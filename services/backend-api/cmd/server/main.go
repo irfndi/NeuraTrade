@@ -213,7 +213,10 @@ func run() error {
 	ccxtService := ccxt.NewService(&cfg.CCXT, getLogger("ccxt_service"), blacklistCache)
 
 	// Initialize JWT authentication middleware
-	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	authMiddleware, err := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	if err != nil {
+		return fmt.Errorf("failed to initialize auth middleware: %w", err)
+	}
 
 	// Initialize cache analytics service
 	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
@@ -475,7 +478,10 @@ func run() error {
 	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
 
 	// Setup routes and get cleanup function
-	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
+	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
+	if err != nil {
+		return fmt.Errorf("failed to setup routes: %w", err)
+	}
 	defer cleanupRoutes()
 	// Create HTTP server with security timeouts
 	srv := &http.Server{

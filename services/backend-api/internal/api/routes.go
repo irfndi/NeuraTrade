@@ -423,7 +423,7 @@ func riskLockSourcePriority(source string) int {
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) func() {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) (func(), error) {
 	configureLiveReadinessGuard(opModeService)
 
 	// Apply CORS middleware globally
@@ -445,7 +445,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	router.Use(rateLimiter.Middleware())
 
 	// Initialize admin middleware
-	adminMiddleware := middleware.NewAdminMiddleware()
+	adminMiddleware := middleware.MustNewAdminMiddleware()
 
 	// Initialize health handler
 	telegramHealth := handlers.TelegramHealthConfig{}
@@ -1004,7 +1004,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 
 	// Register quest runtime via app/autonomy entrypoint before scheduler start.
 	if err := autonomyruntime.RegisterQuestRuntime(questEngine, integratedHandlers); err != nil {
-		log.Fatalf("Failed to register quest runtime handlers: %v", err)
+		return nil, fmt.Errorf("failed to register quest runtime handlers: %w", err)
 	}
 	questEngine.Start() // Start the quest engine scheduler
 
@@ -1469,7 +1469,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		if webSocketHandler != nil {
 			webSocketHandler.Stop()
 		}
-	}
+	}, nil
 }
 
 // Placeholder handlers - to be implemented
