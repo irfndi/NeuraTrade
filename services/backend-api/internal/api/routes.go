@@ -94,11 +94,25 @@ func configureLiveReadinessGuard(opModeService *services.OperationalModeService)
 
 	requiredStrategies := services.DefaultLiveReadinessStrategies()
 	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_LIVE_READINESS_STRATEGIES")); raw != "" {
-		requiredStrategies = strings.Split(raw, ",")
+		parsed := strings.Split(raw, ",")
+		filtered := make([]string, 0, len(parsed))
+		for _, s := range parsed {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				filtered = append(filtered, s)
+			}
+		}
+		if len(filtered) > 0 {
+			requiredStrategies = filtered
+		} else {
+			log.Printf("WARNING: NEURATRADE_LIVE_READINESS_STRATEGIES contained only empty/whitespace entries; using defaults")
+		}
 	}
 	manifestPath := strings.TrimSpace(os.Getenv(services.LiveReadinessManifestEnv))
 	opModeService.SetLiveModeGuard(services.ManifestLiveModeGuard(manifestPath, requiredStrategies))
-	if manifestPath == "" {
+	if manifestPath != "" {
+		log.Printf("Real-money live readiness proof guard enabled with manifest %s; live mode requires strategy evidence", manifestPath)
+	} else {
 		log.Printf("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
 	}
 }

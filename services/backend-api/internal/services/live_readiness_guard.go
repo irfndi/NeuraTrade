@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -26,7 +28,7 @@ type StrategyLiveReadiness struct {
 	Evidence        string                     `json:"evidence,omitempty"`
 	EvidenceMetrics *StrategyReadinessEvidence `json:"evidence_metrics,omitempty"`
 	Reason          string                     `json:"reason,omitempty"`
-	VerifiedAt      string                     `json:"verified_at,omitempty"`
+	VerifiedAt      time.Time                  `json:"verified_at,omitempty"`
 }
 
 // StrategyReadinessEvidence records the minimum proof needed before a trading
@@ -45,7 +47,7 @@ type StrategyReadinessEvidence struct {
 
 // LiveReadinessManifest is the file format consumed by ManifestLiveModeGuard.
 type LiveReadinessManifest struct {
-	UpdatedAt  string                           `json:"updated_at,omitempty"`
+	UpdatedAt  time.Time                        `json:"updated_at,omitempty"`
 	Strategies map[string]StrategyLiveReadiness `json:"strategies"`
 }
 
@@ -55,10 +57,21 @@ func DefaultLiveReadinessStrategies() []string {
 	return []string{"paper_trading", "scalping", "daily_trading", "swing_trading", "arbitrage"}
 }
 
+type cachedManifest struct {
+	manifest  LiveReadinessManifest
+	err       error
+	loadedAt  time.Time
+}
+
 // ManifestLiveModeGuard requires a JSON manifest with ready=true and non-empty
-// evidence for each required strategy.
+// evidence for each required strategy. The manifest is cached in memory for 30
+// seconds to avoid re-reading from disk on every live-mode check.
 func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) LiveModeGuard {
 	required := normalizeReadinessStrategies(requiredStrategies)
+	var mu sync.RWMutex
+	var cache *cachedManifest
+	const cacheTTL = 30 * time.Second
+
 	return func(_ context.Context, _ string, _ string) error {
 		if len(required) == 0 {
 			return nil
@@ -72,42 +85,68 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Liv
 			)
 		}
 
+		mu.RLock()
+		if cache != nil && time.Since(cache.loadedAt) < cacheTTL {
+			mu.RUnlock()
+			if cache.err != nil {
+				return cache.err
+			}
+			return evaluateReadinessBlockers(required, cache.manifest)
+		}
+		mu.RUnlock()
+
+		mu.Lock()
+		defer mu.Unlock()
+		// Double-check after acquiring write lock
+		if cache != nil && time.Since(cache.loadedAt) < cacheTTL {
+			if cache.err != nil {
+				return cache.err
+			}
+			return evaluateReadinessBlockers(required, cache.manifest)
+		}
+
 		// #nosec G304 -- path is operator-configured via NEURATRADE_LIVE_READINESS_MANIFEST.
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("live mode blocked: read readiness manifest %q: %w", path, err)
+			cache = &cachedManifest{err: fmt.Errorf("live mode blocked: read readiness manifest %q: %w", path, err), loadedAt: time.Now()}
+			return cache.err
 		}
 
 		var manifest LiveReadinessManifest
 		if err := json.Unmarshal(raw, &manifest); err != nil {
-			return fmt.Errorf("live mode blocked: parse readiness manifest %q: %w", path, err)
+			cache = &cachedManifest{err: fmt.Errorf("live mode blocked: parse readiness manifest %q: %w", path, err), loadedAt: time.Now()}
+			return cache.err
 		}
 
-		strategies := normalizeReadinessManifestStrategies(manifest.Strategies)
-		var blockers []string
-		for _, strategy := range required {
-			status, ok := strategies[strategy]
-			switch {
-			case !ok:
-				blockers = append(blockers, fmt.Sprintf("%s=missing", strategy))
-			case !status.Ready:
-				reason := strings.TrimSpace(status.Reason)
-				if reason == "" {
-					reason = "not_ready"
-				}
-				blockers = append(blockers, fmt.Sprintf("%s=%s", strategy, reason))
-			case strings.TrimSpace(status.Evidence) == "":
-				blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
-			default:
-				blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
-			}
-		}
-		if len(blockers) > 0 {
-			return fmt.Errorf("live mode blocked: readiness proof incomplete (%s)", strings.Join(blockers, "; "))
-		}
-
-		return nil
+		cache = &cachedManifest{manifest: manifest, loadedAt: time.Now()}
+		return evaluateReadinessBlockers(required, manifest)
 	}
+}
+
+func evaluateReadinessBlockers(required []string, manifest LiveReadinessManifest) error {
+	strategies := normalizeReadinessManifestStrategies(manifest.Strategies)
+	var blockers []string
+	for _, strategy := range required {
+		status, ok := strategies[strategy]
+		switch {
+		case !ok:
+			blockers = append(blockers, fmt.Sprintf("%s=missing", strategy))
+		case !status.Ready:
+			reason := strings.TrimSpace(status.Reason)
+			if reason == "" {
+				reason = "not_ready"
+			}
+			blockers = append(blockers, fmt.Sprintf("%s=%s", strategy, reason))
+		case strings.TrimSpace(status.Evidence) == "":
+			blockers = append(blockers, fmt.Sprintf("%s=missing_evidence", strategy))
+		default:
+			blockers = append(blockers, strategyReadinessEvidenceBlockers(strategy, status)...)
+		}
+	}
+	if len(blockers) > 0 {
+		return fmt.Errorf("live mode blocked: readiness proof incomplete (%s)", strings.Join(blockers, "; "))
+	}
+	return nil
 }
 
 func normalizeReadinessStrategies(strategies []string) []string {

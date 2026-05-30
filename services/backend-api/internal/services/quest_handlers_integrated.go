@@ -536,6 +536,20 @@ func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Conte
 		quest.Metadata = make(map[string]string)
 	}
 
+	clearDailyPerformanceMetrics := func(cp map[string]interface{}) {
+		if cp == nil {
+			return
+		}
+		delete(cp, "daily_report_closed_trades")
+		delete(cp, "daily_report_wins")
+		delete(cp, "daily_report_losses")
+		delete(cp, "daily_report_breakeven")
+		delete(cp, "daily_report_net_pnl")
+		delete(cp, "daily_report_gross_pnl")
+		delete(cp, "daily_report_fees")
+		delete(cp, "daily_report_avg_net_pnl")
+	}
+
 	now := time.Now().UTC()
 	since := now.Add(-24 * time.Hour)
 	chatID := strings.TrimSpace(quest.Metadata["chat_id"])
@@ -555,6 +569,7 @@ func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Conte
 	quest.Checkpoint["daily_report_exchange"] = exchange
 
 	if h.lifecycleStore == nil {
+		clearDailyPerformanceMetrics(quest.Checkpoint)
 		blockers = append(blockers, "lifecycle_store_unavailable")
 		writeDailyTradingReadinessCheckpoint(quest, blockers)
 		quest.CurrentCount++
@@ -564,6 +579,7 @@ func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Conte
 	writeDailyTradingReadinessCheckpoint(quest, blockers)
 	summary, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, exchange, since)
 	if err != nil {
+		clearDailyPerformanceMetrics(quest.Checkpoint)
 		blockers = append(blockers, "realized_performance_query_failed")
 		writeDailyTradingReadinessCheckpoint(quest, blockers)
 		return fmt.Errorf("daily performance report: realized performance: %w", err)
