@@ -58,9 +58,9 @@ func DefaultLiveReadinessStrategies() []string {
 }
 
 type cachedManifest struct {
-	manifest  LiveReadinessManifest
-	err       error
-	loadedAt  time.Time
+	manifest LiveReadinessManifest
+	err      error
+	loadedAt time.Time
 }
 
 // ManifestLiveModeGuard requires a JSON manifest with ready=true and non-empty
