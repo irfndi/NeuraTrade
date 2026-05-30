@@ -444,6 +444,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 
 	// Check for essential routes
 	assert.Contains(t, routePaths, "/health", "Health endpoint should be registered")
+	assert.Contains(t, routePaths, "/metrics", "Prometheus metrics endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/market/prices", "Market prices endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/exchanges/config", "Exchanges config endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/arbitrage/opportunities", "Arbitrage opportunities endpoint should be registered")
