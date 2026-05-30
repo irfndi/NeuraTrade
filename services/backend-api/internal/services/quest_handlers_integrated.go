@@ -548,6 +548,9 @@ func (h *IntegratedQuestHandlers) handleDailyPerformanceReport(ctx context.Conte
 		delete(cp, "daily_report_gross_pnl")
 		delete(cp, "daily_report_fees")
 		delete(cp, "daily_report_avg_net_pnl")
+		delete(cp, "daily_report_win_rate")
+		delete(cp, "daily_report_best_trade")
+		delete(cp, "daily_report_worst_trade")
 	}
 
 	now := time.Now().UTC()
