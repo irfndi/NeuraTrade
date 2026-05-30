@@ -1191,19 +1191,20 @@ func (s *TradingLifecycleStore) ListManagedOpenPositions(ctx context.Context, ch
 	`
 	args := make([]interface{}, 0, 3)
 	if strings.TrimSpace(chatID) != "" {
-		query += " AND chat_id = $1"
+		query += fmt.Sprintf(" AND chat_id = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(chatID))
 		if strings.TrimSpace(exchange) != "" {
-			query += " AND exchange = $2"
+			query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
 			args = append(args, strings.TrimSpace(exchange))
 		}
 	} else if strings.TrimSpace(exchange) != "" {
-		query += " AND exchange = $1"
+		query += fmt.Sprintf(" AND exchange = $%d", len(args)+1)
 		args = append(args, strings.TrimSpace(exchange))
 	}
 	query += " ORDER BY updated_at DESC"
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit)
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)
@@ -1506,7 +1507,8 @@ func (s *TradingLifecycleStore) GetRecentLossStreak(
 	}
 	query += " ORDER BY closed_at DESC"
 	if limit := recentLossStreakQueryLimit(); limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+		args = append(args, limit)
 	}
 
 	rows, err := s.db.Query(ctx, query, args...)

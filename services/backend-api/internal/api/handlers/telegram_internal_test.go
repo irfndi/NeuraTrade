@@ -581,11 +581,11 @@ func TestTelegramInternalHandler_GetDoctor_Healthy(t *testing.T) {
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
-	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
-		WithArgs("777").
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = \$2 AND status = \$3`).
+		WithArgs("777", "polymarket", "connected").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`).
-		WithArgs("777").
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> \$2 AND wallet_type = \$3 AND status = \$4`).
+		WithArgs("777", "polymarket", "exchange", "connected").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
 		WithArgs("777").
@@ -623,11 +623,11 @@ func TestTelegramInternalHandler_GetDoctor_NoSelectedAIModelDoesNotWarnProbeUnav
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_wallets").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectExec("CREATE TABLE IF NOT EXISTS telegram_operator_state").WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
 	mockDB.ExpectQuery("SELECT 1").WillReturnRows(pgxmock.NewRows([]string{"one"}).AddRow(1))
-	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = 'polymarket' AND status = 'connected'`).
-		WithArgs("777").
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider = \$2 AND status = \$3`).
+		WithArgs("777", "polymarket", "connected").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
-	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> 'polymarket' AND wallet_type = 'exchange' AND status = 'connected'`).
-		WithArgs("777").
+	mockDB.ExpectQuery(`SELECT COUNT\(\*\) FROM telegram_operator_wallets WHERE chat_id = \$1 AND provider <> \$2 AND wallet_type = \$3 AND status = \$4`).
+		WithArgs("777", "polymarket", "exchange", "connected").
 		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(1))
 	mockDB.ExpectQuery(`SELECT COALESCE\(\(SELECT autonomous_enabled FROM telegram_operator_state WHERE chat_id = \$1 LIMIT 1\), false\)`).
 		WithArgs("777").

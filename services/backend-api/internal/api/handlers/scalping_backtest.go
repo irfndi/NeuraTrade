@@ -239,7 +239,8 @@ func (h *ScalpingBacktestHandler) ListScalpingBacktests(c *gin.Context) {
 		query += " WHERE status = $1"
 		args = append(args, statusFilter)
 	}
-	query += " ORDER BY created_at DESC LIMIT " + strconv.Itoa(limit)
+	query += " ORDER BY created_at DESC LIMIT $" + strconv.Itoa(len(args)+1)
+	args = append(args, limit)
 
 	rows, err := h.db.Query(c.Request.Context(), query, args...)
 	if err != nil {
