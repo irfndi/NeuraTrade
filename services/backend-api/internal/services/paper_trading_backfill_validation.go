@@ -397,8 +397,6 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 
 	// Track all trades for drawdown calculation
 	allTradePnLs := make([]decimal.Decimal, 0)
-	peak := v.config.InitialCapital.Mul(decimal.NewFromInt(int64(len(v.config.Strategies))))
-	currentEquity := peak
 	totalFees := decimal.Zero
 
 	// Process each strategy's candles sequentially by timestamp
