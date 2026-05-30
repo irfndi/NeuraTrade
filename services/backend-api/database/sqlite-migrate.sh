@@ -29,7 +29,10 @@ sqlite_column_exists() {
 }
 
 apply_paper_trades_column_migrations() {
-  sqlite_table_exists "paper_trades" || return 0
+  if ! sqlite_table_exists "paper_trades"; then
+    printf "error: paper_trades table missing; 015 depends on 012_create_paper_trades_table.sql\n" >&2
+    return 1
+  fi
 
   # Defensive migration: add missing columns only if they don't already exist.
   # On fresh databases created after 012_create_paper_trades_table.sql, all
@@ -44,14 +47,22 @@ apply_paper_trades_column_migrations() {
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
     "DECIMAL(20, 8) NOT NULL DEFAULT 0"
-    "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+    "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"
   )
+
+  if [ ${#cols[@]} -ne ${#defs[@]} ]; then
+    printf "error: cols/defs length mismatch (%d vs %d)\n" "${#cols[@]}" "${#defs[@]}" >&2
+    return 1
+  fi
 
   for i in "${!cols[@]}"; do
     if ! sqlite_column_exists "paper_trades" "${cols[$i]}"; then
       sqlite3 "$DB_PATH" "ALTER TABLE paper_trades ADD COLUMN ${cols[$i]} ${defs[$i]};"
     fi
   done
+
+  # Backfill updated_at for existing rows that got the epoch placeholder default.
+  sqlite3 "$DB_PATH" "UPDATE paper_trades SET updated_at = CURRENT_TIMESTAMP WHERE updated_at = '1970-01-01T00:00:00Z';"
 }
 
 repair_legacy_funding_arbitrage_opportunities() {
@@ -90,6 +101,11 @@ apply_file() {
     repair_legacy_funding_arbitrage_opportunities
   fi
 
+  # 015_alter_paper_trades_columns.sql is intentionally bypassed here.
+  # The raw SQL uses .bail off to tolerate duplicate columns, but sqlite3
+  # still returns non-zero when statements fail. We run a shell-side
+  # conditional check (pragma_table_info) so the migration is idempotent
+  # on both fresh and legacy databases.
   if [ "$name" = "015_alter_paper_trades_columns.sql" ]; then
     apply_paper_trades_column_migrations
     sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
