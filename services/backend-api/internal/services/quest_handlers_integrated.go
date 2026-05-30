@@ -15,6 +15,7 @@ import (
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/utils"
 
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
@@ -840,7 +841,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
-	zaplogrus.Infof("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
+	zaplogrus.Infof("[SCALPING] Using exchange: %s for chat: %s", userExchange, utils.MaskString(chatID, utils.DefaultMaskingConfig))
 	currentMode := h.resolveOperationalMode(chatID, quest)
 	isDryRun := currentMode != OpModeLive
 	ctx = WithOperationalMode(ctx, currentMode)

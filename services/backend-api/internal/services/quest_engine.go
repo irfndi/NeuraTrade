@@ -537,7 +537,11 @@ func (e *QuestEngine) Start() {
 
 	go e.schedulerLoop(runStopCh)
 	zaplogrus.Infof("[QUEST] Quest engine started")
-	zaplogrus.Infof("[QUEST] Initial state: %d quests loaded, running=%v", len(e.quests), e.running)
+	e.mu.RLock()
+	questCount := len(e.quests)
+	isRunning := e.running
+	e.mu.RUnlock()
+	zaplogrus.Infof("[QUEST] Initial state: %d quests loaded, running=%v", questCount, isRunning)
 	zaplogrus.Infof(
 		"[QUEST] Runtime budget: scalping_timeout=%s structured_retries=%d derived_floor=%s stale_timeout=%s execution_timeout=%s lock_ttl=%s",
 		e.runtimeBudget.ScalpingTimeout,
@@ -742,7 +746,7 @@ func (e *QuestEngine) tick() {
 	scheduledCount := 0
 	for _, quest := range e.quests {
 		if quest.Status != QuestStatusActive {
-			zaplogrus.Warnf("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
+			zaplogrus.Infof("[QUEST] Quest %s (%s) skipped - status: %s", quest.ID, quest.Name, quest.Status)
 			continue
 		}
 		activeCount++

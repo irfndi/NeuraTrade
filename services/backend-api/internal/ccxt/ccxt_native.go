@@ -1945,10 +1945,6 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 				freeUSDTFromCoinList += free
 				usedUSDTFromCoinList += frozen + locked
 			}
-
-			if total > 0 {
-				zaplogrus.Infof("[CCXT Native] Bitget balance: %s = %.8f (free: %.8f)", coin.Coin, total, free)
-			}
 		}
 
 		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {

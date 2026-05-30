@@ -507,7 +507,7 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 	}
 
 	if len(resumed) > 0 {
-		zaplogrus.Infof("[DRAWDOWN] Force resumed trading for %d account(s): %v", len(resumed), resumed)
+		zaplogrus.Infof("[DRAWDOWN] Force resumed trading for %d account(s)", len(resumed))
 	}
 
 	return resumed

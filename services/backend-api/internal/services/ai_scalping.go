@@ -1939,7 +1939,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	userPrompt := s.buildUserPrompt(ctx, signals, portfolio)
 
 	zaplogrus.Infof("[AI-SCALPING] Calling LLM with %d signals", len(signals))
-	zaplogrus.Infof("[AI-SCALPING] === SYSTEM PROMPT ===\n%s", systemPrompt)
+	zaplogrus.Infof("[AI-SCALPING] System prompt length: %d chars", len(systemPrompt))
 	zaplogrus.Infof("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", walletBasis(portfolio).InexactFloat64(), len(signals))
 
 	req := &llm.CompletionRequest{

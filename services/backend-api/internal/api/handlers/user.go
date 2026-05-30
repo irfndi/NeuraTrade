@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/utils"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -471,7 +472,7 @@ func (h *UserHandler) userExists(ctx context.Context, email string) (bool, error
 	query := "SELECT COUNT(*) FROM users WHERE email = $1"
 	err := h.db.QueryRow(ctx, query, email).Scan(&count)
 	if err != nil {
-		zaplogrus.Warnf("[USER] Failed to check existing user by email %q: %v", email, err)
+		zaplogrus.Warnf("[USER] Failed to check existing user by email %q: %v", utils.MaskEmail(email), err)
 		return false, err
 	}
 	return count > 0, nil

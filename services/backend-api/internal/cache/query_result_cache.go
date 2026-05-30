@@ -152,7 +152,7 @@ func (c *QueryResultCache) Invalidate(ctx context.Context, tableName string) err
 			return fmt.Errorf("failed to invalidate cache: %w", err)
 		}
 		if c.enableLog {
-			zaplogrus.Warnf("Invalidated %d cache entries for table %s", len(keys), tableName)
+			zaplogrus.Infof("Invalidated %d cache entries for table %s", len(keys), tableName)
 		}
 	}
 
@@ -176,7 +176,7 @@ func (c *QueryResultCache) InvalidateByPattern(ctx context.Context, pattern stri
 			return fmt.Errorf("failed to invalidate cache: %w", err)
 		}
 		if c.enableLog {
-			zaplogrus.Warnf("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
+			zaplogrus.Infof("Invalidated %d cache entries matching pattern %s", len(keys), pattern)
 		}
 	}
 

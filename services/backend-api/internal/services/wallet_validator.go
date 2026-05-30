@@ -7,6 +7,7 @@ import (
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/utils"
 
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/shopspring/decimal"
@@ -278,7 +279,7 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 	}
 
 	if len(exchanges) == 0 {
-		zaplogrus.Infof("[WalletValidator] No connected exchanges for chat %s", chatID)
+		zaplogrus.Infof("[WalletValidator] No connected exchanges for chat %s", utils.MaskString(chatID, utils.DefaultMaskingConfig))
 		return balances, nil
 	}
 

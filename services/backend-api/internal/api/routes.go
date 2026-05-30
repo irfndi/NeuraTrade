@@ -14,6 +14,7 @@ import (
 	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/utils"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -828,7 +829,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		zaplogrus.Warnf("⚠️ Bitget API key/secret detected but passphrase is missing; falling back to paper trading")
 	}
 	if canUseBitgetCreds && chatID != "" && sqlDB != nil && !hasConnectedExchangeWallet(sqlDB, chatID, "bitget") {
-		zaplogrus.Warnf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", chatID)
+		zaplogrus.Warnf("⚠️ Runtime Bitget credentials do not map to an active Bitget wallet for chat %s; falling back to paper trading", utils.MaskString(chatID, utils.DefaultMaskingConfig))
 		canUseBitgetCreds = false
 	}
 	if canUseBitgetCreds {
