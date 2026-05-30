@@ -352,9 +352,9 @@ func (s *DBQuestStore) CountQuests(ctx context.Context, status QuestStatus) (int
 	var count int
 	var err error
 	if status == "" {
-		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM autonomous_quests`).Scan(&count)
+		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM `+runtimeQuestTable).Scan(&count)
 	} else {
-		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM autonomous_quests WHERE status = $1`, string(status)).Scan(&count)
+		err = s.db.QueryRow(ctx, `SELECT COUNT(*) FROM `+runtimeQuestTable+` WHERE status = $1`, string(status)).Scan(&count)
 	}
 	return count, err
 }
