@@ -470,9 +470,18 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				orderSide = PaperOrderSideSell
 			}
 
-			// Calculate position size
+			// Calculate position size based on available capital
+			// Deduct notional of existing open positions to prevent over-allocation
+			openNotional := decimal.Zero
+			for _, pos := range positions {
+				openNotional = openNotional.Add(pos.Size.Mul(pos.EntryPrice))
+			}
+			availableCapital := capital.Sub(openNotional)
+			if availableCapital.LessThanOrEqual(decimal.Zero) {
+				continue
+			}
 			positionPct := strat.MaxPositionPct
-			notional := capital.Mul(positionPct)
+			notional := availableCapital.Mul(positionPct)
 			if notional.LessThanOrEqual(decimal.Zero) {
 				continue
 			}
@@ -622,7 +631,9 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 	}
 
 	// Compute aggregate drawdown
-	currentEquity = v.config.InitialCapital.Mul(decimal.NewFromInt(int64(len(v.config.Strategies)))).Add(result.NetPnL)
+	// Start from initial capital and walk through each trade PnL;
+	// do not pre-add result.NetPnL since the loop already accumulates all PnLs.
+	currentEquity = v.config.InitialCapital.Mul(decimal.NewFromInt(int64(len(v.config.Strategies))))
 	peak = currentEquity
 
 	for _, pnl := range allTradePnLs {
@@ -691,11 +702,15 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 	// Add risk events for drawdown and loss streaks
 	v.collectRiskEvents(result, &allTradePnLs)
 
-	// Evaluate blockers
+	// Build evidence artifact first so evaluateBlockers can check it
+	evidence := v.buildEvidenceArtifact(result, runID)
+	result.EvidenceArtifact = evidence
+
+	// Evaluate blockers after artifact is available
 	result.BlockerStatuses = v.evaluateBlockers(result)
 
-	// Build evidence artifact
-	evidence := v.buildEvidenceArtifact(result, runID)
+	// Rebuild artifact with final blocker statuses and recompute satisfaction
+	evidence = v.buildEvidenceArtifact(result, runID)
 	result.EvidenceArtifact = evidence
 
 	// Determine if validation passed (all blockers satisfied)
@@ -864,6 +879,9 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 		return confidenceVal, "hold", ""
 	}
 
+	if candle.Close.Equal(candle.Open) {
+		return confidenceVal, "hold", ""
+	}
 	if candle.Close.GreaterThan(candle.Open) {
 		return confidenceVal, "buy", "long"
 	}
