@@ -631,8 +631,8 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 	// Compute aggregate drawdown
 	// Start from initial capital and walk through each trade PnL;
 	// do not pre-add result.NetPnL since the loop already accumulates all PnLs.
-	currentEquity = v.config.InitialCapital.Mul(decimal.NewFromInt(int64(len(v.config.Strategies))))
-	peak = currentEquity
+	currentEquity := v.config.InitialCapital.Mul(decimal.NewFromInt(int64(len(v.config.Strategies))))
+	peak := currentEquity
 
 	for _, pnl := range allTradePnLs {
 		currentEquity = currentEquity.Add(pnl)

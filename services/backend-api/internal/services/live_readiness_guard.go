@@ -20,7 +20,7 @@ const (
 )
 
 // LiveModeGuard blocks or permits a transition into real-money live mode.
-type LiveModeGuard func(ctx context.Context, chatID string, changedBy string) error
+type LiveModeGuard func(ctx context.Context, chatID string) error
 
 // StrategyLiveReadiness records one strategy's live-readiness evidence.
 type StrategyLiveReadiness struct {
@@ -66,13 +66,13 @@ type cachedManifest struct {
 // ManifestLiveModeGuard requires a JSON manifest with ready=true and non-empty
 // evidence for each required strategy. The manifest is cached in memory for 30
 // seconds to avoid re-reading from disk on every live-mode check.
-func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) LiveModeGuard {
+func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) OperationalLiveModeGuard {
 	required := normalizeReadinessStrategies(requiredStrategies)
 	var mu sync.RWMutex
 	var cache *cachedManifest
 	const cacheTTL = 30 * time.Second
 
-	return func(_ context.Context, _ string, _ string) error {
+	return func(_ context.Context, _ string) error {
 		if len(required) == 0 {
 			return nil
 		}
