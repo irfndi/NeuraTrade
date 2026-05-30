@@ -646,11 +646,7 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 	}
 
 	// Calculate aggregate stats
-	result.ClosedTrades = 0
 	winningTrades := int64(0)
-	for _, stats := range strategyStats {
-		result.ClosedTrades += stats.ClosedTrades
-	}
 	for _, pnl := range allTradePnLs {
 		if pnl.GreaterThan(decimal.Zero) {
 			winningTrades++

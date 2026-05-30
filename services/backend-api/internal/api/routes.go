@@ -1307,11 +1307,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		// Paper trading readiness endpoints
-		readinessHandler := handlers.NewReadinessHandler(db.(database.DBPool))
-		readiness := v1.Group("/readiness")
-		{
-			readiness.GET("/paper-trading", readinessHandler.PaperTradingManifest)
-			readiness.GET("/paper-trading/evidence", readinessHandler.PaperTradingEvidence)
+		if dbPool, ok := db.(database.DBPool); ok {
+			readinessHandler := handlers.NewReadinessHandler(dbPool)
+			readiness := v1.Group("/readiness")
+			{
+				readiness.GET("/paper-trading", readinessHandler.PaperTradingManifest)
+				readiness.GET("/paper-trading/evidence", readinessHandler.PaperTradingEvidence)
+			}
 		}
 
 		// Agent control plane command and event stream APIs (admin-only).

@@ -1,15 +1,16 @@
 -- Add critical missing tables from Postgres migrations
 -- These tables are needed for autonomous runtime and exchange reliability
 
--- Trading mode states (from PG 070)
+-- Trading mode states (matches Go ensureStorage() schema)
 CREATE TABLE IF NOT EXISTS trading_mode_states (
     chat_id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL DEFAULT 'paper' CHECK (mode IN ('paper', 'live')),
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    source TEXT DEFAULT 'telegram',
-    dry_run TEXT DEFAULT '0',
-    confirmation_count INTEGER DEFAULT 0
+    mode TEXT NOT NULL DEFAULT 'dry',
+    changed_at TIMESTAMP NOT NULL,
+    changed_by TEXT,
+    previous_mode TEXT,
+    confirmations INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_trading_mode_states_mode ON trading_mode_states(mode);
 
 -- Autonomous quests (from PG 071)
 CREATE TABLE IF NOT EXISTS autonomous_quests (

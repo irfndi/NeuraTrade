@@ -19,9 +19,6 @@ const (
 	LiveReadinessManifestEnv = "NEURATRADE_LIVE_READINESS_MANIFEST"
 )
 
-// LiveModeGuard blocks or permits a transition into real-money live mode.
-type LiveModeGuard func(ctx context.Context, chatID string) error
-
 // StrategyLiveReadiness records one strategy's live-readiness evidence.
 type StrategyLiveReadiness struct {
 	Ready           bool                       `json:"ready"`

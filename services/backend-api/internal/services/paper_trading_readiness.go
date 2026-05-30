@@ -176,7 +176,9 @@ func (g *ReadinessManifestGenerator) generateStrategyEvidence(
 	`
 	var violations int
 	vRow := g.db.QueryRow(ctx, violationsQuery, strategy, startTime, endTime)
-	_ = vRow.Scan(&violations) // ignore error, default to 0
+	if err := vRow.Scan(&violations); err != nil {
+		g.logger.Warn(fmt.Sprintf("Failed to query risk violations for strategy %s: %v", strategy, err))
+	}
 
 	return &StrategyEvidence{
 		Strategy:       strategy,
