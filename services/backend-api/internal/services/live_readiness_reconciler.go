@@ -82,15 +82,16 @@ func (r *LiveReadinessReconciler) Start(ctx context.Context) error {
 // Stop signals the background loop to exit and waits for it to finish.
 func (r *LiveReadinessReconciler) Stop() {
 	r.mu.Lock()
-	if !r.running {
-		r.mu.Unlock()
-		return
+	shouldWait := r.running
+	if r.running {
+		close(r.stopCh)
+		r.running = false
 	}
-	close(r.stopCh)
-	r.running = false
 	r.mu.Unlock()
 
-	<-r.stopDone
+	if shouldWait {
+		<-r.stopDone
+	}
 }
 
 // LastRun returns the timestamp of the most recent successful reconciliation.
@@ -138,32 +139,25 @@ func (r *LiveReadinessReconciler) reconcile(ctx context.Context) {
 	startTime := endTime.Add(-r.config.LookbackWindow)
 
 	generator := NewReadinessManifestGenerator(r.db, r.logger)
-	manifest, err := generator.GenerateManifest(ctx, startTime, endTime, r.config.Strategies)
-	if err != nil {
-		r.mu.Lock()
-		r.lastError = fmt.Errorf("generate manifest: %w", err)
-		r.mu.Unlock()
-		if r.logger != nil {
-			r.logger.Error(fmt.Sprintf("Live readiness reconciler: %v", r.lastError))
-		}
-		return
-	}
+	manifest, genErr := generator.GenerateManifest(ctx, startTime, endTime, r.config.Strategies)
 
-	if manifest.Acceptance.Ready {
+	var lastErr error
+	if genErr != nil {
+		lastErr = fmt.Errorf("generate manifest: %w", genErr)
+		if r.logger != nil {
+			r.logger.Error(fmt.Sprintf("Live readiness reconciler: %v", lastErr))
+		}
+	} else if manifest.Acceptance.Ready {
 		if r.store == nil {
 			if r.logger != nil {
 				r.logger.Warn("Live readiness reconciler: manifest ready but no store configured, skipping DB persistence")
 			}
-		} else if _, err := generator.SaveManifestToDB(ctx, r.store, manifest); err != nil {
-			r.mu.Lock()
-			r.lastError = fmt.Errorf("save ready manifest: %w", err)
-			r.mu.Unlock()
+		} else if _, saveErr := generator.SaveManifestToDB(ctx, r.store, manifest); saveErr != nil {
+			lastErr = fmt.Errorf("save ready manifest: %w", saveErr)
 			if r.logger != nil {
-				r.logger.Error(fmt.Sprintf("Live readiness reconciler: %v", r.lastError))
+				r.logger.Error(fmt.Sprintf("Live readiness reconciler: %v", lastErr))
 			}
-			return
-		}
-		if r.logger != nil {
+		} else if r.logger != nil {
 			r.logger.Info("Live readiness reconciler: manifest accepted and persisted to database")
 		}
 	} else {
@@ -173,7 +167,7 @@ func (r *LiveReadinessReconciler) reconcile(ctx context.Context) {
 	}
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.lastRun = time.Now()
-	r.lastError = nil
-	r.mu.Unlock()
+	r.lastError = lastErr
 }
