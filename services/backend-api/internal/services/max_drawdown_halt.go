@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
@@ -180,6 +181,107 @@ func NewMaxDrawdownHaltWithNotification(db DBPool, config MaxDrawdownConfig, not
 	}
 }
 
+func (h *MaxDrawdownHalt) InitSchema(ctx context.Context) error {
+	if h.db == nil {
+		return fmt.Errorf("database connection is nil")
+	}
+	_, err := h.db.Exec(ctx, `CREATE TABLE IF NOT EXISTS drawdown_states (
+		chat_id TEXT PRIMARY KEY,
+		peak_value TEXT NOT NULL DEFAULT '0',
+		current_value TEXT NOT NULL DEFAULT '0',
+		current_drawdown TEXT NOT NULL DEFAULT '0',
+		max_drawdown_seen TEXT NOT NULL DEFAULT '0',
+		status TEXT NOT NULL DEFAULT 'normal',
+		trading_halted BOOLEAN NOT NULL DEFAULT FALSE,
+		halted_at TIMESTAMP,
+		recovered_at TIMESTAMP,
+		last_checked TIMESTAMP NOT NULL,
+		warning_count INTEGER NOT NULL DEFAULT 0,
+		halt_count INTEGER NOT NULL DEFAULT 0,
+		updated_at TIMESTAMP NOT NULL
+	)`)
+	if err != nil {
+		return fmt.Errorf("failed to create drawdown_states table: %w", err)
+	}
+	_, err = h.db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_drawdown_states_trading_halted ON drawdown_states(trading_halted, updated_at DESC)`)
+	if err != nil {
+		return fmt.Errorf("failed to create trading_halted index: %w", err)
+	}
+	_, err = h.db.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_drawdown_states_status ON drawdown_states(status, updated_at DESC)`)
+	if err != nil {
+		return fmt.Errorf("failed to create status index: %w", err)
+	}
+	return nil
+}
+
+func (h *MaxDrawdownHalt) LoadStates(ctx context.Context) error {
+	if h.db == nil {
+		return nil
+	}
+	rows, err := h.db.Query(ctx, `SELECT chat_id, peak_value, current_value, current_drawdown, max_drawdown_seen, status, trading_halted, halted_at, recovered_at, last_checked, warning_count, halt_count FROM drawdown_states`)
+	if err != nil {
+		return fmt.Errorf("failed to load drawdown states: %w", err)
+	}
+	defer rows.Close()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for rows.Next() {
+		var s DrawdownState
+		var peakStr, currentStr, drawdownStr, maxSeenStr string
+		var haltedAt, recoveredAt sql.NullTime
+		err := rows.Scan(&s.ChatID, &peakStr, &currentStr, &drawdownStr, &maxSeenStr, &s.Status, &s.TradingHalted, &haltedAt, &recoveredAt, &s.LastChecked, &s.WarningCount, &s.HaltCount)
+		if err != nil {
+			return fmt.Errorf("failed to scan drawdown state: %w", err)
+		}
+		s.PeakValue, _ = decimal.NewFromString(peakStr)
+		s.CurrentValue, _ = decimal.NewFromString(currentStr)
+		s.CurrentDrawdown, _ = decimal.NewFromString(drawdownStr)
+		s.MaxDrawdownSeen, _ = decimal.NewFromString(maxSeenStr)
+		if haltedAt.Valid {
+			s.HaltedAt = &haltedAt.Time
+		}
+		if recoveredAt.Valid {
+			s.RecoveredAt = &recoveredAt.Time
+		}
+		h.states[s.ChatID] = &s
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate drawdown states: %w", err)
+	}
+	return nil
+}
+
+func (h *MaxDrawdownHalt) saveState(ctx context.Context, state *DrawdownState) {
+	if h.db == nil || state == nil {
+		return
+	}
+	now := time.Now().UTC()
+	_, err := h.db.Exec(ctx, `INSERT INTO drawdown_states (chat_id, peak_value, current_value, current_drawdown, max_drawdown_seen, status, trading_halted, halted_at, recovered_at, last_checked, warning_count, halt_count, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (chat_id) DO UPDATE SET
+			peak_value = EXCLUDED.peak_value,
+			current_value = EXCLUDED.current_value,
+			current_drawdown = EXCLUDED.current_drawdown,
+			max_drawdown_seen = EXCLUDED.max_drawdown_seen,
+			status = EXCLUDED.status,
+			trading_halted = EXCLUDED.trading_halted,
+			halted_at = EXCLUDED.halted_at,
+			recovered_at = EXCLUDED.recovered_at,
+			last_checked = EXCLUDED.last_checked,
+			warning_count = EXCLUDED.warning_count,
+			halt_count = EXCLUDED.halt_count,
+			updated_at = EXCLUDED.updated_at`,
+		state.ChatID, state.PeakValue.String(), state.CurrentValue.String(), state.CurrentDrawdown.String(), state.MaxDrawdownSeen.String(),
+		string(state.Status), state.TradingHalted, state.HaltedAt, state.RecoveredAt, state.LastChecked,
+		state.WarningCount, state.HaltCount, now,
+	)
+	if err != nil {
+		zaplogrus.Warnf("[DRAWDOWN] Failed to persist state for chat %s: %v", state.ChatID, err)
+	}
+}
+
 func (h *MaxDrawdownHalt) CheckDrawdown(ctx context.Context, chatID string, currentValue decimal.Decimal) (*DrawdownState, error) {
 	h.metrics.IncrementTotal()
 
@@ -219,6 +321,9 @@ func (h *MaxDrawdownHalt) CheckDrawdown(ctx context.Context, chatID string, curr
 	events := h.updateState(state)
 
 	h.mu.Unlock()
+
+	// Persist state to DB after releasing lock to avoid blocking concurrent checks
+	h.saveState(ctx, state)
 
 	// Send notifications after releasing lock to prevent deadlock during network I/O
 	for _, evt := range events {
@@ -350,7 +455,6 @@ func (h *MaxDrawdownHalt) GetState(chatID string) (*DrawdownState, bool) {
 
 func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, _ string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	state, exists := h.states[chatID]
 	if !exists {
@@ -369,19 +473,23 @@ func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, _ string
 	state.HaltCount++
 	h.metrics.IncrementHalt()
 
+	h.mu.Unlock()
+	h.saveState(ctx, state)
+
 	return nil
 }
 
 func (h *MaxDrawdownHalt) ResumeTrading(ctx context.Context, chatID string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	state, exists := h.states[chatID]
 	if !exists {
+		h.mu.Unlock()
 		return fmt.Errorf("no state found for chat %s", chatID)
 	}
 
 	if !state.TradingHalted {
+		h.mu.Unlock()
 		return fmt.Errorf("trading is not halted for chat %s", chatID)
 	}
 
@@ -391,6 +499,9 @@ func (h *MaxDrawdownHalt) ResumeTrading(ctx context.Context, chatID string) erro
 	now := time.Now().UTC()
 	state.RecoveredAt = &now
 	h.metrics.IncrementRecovery()
+
+	h.mu.Unlock()
+	h.saveState(ctx, state)
 
 	return nil
 }
@@ -468,7 +579,6 @@ func (h *MaxDrawdownHalt) CalculateDrawdown(peak, current decimal.Decimal) decim
 
 func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue decimal.Decimal) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	state, exists := h.states[chatID]
 	if !exists {
@@ -483,6 +593,9 @@ func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue
 	state.CurrentValue = newValue
 	state.CurrentDrawdown = decimal.Zero
 
+	h.mu.Unlock()
+	h.saveState(ctx, state)
+
 	return nil
 }
 
@@ -490,9 +603,9 @@ func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue
 // This is useful for manual intervention or when system state needs to be reset.
 func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	resumed := make([]string, 0)
+	resumedStates := make([]*DrawdownState, 0)
 	now := time.Now().UTC()
 
 	for chatID, state := range h.states {
@@ -503,7 +616,14 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 			state.RecoveredAt = &now
 			h.metrics.IncrementRecovery()
 			resumed = append(resumed, chatID)
+			resumedStates = append(resumedStates, state)
 		}
+	}
+
+	h.mu.Unlock()
+
+	for _, state := range resumedStates {
+		h.saveState(ctx, state)
 	}
 
 	if len(resumed) > 0 {

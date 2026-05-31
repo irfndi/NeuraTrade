@@ -213,3 +213,53 @@ func TestCCXTOrderExecutor_GetOrderTrades(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, trades, 2)
 }
+
+func TestCCXTOrderExecutor_PlaceOrder_RetriesOn5xx(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"order": map[string]string{"id": "order-12345"},
+		})
+	}))
+	defer server.Close()
+
+	executor := NewCCXTOrderExecutor(CCXTOrderExecutorConfig{
+		ServiceURL: server.URL,
+		Timeout:    30 * time.Second,
+		MaxRetries: 3,
+	})
+
+	orderID, err := executor.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(0.5), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "order-12345", orderID)
+	assert.Equal(t, 3, attempts)
+}
+
+func TestCCXTOrderExecutor_PlaceOrder_NoRetryOn4xx(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "invalid symbol"})
+	}))
+	defer server.Close()
+
+	executor := NewCCXTOrderExecutor(CCXTOrderExecutorConfig{
+		ServiceURL: server.URL,
+		Timeout:    30 * time.Second,
+		MaxRetries: 3,
+	})
+
+	_, err := executor.PlaceOrder(context.Background(), "binance", "BTC/USDT", "buy", "market", decimal.NewFromFloat(0.5), nil)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, attempts)
+}
