@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -153,7 +154,7 @@ func (s *LiveReadinessManifestStore) GetLatestManifest(ctx context.Context) (*Pa
 		"SELECT manifest_json FROM "+liveReadinessManifestTable+" ORDER BY created_at DESC LIMIT 1",
 	).Scan(&raw)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("query latest manifest: %w", err)
@@ -178,7 +179,7 @@ func (s *LiveReadinessManifestStore) GetLatestReadyManifest(ctx context.Context)
 		"SELECT manifest_json FROM "+liveReadinessManifestTable+" WHERE acceptance_ready = TRUE ORDER BY created_at DESC LIMIT 1",
 	).Scan(&raw)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("query latest ready manifest: %w", err)
@@ -207,7 +208,7 @@ func (s *LiveReadinessManifestStore) GetManifestByID(ctx context.Context, id str
 		id,
 	).Scan(&raw)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if isNoRows(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("query manifest by id: %w", err)
@@ -289,4 +290,8 @@ func (s *LiveReadinessManifestStore) HasReadyManifest(ctx context.Context) (bool
 		return false, fmt.Errorf("check ready manifest: %w", err)
 	}
 	return count > 0, nil
+}
+
+func isNoRows(err error) bool {
+	return err == sql.ErrNoRows || err == pgx.ErrNoRows
 }
