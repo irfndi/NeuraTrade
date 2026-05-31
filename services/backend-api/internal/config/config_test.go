@@ -352,6 +352,19 @@ func TestLoad_ProductionRejectsShortEncryptionKey(t *testing.T) {
 	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes")
 }
 
+func TestLoad_ProductionRejectsInvalidBase64EncryptionKey(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
+	// Not valid base64 — contains characters outside base64 alphabet and wrong padding
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "not-valid-base64!!!")
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must be valid base64")
+}
+
 func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {
 	os.Clearenv()
 	t.Setenv("DATABASE_DRIVER", "sqlite")
