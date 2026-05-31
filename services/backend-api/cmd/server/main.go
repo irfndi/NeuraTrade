@@ -480,6 +480,11 @@ func run() error {
 	// Start live-readiness reconciler when enabled and DB is available.
 	if cfg.LiveReadiness.Enabled && db != nil {
 		reconcilerStore := services.NewLiveReadinessManifestStore(db)
+		initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := reconcilerStore.InitSchema(initCtx); err != nil {
+			logger.WithError(err).Warn("Failed to initialize live readiness manifest schema, reconciler may not persist manifests")
+		}
+		initCancel()
 		reconcilerCfg := services.DefaultLiveReadinessReconcilerConfig()
 		if cfg.LiveReadiness.IntervalHours > 0 {
 			reconcilerCfg.Interval = time.Duration(cfg.LiveReadiness.IntervalHours) * time.Hour
@@ -567,8 +572,8 @@ type reconcilerLoggerAdapter struct {
 	log logging.Logger
 }
 
-func (a *reconcilerLoggerAdapter) WithFields(_ map[string]interface{}) services.Logger {
-	return a
+func (a *reconcilerLoggerAdapter) WithFields(fields map[string]interface{}) services.Logger {
+	return &reconcilerLoggerAdapter{log: a.log.WithFields(fields)}
 }
 
 func (a *reconcilerLoggerAdapter) Info(msg string)  { a.log.Info(msg) }

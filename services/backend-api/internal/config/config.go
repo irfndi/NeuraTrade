@@ -733,5 +733,14 @@ func validateConfig(config *Config) error {
 
 	}
 
+	if config.LiveReadiness.Enabled {
+		if config.LiveReadiness.IntervalHours <= 0 {
+			return fmt.Errorf("live_readiness.interval_hours must be > 0 when live_readiness.enabled=true")
+		}
+		if config.LiveReadiness.LookbackHours <= 0 {
+			return fmt.Errorf("live_readiness.lookback_hours must be > 0 when live_readiness.enabled=true")
+		}
+	}
+
 	return nil
 }
