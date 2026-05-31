@@ -182,9 +182,14 @@ func generateSyntheticCandles(symbol, timeframe string, days int, seed int64) []
 	startTime := now.Add(-time.Duration(days*24) * time.Hour)
 
 	for i := range numCandles {
-		regime := regimes[i/regimeLength]
+		var regime struct {
+			drift   float64
+			volMult float64
+		}
 		if regimeLength == 0 {
 			regime = regimes[0]
+		} else {
+			regime = regimes[i/regimeLength]
 		}
 
 		// Random walk with regime drift

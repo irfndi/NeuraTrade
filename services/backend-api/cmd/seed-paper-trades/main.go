@@ -48,7 +48,7 @@ func run() error {
 	now := time.Now().UTC()
 
 	// Ensure backtest runs exist for backtest comparison check
-	if err := seedBacktestRuns(ctx, dbPool); err != nil {
+	if err := seedBacktestRuns(ctx, dbPool, cfg.Database.Driver); err != nil {
 		return fmt.Errorf("seed backtest runs: %w", err)
 	}
 
@@ -78,14 +78,23 @@ func run() error {
 	return nil
 }
 
-func seedBacktestRuns(ctx context.Context, db database.DBPool) error {
+func seedBacktestRuns(ctx context.Context, db database.DBPool, driver string) error {
 	strategies := []string{"scalping", "daily_trading", "swing_trading", "arbitrage"}
+
+	dbType := database.DetectDBType(driver)
+	var query string
+	if dbType == database.DBTypeSQLite {
+		query = `INSERT OR IGNORE INTO scalping_backtest_runs (id, config, status, completed_at)
+				 VALUES ($1, $2, 'completed', CURRENT_TIMESTAMP)`
+	} else {
+		query = `INSERT INTO scalping_backtest_runs (id, config, status, completed_at)
+				 VALUES ($1, $2, 'completed', CURRENT_TIMESTAMP)
+				 ON CONFLICT (id) DO NOTHING`
+	}
+
 	for _, s := range strategies {
 		configJSON := fmt.Sprintf(`{"strategy":%q,"symbol":"BTC/USDT","timeframe":"1h"}`, s)
-		_, err := db.Exec(ctx,
-			`INSERT OR IGNORE INTO scalping_backtest_runs (id, config, status, completed_at)
-			 VALUES ($1, $2, 'completed', CURRENT_TIMESTAMP)`,
-			s, configJSON)
+		_, err := db.Exec(ctx, query, s, configJSON)
 		if err != nil {
 			return err
 		}
