@@ -86,7 +86,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-func configureLiveReadinessGuard(opModeService *services.OperationalModeService) {
+func configureLiveReadinessGuard(opModeService *services.OperationalModeService, db services.DBPool) {
 	if opModeService == nil {
 		return
 	}
@@ -113,11 +113,15 @@ func configureLiveReadinessGuard(opModeService *services.OperationalModeService)
 		}
 	}
 	manifestPath := strings.TrimSpace(os.Getenv(services.LiveReadinessManifestEnv))
-	opModeService.SetLiveModeGuard(services.ManifestLiveModeGuard(manifestPath, requiredStrategies))
+	var store *services.LiveReadinessManifestStore
+	if db != nil {
+		store = services.NewLiveReadinessManifestStore(db)
+	}
+	opModeService.SetLiveModeGuard(services.DBManifestLiveModeGuard(store, manifestPath, requiredStrategies))
 	if manifestPath != "" {
-		zaplogrus.Infof("Real-money live readiness proof guard enabled with manifest %s; live mode requires strategy evidence", manifestPath)
+		zaplogrus.Infof("Real-money live readiness proof guard enabled with DB fallback and manifest %s; live mode requires strategy evidence", manifestPath)
 	} else {
-		zaplogrus.Infof("Real-money live readiness proof guard enabled; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
+		zaplogrus.Infof("Real-money live readiness proof guard enabled with DB fallback; live mode requires %s with strategy evidence", services.LiveReadinessManifestEnv)
 	}
 }
 
@@ -427,7 +431,7 @@ func riskLockSourcePriority(source string) int {
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService) (func(), error) {
-	configureLiveReadinessGuard(opModeService)
+	configureLiveReadinessGuard(opModeService, db)
 
 	// Apply CORS middleware globally
 	router.Use(cors.New(cors.Config{

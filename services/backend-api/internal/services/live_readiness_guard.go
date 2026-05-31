@@ -189,6 +189,13 @@ func convertPaperManifestToLiveManifest(pm *PaperTradingReadinessManifest) LiveR
 			EvidenceMetrics: metrics,
 		}
 	}
+	// Synthesise a paper_trading entry so the guard recognises the overall
+	// paper-trading surface as ready when acceptance criteria pass.
+	lm.Strategies["paper_trading"] = StrategyLiveReadiness{
+		Ready:      pm.Acceptance.Ready,
+		Evidence:   fmt.Sprintf("overall_acceptance=%v", pm.Acceptance.Ready),
+		VerifiedAt: pm.Timestamp,
+	}
 	return lm
 }
 
