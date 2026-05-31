@@ -477,6 +477,31 @@ func run() error {
 	// Create operational mode service
 	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
 
+	// Start live-readiness reconciler when enabled and DB is available.
+	if cfg.LiveReadiness.Enabled && db != nil {
+		reconcilerStore := services.NewLiveReadinessManifestStore(db)
+		reconcilerCfg := services.DefaultLiveReadinessReconcilerConfig()
+		if cfg.LiveReadiness.IntervalHours > 0 {
+			reconcilerCfg.Interval = time.Duration(cfg.LiveReadiness.IntervalHours) * time.Hour
+		}
+		if cfg.LiveReadiness.LookbackHours > 0 {
+			reconcilerCfg.LookbackWindow = time.Duration(cfg.LiveReadiness.LookbackHours) * time.Hour
+		}
+		reconciler := services.NewLiveReadinessReconciler(db, reconcilerStore, &reconcilerLoggerAdapter{log: logger.WithComponent("live_readiness_reconciler")}, reconcilerCfg)
+		if err := reconciler.Start(ctx); err != nil {
+			logger.WithError(err).Warn("Failed to start live readiness reconciler")
+		} else {
+			defer reconciler.Stop()
+			logger.Info("Live readiness reconciler started")
+		}
+	} else {
+		if !cfg.LiveReadiness.Enabled {
+			logger.Info("Live readiness reconciler disabled by configuration")
+		} else {
+			logger.Info("Live readiness reconciler skipped: no database available")
+		}
+	}
+
 	// Setup routes and get cleanup function
 	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
 	if err != nil {
@@ -536,6 +561,19 @@ func (a *positionTrackerHeartbeatAdapter) SyncPositions(ctx context.Context) err
 	}
 	return a.tracker.SyncWithExchange(ctx)
 }
+
+// reconcilerLoggerAdapter wraps logging.Logger to satisfy services.Logger.
+type reconcilerLoggerAdapter struct {
+	log logging.Logger
+}
+
+func (a *reconcilerLoggerAdapter) WithFields(_ map[string]interface{}) services.Logger {
+	return a
+}
+
+func (a *reconcilerLoggerAdapter) Info(msg string)  { a.log.Info(msg) }
+func (a *reconcilerLoggerAdapter) Warn(msg string)  { a.log.Warn(msg) }
+func (a *reconcilerLoggerAdapter) Error(msg string) { a.log.Error(msg) }
 
 type stopLossHeartbeatAdapter struct {
 	service *services.StopLossService
