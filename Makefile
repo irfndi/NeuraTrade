@@ -56,6 +56,9 @@ build: mod-download services-setup ## Build backend binaries
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-paper-validation ./cmd/paper-validation
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-paper-readiness ./cmd/paper-readiness
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-collect-candles ./cmd/collect-candles
+	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-seed-test-candles ./cmd/seed-test-candles
+	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-backfill-paper-trades ./cmd/backfill-paper-trades
+	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-seed-paper-trades ./cmd/seed-paper-trades
 	@cd cmd/neuratrade-cli && $(GO_ENV) go build -o ../../bin/neuratrade .
 	@printf '%s\n' '#!/usr/bin/env bash' \
 		'# CCXT Service Stub' \
@@ -68,7 +71,7 @@ build: mod-download services-setup ## Build backend binaries
 		'cd "$$SCRIPT_DIR/../services/telegram-service"' \
 		'exec bun run index.ts "$$@"' > bin/telegram-service
 	@chmod +x bin/telegram-service
-	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-scalping-soak, bin/neuratrade-paper-validation, bin/neuratrade-paper-readiness, bin/neuratrade-collect-candles$(NC)"
+	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-scalping-soak, bin/neuratrade-paper-validation, bin/neuratrade-paper-readiness, bin/neuratrade-collect-candles, bin/neuratrade-seed-test-candles, bin/neuratrade-backfill-paper-trades, bin/neuratrade-seed-paper-trades$(NC)"
 
 fmt: ## Format backend + frontend code
 	@echo "$(GREEN)Formatting Go code...$(NC)"

@@ -161,7 +161,7 @@ func getOrCreateExchange(ctx context.Context, db database.DBPool, name string) (
 		return id, nil
 	}
 
-	res, err := db.Exec(ctx, "INSERT INTO exchanges (name, ccxt_id, status) VALUES ($1, $1, 'active')", name)
+	res, err := db.Exec(ctx, "INSERT INTO exchanges (name, display_name, ccxt_id, status) VALUES ($1, $1, $1, 'active')", name)
 	if err != nil {
 		return 0, err
 	}
@@ -175,11 +175,20 @@ func getOrCreateTradingPair(ctx context.Context, db database.DBPool, exchangeID 
 		return id, nil
 	}
 
-	res, err := db.Exec(ctx, "INSERT INTO trading_pairs (symbol, exchange_id, is_active) VALUES ($1, $2, true)", symbol, exchangeID)
+	base, quote := parseSymbol(symbol)
+	res, err := db.Exec(ctx, "INSERT INTO trading_pairs (symbol, exchange_id, base_currency, quote_currency, is_active) VALUES ($1, $2, $3, $4, true)", symbol, exchangeID, base, quote)
 	if err != nil {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+func parseSymbol(symbol string) (base, quote string) {
+	parts := strings.Split(symbol, "/")
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return symbol, ""
 }
 
 func splitComma(s string) []string {
