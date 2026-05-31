@@ -216,12 +216,12 @@ func TestCCXTOrderExecutor_GetOrderTrades(t *testing.T) {
 
 func TestCCXTOrderExecutor_PlaceOrder_RetryBehavior(t *testing.T) {
 	cases := []struct {
-		name             string
-		handler          func(attempts *int) http.HandlerFunc
-		maxRetries       int
-		expectError      bool
-		expectAttempts   int
-		expectOrderID    string
+		name           string
+		handler        func(attempts *int) http.HandlerFunc
+		maxRetries     int
+		expectError    bool
+		expectAttempts int
+		expectOrderID  string
 	}{
 		{
 			name: "retries_on_5xx_then_succeeds",
