@@ -92,6 +92,19 @@ func run() error {
 
 	fmt.Printf("\nManifest saved to: %s\n", outputPath)
 
+	// Persist to database for live readiness guard consumption
+	store := services.NewLiveReadinessManifestStore(db)
+	if initErr := store.InitSchema(ctx); initErr != nil {
+		fmt.Fprintf(os.Stderr, "WARN: failed to init manifest schema: %v\n", initErr)
+	} else {
+		manifestID, saveErr := generator.SaveManifestToDB(ctx, store, manifest)
+		if saveErr != nil {
+			fmt.Fprintf(os.Stderr, "WARN: failed to persist manifest to DB: %v\n", saveErr)
+		} else {
+			fmt.Printf("Manifest persisted to DB: %s\n", manifestID)
+		}
+	}
+
 	if failIfNotReady && !manifest.Acceptance.Ready {
 		return fmt.Errorf("paper trading NOT READY: %s", strings.Join(manifest.Acceptance.Failures, "; "))
 	}
