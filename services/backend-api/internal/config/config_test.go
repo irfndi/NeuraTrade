@@ -251,7 +251,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "prod_bot_token")
 	t.Setenv("TELEGRAM_WEBHOOK_URL", "https://prod-api.example.com/webhook")
 	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
-	t.Setenv("SECURITY_ENCRYPTION_KEY", "ci-test-encryption-key-must-be-32-bytes!")
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
 
 	config, err := Load()
 	require.NoError(t, err)
@@ -279,7 +279,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, "prod_bot_token", config.Telegram.BotToken)
 	assert.Equal(t, "https://prod-api.example.com/webhook", config.Telegram.WebhookURL)
 	assert.Equal(t, "ci-test-secret-key-should-be-32-chars!!", config.Auth.JWTSecret)
-	assert.Equal(t, "ci-test-encryption-key-must-be-32-bytes!", config.Security.EncryptionKey)
+	assert.Equal(t, "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=", config.Security.EncryptionKey)
 }
 
 func TestCCXTConfig_GetServiceURL(t *testing.T) {
@@ -344,11 +344,12 @@ func TestLoad_ProductionRejectsShortEncryptionKey(t *testing.T) {
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("DATABASE_DRIVER", "postgres")
 	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
-	t.Setenv("SECURITY_ENCRYPTION_KEY", "too-short")
+	// Base64-encoded string that decodes to fewer than 32 bytes
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "dG9vLXNob3J0")
 
 	config, err := Load()
 	assert.Nil(t, config)
-	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must be at least 32 characters long")
+	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes")
 }
 
 func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {

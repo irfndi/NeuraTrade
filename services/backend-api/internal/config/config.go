@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -736,9 +737,13 @@ func validateConfig(config *Config) error {
 			return fmt.Errorf("SECURITY_ENCRYPTION_KEY cannot be empty in %s environment. Exchange API keys must be encrypted", config.Environment)
 		}
 
-		// Validate encryption key length (must be at least 32 bytes for AES-256-GCM)
-		if len(config.Security.EncryptionKey) < 32 {
-			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must be at least 32 characters long in %s environment", config.Environment)
+		// Validate encryption key decodes to at least 32 bytes for AES-256-GCM
+		decodedKey, decodeErr := base64.StdEncoding.DecodeString(config.Security.EncryptionKey)
+		if decodeErr != nil {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must be valid base64 in %s environment: %w", config.Environment, decodeErr)
+		}
+		if len(decodedKey) < 32 {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes for AES-256-GCM in %s environment (got %d bytes)", config.Environment, len(decodedKey))
 		}
 
 	}

@@ -87,7 +87,9 @@ func (e *CCXTOrderExecutor) doWithRetry(ctx context.Context, makeReq func() (*ht
 	if err != nil {
 		return nil, fmt.Errorf("request failed after %d retries: %w", e.maxRetries, err)
 	}
-	return resp, fmt.Errorf("request failed with status %d after %d retries", resp.StatusCode, e.maxRetries)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return nil, fmt.Errorf("request failed with status %d after %d retries", resp.StatusCode, e.maxRetries)
 }
 
 func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
