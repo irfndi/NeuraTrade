@@ -53,10 +53,10 @@ func run() error {
 	}
 
 	strategies := []struct {
-		id      string
-		symbol  string
+		id        string
+		symbol    string
 		minTrades int
-		winRate float64
+		winRate   float64
 	}{
 		{"scalping", "BTC/USDT", 25, 0.65},
 		{"daily_trading", "ETH/USDT", 10, 0.60},

@@ -172,10 +172,10 @@ func generateSyntheticCandles(symbol, timeframe string, days int, seed int64) []
 		drift   float64
 		volMult float64
 	}{
-		{0.0003, 1.0},   // bull - slight upward drift
-		{-0.0005, 1.2},  // bear - downward drift, higher vol
-		{0.0001, 0.6},   // sideways - low vol
-		{-0.0002, 1.5},  // volatile chop
+		{0.0003, 1.0},  // bull - slight upward drift
+		{-0.0005, 1.2}, // bear - downward drift, higher vol
+		{0.0001, 0.6},  // sideways - low vol
+		{-0.0002, 1.5}, // volatile chop
 	}
 
 	now := time.Now().UTC()
