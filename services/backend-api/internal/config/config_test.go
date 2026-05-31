@@ -251,6 +251,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "prod_bot_token")
 	t.Setenv("TELEGRAM_WEBHOOK_URL", "https://prod-api.example.com/webhook")
 	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
 
 	config, err := Load()
 	require.NoError(t, err)
@@ -278,6 +279,7 @@ func TestLoad_WithEnvironmentVariables(t *testing.T) {
 	assert.Equal(t, "prod_bot_token", config.Telegram.BotToken)
 	assert.Equal(t, "https://prod-api.example.com/webhook", config.Telegram.WebhookURL)
 	assert.Equal(t, "ci-test-secret-key-should-be-32-chars!!", config.Auth.JWTSecret)
+	assert.Equal(t, "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=", config.Security.EncryptionKey)
 }
 
 func TestCCXTConfig_GetServiceURL(t *testing.T) {
@@ -323,6 +325,44 @@ func TestLoad_WithInvalidDatabaseDriver(t *testing.T) {
 	config, err := Load()
 	assert.Nil(t, config)
 	assert.ErrorContains(t, err, "database.driver must be one of")
+}
+
+func TestLoad_ProductionRequiresEncryptionKey(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
+	// Intentionally omit SECURITY_ENCRYPTION_KEY
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY cannot be empty in production environment")
+}
+
+func TestLoad_ProductionRejectsShortEncryptionKey(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
+	// Base64-encoded string that decodes to fewer than 32 bytes
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "dG9vLXNob3J0")
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes")
+}
+
+func TestLoad_ProductionRejectsInvalidBase64EncryptionKey(t *testing.T) {
+	os.Clearenv()
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("AUTH_JWT_SECRET", "ci-test-secret-key-should-be-32-chars!!")
+	// Not valid base64 — contains characters outside base64 alphabet and wrong padding
+	t.Setenv("SECURITY_ENCRYPTION_KEY", "not-valid-base64!!!")
+
+	config, err := Load()
+	assert.Nil(t, config)
+	assert.ErrorContains(t, err, "SECURITY_ENCRYPTION_KEY must be valid base64")
 }
 
 func TestLoad_SQLiteDriverRejectsWhitespacePath(t *testing.T) {

@@ -508,7 +508,7 @@ func run() error {
 	}
 
 	// Setup routes and get cleanup function
-	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
+	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security)
 	if err != nil {
 		return fmt.Errorf("failed to setup routes: %w", err)
 	}

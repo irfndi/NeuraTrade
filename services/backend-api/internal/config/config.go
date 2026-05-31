@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -729,6 +730,20 @@ func validateConfig(config *Config) error {
 			if config.Auth.JWTSecret == insecure {
 				return fmt.Errorf("JWT_SECRET '%s' is insecure and not allowed in %s environment. Please use a secure, randomly generated secret", insecure, config.Environment)
 			}
+		}
+
+		// Require encryption key for API key storage in production
+		if strings.TrimSpace(config.Security.EncryptionKey) == "" {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY cannot be empty in %s environment. Exchange API keys must be encrypted", config.Environment)
+		}
+
+		// Validate encryption key decodes to at least 32 bytes for AES-256-GCM
+		decodedKey, decodeErr := base64.StdEncoding.DecodeString(config.Security.EncryptionKey)
+		if decodeErr != nil {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must be valid base64 in %s environment: %w", config.Environment, decodeErr)
+		}
+		if len(decodedKey) < 32 {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes for AES-256-GCM in %s environment (got %d bytes)", config.Environment, len(decodedKey))
 		}
 
 	}

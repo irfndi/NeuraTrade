@@ -14,7 +14,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,65 +28,13 @@ func (m mockRouteDB) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// setupMockDB creates a mock database pool with all expected initialization queries
+// setupMockDB creates a real SQLite in-memory database for route tests.
+// Using a real database avoids fragile pgxmock expectations for schema init SQL.
 func setupMockDB(t *testing.T) mockRouteDB {
 	t.Helper()
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err, "Failed to create mock pool")
-
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-
-	// Lifecycle store initialization
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS realized_pnl_journal").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN chat_id TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN market_type TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN filled_amount NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN source TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN closed_at TIMESTAMP").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN chat_id TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN market_type TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN close_price NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN realized_pnl NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN source TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN closed_at TIMESTAMP").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-
-	return mockRouteDB{DBPool: database.NewMockDBPool(mock)}
+	db, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err, "Failed to create SQLite database")
+	return mockRouteDB{DBPool: db}
 }
 
 // Helper functions for environment variable management with proper error handling
@@ -385,7 +332,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 	assert.NotNil(t, router)
 
 	assert.Panics(t, func() {
-		_, _ = SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		_, _ = SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -429,7 +376,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	assert.NotPanics(t, func() {
-		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -487,7 +434,7 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -552,7 +499,7 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -620,7 +567,7 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -676,7 +623,7 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -720,7 +667,7 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 			}),
 		}
 		mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered
@@ -758,7 +705,7 @@ func TestSetupRoutes_AIUserRoutesRequireAuth(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ai/status/user-123", nil)
 	rec := httptest.NewRecorder()
@@ -798,7 +745,7 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/telegram/internal/quests", nil)
 	rec := httptest.NewRecorder()
@@ -838,7 +785,7 @@ func TestSetupRoutes_TelegramLegacyInternalAliasesRequireAdminAuth(t *testing.T)
 		}),
 	}
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil)
 
 	legacyPaths := []struct {
 		method string
