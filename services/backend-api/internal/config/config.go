@@ -731,6 +731,16 @@ func validateConfig(config *Config) error {
 			}
 		}
 
+		// Require encryption key for API key storage in production
+		if strings.TrimSpace(config.Security.EncryptionKey) == "" {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY cannot be empty in %s environment. Exchange API keys must be encrypted", config.Environment)
+		}
+
+		// Validate encryption key length (must be at least 32 bytes for AES-256-GCM)
+		if len(config.Security.EncryptionKey) < 32 {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must be at least 32 characters long in %s environment", config.Environment)
+		}
+
 	}
 
 	if config.LiveReadiness.Enabled {

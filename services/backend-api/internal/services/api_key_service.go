@@ -26,8 +26,8 @@ type APIKeyService struct {
 }
 
 func NewAPIKeyService(db database.DBPool, encryptionKey string) (*APIKeyService, error) {
-	if encryptionKey == "" {
-		return &APIKeyService{db: db, encryptor: nil}, nil
+	if strings.TrimSpace(encryptionKey) == "" {
+		return nil, ErrEncryptionKeyNotConfigured
 	}
 
 	key, err := utils.ParseKey(encryptionKey)
