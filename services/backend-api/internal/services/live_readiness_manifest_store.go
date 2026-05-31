@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	liveReadinessManifestTable         = "live_readiness_manifests"
-	liveReadinessManifestStrategyTable = "live_readiness_manifest_strategies"
-	liveReadinessManifestCreatedIdx    = "idx_live_readiness_manifests_created_at"
-	liveReadinessManifestStrategyIdx   = "idx_live_readiness_manifest_strategies_strategy"
+	liveReadinessManifestTable           = "live_readiness_manifests"
+	liveReadinessManifestStrategyTable   = "live_readiness_manifest_strategies"
+	liveReadinessManifestAcceptanceIdx   = "idx_live_readiness_manifests_acceptance_ready"
+	liveReadinessManifestCreatedIdx      = "idx_live_readiness_manifests_created_at"
+	liveReadinessManifestStrategyIdx     = "idx_live_readiness_manifest_strategies_strategy"
 )
 
 // LiveReadinessManifestStore persists paper-trading readiness manifests and
@@ -50,8 +51,14 @@ func (s *LiveReadinessManifestStore) InitSchema(ctx context.Context) error {
 		return fmt.Errorf("failed to create %s table: %w", liveReadinessManifestTable, err)
 	}
 
-	_, err = s.db.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+liveReadinessManifestCreatedIdx+
+	_, err = s.db.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+liveReadinessManifestAcceptanceIdx+
 		" ON "+liveReadinessManifestTable+"(acceptance_ready, created_at DESC)")
+	if err != nil {
+		return fmt.Errorf("failed to create %s index: %w", liveReadinessManifestAcceptanceIdx, err)
+	}
+
+	_, err = s.db.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+liveReadinessManifestCreatedIdx+
+		" ON "+liveReadinessManifestTable+"(created_at DESC)")
 	if err != nil {
 		return fmt.Errorf("failed to create %s index: %w", liveReadinessManifestCreatedIdx, err)
 	}

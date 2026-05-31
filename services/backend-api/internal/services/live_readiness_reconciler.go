@@ -108,7 +108,12 @@ func (r *LiveReadinessReconciler) LastError() error {
 }
 
 func (r *LiveReadinessReconciler) loop(ctx context.Context) {
-	defer close(r.stopDone)
+	defer func() {
+		r.mu.Lock()
+		r.running = false
+		r.mu.Unlock()
+		close(r.stopDone)
+	}()
 
 	ticker := time.NewTicker(r.config.Interval)
 	defer ticker.Stop()
@@ -145,7 +150,11 @@ func (r *LiveReadinessReconciler) reconcile(ctx context.Context) {
 	}
 
 	if manifest.Acceptance.Ready {
-		if _, err := generator.SaveManifestToDB(ctx, r.store, manifest); err != nil {
+		if r.store == nil {
+			if r.logger != nil {
+				r.logger.Warn("Live readiness reconciler: manifest ready but no store configured, skipping DB persistence")
+			}
+		} else if _, err := generator.SaveManifestToDB(ctx, r.store, manifest); err != nil {
 			r.mu.Lock()
 			r.lastError = fmt.Errorf("save ready manifest: %w", err)
 			r.mu.Unlock()

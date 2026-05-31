@@ -131,10 +131,13 @@ func loadLiveReadinessManifest(ctx context.Context, store *LiveReadinessManifest
 
 	// Try database first when a store is available.
 	if store != nil {
-		dbManifest, err := store.GetLatestReadyManifest(ctx)
-		if err == nil && dbManifest != nil {
+		dbManifest, dbErr := store.GetLatestReadyManifest(ctx)
+		if dbErr == nil && dbManifest != nil {
 			manifest = convertPaperManifestToLiveManifest(dbManifest)
 			return manifest, nil
+		}
+		if dbErr != nil && path == "" {
+			return manifest, fmt.Errorf("live mode blocked: database query failed: %w", dbErr)
 		}
 	}
 
@@ -175,8 +178,12 @@ func convertPaperManifestToLiveManifest(pm *PaperTradingReadinessManifest) LiveR
 			metrics.NoTradeSafety = true
 			metrics.NoTradeReason = "zero closed trades in arbitrage"
 		}
+		ready := se.ClosedTrades > 0 && pm.Acceptance.Ready
+		if se.Strategy == "arbitrage" && metrics.NoTradeSafety {
+			ready = pm.Acceptance.Ready
+		}
 		lm.Strategies[se.Strategy] = StrategyLiveReadiness{
-			Ready:           se.ClosedTrades > 0 && pm.Acceptance.Ready,
+			Ready:           ready,
 			Evidence:        fmt.Sprintf("closed=%d open=%d win_rate=%s pnl=%s", se.ClosedTrades, se.OpenPositions, se.WinRate.StringFixed(4), se.NetPnL.StringFixed(4)),
 			VerifiedAt:      pm.Timestamp,
 			EvidenceMetrics: metrics,
