@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	liveReadinessManifestTable           = "live_readiness_manifests"
-	liveReadinessManifestStrategyTable   = "live_readiness_manifest_strategies"
-	liveReadinessManifestAcceptanceIdx   = "idx_live_readiness_manifests_acceptance_ready"
-	liveReadinessManifestCreatedIdx      = "idx_live_readiness_manifests_created_at"
-	liveReadinessManifestStrategyIdx     = "idx_live_readiness_manifest_strategies_strategy"
+	liveReadinessManifestTable         = "live_readiness_manifests"
+	liveReadinessManifestStrategyTable = "live_readiness_manifest_strategies"
+	liveReadinessManifestAcceptanceIdx = "idx_live_readiness_manifests_acceptance_ready"
+	liveReadinessManifestCreatedIdx    = "idx_live_readiness_manifests_created_at"
+	liveReadinessManifestStrategyIdx   = "idx_live_readiness_manifest_strategies_strategy"
 )
 
 // LiveReadinessManifestStore persists paper-trading readiness manifests and
