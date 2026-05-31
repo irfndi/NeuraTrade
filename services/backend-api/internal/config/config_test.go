@@ -63,6 +63,11 @@ func TestConfig_Struct(t *testing.T) {
 			VolatilityHighThreshold: 0.03,
 			VolatilityLowThreshold:  0.005,
 		},
+		LiveReadiness: LiveReadinessConfig{
+			Enabled:       true,
+			IntervalHours: 2,
+			LookbackHours: 72,
+		},
 	}
 
 	assert.Equal(t, "test", config.Environment)
@@ -95,6 +100,9 @@ func TestConfig_Struct(t *testing.T) {
 	assert.Equal(t, 0.0008, config.Fees.DefaultMakerFee)
 	assert.True(t, config.Analytics.EnableForecasting)
 	assert.Equal(t, 120, config.Analytics.ForecastLookback)
+	assert.True(t, config.LiveReadiness.Enabled)
+	assert.Equal(t, 2, config.LiveReadiness.IntervalHours)
+	assert.Equal(t, 72, config.LiveReadiness.LookbackHours)
 }
 
 func TestServerConfig_Struct(t *testing.T) {

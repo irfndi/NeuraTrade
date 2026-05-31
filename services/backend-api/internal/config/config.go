@@ -54,6 +54,8 @@ type Config struct {
 	AI AIConfig `mapstructure:"ai"`
 	// Features holds feature flags.
 	Features FeaturesConfig `mapstructure:"features"`
+	// LiveReadiness holds configuration for the live-readiness reconciler.
+	LiveReadiness LiveReadinessConfig `mapstructure:"live_readiness"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -384,6 +386,16 @@ type FeaturesConfig struct {
 	EnableAIArbitrage bool `mapstructure:"enable_ai_arbitrage"`
 }
 
+// LiveReadinessConfig holds configuration for the live-readiness reconciler.
+type LiveReadinessConfig struct {
+	// Enabled controls whether the background reconciler runs.
+	Enabled bool `mapstructure:"enabled"`
+	// IntervalHours is the tick interval between reconciliations.
+	IntervalHours int `mapstructure:"interval_hours"`
+	// LookbackHours is how far back the reconciler looks for evidence.
+	LookbackHours int `mapstructure:"lookback_hours"`
+}
+
 func Load() (*Config, error) {
 	// First: add user-local NeuraTrade config path.
 	if dir := neuratradeHomeDir(); dir != "" {
@@ -638,6 +650,11 @@ func setDefaults() {
 	viper.SetDefault("features.enable_ai_scalping", true)
 	viper.SetDefault("features.enable_ai_signals", false)
 	viper.SetDefault("features.enable_ai_arbitrage", false)
+
+	// Live readiness reconciler defaults
+	viper.SetDefault("live_readiness.enabled", true)
+	viper.SetDefault("live_readiness.interval_hours", 1)
+	viper.SetDefault("live_readiness.lookback_hours", 168)
 }
 
 func neuratradeHomeDir() string {
@@ -714,6 +731,15 @@ func validateConfig(config *Config) error {
 			}
 		}
 
+	}
+
+	if config.LiveReadiness.Enabled {
+		if config.LiveReadiness.IntervalHours <= 0 {
+			return fmt.Errorf("live_readiness.interval_hours must be > 0 when live_readiness.enabled=true")
+		}
+		if config.LiveReadiness.LookbackHours <= 0 {
+			return fmt.Errorf("live_readiness.lookback_hours must be > 0 when live_readiness.enabled=true")
+		}
 	}
 
 	return nil
