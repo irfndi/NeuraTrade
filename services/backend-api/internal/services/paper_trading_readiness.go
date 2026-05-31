@@ -294,6 +294,38 @@ func (g *ReadinessManifestGenerator) SaveManifest(manifest *PaperTradingReadines
 	return nil
 }
 
+// SaveManifestToDB persists the manifest to the database via the given store.
+// This is invoked automatically by the reconciler when acceptance criteria pass.
+func (g *ReadinessManifestGenerator) SaveManifestToDB(ctx context.Context, store *LiveReadinessManifestStore, manifest *PaperTradingReadinessManifest) (string, error) {
+	if store == nil {
+		return "", fmt.Errorf("live readiness manifest store is nil")
+	}
+	if manifest == nil {
+		return "", fmt.Errorf("manifest is nil")
+	}
+	id, err := store.SaveManifest(ctx, manifest)
+	if err != nil {
+		return "", fmt.Errorf("failed to save manifest to db: %w", err)
+	}
+	g.logger.Info(fmt.Sprintf("Paper trading readiness manifest saved to database: %s", id))
+	return id, nil
+}
+
+// AutoSaveManifest saves the manifest to a file and, when acceptance criteria
+// pass, also persists it to the database so that containerised deployments can
+// query readiness without a shared filesystem.
+func (g *ReadinessManifestGenerator) AutoSaveManifest(ctx context.Context, store *LiveReadinessManifestStore, manifest *PaperTradingReadinessManifest, outputPath string) error {
+	if err := g.SaveManifest(manifest, outputPath); err != nil {
+		return fmt.Errorf("file save failed: %w", err)
+	}
+	if manifest.Acceptance.Ready && store != nil {
+		if _, err := g.SaveManifestToDB(ctx, store, manifest); err != nil {
+			return fmt.Errorf("db save failed: %w", err)
+		}
+	}
+	return nil
+}
+
 // PrintManifest prints the manifest to stdout.
 func (g *ReadinessManifestGenerator) PrintManifest(manifest *PaperTradingReadinessManifest) {
 	fmt.Println("========================================")

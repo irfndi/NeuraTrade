@@ -64,17 +64,30 @@ type cachedManifest struct {
 // evidence for each required strategy. The manifest is cached in memory for 30
 // seconds to avoid re-reading from disk on every live-mode check.
 func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) OperationalLiveModeGuard {
+	return manifestLiveModeGuard(manifestPath, nil, requiredStrategies)
+}
+
+// DBManifestLiveModeGuard requires a JSON manifest with ready=true and non-empty
+// evidence for each required strategy.  It first consults the database via the
+// given store (latest ready manifest) and falls back to the file path when the
+// DB is empty or unavailable.  This makes containerised deployments safe without
+// a shared filesystem.
+func DBManifestLiveModeGuard(store *LiveReadinessManifestStore, manifestPath string, requiredStrategies []string) OperationalLiveModeGuard {
+	return manifestLiveModeGuard(manifestPath, store, requiredStrategies)
+}
+
+func manifestLiveModeGuard(manifestPath string, store *LiveReadinessManifestStore, requiredStrategies []string) OperationalLiveModeGuard {
 	required := normalizeReadinessStrategies(requiredStrategies)
 	var mu sync.RWMutex
 	var cache *cachedManifest
 	const cacheTTL = 30 * time.Second
 
-	return func(_ context.Context, _ string) error {
+	return func(ctx context.Context, _ string) error {
 		if len(required) == 0 {
 			return nil
 		}
 		path := strings.TrimSpace(manifestPath)
-		if path == "" {
+		if path == "" && store == nil {
 			return fmt.Errorf(
 				"live mode blocked: %s is required with verified evidence for %s",
 				LiveReadinessManifestEnv,
@@ -102,22 +115,74 @@ func ManifestLiveModeGuard(manifestPath string, requiredStrategies []string) Ope
 			return evaluateReadinessBlockers(required, cache.manifest)
 		}
 
-		// #nosec G304 -- path is operator-configured via NEURATRADE_LIVE_READINESS_MANIFEST.
-		raw, err := os.ReadFile(path)
+		manifest, err := loadLiveReadinessManifest(ctx, store, path)
 		if err != nil {
-			cache = &cachedManifest{err: fmt.Errorf("live mode blocked: read readiness manifest %q: %w", path, err), loadedAt: time.Now()}
-			return cache.err
-		}
-
-		var manifest LiveReadinessManifest
-		if err := json.Unmarshal(raw, &manifest); err != nil {
-			cache = &cachedManifest{err: fmt.Errorf("live mode blocked: parse readiness manifest %q: %w", path, err), loadedAt: time.Now()}
+			cache = &cachedManifest{err: err, loadedAt: time.Now()}
 			return cache.err
 		}
 
 		cache = &cachedManifest{manifest: manifest, loadedAt: time.Now()}
 		return evaluateReadinessBlockers(required, manifest)
 	}
+}
+
+func loadLiveReadinessManifest(ctx context.Context, store *LiveReadinessManifestStore, path string) (LiveReadinessManifest, error) {
+	var manifest LiveReadinessManifest
+
+	// Try database first when a store is available.
+	if store != nil {
+		dbManifest, err := store.GetLatestReadyManifest(ctx)
+		if err == nil && dbManifest != nil {
+			manifest = convertPaperManifestToLiveManifest(dbManifest)
+			return manifest, nil
+		}
+	}
+
+	if path == "" {
+		return manifest, fmt.Errorf("live mode blocked: no readiness manifest available (db empty and no file path)")
+	}
+
+	// Fall back to filesystem.
+	// #nosec G304 -- path is operator-configured via NEURATRADE_LIVE_READINESS_MANIFEST.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return manifest, fmt.Errorf("live mode blocked: read readiness manifest %q: %w", path, err)
+	}
+
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return manifest, fmt.Errorf("live mode blocked: parse readiness manifest %q: %w", path, err)
+	}
+	return manifest, nil
+}
+
+func convertPaperManifestToLiveManifest(pm *PaperTradingReadinessManifest) LiveReadinessManifest {
+	lm := LiveReadinessManifest{
+		UpdatedAt:  pm.Timestamp,
+		Strategies: make(map[string]StrategyLiveReadiness, len(pm.Strategies)),
+	}
+	for _, se := range pm.Strategies {
+		metrics := &StrategyReadinessEvidence{
+			ClosedTrades:   se.ClosedTrades,
+			WinningTrades:  se.WinningTrades,
+			LosingTrades:   se.LosingTrades,
+			OpenPositions:  se.OpenPositions,
+			NetPnL:         se.NetPnL.StringFixed(4),
+			AvgNetPnL:      se.AvgNetPnL.StringFixed(4),
+			MaxDrawdownPct: se.MaxDrawdown.StringFixed(4),
+		}
+		// Arbitrage can declare no-trade safety when there are zero closed trades.
+		if se.Strategy == "arbitrage" && se.ClosedTrades == 0 {
+			metrics.NoTradeSafety = true
+			metrics.NoTradeReason = "zero closed trades in arbitrage"
+		}
+		lm.Strategies[se.Strategy] = StrategyLiveReadiness{
+			Ready:           se.ClosedTrades > 0 && pm.Acceptance.Ready,
+			Evidence:        fmt.Sprintf("closed=%d open=%d win_rate=%s pnl=%s", se.ClosedTrades, se.OpenPositions, se.WinRate.StringFixed(4), se.NetPnL.StringFixed(4)),
+			VerifiedAt:      pm.Timestamp,
+			EvidenceMetrics: metrics,
+		}
+	}
+	return lm
 }
 
 func evaluateReadinessBlockers(required []string, manifest LiveReadinessManifest) error {
