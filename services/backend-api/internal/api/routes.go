@@ -116,6 +116,9 @@ func configureLiveReadinessGuard(opModeService *services.OperationalModeService,
 	var store *services.LiveReadinessManifestStore
 	if db != nil {
 		store = services.NewLiveReadinessManifestStore(db)
+		if err := store.InitSchema(context.Background()); err != nil {
+			zaplogrus.Warnf("Failed to initialize live readiness manifest schema, relying on file fallback: %v", err)
+		}
 	}
 	opModeService.SetLiveModeGuard(services.DBManifestLiveModeGuard(store, manifestPath, requiredStrategies))
 	if manifestPath != "" {
