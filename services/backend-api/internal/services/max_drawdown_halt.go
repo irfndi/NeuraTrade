@@ -235,10 +235,18 @@ func (h *MaxDrawdownHalt) LoadStates(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to scan drawdown state: %w", err)
 		}
-		s.PeakValue, _ = decimal.NewFromString(peakStr)
-		s.CurrentValue, _ = decimal.NewFromString(currentStr)
-		s.CurrentDrawdown, _ = decimal.NewFromString(drawdownStr)
-		s.MaxDrawdownSeen, _ = decimal.NewFromString(maxSeenStr)
+		peakVal, peakErr := decimal.NewFromString(peakStr)
+		currentVal, currentErr := decimal.NewFromString(currentStr)
+		drawdownVal, drawdownErr := decimal.NewFromString(drawdownStr)
+		maxSeenVal, maxSeenErr := decimal.NewFromString(maxSeenStr)
+		if peakErr != nil || currentErr != nil || drawdownErr != nil || maxSeenErr != nil {
+			zaplogrus.Warnf("[DRAWDOWN] Skipping corrupt state for chat %s: parse error", s.ChatID)
+			continue
+		}
+		s.PeakValue = peakVal
+		s.CurrentValue = currentVal
+		s.CurrentDrawdown = drawdownVal
+		s.MaxDrawdownSeen = maxSeenVal
 		if haltedAt.Valid {
 			s.HaltedAt = &haltedAt.Time
 		}
@@ -456,6 +464,14 @@ func (h *MaxDrawdownHalt) GetState(chatID string) (*DrawdownState, bool) {
 func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, _ string) error {
 	h.mu.Lock()
 
+	var stateToSave *DrawdownState
+	defer func() {
+		h.mu.Unlock()
+		if stateToSave != nil {
+			h.saveState(ctx, stateToSave)
+		}
+	}()
+
 	state, exists := h.states[chatID]
 	if !exists {
 		state = &DrawdownState{
@@ -473,23 +489,27 @@ func (h *MaxDrawdownHalt) ForceHalt(ctx context.Context, chatID string, _ string
 	state.HaltCount++
 	h.metrics.IncrementHalt()
 
-	h.mu.Unlock()
-	h.saveState(ctx, state)
-
+	stateToSave = state
 	return nil
 }
 
 func (h *MaxDrawdownHalt) ResumeTrading(ctx context.Context, chatID string) error {
 	h.mu.Lock()
 
+	var stateToSave *DrawdownState
+	defer func() {
+		h.mu.Unlock()
+		if stateToSave != nil {
+			h.saveState(ctx, stateToSave)
+		}
+	}()
+
 	state, exists := h.states[chatID]
 	if !exists {
-		h.mu.Unlock()
 		return fmt.Errorf("no state found for chat %s", chatID)
 	}
 
 	if !state.TradingHalted {
-		h.mu.Unlock()
 		return fmt.Errorf("trading is not halted for chat %s", chatID)
 	}
 
@@ -500,9 +520,7 @@ func (h *MaxDrawdownHalt) ResumeTrading(ctx context.Context, chatID string) erro
 	state.RecoveredAt = &now
 	h.metrics.IncrementRecovery()
 
-	h.mu.Unlock()
-	h.saveState(ctx, state)
-
+	stateToSave = state
 	return nil
 }
 
@@ -580,6 +598,14 @@ func (h *MaxDrawdownHalt) CalculateDrawdown(peak, current decimal.Decimal) decim
 func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue decimal.Decimal) error {
 	h.mu.Lock()
 
+	var stateToSave *DrawdownState
+	defer func() {
+		h.mu.Unlock()
+		if stateToSave != nil {
+			h.saveState(ctx, stateToSave)
+		}
+	}()
+
 	state, exists := h.states[chatID]
 	if !exists {
 		state = &DrawdownState{
@@ -593,9 +619,7 @@ func (h *MaxDrawdownHalt) ResetPeak(ctx context.Context, chatID string, newValue
 	state.CurrentValue = newValue
 	state.CurrentDrawdown = decimal.Zero
 
-	h.mu.Unlock()
-	h.saveState(ctx, state)
-
+	stateToSave = state
 	return nil
 }
 
@@ -605,8 +629,15 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 	h.mu.Lock()
 
 	resumed := make([]string, 0)
-	resumedStates := make([]*DrawdownState, 0)
+	var statesToSave []*DrawdownState
 	now := time.Now().UTC()
+
+	defer func() {
+		h.mu.Unlock()
+		for _, s := range statesToSave {
+			h.saveState(ctx, s)
+		}
+	}()
 
 	for chatID, state := range h.states {
 		if state.TradingHalted {
@@ -616,14 +647,8 @@ func (h *MaxDrawdownHalt) ForceResumeAll(ctx context.Context) []string {
 			state.RecoveredAt = &now
 			h.metrics.IncrementRecovery()
 			resumed = append(resumed, chatID)
-			resumedStates = append(resumedStates, state)
+			statesToSave = append(statesToSave, state)
 		}
-	}
-
-	h.mu.Unlock()
-
-	for _, state := range resumedStates {
-		h.saveState(ctx, state)
 	}
 
 	if len(resumed) > 0 {

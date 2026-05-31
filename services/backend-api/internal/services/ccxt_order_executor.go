@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
 
@@ -76,7 +78,8 @@ func (e *CCXTOrderExecutor) doWithRetry(ctx context.Context, makeReq func() (*ht
 			return resp, nil
 		}
 		if err == nil {
-			// 5xx response; drain and close body before retry.
+			// 5xx response; drain and close body before retry to allow connection reuse.
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 		}
 	}
@@ -105,12 +108,15 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	idempotencyKey := uuid.New().String()
+
 	resp, err := e.doWithRetry(ctx, func() (*http.Request, error) {
 		httpReq, reqErr := http.NewRequestWithContext(ctx, "POST", e.serviceURL+"/api/order", bytes.NewBuffer(jsonBody))
 		if reqErr != nil {
 			return nil, reqErr
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("X-Idempotency-Key", idempotencyKey)
 		if e.apiKey != "" {
 			httpReq.Header.Set("X-API-Key", e.apiKey)
 		}

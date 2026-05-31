@@ -602,8 +602,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := drawdownHalt.InitSchema(initCtx); err != nil {
 			zaplogrus.Warnf("Failed to initialize drawdown halt schema: %v", err)
-		}
-		if err := drawdownHalt.LoadStates(initCtx); err != nil {
+		} else if err := drawdownHalt.LoadStates(initCtx); err != nil {
 			zaplogrus.Warnf("Failed to load drawdown states: %v", err)
 		}
 		initCancel()
