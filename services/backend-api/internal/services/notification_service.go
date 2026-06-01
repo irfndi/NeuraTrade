@@ -7,14 +7,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/irfndi/neuratrade/internal/grpcutil"
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/telemetry"
 	pb "github.com/irfndi/neuratrade/pkg/pb/telegram"
@@ -69,14 +71,21 @@ func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServ
 	}
 
 	if telegramGrpcAddress != "" {
-		// Use insecure credentials for internal communication
-		conn, err := grpc.NewClient(telegramGrpcAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			ns.logger.Error("Failed to connect to Telegram gRPC service", "address", telegramGrpcAddress, "error", err)
+		dialOpts, dialErr := grpcutil.DialOptions(config.GRPCClientConfig{
+			TLSCACertFile: os.Getenv("NEURATRADE_GRPC_TLS_CA_FILE"),
+			ServerName:    telegramGrpcAddress,
+		})
+		if dialErr != nil {
+			ns.logger.Error("Failed to resolve Telegram gRPC dial options", "address", telegramGrpcAddress, "error", dialErr)
 		} else {
-			ns.grpcClient = pb.NewTelegramServiceClient(conn)
-			ns.grpcConn = conn
-			ns.logger.Info("Connected to Telegram gRPC service", "address", telegramGrpcAddress)
+			conn, err := grpc.NewClient(telegramGrpcAddress, dialOpts...)
+			if err != nil {
+				ns.logger.Error("Failed to connect to Telegram gRPC service", "address", telegramGrpcAddress, "error", err)
+			} else {
+				ns.grpcClient = pb.NewTelegramServiceClient(conn)
+				ns.grpcConn = conn
+				ns.logger.Info("Connected to Telegram gRPC service", "address", telegramGrpcAddress)
+			}
 		}
 	}
 

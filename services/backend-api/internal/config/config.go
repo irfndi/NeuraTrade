@@ -57,6 +57,14 @@ type Config struct {
 	Features FeaturesConfig `mapstructure:"features"`
 	// LiveReadiness holds configuration for the live-readiness reconciler.
 	LiveReadiness LiveReadinessConfig `mapstructure:"live_readiness"`
+	// GRPC holds gRPC client transport settings shared across services.
+	GRPC GRPCClientConfig `mapstructure:"grpc"`
+}
+
+type GRPCClientConfig struct {
+	TLSCACertFile string `mapstructure:"tls_ca_file"`
+	TLSAuthType   string `mapstructure:"tls_auth_type"`
+	ServerName    string `mapstructure:"server_name"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -148,6 +156,9 @@ type CCXTConfig struct {
 	AdminAPIKey string `mapstructure:"admin_api_key"`
 	// Exchanges holds exchange-specific credentials.
 	Exchanges map[string]ExchangeCredentials `mapstructure:"exchanges"`
+	// GrpcTLSCACertFile is the path to the CA bundle used to verify the
+	// CCXT gRPC server certificate. Empty means insecure (dev only).
+	GrpcTLSCACertFile string `mapstructure:"grpc_tls_ca_file"`
 }
 
 // ExchangeCredentials holds API credentials for an exchange.
@@ -448,6 +459,12 @@ func Load() (*Config, error) {
 
 	_ = viper.BindEnv("security.cors_allowed_origins", "NEURATRADE_CORS_ALLOWED_ORIGINS")
 
+	_ = viper.BindEnv("ccxt.grpc_tls_ca_file", "CCXT_GRPC_TLS_CA_FILE")
+
+	_ = viper.BindEnv("grpc.tls_ca_file", "NEURATRADE_GRPC_TLS_CA_FILE")
+	_ = viper.BindEnv("grpc.tls_auth_type", "NEURATRADE_GRPC_TLS_AUTH_TYPE")
+	_ = viper.BindEnv("grpc.server_name", "NEURATRADE_GRPC_SERVER_NAME")
+
 	// Bind Telegram service environment variables
 	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
 	_ = viper.BindEnv("telegram.grpc_address", "TELEGRAM_GRPC_ADDRESS")
@@ -616,6 +633,12 @@ func setDefaults() {
 	// Security
 	viper.SetDefault("security.encryption_key", "")
 	viper.SetDefault("security.cors_allowed_origins", []string{})
+
+	viper.SetDefault("ccxt.grpc_tls_ca_file", "")
+
+	viper.SetDefault("grpc.tls_ca_file", "")
+	viper.SetDefault("grpc.tls_auth_type", "")
+	viper.SetDefault("grpc.server_name", "")
 
 	// Fees
 	viper.SetDefault("fees.default_taker_fee", 0.001)
