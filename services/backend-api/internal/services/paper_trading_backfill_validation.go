@@ -626,8 +626,26 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				continue
 			}
 
-			// Calculate ATR-based stop-loss and take-profit
-			atr := candle.High.Sub(candle.Low)
+			// Calculate True Range (not just High-Low): TR = max(High-Low,
+			// |High-PrevClose|, |Low-PrevClose|). Then average over the last
+			// 5 candles for an ATR proxy. This is what Welles Wilder intended
+			// and what most trading-platform backtests use.
+			prevClose := decimal.Zero
+			if n := len(recentCloses); n > 0 {
+				prevClose = recentCloses[n-1]
+			}
+			tr := candle.High.Sub(candle.Low)
+			if !prevClose.IsZero() {
+				highGap := candle.High.Sub(prevClose).Abs()
+				lowGap := candle.Low.Sub(prevClose).Abs()
+				if highGap.GreaterThan(tr) {
+					tr = highGap
+				}
+				if lowGap.GreaterThan(tr) {
+					tr = lowGap
+				}
+			}
+			atr := tr
 			if len(symbolRecentRanges[candle.Symbol]) >= 5 {
 				atr = decimal.Zero
 				for _, r := range symbolRecentRanges[candle.Symbol] {
@@ -635,13 +653,18 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				}
 				atr = atr.Div(decimal.NewFromInt(5))
 			}
+			// SL/TP at 2x ATR. The previous 100x multiplier placed levels
+			// far beyond any reachable move, so trades never closed by
+			// SL/TP and instead always expired at the hold-candle limit.
+			slMultiplier := decimal.NewFromFloat(2.0)
+			tpMultiplier := decimal.NewFromFloat(3.0)
 			var stopLoss, takeProfit decimal.Decimal
 			if orderSide == PaperOrderSideBuy {
-				stopLoss = order.AvgFillPrice.Sub(atr.Mul(decimal.NewFromFloat(100.0)))
-				takeProfit = order.AvgFillPrice.Add(atr.Mul(decimal.NewFromFloat(100.0)))
+				stopLoss = order.AvgFillPrice.Sub(atr.Mul(slMultiplier))
+				takeProfit = order.AvgFillPrice.Add(atr.Mul(tpMultiplier))
 			} else {
-				stopLoss = order.AvgFillPrice.Add(atr.Mul(decimal.NewFromFloat(100.0)))
-				takeProfit = order.AvgFillPrice.Sub(atr.Mul(decimal.NewFromFloat(100.0)))
+				stopLoss = order.AvgFillPrice.Add(atr.Mul(slMultiplier))
+				takeProfit = order.AvgFillPrice.Sub(atr.Mul(tpMultiplier))
 			}
 
 			// Record the open trade
@@ -953,8 +976,10 @@ func (v *PaperTradingBackfillValidation) strategyCoversSymbol(strat *PaperTradin
 
 // evaluateCandleSignal generates a deterministic trading signal based on
 // the current candle and strategy configuration.
-// Uses mean-reversion within uptrend: buy red candles when price is above SMA-5
-// and volume confirms the move.
+// Uses trend-following: in an uptrend, take long entries on green
+// candles closing above SMA-5; in a downtrend, take short entries on
+// red candles closing below SMA-5. Volume above the recent average
+// boosts confidence.
 func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 	candle backfillCandle,
 	strat *PaperTradingStrategy,
@@ -965,24 +990,24 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 		return 0, "hold", ""
 	}
 
-	// Need 20 periods for trend direction and 5 periods for SMA entry timing.
 	if len(recentCloses) < 20 || len(recentVolumes) < 5 {
 		return 0, "hold", ""
 	}
 
-	// 20-candle trend filter: rising = uptrend, falling = downtrend
-	trendUp := recentCloses[len(recentCloses)-1].GreaterThan(recentCloses[0])
+	last := recentCloses[len(recentCloses)-1]
+	first := recentCloses[0]
+	if last.Equal(first) {
+		return 0, "hold", ""
+	}
+	trendUp := last.GreaterThan(first)
 
-	// SMA-5 from the most recent 5 closes (entry timing)
 	sma5 := decimal.Zero
 	for i := len(recentCloses) - 5; i < len(recentCloses); i++ {
 		sma5 = sma5.Add(recentCloses[i])
 	}
 	sma5 = sma5.Div(decimal.NewFromInt(5))
 
-	// Only trade in the direction of the prevailing trend.
 	if trendUp {
-		// Uptrend: only long green candles closing above SMA-5
 		if candle.Close.LessThanOrEqual(candle.Open) {
 			return 0, "hold", ""
 		}
@@ -990,7 +1015,6 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 			return 0, "hold", ""
 		}
 	} else {
-		// Downtrend: only short red candles closing below SMA-5
 		if candle.Close.GreaterThan(candle.Open) {
 			return 0, "hold", ""
 		}
@@ -999,11 +1023,9 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 		}
 	}
 
-	// Confidence based on body size relative to open
 	change := candle.Close.Sub(candle.Open).Div(candle.Open).Abs()
 	confidenceVal, _ := change.Float64()
 
-	// Boost confidence when close is near the extreme of the candle (strong momentum)
 	if candle.High.GreaterThan(candle.Low) {
 		if trendUp {
 			highPos := candle.Close.Sub(candle.Low).Div(candle.High.Sub(candle.Low))
@@ -1016,7 +1038,23 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 		}
 	}
 
-	// Clamp confidence
+	// Volume confirmation: if the current candle's volume is materially
+	// above the recent average, boost confidence; if materially below,
+	// penalize. This makes the strategy prefer breakouts that have
+	// participation rather than thin moves that get faded.
+	if len(recentVolumes) > 0 {
+		avgVol := decimal.Zero
+		for _, v := range recentVolumes {
+			avgVol = avgVol.Add(v)
+		}
+		avgVol = avgVol.Div(decimal.NewFromInt(int64(len(recentVolumes))))
+		if !avgVol.IsZero() {
+			volRatio := candle.Volume.Div(avgVol)
+			ratio, _ := volRatio.Float64()
+			confidenceVal = confidenceVal * (0.5 + ratio/2.0)
+		}
+	}
+
 	if confidenceVal > 0.99 {
 		confidenceVal = 0.99
 	}
