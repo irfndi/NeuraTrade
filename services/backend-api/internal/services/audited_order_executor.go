@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -39,7 +40,12 @@ func (e *AuditedOrderExecutor) IsPaperTrading() bool {
 	return e.inner.IsPaperTrading()
 }
 
+var ErrNoInnerExecutor = errors.New("audited order executor has no inner executor")
+
 func (e *AuditedOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
+	if e.inner == nil {
+		return "", ErrNoInnerExecutor
+	}
 	auditID := uuid.New().String()
 	details := TradeDetails{Exchange: exchange, Symbol: symbol, Side: side, OrderType: orderType, AmountUSDT: amount, EntryPrice: price}
 	e.writeAuditPending(ctx, auditID, details)
@@ -54,7 +60,7 @@ func (e *AuditedOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol,
 
 func (e *AuditedOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
 	if e.inner == nil {
-		return "", fmt.Errorf("audited order executor has no inner executor")
+		return "", ErrNoInnerExecutor
 	}
 	auditID := uuid.New().String()
 	e.captureSafetySnapshot(ctx, &details)
@@ -70,7 +76,7 @@ func (e *AuditedOrderExecutor) PlaceOrderWithDetails(ctx context.Context, detail
 
 func (e *AuditedOrderExecutor) PlaceRiskReductionOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
 	if e.inner == nil {
-		return "", fmt.Errorf("audited order executor has no inner executor")
+		return "", ErrNoInnerExecutor
 	}
 	auditID := uuid.New().String()
 	e.writeAuditPending(ctx, auditID, details)
@@ -96,14 +102,23 @@ func (e *AuditedOrderExecutor) PlaceRiskReductionOrderWithDetails(ctx context.Co
 }
 
 func (e *AuditedOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
+	if e.inner == nil {
+		return nil, ErrNoInnerExecutor
+	}
 	return e.inner.GetOpenOrders(ctx, exchange, symbol)
 }
 
 func (e *AuditedOrderExecutor) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
+	if e.inner == nil {
+		return nil, ErrNoInnerExecutor
+	}
 	return e.inner.GetClosedOrders(ctx, exchange, symbol, limit)
 }
 
 func (e *AuditedOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID string) error {
+	if e.inner == nil {
+		return ErrNoInnerExecutor
+	}
 	return e.inner.CancelOrder(ctx, exchange, orderID)
 }
 

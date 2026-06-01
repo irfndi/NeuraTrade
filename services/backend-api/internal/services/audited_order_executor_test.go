@@ -262,3 +262,28 @@ func TestAuditedOrderExecutor_LongReasoningTruncation(t *testing.T) {
 	assert.Equal(t, "order-long-reason", orderID)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
+
+func TestAuditedOrderExecutor_NilInnerReturnsErrorAcrossAllMethods(t *testing.T) {
+	e := NewAuditedOrderExecutor(nil, nil)
+	ctx := context.Background()
+
+	_, err := e.PlaceOrder(ctx, "bitget", "BTC/USDT", "buy", "market", decimal.NewFromInt(100), nil)
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	_, err = e.PlaceOrderWithDetails(ctx, TradeDetails{Exchange: "bitget", Symbol: "BTC/USDT"})
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	_, err = e.PlaceRiskReductionOrderWithDetails(ctx, TradeDetails{Exchange: "bitget", Symbol: "BTC/USDT"})
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	_, err = e.GetOpenOrders(ctx, "bitget", "BTC/USDT")
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	_, err = e.GetClosedOrders(ctx, "bitget", "BTC/USDT", 10)
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	err = e.CancelOrder(ctx, "bitget", "order-123")
+	assert.ErrorIs(t, err, ErrNoInnerExecutor)
+
+	assert.True(t, e.IsPaperTrading(), "nil inner should report paper trading (safe default)")
+}
