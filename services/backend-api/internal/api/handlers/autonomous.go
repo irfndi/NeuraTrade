@@ -24,14 +24,14 @@ import (
 type AutonomousHandler struct {
 	questEngine         *services.QuestEngine
 	readiness           *ReadinessChecker
-	portfolioSafety      *services.PortfolioSafetyService
-	configuredExchanges  []string
+	portfolioSafety     *services.PortfolioSafetyService
+	configuredExchanges []string
 	reconciler          *services.ExchangePositionReconciler
 	lifecycleStore      *services.TradingLifecycleStore
 	telemetryStore      *services.ScalpingTelemetryStore
-	dbPool               database.DBPool
-	redisClient          *redis.Client
-	exchangeLiquidator   ExchangeLiquidator
+	dbPool              database.DBPool
+	redisClient         *redis.Client
+	exchangeLiquidator  ExchangeLiquidator
 }
 
 // NewAutonomousHandler creates a new autonomous handler
