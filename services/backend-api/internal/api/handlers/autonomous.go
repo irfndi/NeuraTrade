@@ -1118,7 +1118,7 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up position: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to look up position: %v", err)})
 		return
 	}
 
@@ -1126,7 +1126,7 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 	if _, err := h.dbPool.Exec(ctx, `
 		UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
 	`, now, positionID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark position liquidated: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to mark position liquidated: %v", err)})
 		return
 	}
 	if orderID != "" {

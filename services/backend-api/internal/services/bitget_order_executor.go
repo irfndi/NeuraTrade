@@ -97,7 +97,9 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 	if scopedChatID := strings.TrimSpace(scalpingChatIDFromContext(ctx)); scopedChatID != "" {
 		clientOidChatID = scopedChatID
 	}
-	details.ClientOrderID = generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
+	if strings.TrimSpace(details.ClientOrderID) == "" {
+		details.ClientOrderID = generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
+	}
 
 	fmt.Printf("[BITGET-ORDER] Starting order: %s %s (%.2f USDT) clientOid=%s\n",
 		details.Side, apiSymbol, details.AmountUSDT.InexactFloat64(), details.ClientOrderID)
