@@ -1250,6 +1250,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 
 	sharedKillSwitch := apprisk.NewKillSwitch()
+	if db != nil {
+		store := apprisk.NewSQLKillSwitchStore(db)
+		sharedKillSwitch.SetStore(store)
+		if err := sharedKillSwitch.Reconcile(context.Background()); err != nil {
+			zaplogrus.Warnf("kill switch reconcile: %v", err)
+		}
+	}
 	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 
 	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{

@@ -123,15 +123,16 @@ type Application struct {
 
 // Builder builds an Application.
 type Builder struct {
-	config     Config
-	exchanges  ports.ExchangeRegistry
-	state      ports.StateStore
-	notifier   ports.Notifier
-	policy     ports.PolicyEngine
-	killSwitch ports.KillSwitch
-	safeMode   *risk.SafeModeImpl
-	collector  *marketdata.CollectorActor
-	strategy   *strategy.StrategyActor
+	config         Config
+	exchanges      ports.ExchangeRegistry
+	state          ports.StateStore
+	notifier       ports.Notifier
+	policy         ports.PolicyEngine
+	killSwitch     ports.KillSwitch
+	killSwitchStore risk.KillSwitchStore
+	safeMode       *risk.SafeModeImpl
+	collector      *marketdata.CollectorActor
+	strategy       *strategy.StrategyActor
 }
 
 // NewBuilder creates a new Builder.
@@ -177,6 +178,14 @@ func (b *Builder) WithKillSwitch(ks ports.KillSwitch) *Builder {
 	return b
 }
 
+// WithKillSwitchStore installs a persistence backend on the kill switch.
+// When the kill switch is a *risk.KillSwitchImpl, Engage/Disengage writes
+// are mirrored to the store and Reconcile() loads previous state on startup.
+func (b *Builder) WithKillSwitchStore(store risk.KillSwitchStore) *Builder {
+	b.killSwitchStore = store
+	return b
+}
+
 // WithSafeMode sets the safe mode controller.
 func (b *Builder) WithSafeMode(sm *risk.SafeModeImpl) *Builder {
 	b.safeMode = sm
@@ -196,6 +205,12 @@ func (b *Builder) WithStrategy(actor *strategy.StrategyActor) *Builder {
 
 // Build builds the Application.
 func (b *Builder) Build() (*Application, error) {
+	return b.BuildWithContext(context.Background())
+}
+
+// BuildWithContext builds the application with an explicit context for
+// startup-reconciliation calls (e.g. kill switch state restore).
+func (b *Builder) BuildWithContext(ctx context.Context) (*Application, error) {
 	app := &Application{
 		Config:      b.config,
 		Supervisor:  supervisor.New(),
@@ -208,8 +223,7 @@ func (b *Builder) Build() (*Application, error) {
 		Notifier:    b.notifier,
 	}
 
-	// Build risk components if not provided
-	if err := app.buildRiskComponents(b); err != nil {
+	if err := app.buildRiskComponents(ctx, b); err != nil {
 		return nil, fmt.Errorf("build risk components: %w", err)
 	}
 
@@ -221,7 +235,7 @@ func (b *Builder) Build() (*Application, error) {
 }
 
 // buildRiskComponents builds the risk system components.
-func (a *Application) buildRiskComponents(b *Builder) error {
+func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error {
 	// Create safe mode if not provided
 	if b.safeMode != nil {
 		a.SafeMode = b.safeMode
@@ -234,6 +248,15 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 		a.KillSwitch = b.killSwitch
 	} else {
 		a.KillSwitch = risk.NewKillSwitch()
+	}
+
+	if b.killSwitchStore != nil {
+		if ks, ok := a.KillSwitch.(*risk.KillSwitchImpl); ok {
+			ks.SetStore(b.killSwitchStore)
+			if err := ks.Reconcile(ctx); err != nil {
+				zaplogrus.Warnf("[bootstrap] kill switch reconcile: %v", err)
+			}
+		}
 	}
 
 	// Create policy engine if not provided

@@ -19,6 +19,7 @@ type KillSwitchImpl struct {
 	reason       string
 	cancelOrders bool
 	listeners    []KillSwitchListener
+	store        KillSwitchStore
 }
 
 // KillSwitchListener is called when kill switch state changes.
@@ -30,6 +31,62 @@ func NewKillSwitch() *KillSwitchImpl {
 		cancelOrders: true,
 		listeners:    make([]KillSwitchListener, 0),
 	}
+}
+
+// SetStore installs a persistence backend. Engage/Disengage will write to the
+// store on every state change. Call Reconcile after SetStore to load the
+// previous state on startup.
+func (k *KillSwitchImpl) SetStore(store KillSwitchStore) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.store = store
+}
+
+// Reconcile reads the persisted state (if any) and applies it to the
+// in-memory actor. If no state is stored, the in-memory defaults are kept.
+func (k *KillSwitchImpl) Reconcile(ctx context.Context) error {
+	k.mu.Lock()
+	store := k.store
+	k.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	state, found, err := store.Load(ctx)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.engaged = state.Engaged
+	k.engagedAt = state.EngagedAt
+	k.engagedBy = state.EngagedBy
+	k.reason = state.Reason
+	k.cancelOrders = state.CancelOrders
+	return nil
+}
+
+func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) {
+	if k.store == nil {
+		return
+	}
+	persisted := PersistedKillSwitchState{
+		Engaged:      state.Enabled,
+		EngagedBy:    state.EngagedBy,
+		Reason:       state.Reason,
+		CancelOrders: state.CancelOrders,
+		UpdatedAt:    time.Now(),
+	}
+	if !k.engagedAt.IsZero() {
+		persisted.EngagedAt = k.engagedAt
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = k.store.Save(ctx, persisted)
+	}()
 }
 
 // Engage engages the kill switch, blocking all trading.
@@ -46,8 +103,9 @@ func (k *KillSwitchImpl) Engage(ctx context.Context, reason string) error {
 	k.engagedBy = extractSourceFromContext(ctx)
 	k.reason = reason
 
-	// Notify listeners
 	state := k.stateLocked()
+	k.persistLocked(state)
+
 	for _, listener := range k.listeners {
 		go listener(state)
 	}
@@ -69,8 +127,9 @@ func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
 	k.engagedBy = ""
 	k.reason = ""
 
-	// Notify listeners
 	state := k.stateLocked()
+	k.persistLocked(state)
+
 	for _, listener := range k.listeners {
 		go listener(state)
 	}
