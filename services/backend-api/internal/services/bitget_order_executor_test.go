@@ -963,6 +963,8 @@ func newBitgetFuturesTestServer(t *testing.T, orderID string) (*httptest.Server,
 			require.NoError(t, err)
 			require.NoError(t, json.Unmarshal(body, &orderBody))
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":"00000","msg":"ok","data":{"orderId":"%s"}}`, orderID)))
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"nextFlag":"false","orderList":[{"orderId":"tpsl-plan-1","holdSide":"long"}]}}`))
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}
