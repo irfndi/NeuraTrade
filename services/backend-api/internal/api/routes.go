@@ -335,6 +335,12 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
 
+	if info, statErr := os.Stat(configPath); statErr == nil {
+		if info.Mode().Perm()&0o077 != 0 {
+			zaplogrus.Warnf("SECURITY: config.json at %s has overly permissive permissions (%04o). Run: chmod 600 %s", configPath, info.Mode().Perm(), configPath)
+		}
+	}
+
 	// #nosec G304,G703 -- config path is derived from NEURATRADE_HOME or user home
 	configFile, err := os.ReadFile(configPath)
 	if err != nil {
@@ -435,7 +441,7 @@ func riskLockSourcePriority(source string) int {
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig) (func(), error) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService) (func(), error) {
 	configureLiveReadinessGuard(opModeService, db)
 
 	// Apply CORS middleware globally
@@ -497,16 +503,13 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		notificationService = services.NewNotificationService(db, redis, "http://telegram-service:3002", "telegram-service:50052", "")
 	}
 
-	// Initialize API key service for encrypted exchange credential storage
-	var apiKeyService *services.APIKeyService
-	if securityConfig != nil && securityConfig.EncryptionKey != "" {
+	if apiKeyService == nil && securityConfig != nil && securityConfig.EncryptionKey != "" {
 		var err error
 		apiKeyService, err = services.NewAPIKeyService(db, securityConfig.EncryptionKey)
 		if err != nil {
 			zaplogrus.Warnf("[APIKEY] Failed to initialize API key service: %v", err)
 		}
 	}
-	_ = apiKeyService // wired for future handler injection
 
 	// Initialize handlers
 	marketHandler := handlers.NewMarketHandler(db, ccxtService, collectorService, redis, cacheAnalyticsService)
@@ -849,6 +852,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if val := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); val != "" {
 		chatID = val
 	}
+
+	credentialSource := "config.json"
+	if (bitgetAPIKey == "" || bitgetSecret == "" || bitgetPassphrase == "") && apiKeyService != nil && chatID != "" {
+		dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		dbKey, dbSecret, dbPassphrase, dbErr := apiKeyService.GetExchangeKeysByExchange(dbCtx, chatID, "bitget")
+		dbCancel()
+		if dbErr == nil && dbKey != "" && dbSecret != "" {
+			bitgetAPIKey = dbKey
+			bitgetSecret = dbSecret
+			if dbPassphrase != "" {
+				bitgetPassphrase = dbPassphrase
+			}
+			credentialSource = "exchange_api_keys (DB)"
+		} else if dbErr != nil {
+			zaplogrus.Infof("[BITGET-CREDS] DB lookup for Bitget keys: %v", dbErr)
+		}
+	}
+	zaplogrus.Infof("[BITGET-CREDS] Credential source: %s", credentialSource)
 
 	if chatID == "" {
 		zaplogrus.Warnf("WARNING: TELEGRAM_CHAT_ID is not configured in env or ~/.neuratrade/config.json; trade notifications disabled")
