@@ -63,6 +63,8 @@ type IntegratedQuestHandlers struct {
 	tradeJournalMu       sync.Mutex
 	tradeJournalReady    bool
 	tradeJournalReadyFor *sql.DB
+	killSwitch           interface{ IsEngaged() bool }
+	safeMode             interface{ IsEnabled() bool }
 }
 
 const (
@@ -100,6 +102,8 @@ func NewIntegratedQuestHandlers(
 	futuresArb interface{},
 	notif *NotificationService,
 	monitoring *AutonomousMonitorManager,
+	killSwitch interface{ IsEngaged() bool },
+	safeMode interface{ IsEnabled() bool },
 ) *IntegratedQuestHandlers {
 	return &IntegratedQuestHandlers{
 		technicalAnalysis:   ta,
@@ -108,6 +112,8 @@ func NewIntegratedQuestHandlers(
 		futuresArbService:   futuresArb,
 		notificationService: notif,
 		monitoring:          monitoring,
+		killSwitch:          killSwitch,
+		safeMode:            safeMode,
 	}
 }
 
@@ -121,8 +127,10 @@ func NewIntegratedQuestHandlersWithAutonomyStore(
 	monitoring *AutonomousMonitorManager,
 	db *sql.DB,
 	store *AutonomousRolloutStore,
+	killSwitch interface{ IsEngaged() bool },
+	safeMode interface{ IsEnabled() bool },
 ) (*IntegratedQuestHandlers, error) {
-	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
+	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring, killSwitch, safeMode)
 	handlers.SetDB(db)
 	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
 		return nil, fmt.Errorf("failed to set autonomy store in NewIntegratedQuestHandlersWithAutonomyStore: %w", err)
@@ -1391,16 +1399,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		connectionChecked = true
 		exchangeConnected = healthChecker.IsHealthy(ctx)
 	}
-	safeMode := checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"])
-	if envSafeMode, ok := getEnvBool("NEURATRADE_SAFE_MODE_ENABLED"); ok && envSafeMode {
-		safeMode = true
-	}
-	killSwitchEngaged := false
-	if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH_ENGAGED"); ok {
-		killSwitchEngaged = envKillSwitch
-	} else if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH"); ok {
-		killSwitchEngaged = envKillSwitch
-	}
+	safeMode := checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) || (h.safeMode != nil && h.safeMode.IsEnabled())
+	killSwitchEngaged := h.killSwitch != nil && h.killSwitch.IsEngaged()
 	strategyID := ScalpingStrategyID(chatID)
 	cycleCtx := WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:            chatID,

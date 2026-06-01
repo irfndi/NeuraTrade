@@ -28,6 +28,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/redis/go-redis/v9"
+
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/shopspring/decimal"
 )
 
@@ -529,8 +531,20 @@ func run() error {
 		cfg.Security.CORSAllowedOrigins = cfg.Server.AllowedOrigins
 	}
 
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	if db != nil {
+		store := apprisk.NewSQLKillSwitchStore(db)
+		sharedKillSwitch.SetStore(store)
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
+			zaplogrus.Warnf("kill switch reconcile: %v", err)
+		}
+		reconcileCancel()
+	}
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
 	// Setup routes and get cleanup function
-	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService)
+	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService, sharedKillSwitch, sharedSafeMode)
 	if err != nil {
 		return fmt.Errorf("failed to setup routes: %w", err)
 	}
