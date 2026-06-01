@@ -36,8 +36,8 @@ var (
 
 	AIScalpingDecisionDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name: "ai_scalping_decision_duration_seconds",
-			Help: "Duration of AI scalping decisions in seconds, labeled by outcome.",
+			Name:    "ai_scalping_decision_duration_seconds",
+			Help:    "Duration of AI scalping decisions in seconds, labeled by outcome.",
 			Buckets: []float64{0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 120},
 		},
 		[]string{"outcome"},
