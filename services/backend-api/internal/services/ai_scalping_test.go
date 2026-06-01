@@ -4291,4 +4291,20 @@ func TestAIScalpingService_ValidateDecision_RefusesLiveTradeWithMissingSLTP(t *t
 		err := svc.validateDecision(liveCtx, decision, signals)
 		require.NoError(t, err)
 	})
+
+	t.Run("paper_mode_with_missing_sl_tp_increments_prometheus_counter", func(t *testing.T) {
+		svcWithClient := &AIScalpingService{
+			llmClient: &errorLLMClient{},
+		}
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+		}
+		err := svcWithClient.validateDecision(paperCtx, decision, signals)
+		require.NoError(t, err, "paper mode must apply defaults")
+		require.NotNil(t, decision.StopLoss)
+		require.NotNil(t, decision.TakeProfit)
+	})
 }
