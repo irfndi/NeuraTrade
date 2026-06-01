@@ -27,7 +27,7 @@ openssl req -new -key "$CERT_DIR/server.key" \
   -subj "/CN=${CN}/O=${ORG}" \
   -out "$CERT_DIR/server.csr"
 
-cat > "$CERT_DIR/server.ext" <<EOF
+cat >"$CERT_DIR/server.ext" <<EOF
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment
@@ -50,7 +50,7 @@ openssl req -new -key "$CERT_DIR/client.key" \
   -subj "/CN=${CN}-client/O=${ORG}" \
   -out "$CERT_DIR/client.csr"
 
-cat > "$CERT_DIR/client.ext" <<EOF
+cat >"$CERT_DIR/client.ext" <<EOF
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, keyEncipherment

@@ -123,16 +123,16 @@ type Application struct {
 
 // Builder builds an Application.
 type Builder struct {
-	config         Config
-	exchanges      ports.ExchangeRegistry
-	state          ports.StateStore
-	notifier       ports.Notifier
-	policy         ports.PolicyEngine
-	killSwitch     ports.KillSwitch
+	config          Config
+	exchanges       ports.ExchangeRegistry
+	state           ports.StateStore
+	notifier        ports.Notifier
+	policy          ports.PolicyEngine
+	killSwitch      ports.KillSwitch
 	killSwitchStore risk.KillSwitchStore
-	safeMode       *risk.SafeModeImpl
-	collector      *marketdata.CollectorActor
-	strategy       *strategy.StrategyActor
+	safeMode        *risk.SafeModeImpl
+	collector       *marketdata.CollectorActor
+	strategy        *strategy.StrategyActor
 }
 
 // NewBuilder creates a new Builder.

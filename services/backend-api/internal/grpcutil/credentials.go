@@ -43,4 +43,3 @@ func DialOptions(cfg config.GRPCClientConfig) ([]grpc.DialOption, error) {
 		return nil, fmt.Errorf("unsupported grpc tls_auth_type %q (want \"tls\" or \"mtls\")", cfg.TLSAuthType)
 	}
 }
-
