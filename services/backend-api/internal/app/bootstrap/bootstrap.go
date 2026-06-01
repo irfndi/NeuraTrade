@@ -254,7 +254,7 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 		if ks, ok := a.KillSwitch.(*risk.KillSwitchImpl); ok {
 			ks.SetStore(b.killSwitchStore)
 			if err := ks.Reconcile(ctx); err != nil {
-				zaplogrus.Warnf("[bootstrap] kill switch reconcile: %v", err)
+				return fmt.Errorf("kill switch reconcile: %w", err)
 			}
 		}
 	}

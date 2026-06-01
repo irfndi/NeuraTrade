@@ -522,6 +522,13 @@ func run() error {
 		logger.Warn("Encryption key not configured; exchange API keys will not be available from encrypted DB storage")
 	}
 
+	// Backward-compat: if the legacy server.allowed_origins is set but
+	// the new security.cors_allowed_origins is not, mirror the value so
+	// existing deployments don't silently lose their CORS allowlist.
+	if len(cfg.Security.CORSAllowedOrigins) == 0 && len(cfg.Server.AllowedOrigins) > 0 {
+		cfg.Security.CORSAllowedOrigins = cfg.Server.AllowedOrigins
+	}
+
 	// Setup routes and get cleanup function
 	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService)
 	if err != nil {
