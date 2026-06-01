@@ -1867,9 +1867,9 @@ func (r *ReadinessChecker) checkRiskLimits(c *gin.Context) *CheckResult {
 			Message:   fmt.Sprintf("Risk limits are not configured (max_position_size_pct=%.4f, max_exposure_pct=%.4f)", cfg.MaxPositionSizePct, cfg.MaxExposurePct),
 			LatencyMs: latency,
 			Details: map[string]string{
-				"max_position_size_pct": fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
+				"max_position_size_pct":  fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
 				"max_position_floor_pct": fmt.Sprintf("%.4f", cfg.MaxPositionFloorPct),
-				"max_exposure_pct":      fmt.Sprintf("%.4f", cfg.MaxExposurePct),
+				"max_exposure_pct":       fmt.Sprintf("%.4f", cfg.MaxExposurePct),
 			},
 		}
 	}

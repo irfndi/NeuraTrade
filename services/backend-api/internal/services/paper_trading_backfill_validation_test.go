@@ -212,7 +212,7 @@ func TestPaperTradingBackfillValidation_EvaluateCandleSignal(t *testing.T) {
 		MaxPositionPct: decimal.NewFromFloat(0.05),
 	}
 
-	uptrendCloses := makeTrendCloses(80, 1, 20)  // 80..99, last=99 > first=80
+	uptrendCloses := makeTrendCloses(80, 1, 20)    // 80..99, last=99 > first=80
 	downtrendCloses := makeTrendCloses(99, -1, 20) // 99..80, last=80 < first=99
 
 	tests := []struct {
