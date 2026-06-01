@@ -2271,6 +2271,12 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	zaplogrus.Infof("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.StringFixed(2))
 
 	// Build detailed trade info for rich notification
+	intentID := fmt.Sprintf("%s-%s-%d",
+		scalpingChatIDFromContext(ctx),
+		decision.Symbol,
+		time.Now().UnixNano(),
+	)
+
 	details := TradeDetails{
 		Exchange:          exchange,
 		Symbol:            decision.Symbol,
@@ -2288,6 +2294,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Reasoning:         decision.Reasoning,
 		EntryPrice:        decision.EntryPrice,
 		IsPaperTrade:      paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
+		IntentID:          intentID,
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications

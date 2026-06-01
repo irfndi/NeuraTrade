@@ -36,6 +36,9 @@ type TradeDetails struct {
 	OrderID            string
 	IsPaperTrade       bool
 	ReduceOnly         bool // Must be true for PlaceRiskReductionOrderWithDetails
+	IntentID              string // idempotency cross-reference
+	ClientOrderID         string // idempotency key for the exchange
+	PreTradeSafetyStatus  string // JSON snapshot of pre-trade safety check
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service
