@@ -72,7 +72,7 @@ func run() error {
 
 	recorder := services.NewPaperTradeRecorder(dbPool, &simpleLogger{})
 	execCfg := services.DefaultPaperExecutionConfig()
-	execCfg.EnableRandomness = false // Deterministic for reproducible backtesting
+	execCfg.EnableRandomness = false                          // Deterministic for reproducible backtesting
 	execCfg.SlippagePercentage = decimal.NewFromFloat(0.0003) // Realistic for liquid markets
 	executor := services.NewPaperExecutionSimulator(execCfg)
 
