@@ -377,13 +377,17 @@ func (h *ArbitrageHandler) GetFundingRates(c *gin.Context) {
 	// Create cache key based on exchange and symbols
 	var cacheKey string
 	if len(symbols) == 0 {
-		cacheKey = fmt.Sprintf("funding_rates:all:%s", exchange)
+		cacheKey = fmt.Sprintf("funding_rates:all:%s", sanitizeCacheKey(exchange))
 	} else {
 		// Sort symbols for consistent cache key
 		sortedSymbols := make([]string, len(symbols))
 		copy(sortedSymbols, symbols)
 		sort.Strings(sortedSymbols)
-		cacheKey = fmt.Sprintf("funding_rates:%s:%s", exchange, strings.Join(sortedSymbols, ","))
+		cleanSymbols := make([]string, len(sortedSymbols))
+		for i, s := range sortedSymbols {
+			cleanSymbols[i] = sanitizeCacheKey(s)
+		}
+		cacheKey = fmt.Sprintf("funding_rates:%s:%s", sanitizeCacheKey(exchange), strings.Join(cleanSymbols, ","))
 	}
 
 	// Check Redis cache first
