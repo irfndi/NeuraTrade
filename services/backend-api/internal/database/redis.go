@@ -74,6 +74,7 @@ func NewRedisConnectionWithRetry(cfg config.RedisConfig, errorRecoveryManager Er
 		Addr:     fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password: cfg.Password,
 		DB:       cfg.DB,
+		Network:  "tcp4",
 	}
 
 	// Apply connection pool optimizations

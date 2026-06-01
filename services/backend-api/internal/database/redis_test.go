@@ -2,10 +2,13 @@ package database
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,9 +94,56 @@ func TestRedisClient_ValidationErrors(t *testing.T) {
 	_, _, err = client.AcquireLock(ctx, "lock:key", 0)
 	assert.Error(t, err)
 
-	_, err = client.ReleaseLock(ctx, "", "token")
+	_, err = client.ReleaseLock(ctx, "", "")
 	assert.Error(t, err)
 
 	_, err = client.ReleaseLock(ctx, "lock:key", "")
 	assert.Error(t, err)
+}
+
+func TestNewRedisConnection_FailsFastOnUnreachableHost(t *testing.T) {
+	cfg := config.RedisConfig{
+		Host:         "192.0.2.1",
+		Port:         6379,
+		DialTimeout:  1,
+		ReadTimeout:  1,
+		WriteTimeout: 1,
+		PoolTimeout:  1,
+		MaxRetries:   1,
+	}
+
+	start := time.Now()
+	client, err := NewRedisConnectionWithRetry(cfg, nil)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Nil(t, client)
+	assert.Less(t, elapsed, 5*time.Second)
+}
+
+func TestNewRedisConnection_SucceedsWithTCP4Forced(t *testing.T) {
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	defer server.Close()
+
+	_, portStr, err := net.SplitHostPort(server.Addr())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+
+	cfg := config.RedisConfig{
+		Host:        "127.0.0.1",
+		Port:        port,
+		DialTimeout: 1,
+		MaxRetries:  1,
+	}
+
+	client, err := NewRedisConnectionWithRetry(cfg, nil)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, client.HealthCheck(ctx))
 }
