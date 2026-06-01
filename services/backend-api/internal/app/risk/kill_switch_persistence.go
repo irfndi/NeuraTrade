@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
@@ -24,6 +25,7 @@ type KillSwitchStore interface {
 }
 
 type MemoryKillSwitchStore struct {
+	mu    sync.Mutex
 	state *PersistedKillSwitchState
 }
 
@@ -32,6 +34,8 @@ func NewMemoryKillSwitchStore() *MemoryKillSwitchStore {
 }
 
 func (m *MemoryKillSwitchStore) Load(_ context.Context) (PersistedKillSwitchState, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.state == nil {
 		return PersistedKillSwitchState{}, false, nil
 	}
@@ -39,6 +43,8 @@ func (m *MemoryKillSwitchStore) Load(_ context.Context) (PersistedKillSwitchStat
 }
 
 func (m *MemoryKillSwitchStore) Save(_ context.Context, s PersistedKillSwitchState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.state = &s
 	return nil
 }
