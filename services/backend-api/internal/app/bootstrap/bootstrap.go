@@ -224,14 +224,31 @@ func (b *Builder) BuildWithContext(ctx context.Context) (*Application, error) {
 	}
 
 	if err := app.buildRiskComponents(ctx, b); err != nil {
+		app.rollbackPartialBuild()
 		return nil, fmt.Errorf("build risk components: %w", err)
 	}
 
 	if err := app.buildStrategyComponents(b); err != nil {
+		app.rollbackPartialBuild()
 		return nil, fmt.Errorf("build strategy components: %w", err)
 	}
 
 	return app, nil
+}
+
+func (a *Application) rollbackPartialBuild() {
+	if a.RiskRef != nil {
+		a.RiskRef.Stop()
+	}
+	if a.ActorSystem != nil {
+		a.ActorSystem.StopAll()
+	}
+	if a.Supervisor != nil {
+		_ = a.Supervisor.Shutdown(5 * time.Second)
+	}
+	if a.EventBus != nil {
+		a.EventBus.Stop()
+	}
 }
 
 // buildRiskComponents builds the risk system components.
