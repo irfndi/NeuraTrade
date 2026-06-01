@@ -59,6 +59,14 @@ var (
 		Help:    "Duration of database ping operations in seconds.",
 		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 	})
+
+	LLMNonJSONPaperTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_llm_nonjson_paper_total",
+			Help: "Total number of non-JSON LLM responses handled in paper mode, labeled by provider.",
+		},
+		[]string{"provider"},
+	)
 )
 
 func init() {
@@ -69,6 +77,7 @@ func init() {
 	_ = prometheus.Register(RiskKillSwitchEngaged)
 	_ = prometheus.Register(RedisPingDuration)
 	_ = prometheus.Register(DatabasePingDuration)
+	_ = prometheus.Register(LLMNonJSONPaperTotal)
 	_ = prometheus.Register(collectors.NewGoCollector())
 	_ = prometheus.Register(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 }

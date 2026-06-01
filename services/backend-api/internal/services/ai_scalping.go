@@ -23,6 +23,7 @@ import (
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
@@ -2648,13 +2649,20 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 		if err := s.refuseLiveTradeWithSyntheticSLTP(ctx, decision, defaultSL, defaultTP); err != nil {
 			return err
 		}
+		providerName := "unknown"
+		if s.llmClient != nil {
+			providerName = string(s.llmClient.Provider())
+		}
+		zaplogrus.Warnf("[AI-SCALPING] LLM returned incomplete decision (missing SL/TP) in PAPER mode for %s %s — applying synthetic SL=%.4f TP=%.4f | provider=%s model=%s",
+			decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+			providerName, s.config.Model)
+		metrics.LLMNonJSONPaperTotal.WithLabelValues(providerName).Inc()
 		if decision.StopLoss == nil {
 			decision.StopLoss = &defaultSL
 		}
 		if decision.TakeProfit == nil {
 			decision.TakeProfit = &defaultTP
 		}
-		zaplogrus.Infof("[AI-SCALPING] Applied default SL/TP for %s %s due to incomplete model output", decision.Action, decision.Symbol)
 	}
 	if decision.StopLoss.LessThanOrEqual(decimal.Zero) || decision.TakeProfit.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("stop_loss and take_profit must be positive")
