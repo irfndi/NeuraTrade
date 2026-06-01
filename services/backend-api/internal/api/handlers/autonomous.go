@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/redis/go-redis/v9"
 )
 
 // AutonomousHandler handles autonomous mode endpoints
@@ -27,13 +28,17 @@ type AutonomousHandler struct {
 	reconciler          *services.ExchangePositionReconciler
 	lifecycleStore      *services.TradingLifecycleStore
 	telemetryStore      *services.ScalpingTelemetryStore
+	dbPool              database.DBPool
+	redisClient         *redis.Client
 }
 
 // NewAutonomousHandler creates a new autonomous handler
 func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string) *AutonomousHandler {
+	rc := NewReadinessChecker()
+	rc.SetPortfolioSafety(portfolioSafety)
 	return &AutonomousHandler{
 		questEngine:         questEngine,
-		readiness:           NewReadinessChecker(),
+		readiness:           rc,
 		portfolioSafety:     portfolioSafety,
 		configuredExchanges: exchanges,
 	}
@@ -41,12 +46,30 @@ func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *se
 
 // NewAutonomousHandlerWithReconciler creates a new autonomous handler with reconciler
 func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string, reconciler *services.ExchangePositionReconciler) *AutonomousHandler {
+	rc := NewReadinessChecker()
+	rc.SetPortfolioSafety(portfolioSafety)
 	return &AutonomousHandler{
 		questEngine:         questEngine,
-		readiness:           NewReadinessChecker(),
+		readiness:           rc,
 		portfolioSafety:     portfolioSafety,
 		configuredExchanges: exchanges,
 		reconciler:          reconciler,
+	}
+}
+
+// SetDBPool wires the database pool for direct liquidation and readiness checks.
+func (h *AutonomousHandler) SetDBPool(dbPool database.DBPool) {
+	h.dbPool = dbPool
+	if h.readiness != nil {
+		h.readiness.SetDBPool(dbPool)
+	}
+}
+
+// SetRedisClient wires the Redis client for readiness checks.
+func (h *AutonomousHandler) SetRedisClient(client *redis.Client) {
+	h.redisClient = client
+	if h.readiness != nil {
+		h.readiness.SetRedisClient(client)
 	}
 }
 
@@ -1065,11 +1088,60 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual liquidation logic
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, LiquidationResponse{
+			Ok:      false,
+			Message: "Database pool not wired into autonomous handler; cannot persist liquidation",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	row := h.dbPool.QueryRow(ctx, `
+		SELECT position_id, order_id
+		FROM trading_positions
+		WHERE status = 'OPEN' AND LOWER(symbol) = LOWER(?)
+		ORDER BY opened_at ASC
+		LIMIT 1
+	`, req.Symbol)
+
+	var positionID, orderID string
+	if err := row.Scan(&positionID, &orderID); err != nil {
+		if isNoRowsError(err) {
+			c.JSON(http.StatusOK, LiquidationResponse{
+				Ok:              true,
+				Message:         "No open position for symbol " + req.Symbol,
+				LiquidatedCount: 0,
+				RequestID:       generateRequestID(),
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up position: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	if _, err := h.dbPool.Exec(ctx, `
+		UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
+	`, now, positionID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark position liquidated: " + err.Error()})
+		return
+	}
+	if orderID != "" {
+		if _, err := h.dbPool.Exec(ctx, `
+			UPDATE trading_orders SET status = 'CLOSED', updated_at = ? WHERE order_id = ? AND status = 'OPEN'
+		`, now, orderID); err != nil {
+			zaplogrus.Warnf("AutonomousHandler.Liquidate: failed to close order %s for position %s: %v", orderID, positionID, err)
+		}
+	}
+
+	zaplogrus.Infof("AutonomousHandler.Liquidate: position_id=%s symbol=%s chat_id=%s marked LIQUIDATED", positionID, req.Symbol, req.ChatID)
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
-		Message:         "Liquidation request submitted for " + req.Symbol,
-		LiquidatedCount: 0,
+		Message:         "Position liquidated for " + req.Symbol,
+		LiquidatedCount: 1,
 		RequestID:       generateRequestID(),
 	})
 }
@@ -1084,11 +1156,68 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual liquidation logic
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, LiquidationResponse{
+			Ok:      false,
+			Message: "Database pool not wired into autonomous handler; cannot persist liquidation",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	rows, err := h.dbPool.Query(ctx, `
+		SELECT position_id, order_id FROM trading_positions WHERE status = 'OPEN'
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list open positions: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type pendingRow struct {
+		positionID string
+		orderID    string
+	}
+	var pending []pendingRow
+	for rows.Next() {
+		var pr pendingRow
+		if err := rows.Scan(&pr.positionID, &pr.orderID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan position: " + err.Error()})
+			return
+		}
+		pending = append(pending, pr)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "position iteration failed: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	liquidated := 0
+	for _, p := range pending {
+		if _, err := h.dbPool.Exec(ctx, `
+			UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
+		`, now, p.positionID); err != nil {
+			zaplogrus.Warnf("AutonomousHandler.LiquidateAll: failed to liquidate position %s: %v", p.positionID, err)
+			continue
+		}
+		if p.orderID != "" {
+			if _, err := h.dbPool.Exec(ctx, `
+				UPDATE trading_orders SET status = 'CLOSED', updated_at = ? WHERE order_id = ? AND status = 'OPEN'
+			`, now, p.orderID); err != nil {
+				zaplogrus.Warnf("AutonomousHandler.LiquidateAll: failed to close order %s: %v", p.orderID, err)
+			}
+		}
+		liquidated++
+	}
+
+	zaplogrus.Infof("AutonomousHandler.LiquidateAll: chat_id=%s liquidated %d/%d open positions", req.ChatID, liquidated, len(pending))
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
-		Message:         "Full liquidation request submitted",
-		LiquidatedCount: 0,
+		Message:         fmt.Sprintf("Liquidated %d of %d open positions", liquidated, len(pending)),
+		LiquidatedCount: liquidated,
 		RequestID:       generateRequestID(),
 	})
 }
@@ -1363,7 +1492,26 @@ func formatDrawdown(value float64, sampleSize int) string {
 }
 
 // ReadinessChecker checks system readiness for autonomous mode
-type ReadinessChecker struct{}
+type ReadinessChecker struct {
+	dbPool          database.DBPool
+	redisClient     *redis.Client
+	portfolioSafety *services.PortfolioSafetyService
+}
+
+// SetDBPool wires the database pool used by checkDatabase.
+func (r *ReadinessChecker) SetDBPool(dbPool database.DBPool) {
+	r.dbPool = dbPool
+}
+
+// SetRedisClient wires the Redis client used by checkRedis.
+func (r *ReadinessChecker) SetRedisClient(client *redis.Client) {
+	r.redisClient = client
+}
+
+// SetPortfolioSafety wires the portfolio safety service used by checkRiskLimits.
+func (r *ReadinessChecker) SetPortfolioSafety(svc *services.PortfolioSafetyService) {
+	r.portfolioSafety = svc
+}
 
 // CheckResult represents the result of a single check
 type CheckResult struct {
@@ -1442,24 +1590,56 @@ func (r *ReadinessChecker) Check(c *gin.Context, chatID string) *ReadinessResult
 
 func (r *ReadinessChecker) checkDatabase(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual database ping
+	if r.dbPool == nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Database pool not configured for readiness checker (call SetDBPool)",
+			LatencyMs: latency,
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := r.dbPool.Exec(ctx, "SELECT 1"); err != nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "critical",
+			Message:   fmt.Sprintf("Database ping failed: %v", err),
+			LatencyMs: latency,
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Database connection successful",
+		Message:   "Database ping successful",
 		LatencyMs: latency,
 	}
 }
 
 func (r *ReadinessChecker) checkRedis(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual Redis ping
+	if r.redisClient == nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Redis client not configured for readiness checker (call SetRedisClient or run with Redis disabled)",
+			LatencyMs: latency,
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if err := r.redisClient.Ping(ctx).Err(); err != nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   fmt.Sprintf("Redis ping failed (degraded mode OK): %v", err),
+			LatencyMs: latency,
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Redis connection successful",
+		Message:   "Redis ping successful",
 		LatencyMs: latency,
 	}
 }
@@ -1671,17 +1851,38 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 
 func (r *ReadinessChecker) checkRiskLimits(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual risk limits check
+	if r.portfolioSafety == nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "PortfolioSafetyService not wired into readiness checker (call SetPortfolioSafety)",
+			LatencyMs: latency,
+		}
+	}
+	cfg := r.portfolioSafety.GetConfig()
+	if cfg.MaxPositionSizePct <= 0 || cfg.MaxExposurePct <= 0 {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "critical",
+			Message:   fmt.Sprintf("Risk limits are not configured (max_position_size_pct=%.4f, max_exposure_pct=%.4f)", cfg.MaxPositionSizePct, cfg.MaxExposurePct),
+			LatencyMs: latency,
+			Details: map[string]string{
+				"max_position_size_pct": fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
+				"max_position_floor_pct": fmt.Sprintf("%.4f", cfg.MaxPositionFloorPct),
+				"max_exposure_pct":      fmt.Sprintf("%.4f", cfg.MaxExposurePct),
+			},
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Risk limits configured",
+		Message:   fmt.Sprintf("Risk limits configured (max_position=%.1f%%, max_exposure=%.1f%%)", cfg.MaxPositionSizePct*100, cfg.MaxExposurePct*100),
 		LatencyMs: latency,
 		Details: map[string]string{
-			"max_drawdown":   "5%",
-			"daily_loss_cap": "2%",
-			"position_limit": "10%",
+			"max_position_size_pct":  fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
+			"max_position_floor_pct": fmt.Sprintf("%.4f", cfg.MaxPositionFloorPct),
+			"max_exposure_pct":       fmt.Sprintf("%.4f", cfg.MaxExposurePct),
+			"default_quote_currency": cfg.DefaultQuoteCurrency,
 		},
 	}
 }

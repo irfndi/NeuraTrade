@@ -856,7 +856,7 @@ func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T)
 			result := svc.evaluatePreTradeGate(context.Background(), decision, []aiMarketSignal{signal})
 			assert.Equal(t, tt.allowed, result.Allowed)
 
-			err := svc.validateDecision(&AITradingDecision{
+			err := svc.validateDecision(context.Background(), &AITradingDecision{
 				Action:      "buy",
 				Symbol:      "GRASS/USDT",
 				SizePercent: 12.78,
@@ -887,7 +887,7 @@ func TestAIScalpingService_ValidateDecision_AdjustsLowRiskRewardForBuy(t *testin
 		TakeProfit:  decimalPointer("0.09444"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "DOGE/USDT",
 		Price:              0.09429,
 		High24h:            0.095,
@@ -915,7 +915,7 @@ func TestAIScalpingService_ValidateDecision_BlocksRecentBuyAboveRangeCeiling(t *
 		TakeProfit:  decimalPointer("3.60"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "UNI/USDT",
 		Price:              3.47,
 		High24h:            3.70,
@@ -945,7 +945,7 @@ func TestAIScalpingService_ValidateDecision_BlocksRecentBuyWithoutMomentum(t *te
 		TakeProfit:  decimalPointer("0.1060"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "DOGE/USDT",
 		Price:              0.1037,
 		High24h:            0.108,
@@ -975,7 +975,7 @@ func TestAIScalpingService_ValidateDecision_BlocksNoRecentBuyAboveRangeCeiling(t
 		TakeProfit:  decimalPointer("0.0510"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "CHZ/USDT",
 		Price:              0.0485,
 		High24h:            0.051,
@@ -1004,7 +1004,7 @@ func TestAIScalpingService_ValidateDecision_AllowsStrictRecentBuy(t *testing.T) 
 		TakeProfit:  decimalPointer("0.0189"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "GOAT/USDT",
 		Price:              0.0183,
 		High24h:            0.0200,
@@ -1033,7 +1033,7 @@ func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadTrendIsPositive(t
 		TakeProfit:  decimalPointer("3.48"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "UNI/USDT",
 		Price:              3.568,
 		High24h:            3.60,
@@ -1063,7 +1063,7 @@ func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadDowntrendIsTooWea
 		TakeProfit:  decimalPointer("0.1020"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "DOGE/USDT",
 		Price:              0.10508,
 		High24h:            0.107,
@@ -1093,7 +1093,7 @@ func TestAIScalpingService_ValidateDecision_RejectsCounterTrendBlowoffReversalSe
 		TakeProfit:  decimalPointer("0.0487"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "CHZ/USDT",
 		Price:              0.04983,
 		High24h:            0.05,
@@ -1123,7 +1123,7 @@ func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithPositiveBookPr
 		TakeProfit:  decimalPointer("0.0487"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "CHZ/USDT",
 		Price:              0.04983,
 		High24h:            0.05,
@@ -1153,7 +1153,7 @@ func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithWeakBookPressu
 		TakeProfit:  decimalPointer("0.3880"),
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "ONDO/USDT",
 		Price:              0.3954,
 		High24h:            0.3954,
@@ -2345,7 +2345,7 @@ func TestAIScalpingService_ValidateDecision_HoldNormalization(t *testing.T) {
 		Reasoning:   "",
 	}
 
-	err := svc.validateDecision(decision, nil)
+	err := svc.validateDecision(context.Background(), decision, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, "", decision.Symbol)
 	assert.Equal(t, 0.0, decision.SizePercent)
@@ -3599,7 +3599,7 @@ func TestAIScalpingService_ValidateDecisionAllowsValidatedReversalBuy(t *testing
 		TakeProfit:  &takeProfit,
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "REV/USDT",
 		Price:              100,
 		High24h:            115,
@@ -3631,7 +3631,7 @@ func TestAIScalpingService_ValidateDecisionAllowsValidatedSellWindow(t *testing.
 		TakeProfit:  &takeProfit,
 	}
 
-	err := svc.validateDecision(decision, []aiMarketSignal{{
+	err := svc.validateDecision(context.Background(), decision, []aiMarketSignal{{
 		Symbol:             "SW/USDT",
 		Price:              100,
 		High24h:            115,
@@ -4188,5 +4188,107 @@ func TestApplySLTPFromOriginal(t *testing.T) {
 		assert.True(t, decision.StopLoss.Equal(existingSL), "should keep existing SL")
 		require.NotNil(t, decision.TakeProfit, "should fill missing TP")
 		assert.True(t, decision.TakeProfit.Equal(decimal.NewFromInt(43000)))
+	})
+}
+
+func TestAIScalpingService_ValidateDecision_RefusesLiveTradeWithMissingSLTP(t *testing.T) {
+	svc := &AIScalpingService{}
+	liveCtx := WithOperationalMode(context.Background(), OpModeLive)
+	paperCtx := WithOperationalMode(context.Background(), ModePaper)
+	dryCtx := WithOperationalMode(context.Background(), OpModeDry)
+	neutralCtx := context.Background()
+
+	signals := []aiMarketSignal{{
+		Symbol:             "DOGE/USDT",
+		Price:              0.09429,
+		High24h:            0.095,
+		Low24h:             0.091,
+		Volume24h:          1_000_000,
+		BidAskSpread:       0.011,
+		OrderBookImbalance: 0.45,
+		RangePosition24h:   18.92,
+	}}
+
+	t.Run("live_mode_with_missing_sl_tp_returns_error_and_does_not_mutate_decision", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+		}
+		err := svc.validateDecision(liveCtx, decision, signals)
+		require.Error(t, err, "live mode must refuse a buy with missing SL/TP rather than apply synthetic defaults")
+		assert.Nil(t, decision.StopLoss, "decision.StopLoss must remain nil when the trade is refused")
+		assert.Nil(t, decision.TakeProfit, "decision.TakeProfit must remain nil when the trade is refused")
+		assert.Contains(t, err.Error(), "refusing live trade")
+		assert.Contains(t, err.Error(), "DOGE/USDT")
+	})
+
+	t.Run("live_mode_with_missing_tp_only_also_refuses", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+			StopLoss:    decimalPointer("0.09350"),
+		}
+		err := svc.validateDecision(liveCtx, decision, signals)
+		require.Error(t, err, "live mode must refuse when only TP is missing - asymmetric risk:reward is unacceptable")
+	})
+
+	t.Run("paper_mode_with_missing_sl_tp_applies_defaults", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+		}
+		err := svc.validateDecision(paperCtx, decision, signals)
+		require.NoError(t, err, "paper mode must keep the prior behavior of applying default SL/TP for evidence collection")
+		require.NotNil(t, decision.StopLoss)
+		require.NotNil(t, decision.TakeProfit)
+		assert.True(t, decision.StopLoss.LessThan(decimal.NewFromFloat(0.09429)))
+		assert.True(t, decision.TakeProfit.GreaterThan(decimal.NewFromFloat(0.09429)))
+	})
+
+	t.Run("dry_mode_with_missing_sl_tp_applies_defaults", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+		}
+		err := svc.validateDecision(dryCtx, decision, signals)
+		require.NoError(t, err)
+		require.NotNil(t, decision.StopLoss)
+		require.NotNil(t, decision.TakeProfit)
+		assert.True(t, decision.StopLoss.LessThan(decimal.NewFromFloat(0.09429)))
+		assert.True(t, decision.TakeProfit.GreaterThan(decimal.NewFromFloat(0.09429)))
+	})
+
+	t.Run("neutral_context_with_missing_sl_tp_applies_defaults", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+		}
+		err := svc.validateDecision(neutralCtx, decision, signals)
+		require.NoError(t, err, "neutral context (no mode) must default to non-live behavior for back-compat")
+		require.NotNil(t, decision.StopLoss)
+		require.NotNil(t, decision.TakeProfit)
+	})
+
+	t.Run("live_mode_with_both_sl_and_tp_present_passes_through", func(t *testing.T) {
+		decision := &AITradingDecision{
+			Action:      "buy",
+			Symbol:      "DOGE/USDT",
+			SizePercent: 5.0,
+			Confidence:  0.80,
+			StopLoss:    decimalPointer("0.09350"),
+			TakeProfit:  decimalPointer("0.09600"),
+		}
+		err := svc.validateDecision(liveCtx, decision, signals)
+		require.NoError(t, err)
 	})
 }

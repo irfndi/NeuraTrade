@@ -941,3 +941,108 @@ func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
 	assert.True(t, providerRequiresAPIKey("deepseek"))
 	assert.True(t, providerRequiresAPIKey("unknown-provider"))
 }
+
+func TestHasConnectedExchangeWallet_NilDBReturnsFalse(t *testing.T) {
+	assert.False(t, hasConnectedExchangeWallet(nil, "chat-1", "bitget"))
+}
+
+func TestHasConnectedExchangeWallet_EmptyChatIDReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "", "bitget"))
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "  ", "bitget"))
+}
+
+func TestHasConnectedExchangeWallet_EmptyProviderReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "chat-1", ""))
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "chat-1", "  "))
+}
+
+func TestHasConnectedExchangeWallet_NotConnectedRowReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'pending', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"),
+		"pending status must not be treated as connected")
+}
+
+func TestHasConnectedExchangeWallet_ConnectedRowReturnsTrue(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'connected', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.True(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"))
+	assert.True(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "BITGET"),
+		"provider match should be case-insensitive")
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "binance"),
+		"different provider must not match")
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-2", "bitget"),
+		"different chat_id must not match")
+}
+
+func TestHasConnectedExchangeWallet_DisconnectedRowReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'disconnected', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"),
+		"disconnected status must not be treated as connected")
+}

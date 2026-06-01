@@ -1176,6 +1176,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	} else {
 		autonomousHandler = handlers.NewAutonomousHandler(questEngine, portfolioSafety, ccxtService.GetSupportedExchanges())
 	}
+	if db != nil {
+		autonomousHandler.SetDBPool(db)
+	}
+	if redis != nil {
+		autonomousHandler.SetRedisClient(redis.Client)
+	}
 	if lifecycleStore != nil {
 		autonomousHandler.SetLifecycleStore(lifecycleStore)
 	}
