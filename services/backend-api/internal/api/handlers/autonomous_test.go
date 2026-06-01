@@ -491,3 +491,252 @@ func (closedDBPool) Begin(ctx context.Context) (database.Tx, error) {
 type nilRow struct{ err error }
 
 func (r nilRow) Scan(dest ...any) error { return r.err }
+
+func TestAutonomousHandler_ConnectExchange_RequiresDBPool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewAutonomousHandler(nil, nil, nil)
+	router := gin.New()
+	router.POST("/connect", h.ConnectExchange)
+
+	req := httptest.NewRequest(http.MethodPost, "/connect",
+		strings.NewReader(`{"chat_id":"c1","exchange":"bitget"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+}
+
+func TestAutonomousHandler_AddWallet_RejectsInvalidAddress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "add-wallet-bad.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	h := NewAutonomousHandler(nil, nil, nil)
+	h.SetDBPool(sqliteDB)
+	router := gin.New()
+	router.POST("/add", h.AddWallet)
+
+	req := httptest.NewRequest(http.MethodPost, "/add",
+		strings.NewReader(`{"chat_id":"c1","wallet_address":"not-an-address"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+func TestAutonomousHandler_GetWallets_RequiresChatID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewAutonomousHandler(nil, nil, nil)
+	router := gin.New()
+	router.GET("/wallets", h.GetWallets)
+
+	req := httptest.NewRequest(http.MethodGet, "/wallets", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+func TestAutonomousHandler_GetWallets_EmptyForUnknownChat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "wallets-empty.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		email TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		telegram_chat_id TEXT(50)
+	)`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS wallets (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		chain TEXT NOT NULL,
+		address TEXT NOT NULL,
+		wallet_type TEXT NOT NULL,
+		label TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	require.NoError(t, err)
+
+	h := NewAutonomousHandler(nil, nil, nil)
+	h.SetDBPool(sqliteDB)
+	router := gin.New()
+	router.GET("/wallets", h.GetWallets)
+
+	req := httptest.NewRequest(http.MethodGet, "/wallets?chat_id=99999", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"wallets":[]`)
+}
+
+func TestAutonomousHandler_ConnectExchange_RequiresUserWithKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "connect-exchange-no-user.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		email TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		telegram_chat_id TEXT(50)
+	)`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS exchange_api_keys (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		exchange_name TEXT NOT NULL,
+		key_name TEXT NOT NULL,
+		encrypted_key TEXT NOT NULL,
+		encrypted_secret TEXT NOT NULL,
+		encrypted_passphrase TEXT NOT NULL DEFAULT '',
+		permissions TEXT DEFAULT '["read"]',
+		is_active INTEGER DEFAULT 1,
+		last_used_at TEXT,
+		expires_at TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_id, exchange_name, key_name)
+	)`)
+	require.NoError(t, err)
+
+	h := NewAutonomousHandler(nil, nil, nil)
+	h.SetDBPool(sqliteDB)
+	router := gin.New()
+	router.POST("/connect", h.ConnectExchange)
+
+	req := httptest.NewRequest(http.MethodPost, "/connect",
+		strings.NewReader(`{"chat_id":"no-such-chat","exchange":"bitget"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+}
+
+func TestAutonomousHandler_ConnectExchange_SuccessWithKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "connect-exchange-ok.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		email TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		telegram_chat_id TEXT(50)
+	)`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `INSERT INTO users (id, email, password_hash, telegram_chat_id) VALUES ('u1', 'e@x', 'h', 'chat-1')`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS exchange_api_keys (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		exchange_name TEXT NOT NULL,
+		key_name TEXT NOT NULL,
+		encrypted_key TEXT NOT NULL,
+		encrypted_secret TEXT NOT NULL,
+		encrypted_passphrase TEXT NOT NULL DEFAULT '',
+		permissions TEXT DEFAULT '["read"]',
+		is_active INTEGER DEFAULT 1,
+		last_used_at TEXT,
+		expires_at TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_id, exchange_name, key_name)
+	)`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `INSERT INTO exchange_api_keys
+		(id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, is_active)
+		VALUES ('k1', 'u1', 'bitget', 'main', 'k', 's', 1)`)
+	require.NoError(t, err)
+
+	h := NewAutonomousHandler(nil, nil, nil)
+	h.SetDBPool(sqliteDB)
+	router := gin.New()
+	router.POST("/connect", h.ConnectExchange)
+
+	req := httptest.NewRequest(http.MethodPost, "/connect",
+		strings.NewReader(`{"chat_id":"chat-1","exchange":"bitget","account_label":"trading"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"ok":true`)
+	assert.Contains(t, w.Body.String(), `trading`)
+}
+
+func TestAutonomousHandler_AddRemoveWallet_RoundTrip(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "wallet-roundtrip.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	ctx := context.Background()
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		email TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		telegram_chat_id TEXT(50)
+	)`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `INSERT INTO users (id, email, password_hash, telegram_chat_id) VALUES ('u1', 'e@x', 'h', 'chat-1')`)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, `CREATE TABLE IF NOT EXISTS wallets (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id INTEGER NOT NULL,
+		chain TEXT NOT NULL,
+		address TEXT NOT NULL,
+		wallet_type TEXT NOT NULL,
+		label TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	require.NoError(t, err)
+
+	h := NewAutonomousHandler(nil, nil, nil)
+	h.SetDBPool(sqliteDB)
+	router := gin.New()
+	router.POST("/add", h.AddWallet)
+	router.POST("/remove", h.RemoveWallet)
+	router.GET("/list", h.GetWallets)
+
+	addr := "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01"
+	req := httptest.NewRequest(http.MethodPost, "/add",
+		strings.NewReader(`{"chat_id":"chat-1","wallet_address":"`+addr+`","chain":"evm","label":"main"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	req = httptest.NewRequest(http.MethodGet, "/list?chat_id=chat-1", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "0xabcd")
+	assert.Contains(t, w.Body.String(), "main")
+
+	req = httptest.NewRequest(http.MethodPost, "/remove",
+		strings.NewReader(`{"chat_id":"chat-1","wallet_id_or_address":"`+addr+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	req = httptest.NewRequest(http.MethodGet, "/list?chat_id=chat-1", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"wallets":[]`)
+}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -235,6 +236,7 @@ type WalletInfo struct {
 	Type          string `json:"type"`
 	Provider      string `json:"provider"`
 	AddressMasked string `json:"address_masked"`
+	Label         string `json:"label,omitempty"`
 	Status        string `json:"status"`
 	ConnectedAt   string `json:"connected_at,omitempty"`
 }
@@ -1222,7 +1224,9 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 	})
 }
 
-// ConnectExchange connects an exchange account
+// ConnectExchange verifies an exchange connection for the chat.
+// Actual credentials are added via the exchange_api_keys create endpoint;
+// this handler confirms the link between chat_id and the user's stored keys.
 func (h *AutonomousHandler) ConnectExchange(c *gin.Context) {
 	var req struct {
 		ChatID       string `json:"chat_id" binding:"required"`
@@ -1234,14 +1238,55 @@ func (h *AutonomousHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual exchange connection
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot verify exchange connection",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	var count int
+	if err := h.dbPool.QueryRow(ctx,
+		"SELECT COUNT(1) FROM exchange_api_keys WHERE user_id = ? AND exchange_name = ? AND is_active = 1",
+		userID, req.Exchange).Scan(&count); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "count keys: " + err.Error()})
+		return
+	}
+
+	if count == 0 {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok:      false,
+			Message: fmt.Sprintf("No active %s keys for this user. Use the create-key endpoint to add credentials.", req.Exchange),
+		})
+		return
+	}
+
+	label := req.AccountLabel
+	if label == "" {
+		label = req.Exchange
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Exchange connection initiated for " + req.Exchange,
+		Message: fmt.Sprintf("%s connected (%d active key(s), label=%s)", req.Exchange, count, label),
 	})
 }
 
-// ConnectPolymarket connects a Polymarket wallet
+// ConnectPolymarket verifies a Polymarket wallet address is bound to the chat.
 func (h *AutonomousHandler) ConnectPolymarket(c *gin.Context) {
 	var req struct {
 		ChatID        string `json:"chat_id" binding:"required"`
@@ -1252,19 +1297,51 @@ func (h *AutonomousHandler) ConnectPolymarket(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual Polymarket connection
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot record wallet",
+		})
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(req.WalletAddress), "0x") || len(req.WalletAddress) != 42 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet_address must be a 0x-prefixed 42-char EVM address"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	if err := h.upsertWallet(ctx, userID, "polygon", strings.ToLower(req.WalletAddress),
+		"polymarket", "polymarket:"+strings.ToLower(req.WalletAddress)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "record wallet: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Polymarket wallet connection initiated",
+		Message: "Polymarket wallet " + strings.ToLower(req.WalletAddress) + " linked",
 	})
 }
 
-// AddWallet adds a watch-only wallet
+// AddWallet adds a watch-only wallet.
 func (h *AutonomousHandler) AddWallet(c *gin.Context) {
 	var req struct {
 		ChatID        string `json:"chat_id" binding:"required"`
 		WalletAddress string `json:"wallet_address" binding:"required"`
+		Chain         string `json:"chain"`
 		WalletType    string `json:"wallet_type"`
+		Label         string `json:"label,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
@@ -1274,15 +1351,49 @@ func (h *AutonomousHandler) AddWallet(c *gin.Context) {
 	if req.WalletType == "" {
 		req.WalletType = "external"
 	}
+	if req.Chain == "" {
+		req.Chain = "evm"
+	}
 
-	// TODO: Implement actual wallet addition
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot add wallet",
+		})
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(req.WalletAddress), "0x") || len(req.WalletAddress) != 42 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet_address must be a 0x-prefixed 42-char EVM address"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	if err := h.upsertWallet(ctx, userID, strings.ToLower(req.Chain),
+		strings.ToLower(req.WalletAddress), req.WalletType, req.Label); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "add wallet: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Wallet added successfully",
+		Message: "Wallet " + strings.ToLower(req.WalletAddress) + " added",
 	})
 }
 
-// RemoveWallet removes a wallet
+// RemoveWallet removes a wallet by id or address.
 func (h *AutonomousHandler) RemoveWallet(c *gin.Context) {
 	var req struct {
 		ChatID            string `json:"chat_id" binding:"required"`
@@ -1293,14 +1404,56 @@ func (h *AutonomousHandler) RemoveWallet(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual wallet removal
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot remove wallet",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id",
+		})
+		return
+	}
+
+	var res database.Result
+	if isNumeric(req.WalletIDOrAddress) {
+		res, err = h.dbPool.Exec(ctx,
+			"DELETE FROM wallets WHERE user_id = ? AND id = ?",
+			userID, req.WalletIDOrAddress)
+	} else {
+		res, err = h.dbPool.Exec(ctx,
+			"DELETE FROM wallets WHERE user_id = ? AND LOWER(address) = ?",
+			userID, strings.ToLower(req.WalletIDOrAddress))
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "remove wallet: " + err.Error()})
+		return
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No wallet matched the given id or address",
+		})
+		return
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Wallet removed successfully",
+		Message: "Wallet removed",
 	})
 }
 
-// GetWallets returns connected wallets
+// GetWallets returns connected wallets for the chat.
 func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 	chatID := c.Query("chat_id")
 	if chatID == "" {
@@ -1308,10 +1461,120 @@ func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual wallet retrieval
-	c.JSON(http.StatusOK, WalletsResponse{
-		Wallets: []WalletInfo{},
-	})
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletsResponse{Wallets: []WalletInfo{}})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, chatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusOK, WalletsResponse{Wallets: []WalletInfo{}})
+		return
+	}
+
+	rows, err := h.dbPool.Query(ctx,
+		"SELECT id, chain, address, wallet_type, COALESCE(label, ''), created_at FROM wallets WHERE user_id = ? ORDER BY created_at DESC",
+		userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list wallets: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	out := make([]WalletInfo, 0, 4)
+	for rows.Next() {
+		var (
+			id        int64
+			chain     string
+			address   string
+			wtype     string
+			label     string
+			createdAt string
+		)
+		if err := rows.Scan(&id, &chain, &address, &wtype, &label, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan wallet: " + err.Error()})
+			return
+		}
+		out = append(out, WalletInfo{
+			WalletID:      fmt.Sprintf("%d", id),
+			Type:          wtype,
+			Provider:      chain,
+			AddressMasked: maskAddress(address),
+			Label:         label,
+			Status:        "active",
+			ConnectedAt:   createdAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "iterate wallets: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, WalletsResponse{Wallets: out})
+}
+
+func (h *AutonomousHandler) resolveUserIDByChatID(ctx context.Context, chatID string) (string, error) {
+	if h.dbPool == nil {
+		return "", nil
+	}
+	var userID string
+	err := h.dbPool.QueryRow(ctx,
+		"SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
+	if err != nil {
+		if isNoRowsError(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return userID, nil
+}
+
+// upsertWallet inserts a wallet row or refreshes its label/type if it already
+// exists. The check-then-insert pattern works regardless of whether the
+// wallets table has a unique (user_id, chain, address) constraint.
+func (h *AutonomousHandler) upsertWallet(ctx context.Context, userID, chain, address, wtype, label string) error {
+	if h.dbPool == nil {
+		return errors.New("db pool not wired")
+	}
+	var existingID int64
+	err := h.dbPool.QueryRow(ctx,
+		"SELECT id FROM wallets WHERE user_id = ? AND chain = ? AND address = ? LIMIT 1",
+		userID, chain, address).Scan(&existingID)
+	if err == nil {
+		_, err = h.dbPool.Exec(ctx,
+			"UPDATE wallets SET wallet_type = ?, label = ? WHERE id = ?",
+			wtype, label, existingID)
+		return err
+	}
+	if !isNoRowsError(err) {
+		return err
+	}
+	_, err = h.dbPool.Exec(ctx,
+		"INSERT INTO wallets (user_id, chain, address, wallet_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		userID, chain, address, wtype, label, time.Now().UTC())
+	return err
+}
+
+func isNumeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func maskAddress(addr string) string {
+	if len(addr) < 10 {
+		return addr
+	}
+	return addr[:6] + "..." + addr[len(addr)-4:]
 }
 
 // Helper functions
