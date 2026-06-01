@@ -385,6 +385,57 @@ func TestAutonomousHandler_LiquidateAll_LiquidatesEverything(t *testing.T) {
 	assert.Equal(t, "CLOSED", orderStatus(t, db, "ord-3"))
 }
 
+func TestAutonomousHandler_Liquidate_SkipsDBMarkWhenExchangeCloseFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupAutonomousLiquidationDB(t)
+	insertOpenPosition(t, db, "pos-1", "ord-1", "DOGE/USDT", "buy", time.Now().UTC().Add(-time.Minute))
+
+	stub := &stubExchangeLiquidator{err: errors.New("exchange unreachable")}
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetDBPool(db)
+	handler.SetExchangeLiquidator(stub)
+	router := gin.New()
+	router.POST("/liquidate", handler.Liquidate)
+
+	req := httptest.NewRequest(http.MethodPost, "/liquidate", strings.NewReader(`{"chat_id":"c1","symbol":"DOGE/USDT"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadGateway, w.Code)
+	assert.Contains(t, w.Body.String(), "Exchange close failed")
+	assert.Equal(t, "OPEN", positionStatus(t, db, "pos-1"), "position must remain OPEN when exchange close fails")
+	assert.Equal(t, "OPEN", orderStatus(t, db, "ord-1"), "order must remain OPEN when exchange close fails")
+	assert.Equal(t, "bitget", stub.calledExchange)
+	assert.Equal(t, "ord-1", stub.calledOrderID)
+	assert.Equal(t, "pos-1", stub.calledPositionID)
+}
+
+func TestAutonomousHandler_Liquidate_MarksDBOnExchangeCloseSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupAutonomousLiquidationDB(t)
+	insertOpenPosition(t, db, "pos-1", "ord-1", "DOGE/USDT", "buy", time.Now().UTC().Add(-time.Minute))
+
+	stub := &stubExchangeLiquidator{err: nil}
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetDBPool(db)
+	handler.SetExchangeLiquidator(stub)
+	router := gin.New()
+	router.POST("/liquidate", handler.Liquidate)
+
+	req := httptest.NewRequest(http.MethodPost, "/liquidate", strings.NewReader(`{"chat_id":"c1","symbol":"DOGE/USDT"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "LIQUIDATED", positionStatus(t, db, "pos-1"))
+	assert.Equal(t, "CLOSED", orderStatus(t, db, "ord-1"))
+	assert.Equal(t, "bitget", stub.calledExchange)
+	assert.Equal(t, "ord-1", stub.calledOrderID)
+	assert.Equal(t, "pos-1", stub.calledPositionID)
+}
+
 func TestReadinessChecker_CheckDatabase_WithoutDBPoolReportsWarning(t *testing.T) {
 	rc := NewReadinessChecker()
 	gin.SetMode(gin.TestMode)
@@ -470,6 +521,20 @@ func TestReadinessChecker_CheckRiskLimits_WithDefaultConfigReportsHealthy(t *tes
 	assert.Contains(t, result.Message, "Risk limits configured")
 	assert.Contains(t, result.Details, "max_position_size_pct")
 	assert.Contains(t, result.Details, "max_exposure_pct")
+}
+
+type stubExchangeLiquidator struct {
+	err              error
+	calledExchange   string
+	calledOrderID    string
+	calledPositionID string
+}
+
+func (s *stubExchangeLiquidator) ClosePosition(_ context.Context, exchangeID, orderID, positionID string) error {
+	s.calledExchange = exchangeID
+	s.calledOrderID = orderID
+	s.calledPositionID = positionID
+	return s.err
 }
 
 // closedDBPool simulates a DBPool whose Exec always errors.
