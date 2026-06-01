@@ -457,7 +457,13 @@ func (s *StopLossService) ExecuteStopLoss(ctx context.Context, orderID string, t
 	}
 
 	if err != nil {
+		s.ordersMu.Lock()
 		order.Status = StopLossStatusActive
+		orderIDCopy := order.ID
+		s.ordersMu.Unlock()
+		s.saveToRedis(ctx, order)
+		s.logger.Warn("Stop-loss execution failed; reset status to active in memory and Redis",
+			"order_id", orderIDCopy, "error", err)
 		return nil, fmt.Errorf("stop-loss execution failed: %w", err)
 	}
 
