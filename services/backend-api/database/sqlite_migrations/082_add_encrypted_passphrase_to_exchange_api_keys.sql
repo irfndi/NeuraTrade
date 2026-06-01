@@ -1,4 +1,8 @@
--- Migration 082 (SQLite): Add encrypted_passphrase column to exchange_api_keys
+-- Migration 082 (SQLite): Add encrypted_passphrase column to exchange_api_keys.
+-- Fresh install: CREATE TABLE creates the schema with the column.
+-- Existing install: 082 was a no-op (CREATE TABLE IF NOT EXISTS), so the
+-- column was never added. The fix for that is in 086 (idempotent ALTER)
+-- which uses PRAGMA table_info to skip when the column already exists.
 CREATE TABLE IF NOT EXISTS exchange_api_keys (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

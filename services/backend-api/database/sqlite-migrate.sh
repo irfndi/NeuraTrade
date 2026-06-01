@@ -65,6 +65,16 @@ apply_paper_trades_column_migrations() {
   sqlite3 "$DB_PATH" "UPDATE paper_trades SET updated_at = CURRENT_TIMESTAMP WHERE updated_at = '1970-01-01T00:00:00Z';"
 }
 
+apply_encrypted_passphrase_backfill() {
+  if ! sqlite_table_exists "exchange_api_keys"; then
+    return 0
+  fi
+  if sqlite_column_exists "exchange_api_keys" "encrypted_passphrase"; then
+    return 0
+  fi
+  sqlite3 "$DB_PATH" "ALTER TABLE exchange_api_keys ADD COLUMN encrypted_passphrase TEXT NOT NULL DEFAULT '';"
+}
+
 repair_legacy_funding_arbitrage_opportunities() {
   sqlite_table_exists "funding_arbitrage_opportunities" || return 0
   sqlite_column_exists "funding_arbitrage_opportunities" "estimated_profit_percentage" && return 0
@@ -108,6 +118,15 @@ apply_file() {
   # on both fresh and legacy databases.
   if [ "$name" = "015_alter_paper_trades_columns.sql" ]; then
     apply_paper_trades_column_migrations || return $?
+    sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
+    printf "applied %s\n" "$name"
+    return 0
+  fi
+
+  # 086_add_encrypted_passphrase_backfill.sql: defensive ALTER for the
+  # 082 column that never made it into pre-existing tables.
+  if [ "$name" = "086_add_encrypted_passphrase_backfill.sql" ]; then
+    apply_encrypted_passphrase_backfill || return $?
     sqlite3 "$DB_PATH" "INSERT INTO schema_migrations(filename) VALUES('$name');"
     printf "applied %s\n" "$name"
     return 0
