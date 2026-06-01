@@ -1046,3 +1046,74 @@ func TestHasConnectedExchangeWallet_DisconnectedRowReturnsFalse(t *testing.T) {
 	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"),
 		"disconnected status must not be treated as connected")
 }
+
+func TestSetupRoutes_CORSAllowedOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	defer restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{Addr: "localhost:6379"}),
+	}
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	securityConfig := &config.SecurityConfig{
+		CORSAllowedOrigins: []string{"https://app.example.com"},
+	}
+
+	_, err := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, securityConfig, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code, "preflight for allowed origin should be 204")
+	assert.Equal(t, "https://app.example.com", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestSetupRoutes_CORSDisallowedOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	defer restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{Addr: "localhost:6379"}),
+	}
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	securityConfig := &config.SecurityConfig{
+		CORSAllowedOrigins: []string{"https://app.example.com"},
+	}
+
+	_, err := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, securityConfig, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "https://evil.example.org")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"),
+		"disallowed origin must not receive Access-Control-Allow-Origin header")
+}

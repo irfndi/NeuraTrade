@@ -311,6 +311,9 @@ type SecurityConfig struct {
 	// EncryptionKey is the base64-encoded 32-byte key for AES-256-GCM encryption.
 	// Used for encrypting sensitive data like exchange API keys.
 	EncryptionKey string `mapstructure:"encryption_key"`
+	// CORSAllowedOrigins is a list of origins permitted by the CORS middleware.
+	// Empty list defaults to http://localhost:3000 for development.
+	CORSAllowedOrigins []string `mapstructure:"cors_allowed_origins"`
 }
 
 // FeesConfig defines default fees used when exchange-specific data is missing.
@@ -442,6 +445,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ccxt.service_url", "CCXT_SERVICE_URL")
 	_ = viper.BindEnv("ccxt.grpc_address", "CCXT_GRPC_ADDRESS")
 	_ = viper.BindEnv("ccxt.admin_api_key", "ADMIN_API_KEY")
+
+	_ = viper.BindEnv("security.cors_allowed_origins", "NEURATRADE_CORS_ALLOWED_ORIGINS")
 
 	// Bind Telegram service environment variables
 	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
@@ -610,6 +615,7 @@ func setDefaults() {
 
 	// Security
 	viper.SetDefault("security.encryption_key", "")
+	viper.SetDefault("security.cors_allowed_origins", []string{})
 
 	// Fees
 	viper.SetDefault("fees.default_taker_fee", 0.001)

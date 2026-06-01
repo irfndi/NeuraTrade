@@ -364,7 +364,7 @@ func run() error {
 	defer positionTracker.Stop()
 
 	stopLossConfig := services.DefaultStopLossConfig()
-	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil)
+	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil, getRedisClient())
 
 	stopLossAutoExecConfig := services.DefaultStopLossAutoExecutionConfig()
 	stopLossAutoExecConfig.EnableNotifications = cfg.Telegram.BotToken != ""

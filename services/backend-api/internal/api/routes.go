@@ -444,9 +444,13 @@ func riskLockSourcePriority(source string) int {
 func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService) (func(), error) {
 	configureLiveReadinessGuard(opModeService, db)
 
-	// Apply CORS middleware globally
+	allowedOrigins := []string{"http://localhost:3000"}
+	if securityConfig != nil && len(securityConfig.CORSAllowedOrigins) > 0 {
+		allowedOrigins = securityConfig.CORSAllowedOrigins
+	}
+
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins:     allowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
 		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
