@@ -102,10 +102,7 @@ func TestIsDuplicateOrderError_Codes(t *testing.T) {
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_SetsClientOrderID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"bg-test-123"}}`))
-	}))
+	server := newBitgetTestServer(t, bitgetTestServerOpts{placeOrderResponse: `{"code":"00000","msg":"ok","data":{"orderId":"bg-test-123"}}`})
 	defer server.Close()
 
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
@@ -127,10 +124,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_SetsClientOrderID(t *testing.
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_DuplicateOrderTreatedAsSuccess(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":"40094","msg":"duplicate client order id","data":{"orderId":""}}`))
-	}))
+	server := newBitgetTestServer(t, bitgetTestServerOpts{placeOrderResponse: `{"code":"40094","msg":"duplicate client order id","data":{"orderId":""}}`})
 	defer server.Close()
 
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
@@ -152,10 +146,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_DuplicateOrderTreatedAsSucces
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_DuplicateWithExistingOrderID(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":"43025","msg":"order already placed","data":{"orderId":"bg-existing-456"}}`))
-	}))
+	server := newBitgetTestServer(t, bitgetTestServerOpts{placeOrderResponse: `{"code":"43025","msg":"order already placed","data":{"orderId":"bg-existing-456"}}`})
 	defer server.Close()
 
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
@@ -251,22 +242,11 @@ func TestTradeDetails_HasIntentIDAndClientOrderID(t *testing.T) {
 }
 
 func TestBitgetOrderExecutor_PlaceOrderWithDetails_MinNotionalViaTestServer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{"sizeMultiplier":"0.001","minTradeNum":"1","volumePlace":"0","pricePlace":"2"}]}`))
-		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/ticker"):
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{"lastPr":"50000"}]}`))
-		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/order/place-order"):
-			var body map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&body)
-			assert.NotEmpty(t, body["clientOid"], "clientOid must be present in the order payload")
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"orderId":"bg-order-with-clientOid"}}`))
-		default:
-			t.Logf("unhandled path: %s", r.URL.Path)
-		}
-	}))
+	server := newBitgetTestServer(t, bitgetTestServerOpts{
+		placeOrderResponse: `{"code":"00000","msg":"ok","data":{"orderId":"bg-order-with-clientOid"}}`,
+		accountResponse:    `{"code":"00000","msg":"ok","data":{"marginMode":"isolated","posMode":"one_way_mode","isolatedLongLever":10,"isolatedShortLever":10}}`,
+		assertClientOid:    true,
+	})
 	defer server.Close()
 
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
@@ -287,4 +267,53 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_MinNotionalViaTestServer(t *t
 	orderID, err := executor.PlaceOrderWithDetails(t.Context(), details)
 	require.NoError(t, err)
 	assert.NotEmpty(t, orderID)
+}
+
+type bitgetTestServerOpts struct {
+	placeOrderResponse string
+	assertClientOid    bool
+	contractsResponse  string
+	tickerResponse     string
+	accountResponse    string
+}
+
+func newBitgetTestServer(t *testing.T, opts bitgetTestServerOpts) *httptest.Server {
+	t.Helper()
+	contracts := opts.contractsResponse
+	if contracts == "" {
+		contracts = `{"code":"00000","msg":"ok","data":[{"sizeMultiplier":"0.001","minTradeNum":"1","volumePlace":"0","pricePlace":"2"}]}`
+	}
+	ticker := opts.tickerResponse
+	if ticker == "" {
+		ticker = `{"code":"00000","msg":"ok","data":[{"lastPr":"50000"}]}`
+	}
+	account := opts.accountResponse
+	if account == "" {
+		account = `{"code":"00000","msg":"ok","data":{"marginMode":"isolated","posMode":"one_way_mode","isolatedLongLever":10,"isolatedShortLever":10}}`
+	}
+	placeOrder := opts.placeOrderResponse
+	if placeOrder == "" {
+		placeOrder = `{"code":"00000","msg":"ok","data":{"orderId":"bg-default"}}`
+	}
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/contracts"):
+			_, _ = w.Write([]byte(contracts))
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/market/ticker"):
+			_, _ = w.Write([]byte(ticker))
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/account/account"):
+			_, _ = w.Write([]byte(account))
+		case strings.HasPrefix(r.URL.Path, "/api/v2/mix/order/place-order"):
+			if opts.assertClientOid {
+				var body map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				assert.NotEmpty(t, body["clientOid"], "clientOid must be present in the order payload")
+			}
+			_, _ = w.Write([]byte(placeOrder))
+		default:
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		}
+	}))
 }

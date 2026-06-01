@@ -18,12 +18,14 @@ type slTestCCXT struct {
 	tickerPrice float64
 }
 
-func (m *slTestCCXT) Initialize(_ context.Context) error                       { return nil }
-func (m *slTestCCXT) IsHealthy(_ context.Context) bool                         { return true }
-func (m *slTestCCXT) Close() error                                             { return nil }
-func (m *slTestCCXT) GetServiceURL() string                                     { return "" }
-func (m *slTestCCXT) GetSupportedExchanges() []string                           { return nil }
-func (m *slTestCCXT) GetExchangeInfo(_ string) (ccxt.ExchangeInfo, bool)        { return ccxt.ExchangeInfo{}, false }
+func (m *slTestCCXT) Initialize(_ context.Context) error { return nil }
+func (m *slTestCCXT) IsHealthy(_ context.Context) bool   { return true }
+func (m *slTestCCXT) Close() error                       { return nil }
+func (m *slTestCCXT) GetServiceURL() string              { return "" }
+func (m *slTestCCXT) GetSupportedExchanges() []string    { return nil }
+func (m *slTestCCXT) GetExchangeInfo(_ string) (ccxt.ExchangeInfo, bool) {
+	return ccxt.ExchangeInfo{}, false
+}
 func (m *slTestCCXT) GetExchangeConfig(_ context.Context) (*ccxt.ExchangeConfigResponse, error) {
 	return nil, nil
 }

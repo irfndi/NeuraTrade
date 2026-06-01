@@ -34,13 +34,17 @@ func (m *mockAuditInner) PlaceOrderWithDetails(ctx context.Context, details Trad
 
 func (m *mockAuditInner) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
 	args := m.Called(ctx, exchange, symbol)
-	if args.Get(0) == nil { return nil, args.Error(1) }
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
 	return args.Get(0).([]map[string]interface{}), args.Error(1)
 }
 
 func (m *mockAuditInner) GetClosedOrders(ctx context.Context, exchange, symbol string, limit int) ([]map[string]interface{}, error) {
 	args := m.Called(ctx, exchange, symbol, limit)
-	if args.Get(0) == nil { return nil, args.Error(1) }
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
 	return args.Get(0).([]map[string]interface{}), args.Error(1)
 }
 
@@ -128,8 +132,11 @@ func TestAuditedOrderExecutor_SafetySnapshotIsCaptured(t *testing.T) {
 	inner.safetyAllowed = false
 	inner.safetyReason = "Daily loss limit exceeded: 150.00/100.00"
 	inner.On("IsPaperTrading").Return(false)
+	var capturedDetails TradeDetails
+	inner.On("PlaceOrderWithDetails", mock.Anything, mock.MatchedBy(func(d TradeDetails) bool { return d.Symbol == "SOL/USDT" })).Run(func(args mock.Arguments) {
+		capturedDetails = args.Get(1).(TradeDetails)
+	}).Return("order-sol-789", nil)
 	details := TradeDetails{Exchange: "bitget", Symbol: "SOL/USDT", Side: "buy", OrderType: "market", AmountUSDT: decimal.NewFromFloat(200)}
-	inner.On("PlaceOrderWithDetails", mock.Anything, mock.MatchedBy(func(d TradeDetails) bool { return d.Symbol == "SOL/USDT" })).Return("order-sol-789", nil)
 	auditExec := NewAuditedOrderExecutor(inner, dbPool)
 	mockDB.ExpectExec("INSERT INTO trade_audit_log").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "SOL/USDT", "bitget", "buy", "market", "200", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), "pending", pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mockDB.ExpectExec("UPDATE trade_audit_log").WithArgs("order-sol-789", "placed", pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
@@ -137,9 +144,9 @@ func TestAuditedOrderExecutor_SafetySnapshotIsCaptured(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "order-sol-789", orderID)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
-	assert.NotEmpty(t, details.PreTradeSafetyStatus)
+	assert.NotEmpty(t, capturedDetails.PreTradeSafetyStatus)
 	var snap SafetySnapshot
-	err = json.Unmarshal([]byte(details.PreTradeSafetyStatus), &snap)
+	err = json.Unmarshal([]byte(capturedDetails.PreTradeSafetyStatus), &snap)
 	require.NoError(t, err)
 	assert.False(t, snap.Allowed)
 	assert.Contains(t, snap.Reason, "Daily loss limit exceeded")
@@ -181,7 +188,6 @@ func TestAuditedOrderExecutor_PassthroughReadMethods(t *testing.T) {
 	dbPool, mockDB := setupAuditTestDB(t)
 	defer mockDB.Close()
 	inner := new(mockAuditInner)
-	inner.On("IsPaperTrading").Return(false)
 	auditExec := NewAuditedOrderExecutor(inner, dbPool)
 	expectedOrders := []map[string]interface{}{{"id": "order-1"}}
 	inner.On("GetOpenOrders", mock.Anything, "bitget", "BTC/USDT").Return(expectedOrders, nil)
