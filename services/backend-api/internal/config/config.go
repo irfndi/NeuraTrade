@@ -547,12 +547,17 @@ func setDefaults() {
 	}
 	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
-	// Redis
-	viper.SetDefault("redis.host", "localhost")
+	// Force IPv4 to avoid `localhost` → `[::1]` resolution flakes (NeuraTrade-3ybt).
+	viper.SetDefault("redis.host", "127.0.0.1")
 	viper.SetDefault("redis.port", 6379)
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("redis.max_retries", 3)
+	// Tight timeouts (seconds) so a dead Redis cannot stall /health (NeuraTrade-3ybt).
+	viper.SetDefault("redis.dial_timeout", 2)
+	viper.SetDefault("redis.read_timeout", 1)
+	viper.SetDefault("redis.write_timeout", 1)
+	viper.SetDefault("redis.pool_timeout", 2)
 
 	// CCXT defaults for native deployment. Explicit env vars still take precedence.
 	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
