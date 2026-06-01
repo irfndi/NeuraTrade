@@ -335,7 +335,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		body["reduceOnly"] = "YES"
 	}
 
-	if details != nil && details.ClientOrderID != "" {
+	if details.ClientOrderID != "" {
 		body["clientOid"] = details.ClientOrderID
 	}
 

@@ -635,8 +635,7 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				}
 				atr = atr.Div(decimal.NewFromInt(5))
 			}
-			stopLoss := decimal.Zero
-			takeProfit := decimal.Zero
+			var stopLoss, takeProfit decimal.Decimal
 			if orderSide == PaperOrderSideBuy {
 				stopLoss = order.AvgFillPrice.Sub(atr.Mul(decimal.NewFromFloat(100.0)))
 				takeProfit = order.AvgFillPrice.Add(atr.Mul(decimal.NewFromFloat(100.0)))

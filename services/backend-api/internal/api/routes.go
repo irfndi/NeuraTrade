@@ -335,6 +335,7 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 		configPath = filepath.Join(homeDir, ".neuratrade", "config.json")
 	}
 
+	// #nosec G703 -- config path is derived from NEURATRADE_HOME or user home
 	if info, statErr := os.Stat(configPath); statErr == nil {
 		if info.Mode().Perm()&0o077 != 0 {
 			zaplogrus.Warnf("SECURITY: config.json at %s has overly permissive permissions (%04o). Run: chmod 600 %s", configPath, info.Mode().Perm(), configPath)
