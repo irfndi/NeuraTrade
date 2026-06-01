@@ -1,8 +1,8 @@
 package cache
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -958,7 +958,6 @@ func TestRedisBlacklistCache_LoadFromDatabase_WithExpired(t *testing.T) {
 
 	repo.AssertExpectations(t)
 }
-
 
 func TestRedisBlacklistCache_CleanupExpired_AtomicReadDelete(t *testing.T) {
 	client := setupBlacklistTestRedis(t)
