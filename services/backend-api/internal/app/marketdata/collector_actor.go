@@ -538,13 +538,37 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 	bestAsk := ob.Asks[0].Price
 	spread := bestAsk.Sub(bestBid)
 	midPrice := bestBid.Add(bestAsk).Div(decimal.NewFromInt(2))
+
+	// 1% USD depth filter: only count levels within 1% of mid price.
+	// The client.CalculateOrderBookMetrics helper applies the same filter;
+	// without it the imbalance/liquidity scores diverge from what an
+	// operator sees in the UI, which made the backtest look much
+	// shallower than reality.
+	thresholdPct := decimal.NewFromFloat(0.01)
+	var thresholdAbs decimal.Decimal
+	if !midPrice.IsZero() {
+		thresholdAbs = midPrice.Mul(thresholdPct)
+	}
 	bidDepth := decimal.Zero
 	askDepth := decimal.Zero
-	for _, lvl := range ob.Bids {
-		bidDepth = bidDepth.Add(lvl.Amount)
-	}
-	for _, lvl := range ob.Asks {
-		askDepth = askDepth.Add(lvl.Amount)
+	if !thresholdAbs.IsZero() {
+		for _, lvl := range ob.Bids {
+			if lvl.Price.GreaterThanOrEqual(midPrice.Sub(thresholdAbs)) {
+				bidDepth = bidDepth.Add(lvl.Amount)
+			}
+		}
+		for _, lvl := range ob.Asks {
+			if lvl.Price.LessThanOrEqual(midPrice.Add(thresholdAbs)) {
+				askDepth = askDepth.Add(lvl.Amount)
+			}
+		}
+	} else {
+		for _, lvl := range ob.Bids {
+			bidDepth = bidDepth.Add(lvl.Amount)
+		}
+		for _, lvl := range ob.Asks {
+			askDepth = askDepth.Add(lvl.Amount)
+		}
 	}
 	totalDepth := bidDepth.Add(askDepth)
 
