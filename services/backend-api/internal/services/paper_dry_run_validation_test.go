@@ -105,6 +105,7 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 		Size:       filledEntry.FilledSize,
 		Fees:       entryFees,
 		CostBasis:  filledEntry.AvgFillPrice.Mul(filledEntry.FilledSize),
+		OpenedAt:   now,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), opened.ID)
@@ -112,7 +113,7 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 	winPnL := takeProfitPrice.Sub(entryPrice).Mul(size).Sub(exitFees)
 	expectPaperGetTrade(mockPool, *opened, now)
 	expectPaperCloseTrade(mockPool, *opened, takeProfitPrice, exitFees, winPnL, now)
-	closedWin, err := recorder.RecordCloseTrade(ctx, opened.ID, filledTakeProfit.AvgFillPrice, exitFees)
+	closedWin, err := recorder.RecordCloseTrade(ctx, opened.ID, filledTakeProfit.AvgFillPrice, exitFees, now)
 	require.NoError(t, err)
 	require.Equal(t, "closed", closedWin.Status)
 	require.True(t, closedWin.PnL.Equal(winPnL))
@@ -129,13 +130,14 @@ func TestPaperDryRunValidationFlowRecordsPerformanceAndProtectionExits(t *testin
 		Size:       size,
 		Fees:       entryFees,
 		CostBasis:  entryPrice.Mul(size),
+		OpenedAt:   now,
 	})
 	require.NoError(t, err)
 
 	lossPnL := stopLossPrice.Sub(entryPrice).Mul(size).Sub(exitFees)
 	expectPaperGetTrade(mockPool, *openedLoss, now)
 	expectPaperCloseTrade(mockPool, *openedLoss, stopLossPrice, exitFees, lossPnL, now)
-	closedLoss, err := recorder.RecordCloseTrade(ctx, openedLoss.ID, filledStopLoss.AvgFillPrice, exitFees)
+	closedLoss, err := recorder.RecordCloseTrade(ctx, openedLoss.ID, filledStopLoss.AvgFillPrice, exitFees, now)
 	require.NoError(t, err)
 	require.True(t, closedLoss.PnL.Equal(lossPnL))
 
@@ -239,7 +241,7 @@ func TestPaperTradeRecorderWorksWithSQLiteMigrationSchema(t *testing.T) {
 	require.Equal(t, "open", opened.Status)
 	require.True(t, opened.EntryPrice.Equal(decimal.NewFromInt(100)))
 
-	closed, err := recorder.RecordCloseTrade(ctx, opened.ID, decimal.NewFromInt(102), decimal.New(2, -2))
+	closed, err := recorder.RecordCloseTrade(ctx, opened.ID, decimal.NewFromInt(102), decimal.New(2, -2), time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "closed", closed.Status)
 	require.True(t, closed.PnL.Equal(decimal.NewFromFloat(1.98)))
@@ -282,7 +284,7 @@ func expectPaperOpenTrade(
 	now time.Time,
 ) {
 	mockPool.ExpectQuery("INSERT INTO paper_trades").
-		WithArgs(userID, questID, strategyID, exchange, symbol, side, entryPrice, size, fees, costBasis).
+		WithArgs(userID, questID, strategyID, exchange, symbol, side, entryPrice, size, fees, costBasis, now).
 		WillReturnRows(paperTradeRows().AddRow(
 			id, userID, questID, strategyID, exchange, symbol, side, entryPrice, decimal.Zero,
 			size, fees, decimal.Zero, costBasis, "open", now, nil, now, now,

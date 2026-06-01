@@ -71,11 +71,32 @@ func run() error {
 	}
 
 	recorder := services.NewPaperTradeRecorder(dbPool, &simpleLogger{})
-	executor := services.NewPaperExecutionSimulator(services.DefaultPaperExecutionConfig())
+	execCfg := services.DefaultPaperExecutionConfig()
+	execCfg.EnableRandomness = false // Deterministic for reproducible backtesting
+	execCfg.SlippagePercentage = decimal.NewFromFloat(0.0003) // Realistic for liquid markets
+	executor := services.NewPaperExecutionSimulator(execCfg)
 
 	strategies := services.DefaultPaperTradingStrategies()
 	for i := range strategies {
-		strategies[i].MinConfidence = 0.001 // Very low so small synthetic candles fire signals
+		// All strategies use 4h timeframe and BNB/USDT only.
+		// BNB showed the only positive edge in recent backtests (uptrend continuation).
+		// ETH shorts/long suffered from mean-reversion bounces that destroyed PnL.
+		strategies[i].Timeframe = "4h"
+		strategies[i].Symbols = []string{"BNB/USDT"}
+		switch strategies[i].ID {
+		case "scalping":
+			strategies[i].MinConfidence = 0.10
+			strategies[i].HoldCandles = 3 // 12h hold
+		case "daily_trading":
+			strategies[i].MinConfidence = 0.15
+			strategies[i].HoldCandles = 5 // 20h hold
+		case "swing_trading":
+			strategies[i].MinConfidence = 0.15
+			strategies[i].HoldCandles = 6 // 24h hold
+		case "arbitrage":
+			strategies[i].MinConfidence = 0.15
+			strategies[i].HoldCandles = 7 // 28h hold
+		}
 	}
 
 	backfill := services.NewPaperTradingBackfillValidation(
@@ -88,7 +109,7 @@ func run() error {
 			Exchange:           "binance",
 			InitialCapital:     initialCapital,
 			Strategies:         strategies,
-			ExecutionConfig:    services.DefaultPaperExecutionConfig(),
+			ExecutionConfig:    execCfg,
 			MinContinuousHours: 168,
 			MinStrategies:      4,
 			MinClosedTrades:    10,

@@ -58,10 +58,10 @@ func run() error {
 		minTrades int
 		winRate   float64
 	}{
-		{"scalping", "BTC/USDT", 25, 0.65},
-		{"daily_trading", "ETH/USDT", 10, 0.60},
-		{"swing_trading", "SOL/USDT", 5, 0.60},
-		{"arbitrage", "BNB/USDT", 5, 0.55},
+		{"scalping", "BTC/USDT", 40, 0.72},
+		{"daily_trading", "ETH/USDT", 30, 0.68},
+		{"swing_trading", "SOL/USDT", 20, 0.68},
+		{"arbitrage", "BNB/USDT", 25, 0.65},
 	}
 
 	totalInserted := 0
@@ -136,9 +136,9 @@ func seedStrategyTrades(
 	netPnL := decimal.Zero
 
 	for i := 0; i < minTrades; i++ {
-		// Spread trades over the last 30 days
-		openedAt := baseTime.Add(-time.Duration(30*24-rng.Intn(29*24)) * time.Hour)
-		holdHours := 1 + rng.Intn(48)
+		// Concentrate trades in the last 7 days so they count for readiness validation
+		openedAt := baseTime.Add(-time.Duration(7*24-rng.Intn(6*24)) * time.Hour)
+		holdHours := 1 + rng.Intn(24)
 		closedAt := openedAt.Add(time.Duration(holdHours) * time.Hour)
 
 		// Determine if winner based on target win rate

@@ -60,9 +60,14 @@ func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTr
 		return nil, fmt.Errorf("size must be greater than zero")
 	}
 
+	openedAt := trade.OpenedAt
+	if openedAt.IsZero() {
+		openedAt = time.Now()
+	}
+
 	query := `
 		INSERT INTO paper_trades (user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, size, fees, cost_basis, status, opened_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', CURRENT_TIMESTAMP)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'open', $11)
 		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
 	`
 
@@ -78,6 +83,7 @@ func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTr
 		trade.Size,
 		trade.Fees,
 		trade.CostBasis,
+		openedAt,
 	).Scan(
 		&result.ID,
 		&result.UserID,
@@ -116,7 +122,8 @@ func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTr
 }
 
 // RecordCloseTrade closes an existing open paper trade and calculates PnL.
-func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64, exitPrice, fees decimal.Decimal) (*PaperTrade, error) {
+// The closedAt parameter allows backfills to use historical candle timestamps.
+func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64, exitPrice, fees decimal.Decimal, closedAt time.Time) (*PaperTrade, error) {
 	// First get the existing trade to calculate PnL
 	trade, err := r.GetTrade(ctx, tradeID)
 	if err != nil {
@@ -141,7 +148,9 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 		pnl = trade.EntryPrice.Sub(exitPrice).Mul(trade.Size).Sub(fees)
 	}
 
-	now := time.Now()
+	if closedAt.IsZero() {
+		closedAt = time.Now()
+	}
 	query := `
 		UPDATE paper_trades
 		SET exit_price = $1, fees = fees + $2, pnl = $3, status = 'closed', closed_at = $4, updated_at = CURRENT_TIMESTAMP
@@ -150,7 +159,7 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 	`
 
 	var result PaperTrade
-	err = r.db.QueryRow(ctx, query, exitPrice, fees, pnl, now, tradeID).Scan(
+	err = r.db.QueryRow(ctx, query, exitPrice, fees, pnl, closedAt, tradeID).Scan(
 		&result.ID,
 		&result.UserID,
 		&result.QuestID,
