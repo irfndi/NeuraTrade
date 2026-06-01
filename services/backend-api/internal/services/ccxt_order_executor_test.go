@@ -283,3 +283,27 @@ func TestCCXTOrderExecutor_PlaceOrder_RetryBehavior(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractOrderIDFromDuplicateBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"empty", "", ""},
+		{"unrelated json", `{"error":"duplicate"}`, ""},
+		{"id field", `{"id":"ccxt-real-1"}`, "ccxt-real-1"},
+		{"orderId field", `{"orderId":"ccxt-real-2"}`, "ccxt-real-2"},
+		{"nested order", `{"order":{"id":"ccxt-real-3"}}`, "ccxt-real-3"},
+		{"nested data", `{"data":{"id":"ccxt-real-4"}}`, "ccxt-real-4"},
+		{"nested existing", `{"existing":{"id":"ccxt-real-5"}}`, "ccxt-real-5"},
+		{"nested duplicate", `{"duplicate":{"id":"ccxt-real-6"}}`, "ccxt-real-6"},
+		{"garbage", `not json`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := extractOrderIDFromDuplicateBody([]byte(c.body))
+			assert.Equal(t, c.want, got)
+		})
+	}
+}

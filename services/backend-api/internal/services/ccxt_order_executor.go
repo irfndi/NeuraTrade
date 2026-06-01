@@ -147,7 +147,11 @@ func (e *CCXTOrderExecutor) placeOrderWithKey(ctx context.Context, exchange, sym
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
-		fmt.Printf("[CCXT-ORDER] Duplicate order detected (idempotent retry, HTTP 409): clientOrderId=%s\n", idempotencyKey)
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[CCXT-ORDER] Duplicate order detected (idempotent retry, HTTP 409): clientOrderId=%s body=%s\n", idempotencyKey, string(body))
+		if realID := extractOrderIDFromDuplicateBody(body); realID != "" {
+			return realID, nil
+		}
 		return idempotencyKey, nil
 	}
 
@@ -166,6 +170,50 @@ func (e *CCXTOrderExecutor) placeOrderWithKey(ctx context.Context, exchange, sym
 	}
 
 	return result.Order.ID, nil
+}
+
+// extractOrderIDFromDuplicateBody pulls a real exchange order ID out of a 409
+// duplicate-order response. CCXT-side services vary in shape, so this tries
+// the common fields and returns the first non-empty match. Empty string means
+// the caller should fall back to the idempotency key.
+func extractOrderIDFromDuplicateBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var probe struct {
+		ID      string `json:"id"`
+		OrderID string `json:"orderId"`
+		Order   *struct {
+			ID string `json:"id"`
+		} `json:"order"`
+		Existing *struct {
+			ID string `json:"id"`
+		} `json:"existing"`
+		Duplicate *struct {
+			ID string `json:"id"`
+		} `json:"duplicate"`
+		Data *struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
+	switch {
+	case probe.ID != "":
+		return probe.ID
+	case probe.OrderID != "":
+		return probe.OrderID
+	case probe.Order != nil && probe.Order.ID != "":
+		return probe.Order.ID
+	case probe.Existing != nil && probe.Existing.ID != "":
+		return probe.Existing.ID
+	case probe.Duplicate != nil && probe.Duplicate.ID != "":
+		return probe.Duplicate.ID
+	case probe.Data != nil && probe.Data.ID != "":
+		return probe.Data.ID
+	}
+	return ""
 }
 
 func (e *CCXTOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID string) error {
