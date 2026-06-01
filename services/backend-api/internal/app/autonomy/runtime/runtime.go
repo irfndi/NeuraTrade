@@ -19,6 +19,8 @@ type Dependencies struct {
 	NotificationService *services.NotificationService
 	MonitoringService   *services.AutonomousMonitorManager
 	SQLDB               *sql.DB
+	KillSwitch          interface{ IsEngaged() bool }
+	SafeMode            interface{ IsEnabled() bool }
 }
 
 func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHandlers {
@@ -29,6 +31,8 @@ func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHa
 		deps.FuturesArbService,
 		deps.NotificationService,
 		deps.MonitoringService,
+		deps.KillSwitch,
+		deps.SafeMode,
 	)
 	handlers.SetDB(deps.SQLDB)
 	return handlers
@@ -54,6 +58,8 @@ func BuildIntegratedHandlers(deps Dependencies) (*services.IntegratedQuestHandle
 		deps.MonitoringService,
 		deps.SQLDB,
 		nil,
+		deps.KillSwitch,
+		deps.SafeMode,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build integrated autonomy handlers: %w", err)

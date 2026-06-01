@@ -62,7 +62,7 @@ func TestIntegratedQuestHandlers_MarketScanWithTA(t *testing.T) {
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
-		nil, nil, nil, nil, mockNotif, mockMonitoring,
+		nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil,
 	)
 
 	quest := &Quest{
@@ -91,7 +91,7 @@ func TestIntegratedQuestHandlers_FundingRateScan(t *testing.T) {
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
-		nil, nil, nil, nil, mockNotif, mockMonitoring,
+		nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil,
 	)
 
 	quest := &Quest{
@@ -119,7 +119,7 @@ func TestIntegratedQuestHandlers_PortfolioHealthWithRisk(t *testing.T) {
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
-		nil, nil, nil, nil, mockNotif, mockMonitoring,
+		nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil,
 	)
 
 	quest := &Quest{
@@ -148,7 +148,7 @@ func TestIntegratedQuestHandlers_GetMonitoringSnapshot(t *testing.T) {
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
 
 	handlers := NewIntegratedQuestHandlers(
-		nil, nil, nil, nil, mockNotif, mockMonitoring,
+		nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil,
 	)
 
 	snapshot := handlers.GetMonitoringSnapshot("test123")
@@ -162,7 +162,7 @@ func TestIntegratedQuestHandlers_GetMonitoringSnapshot(t *testing.T) {
 func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 	mockNotif := &NotificationService{}
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil)
 
 	quest := &Quest{
 		ID:         "unknown-routine",
@@ -184,7 +184,7 @@ func TestIntegratedQuestHandlers_ExecuteRoutineUnknownDefinition(t *testing.T) {
 func TestIntegratedQuestHandlers_ExecuteRoutine_VolatilityWatchUsesPortfolioHealthFlow(t *testing.T) {
 	mockNotif := &NotificationService{}
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil)
 
 	quest := &Quest{
 		ID:           "volatility-watch",
@@ -209,7 +209,7 @@ func TestIntegratedQuestHandlers_ExecuteRoutine_VolatilityWatchUsesPortfolioHeal
 func TestIntegratedQuestHandlers_ExecuteRoutine_FundGrowthGoalUpdatesCheckpoint(t *testing.T) {
 	mockNotif := &NotificationService{}
 	mockMonitoring := NewAutonomousMonitorManager(mockNotif, testLogger)
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, mockNotif, mockMonitoring, nil, nil)
 
 	quest := &Quest{
 		ID:           "fund-growth",
@@ -235,7 +235,7 @@ func TestIntegratedQuestHandlers_ExecuteRoutine_FundGrowthGoalUpdatesCheckpoint(
 
 func TestIntegratedQuestHandlers_SetQuestEngine(t *testing.T) {
 	engine := NewQuestEngineWithNotification(NewInMemoryQuestStore(), nil, nil)
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetQuestEngine(engine)
 	assert.Equal(t, engine, handlers.questEngine)
 }
@@ -407,7 +407,7 @@ func TestIntegratedQuestHandlers_GetUserExchange_SQLiteLookup(t *testing.T) {
 	`, "w1", "chat-1", "bitget", "connected", time.Now().UTC())
 	require.NoError(t, err)
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	assert.Equal(t, "bitget", handlers.getUserExchange("chat-1"))
@@ -794,7 +794,7 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_HybridModes(t *testin
 	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
 	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_CAP_PCT", "0.50")
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{
 		Checkpoint: map[string]interface{}{
 			"recovery_clean_cycles": 2,
@@ -826,7 +826,7 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_IgnoresRuntimeFailure
 	t.Setenv("NEURATRADE_RECOVERY_MICRO_ENTRY_MIN_DRAWDOWN", "0.30")
 	t.Setenv("NEURATRADE_RECOVERY_DERISK_ONLY_DRAWDOWN", "0.40")
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{
 		Checkpoint: map[string]interface{}{
 			"recovery_clean_cycles_current": 1,
@@ -844,7 +844,7 @@ func TestIntegratedQuestHandlers_EvaluateRecoveryGateState_IgnoresRuntimeFailure
 }
 
 func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesCurrentDrawdownFromPeakEquity(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDrawdownHalt(NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig()))
 
 	quest := &Quest{
@@ -900,7 +900,7 @@ func TestIntegratedQuestHandlers_EnrichPortfolioControlPlane_UsesRawEquityForFul
 	}, "bootstrap_reconciliation")
 	require.NoError(t, err)
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetLifecycleStore(store)
 	handlers.SetDrawdownHalt(NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig()))
 
@@ -988,7 +988,7 @@ func TestIntegratedQuestHandlers_RecentLossWindowRecoveryGate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("NEURATRADE_SCALPING_SYMBOL_LOSS_WINDOW_SECONDS", tt.windowSeconds)
-			handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+			handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 			store := newLifecycleStoreForTest(t)
 			handlers.SetLifecycleStore(store)
 
@@ -1034,7 +1034,7 @@ func TestIntegratedQuestHandlers_RecentLossWindowRecoveryGate(t *testing.T) {
 }
 
 func TestIntegratedQuestHandlers_UpdateRecoveryCleanCycles_ResetOnFailure(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{}}
 
 	handlers.updateRecoveryCleanCycles(quest, true, "")
@@ -1052,7 +1052,7 @@ func TestIntegratedQuestHandlers_EvaluateEntryAttemptGateState_BudgetLimit(t *te
 	t.Setenv("NEURATRADE_LIVENESS_IDLE_MINUTES", "45")
 	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	now := time.Now().UTC()
 	quest := &Quest{
 		Checkpoint: map[string]interface{}{
@@ -1082,7 +1082,7 @@ func TestIntegratedQuestHandlers_EvaluateEntryAttemptGateState_BudgetLimit(t *te
 func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) {
 	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	now := time.Now().UTC()
 	quest := &Quest{
 		Checkpoint: map[string]interface{}{
@@ -1103,7 +1103,7 @@ func TestIntegratedQuestHandlers_RecordEntryAttempt_RotatesWindow(t *testing.T) 
 func TestIntegratedQuestHandlers_RecordEntryAttempt_SetsBlockReasonAtBudgetEdge(t *testing.T) {
 	t.Setenv("NEURATRADE_LIVENESS_MAX_ATTEMPTS_PER_HOUR", "3")
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	now := time.Now().UTC()
 	windowStart := now.Add(-20 * time.Minute)
 	quest := &Quest{Checkpoint: map[string]interface{}{}}
@@ -1190,7 +1190,7 @@ func TestIsAutonomousManagedPosition(t *testing.T) {
 }
 
 func TestIntegratedQuestHandlers_ResetScalpingFailureState_ClearsCheckpointError(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
 		"runtime_failure_streak":  3,
 		"runtime_last_failure":    "portfolio safety blocked: maximum allowed 0.00",
@@ -1337,7 +1337,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFil
 		OpenedAt:   time.Now().UTC().Add(-30 * time.Second),
 	}))
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 	handlers.SetLifecycleStore(store)
 
@@ -1410,7 +1410,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsProbableEntryFil
 		OpenedAt:   time.Now().UTC().Add(-30 * time.Second),
 	}))
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 	handlers.SetLifecycleStore(store)
 
@@ -1483,7 +1483,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_DoesNotReprocessSkipp
 		OpenedAt:   time.Now().UTC().Add(-time.Minute),
 	}))
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 	handlers.SetLifecycleStore(store)
 
@@ -1871,7 +1871,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_PersistsLegacyTradeCl
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	orderExecutor := new(MockScalpingOrderExecutor)
@@ -1940,7 +1940,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_SkipsLegacyJournalWhe
 	sqliteDB, err := database.NewSQLiteConnection(dbPath)
 	require.NoError(t, err)
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.db = sqliteDB.DB
 
 	orderExecutor := new(MockScalpingOrderExecutor)
@@ -1998,7 +1998,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_LegacyCloseWithoutOpt
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	orderExecutor := new(MockScalpingOrderExecutor)
@@ -2060,7 +2060,7 @@ func TestIntegratedQuestHandlers_IngestClosedOrderFeedback_TracksMissingPnL(t *t
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	orderExecutor := new(MockScalpingOrderExecutor)
@@ -2107,7 +2107,7 @@ func TestIntegratedQuestHandlers_PersistLegacyTradeEntry_StoresBaseSizeAndCostBa
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	quest := &Quest{
@@ -2149,7 +2149,7 @@ func TestIntegratedQuestHandlers_PersistLegacyTradeEntry_StoresZeroSizeWithoutEn
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	quest := &Quest{
@@ -2187,7 +2187,7 @@ func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement
 	sqliteDB1, err := database.NewSQLiteConnection(dbPath1)
 	require.NoError(t, err)
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 
 	require.NoError(t, sqliteDB1.Close())
 	handlers.SetDB(sqliteDB1.DB)
@@ -2227,7 +2227,7 @@ func TestIntegratedQuestHandlers_SetDB_RetriesTradeJournalInitAfterDBReplacement
 }
 
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsStaleDecisionMetadata(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
 		"account_tier":                          "micro",
 		"effective_min_confidence":              0.72,
@@ -2269,7 +2269,7 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsSta
 }
 
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNilDecisionMetadata(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{
 		"account_tier":                          "small",
 		"effective_min_confidence":              0.70,
@@ -2297,7 +2297,7 @@ func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_ClearsNil
 }
 
 func TestIntegratedQuestHandlers_ApplyScalpingCycleDecisionDiagnostics_PopulatesCountMetadata(t *testing.T) {
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	quest := &Quest{Checkpoint: map[string]interface{}{}}
 	decision := &AITradingDecision{
 		PolicyAdjustments: []string{
@@ -2353,7 +2353,7 @@ func TestIntegratedQuestHandlers_RecordTradeDecision_DoesNotSynthesizeTradeMemor
 		_ = sqliteDB.Close()
 	})
 
-	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil)
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
 	handlers.SetDB(sqliteDB.DB)
 
 	quest := &Quest{

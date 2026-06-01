@@ -442,7 +442,7 @@ func riskLockSourcePriority(source string) int {
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService) (func(), error) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService, sharedKillSwitch *apprisk.KillSwitchImpl, sharedSafeMode *apprisk.SafeModeImpl) (func(), error) {
 	configureLiveReadinessGuard(opModeService, db)
 
 	allowedOrigins := []string{"http://localhost:3000"}
@@ -806,6 +806,8 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		NotificationService: notificationService,
 		MonitoringService:   autonomousMonitoring,
 		SQLDB:               sqlDB,
+		KillSwitch:          sharedKillSwitch,
+		SafeMode:            sharedSafeMode,
 	}
 
 	// Create integrated quest runtime handlers through app/autonomy module.
@@ -1250,17 +1252,21 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		zaplogrus.Warnf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
 	}
 
-	sharedKillSwitch := apprisk.NewKillSwitch()
-	if db != nil {
-		store := apprisk.NewSQLKillSwitchStore(db)
-		sharedKillSwitch.SetStore(store)
-		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
-			zaplogrus.Warnf("kill switch reconcile: %v", err)
+	if sharedKillSwitch == nil {
+		sharedKillSwitch = apprisk.NewKillSwitch()
+		if db != nil {
+			store := apprisk.NewSQLKillSwitchStore(db)
+			sharedKillSwitch.SetStore(store)
+			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
+				zaplogrus.Warnf("kill switch reconcile: %v", err)
+			}
+			reconcileCancel()
 		}
-		reconcileCancel()
 	}
-	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	if sharedSafeMode == nil {
+		sharedSafeMode = apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	}
 
 	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{
 		Autonomy:  integratedHandlers.AutonomyCoordinator(),
