@@ -450,6 +450,12 @@ func NewRiskActorRef(ref *actor.Ref) *RiskActorRef {
 	return &RiskActorRef{ref: ref}
 }
 
+func (r *RiskActorRef) Stop() {
+	if r != nil && r.ref != nil {
+		r.ref.Stop()
+	}
+}
+
 // EvaluateIntent evaluates an order intent.
 func (r *RiskActorRef) EvaluateIntent(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
 	reply := make(chan EvaluateIntentReply, 1)
