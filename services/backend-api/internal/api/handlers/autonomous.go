@@ -1137,7 +1137,7 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 		}
 	}
 
-	zaplogrus.Infof("AutonomousHandler.Liquidate: position_id=%s symbol=%s chat_id=%s marked LIQUIDATED", positionID, req.Symbol, req.ChatID)
+	zaplogrus.Infof("AutonomousHandler.Liquidate: position_id=%s symbol=%s marked LIQUIDATED", positionID, req.Symbol)
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
 		Message:         "Position liquidated for " + req.Symbol,
@@ -1213,7 +1213,7 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 		liquidated++
 	}
 
-	zaplogrus.Infof("AutonomousHandler.LiquidateAll: chat_id=%s liquidated %d/%d open positions", req.ChatID, liquidated, len(pending))
+	zaplogrus.Infof("AutonomousHandler.LiquidateAll: liquidated %d/%d open positions", liquidated, len(pending))
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
 		Message:         fmt.Sprintf("Liquidated %d of %d open positions", liquidated, len(pending)),

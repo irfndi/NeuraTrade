@@ -70,18 +70,15 @@ func (e *ModeAwareOrderExecutor) resolveMode(ctx context.Context) OperationalMod
 }
 
 func (e *ModeAwareOrderExecutor) executorForContext(ctx context.Context) (ScalpingOrderExecutor, OperationalMode, error) {
+	if e == nil {
+		return nil, ModePaper, fmt.Errorf("ModeAwareOrderExecutor receiver is nil; check service wiring in cmd/server/main.go")
+	}
 	mode := e.resolveMode(ctx)
 	if mode == OpModeLive {
-		if e == nil {
-			return nil, mode, fmt.Errorf("live mode selected but ModeAwareOrderExecutor receiver is nil; check service wiring in cmd/server/main.go")
-		}
 		if e.liveExecutor == nil {
 			return nil, mode, fmt.Errorf("live mode selected but real order execution is unavailable; verify Bitget credentials, passphrase, and connected wallet mapping (routes.go liveOrderExecutor wiring)")
 		}
 		return e.liveExecutor, mode, nil
-	}
-	if e == nil {
-		return nil, mode, fmt.Errorf("paper mode selected but ModeAwareOrderExecutor receiver is nil; check service wiring in cmd/server/main.go")
 	}
 	if e.paperExecutor == nil {
 		return nil, mode, fmt.Errorf("paper execution is unavailable; check paper executor wiring in cmd/server/main.go")

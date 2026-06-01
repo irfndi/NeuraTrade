@@ -145,3 +145,10 @@ func TestModeAwareOrderExecutor_DefaultsToPaperWithoutContextOrModeService(t *te
 	assert.Equal(t, 1, paperExec.calls)
 	assert.True(t, paperExec.lastDetails.IsPaperTrade)
 }
+
+func TestModeAwareOrderExecutor_NilReceiverReturnsErrorNotPanic(t *testing.T) {
+	var exec *ModeAwareOrderExecutor
+	_, err := exec.PlaceOrderWithDetails(WithOperationalMode(context.Background(), OpModeLive), TradeDetails{Symbol: "BTC/USDT"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "receiver is nil")
+}
