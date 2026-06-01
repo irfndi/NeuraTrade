@@ -93,12 +93,31 @@ func (e *CCXTOrderExecutor) doWithRetry(ctx context.Context, makeReq func() (*ht
 }
 
 func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal) (string, error) {
+	idempotencyKey := uuid.New().String()
+	return e.placeOrderWithKey(ctx, exchange, symbol, side, orderType, amount, price, idempotencyKey)
+}
+
+func (e *CCXTOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
+	clientOrderID := details.ClientOrderID
+	if clientOrderID == "" {
+		key, err := generateIdempotencyKey("", details.Symbol, details.Side, details.IntentID)
+		if err != nil {
+			return "", fmt.Errorf("generate client order id: %w", err)
+		}
+		clientOrderID = key
+	}
+	return e.placeOrderWithKey(ctx, details.Exchange, details.Symbol, details.Side,
+		details.OrderType, details.AmountUSDT, details.EntryPrice, clientOrderID)
+}
+
+func (e *CCXTOrderExecutor) placeOrderWithKey(ctx context.Context, exchange, symbol, side, orderType string, amount decimal.Decimal, price *decimal.Decimal, idempotencyKey string) (string, error) {
 	reqBody := map[string]interface{}{
-		"exchange": exchange,
-		"symbol":   symbol,
-		"side":     side,
-		"type":     orderType,
-		"amount":   amount.InexactFloat64(),
+		"exchange":      exchange,
+		"symbol":        symbol,
+		"side":          side,
+		"type":          orderType,
+		"amount":        amount.InexactFloat64(),
+		"clientOrderId": idempotencyKey,
 	}
 
 	if price != nil {
@@ -109,8 +128,6 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-
-	idempotencyKey := uuid.New().String()
 
 	resp, err := e.doWithRetry(ctx, func() (*http.Request, error) {
 		httpReq, reqErr := http.NewRequestWithContext(ctx, "POST", e.serviceURL+"/api/order", bytes.NewBuffer(jsonBody))
@@ -129,6 +146,15 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[CCXT-ORDER] Duplicate order detected (idempotent retry, HTTP 409): clientOrderId=%s body=%s\n", idempotencyKey, string(body))
+		if realID := extractOrderIDFromDuplicateBody(body); realID != "" {
+			return realID, nil
+		}
+		return idempotencyKey, nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("order placement failed with status: %d", resp.StatusCode)
 	}
@@ -144,6 +170,50 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 	}
 
 	return result.Order.ID, nil
+}
+
+// extractOrderIDFromDuplicateBody pulls a real exchange order ID out of a 409
+// duplicate-order response. CCXT-side services vary in shape, so this tries
+// the common fields and returns the first non-empty match. Empty string means
+// the caller should fall back to the idempotency key.
+func extractOrderIDFromDuplicateBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var probe struct {
+		ID      string `json:"id"`
+		OrderID string `json:"orderId"`
+		Order   *struct {
+			ID string `json:"id"`
+		} `json:"order"`
+		Existing *struct {
+			ID string `json:"id"`
+		} `json:"existing"`
+		Duplicate *struct {
+			ID string `json:"id"`
+		} `json:"duplicate"`
+		Data *struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
+	switch {
+	case probe.ID != "":
+		return probe.ID
+	case probe.OrderID != "":
+		return probe.OrderID
+	case probe.Order != nil && probe.Order.ID != "":
+		return probe.Order.ID
+	case probe.Existing != nil && probe.Existing.ID != "":
+		return probe.Existing.ID
+	case probe.Duplicate != nil && probe.Duplicate.ID != "":
+		return probe.Duplicate.ID
+	case probe.Data != nil && probe.Data.ID != "":
+		return probe.Data.ID
+	}
+	return ""
 }
 
 func (e *CCXTOrderExecutor) CancelOrder(ctx context.Context, exchange, orderID string) error {
@@ -302,3 +372,9 @@ func (e *CCXTOrderExecutor) GetOrderTrades(ctx context.Context, exchange, orderI
 	}
 	return result.Trades, nil
 }
+
+func (e *CCXTOrderExecutor) IsPaperTrading() bool {
+	return false
+}
+
+var _ ScalpingOrderExecutor = (*CCXTOrderExecutor)(nil)

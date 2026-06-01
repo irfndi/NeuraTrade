@@ -193,6 +193,14 @@ func TestPaperTradingBackfillValidation_ValidateConfig(t *testing.T) {
 	}
 }
 
+func makeTrendCloses(start, step int64, count int) []decimal.Decimal {
+	closes := make([]decimal.Decimal, count)
+	for i := 0; i < count; i++ {
+		closes[i] = decimal.NewFromInt(start + step*int64(i))
+	}
+	return closes
+}
+
 func TestPaperTradingBackfillValidation_EvaluateCandleSignal(t *testing.T) {
 	v := &PaperTradingBackfillValidation{
 		config: normalizePaperTradingBackfillConfig(PaperTradingBackfillConfig{}),
@@ -204,50 +212,102 @@ func TestPaperTradingBackfillValidation_EvaluateCandleSignal(t *testing.T) {
 		MaxPositionPct: decimal.NewFromFloat(0.05),
 	}
 
+	uptrendCloses := makeTrendCloses(80, 1, 20)    // 80..99, last=99 > first=80
+	downtrendCloses := makeTrendCloses(99, -1, 20) // 99..80, last=80 < first=99
+
 	tests := []struct {
-		name       string
-		candle     backfillCandle
-		wantAction string
-		wantSide   string
+		name         string
+		candle       backfillCandle
+		recentCloses []decimal.Decimal
+		wantAction   string
+		wantSide     string
 	}{
 		{
-			name: "bullish candle (close > open)",
+			name: "uptrend green above sma should buy",
 			candle: backfillCandle{
-				Open:  decimal.NewFromInt(100),
-				High:  decimal.NewFromInt(110),
-				Low:   decimal.NewFromInt(95),
-				Close: decimal.NewFromInt(105),
+				Open:   decimal.NewFromInt(100),
+				High:   decimal.NewFromInt(110),
+				Low:    decimal.NewFromInt(90),
+				Close:  decimal.NewFromInt(105),
+				Volume: decimal.NewFromInt(2000),
 			},
-			wantAction: "buy",
-			wantSide:   "long",
+			recentCloses: uptrendCloses,
+			wantAction:   "buy",
+			wantSide:     "long",
 		},
 		{
-			name: "bearish candle (close < open)",
+			name: "uptrend green below sma should hold",
 			candle: backfillCandle{
-				Open:  decimal.NewFromInt(100),
-				High:  decimal.NewFromInt(105),
-				Low:   decimal.NewFromInt(90),
-				Close: decimal.NewFromInt(95),
+				Open:   decimal.NewFromInt(90),
+				High:   decimal.NewFromInt(105),
+				Low:    decimal.NewFromInt(85),
+				Close:  decimal.NewFromInt(93),
+				Volume: decimal.NewFromInt(2000),
 			},
-			wantAction: "sell",
-			wantSide:   "short",
+			recentCloses: uptrendCloses,
+			wantAction:   "hold",
+			wantSide:     "",
 		},
 		{
-			name: "flat candle with low confidence",
+			name: "uptrend red candle should hold",
+			candle: backfillCandle{
+				Open:   decimal.NewFromInt(100),
+				High:   decimal.NewFromInt(105),
+				Low:    decimal.NewFromInt(85),
+				Close:  decimal.NewFromInt(93),
+				Volume: decimal.NewFromInt(2000),
+			},
+			recentCloses: uptrendCloses,
+			wantAction:   "hold",
+			wantSide:     "",
+		},
+		{
+			name: "downtrend red below sma should sell",
+			candle: backfillCandle{
+				Open:   decimal.NewFromInt(85),
+				High:   decimal.NewFromInt(90),
+				Low:    decimal.NewFromInt(70),
+				Close:  decimal.NewFromInt(75),
+				Volume: decimal.NewFromInt(2000),
+			},
+			recentCloses: downtrendCloses,
+			wantAction:   "sell",
+			wantSide:     "short",
+		},
+		{
+			name: "downtrend green candle should hold",
+			candle: backfillCandle{
+				Open:   decimal.NewFromInt(88),
+				High:   decimal.NewFromInt(105),
+				Low:    decimal.NewFromInt(85),
+				Close:  decimal.NewFromInt(93),
+				Volume: decimal.NewFromInt(2000),
+			},
+			recentCloses: downtrendCloses,
+			wantAction:   "hold",
+			wantSide:     "",
+		},
+		{
+			name: "flat candle should hold",
 			candle: backfillCandle{
 				Open:  decimal.NewFromInt(100),
 				High:  decimal.NewFromInt(100),
 				Low:   decimal.NewFromInt(100),
 				Close: decimal.NewFromInt(100),
 			},
-			wantAction: "hold",
-			wantSide:   "",
+			recentCloses: uptrendCloses,
+			wantAction:   "hold",
+			wantSide:     "",
 		},
 	}
 
+	recentVolumes := make([]decimal.Decimal, 20)
+	for i := range recentVolumes {
+		recentVolumes[i] = decimal.NewFromInt(1000)
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, action, side := v.evaluateCandleSignal(tt.candle, strat)
+			_, action, side := v.evaluateCandleSignal(tt.candle, strat, tt.recentCloses, recentVolumes)
 			assert.Equal(t, tt.wantAction, action)
 			assert.Equal(t, tt.wantSide, side)
 		})
@@ -261,25 +321,42 @@ func TestPaperTradingBackfillValidation_EvaluateCandleSignal_HighConfidence(t *t
 
 	strat := &PaperTradingStrategy{
 		ID:             "test",
-		MinConfidence:  0.50,
+		MinConfidence:  0.01,
 		MaxPositionPct: decimal.NewFromFloat(0.05),
 	}
 
-	candle := backfillCandle{
-		Open:  decimal.NewFromInt(100),
-		High:  decimal.NewFromInt(110),
-		Low:   decimal.NewFromInt(90),
-		Close: decimal.NewFromInt(108),
+	recentCloses := makeTrendCloses(80, 1, 20) // uptrend: 80..99
+	recentVolumes := make([]decimal.Decimal, 20)
+	for i := range recentVolumes {
+		recentVolumes[i] = decimal.NewFromInt(1000)
 	}
 
-	confidence, action, side := v.evaluateCandleSignal(candle, strat)
+	// Valid trend-following signal: green candle in uptrend above SMA-5
+	candle := backfillCandle{
+		Open:   decimal.NewFromInt(100),
+		High:   decimal.NewFromInt(110),
+		Low:    decimal.NewFromInt(90),
+		Close:  decimal.NewFromInt(108),
+		Volume: decimal.NewFromInt(2000),
+	}
+
+	confidence, action, side := v.evaluateCandleSignal(candle, strat, recentCloses, recentVolumes)
 	assert.GreaterOrEqual(t, confidence, strat.MinConfidence)
 	assert.Equal(t, "buy", action)
 	assert.Equal(t, "long", side)
 
-	strat.MinConfidence = 0.999
-	confidence, action, _ = v.evaluateCandleSignal(candle, strat)
+	// Red candle below SMA should be ignored in uptrend (only longs allowed)
+	redCandle := backfillCandle{
+		Open:   decimal.NewFromInt(100),
+		High:   decimal.NewFromInt(105),
+		Low:    decimal.NewFromInt(90),
+		Close:  decimal.NewFromInt(93),
+		Volume: decimal.NewFromInt(2000),
+	}
+	confidence, action, side = v.evaluateCandleSignal(redCandle, strat, recentCloses, recentVolumes)
+	assert.Equal(t, 0.0, confidence)
 	assert.Equal(t, "hold", action)
+	assert.Equal(t, "", side)
 }
 
 func TestPaperTradingReadinessEvidenceBlockers(t *testing.T) {

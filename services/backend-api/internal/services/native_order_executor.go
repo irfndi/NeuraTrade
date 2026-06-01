@@ -15,27 +15,30 @@ import (
 
 // TradeDetails contains all information for a trade notification
 type TradeDetails struct {
-	Exchange           string
-	Symbol             string
-	Side               string
-	OrderType          string // market, limit
-	MarketType         string // spot, futures
-	AllowSpotFallback  bool
-	Leverage           int // for futures
-	EffectiveLeverage  int
-	LeverageSyncStatus string
-	Amount             decimal.Decimal
-	AmountUSDT         decimal.Decimal
-	WalletPercent      float64
-	EntryPrice         *decimal.Decimal
-	TakeProfit         *decimal.Decimal
-	StopLoss           *decimal.Decimal
-	TradeType          string // scalping, arbitrage, swing, etc.
-	Confidence         float64
-	Reasoning          string
-	OrderID            string
-	IsPaperTrade       bool
-	ReduceOnly         bool // Must be true for PlaceRiskReductionOrderWithDetails
+	Exchange             string
+	Symbol               string
+	Side                 string
+	OrderType            string // market, limit
+	MarketType           string // spot, futures
+	AllowSpotFallback    bool
+	Leverage             int // for futures
+	EffectiveLeverage    int
+	LeverageSyncStatus   string
+	Amount               decimal.Decimal
+	AmountUSDT           decimal.Decimal
+	WalletPercent        float64
+	EntryPrice           *decimal.Decimal
+	TakeProfit           *decimal.Decimal
+	StopLoss             *decimal.Decimal
+	TradeType            string // scalping, arbitrage, swing, etc.
+	Confidence           float64
+	Reasoning            string
+	OrderID              string
+	IsPaperTrade         bool
+	ReduceOnly           bool   // Must be true for PlaceRiskReductionOrderWithDetails
+	IntentID             string // idempotency cross-reference
+	ClientOrderID        string // idempotency key for the exchange
+	PreTradeSafetyStatus string // JSON snapshot of pre-trade safety check
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service

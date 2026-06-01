@@ -17,9 +17,9 @@ import (
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/grpcutil"
 	pb "github.com/irfndi/neuratrade/pkg/pb/ccxt"
 	"github.com/shopspring/decimal"
 )
@@ -152,19 +152,24 @@ func NewClient(cfg *config.CCXTConfig) *Client {
 	}
 
 	if cfg.GrpcAddress != "" {
-		// Use insecure credentials for internal communication with connection timeout
-		// Use non-blocking dial to avoid startup delays when gRPC service is unavailable
-		conn, err := grpc.NewClient(
-			cfg.GrpcAddress,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
+		// Use non-blocking dial to avoid startup delays when gRPC service is unavailable.
+		// TLS is opted into via NEURATRADE_GRPC_TLS_CA_FILE (server-cert validation only).
+		dialOpts, err := grpcutil.DialOptions(config.GRPCClientConfig{
+			TLSCACertFile: cfg.GrpcTLSCACertFile,
+			ServerName:    grpcutil.HostOnly(cfg.GrpcAddress),
+		})
 		if err != nil {
-			zaplogrus.Warnf("Failed to create CCXT gRPC client at %s: %v (HTTP fallback available)", cfg.GrpcAddress, err)
+			zaplogrus.Warnf("Failed to resolve CCXT gRPC dial options: %v (HTTP fallback available)", err)
 		} else {
-			client.grpcClient = pb.NewCcxtServiceClient(conn)
-			client.grpcConn = conn
-			client.grpcEnabled = true
-			zaplogrus.Infof("Created CCXT gRPC client for %s (connection will be established on first use)", cfg.GrpcAddress)
+			conn, err := grpc.NewClient(cfg.GrpcAddress, dialOpts...)
+			if err != nil {
+				zaplogrus.Warnf("Failed to create CCXT gRPC client at %s: %v (HTTP fallback available)", cfg.GrpcAddress, err)
+			} else {
+				client.grpcClient = pb.NewCcxtServiceClient(conn)
+				client.grpcConn = conn
+				client.grpcEnabled = true
+				zaplogrus.Infof("Created CCXT gRPC client for %s (connection will be established on first use)", cfg.GrpcAddress)
+			}
 		}
 	}
 

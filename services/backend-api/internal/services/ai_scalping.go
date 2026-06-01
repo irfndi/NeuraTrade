@@ -1274,7 +1274,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		annotateDecisionSignalTelemetry(decision, signals)
 	}
 
-	if err := s.validateDecision(decision, signals); err != nil {
+	if err := s.validateDecision(ctx, decision, signals); err != nil {
 		if isDecisionContractValidationError(decision, err) {
 			runtimeErr := fmt.Errorf("invalid model decision contract: %w", err)
 			s.updateRuntimeState(
@@ -2271,6 +2271,12 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	zaplogrus.Infof("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.StringFixed(2))
 
 	// Build detailed trade info for rich notification
+	intentID := fmt.Sprintf("%s-%s-%d",
+		scalpingChatIDFromContext(ctx),
+		decision.Symbol,
+		time.Now().UnixNano(),
+	)
+
 	details := TradeDetails{
 		Exchange:          exchange,
 		Symbol:            decision.Symbol,
@@ -2288,6 +2294,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Reasoning:         decision.Reasoning,
 		EntryPrice:        decision.EntryPrice,
 		IsPaperTrade:      paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
+		IntentID:          intentID,
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications
@@ -2583,7 +2590,7 @@ func calculateNetExpectancy(wins, losses int, sumWin, sumLoss float64) float64 {
 	return winRate*avgWin - (1-winRate)*avgLoss
 }
 
-func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signals []aiMarketSignal) error {
+func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITradingDecision, signals []aiMarketSignal) error {
 	if decision == nil {
 		return fmt.Errorf("decision is nil")
 	}
@@ -2638,6 +2645,9 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	}
 	if decision.StopLoss == nil || decision.TakeProfit == nil {
 		defaultSL, defaultTP := defaultExitLevels(resolved.Price, decision.Action)
+		if err := s.refuseLiveTradeWithSyntheticSLTP(ctx, decision, defaultSL, defaultTP); err != nil {
+			return err
+		}
 		if decision.StopLoss == nil {
 			decision.StopLoss = &defaultSL
 		}
@@ -4750,6 +4760,21 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 		takeProfit := entry.Mul(decimal.NewFromInt(1).Add(takePct))
 		return stopLoss, takeProfit
 	}
+}
+
+func (s *AIScalpingService) refuseLiveTradeWithSyntheticSLTP(ctx context.Context, decision *AITradingDecision, defaultSL, defaultTP decimal.Decimal) error {
+	mode, ok := operationalModeFromContext(ctx)
+	if !ok || mode != OpModeLive {
+		return nil
+	}
+	zaplogrus.Warnf(
+		"[AI-SCALPING] Refusing live trade on %s %s: SL/TP missing from model output (defaults would be SL=%.4f TP=%.4f); paper mode will apply defaults for evidence collection",
+		decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+	)
+	return fmt.Errorf(
+		"refusing live trade on %s %s: SL/TP could not be extracted from model output; defaults would be SL=%.4f TP=%.4f",
+		decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+	)
 }
 
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {

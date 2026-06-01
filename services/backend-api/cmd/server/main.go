@@ -364,7 +364,7 @@ func run() error {
 	defer positionTracker.Stop()
 
 	stopLossConfig := services.DefaultStopLossConfig()
-	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil)
+	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil, getRedisClient())
 
 	stopLossAutoExecConfig := services.DefaultStopLossAutoExecutionConfig()
 	stopLossAutoExecConfig.EnableNotifications = cfg.Telegram.BotToken != ""
@@ -507,8 +507,23 @@ func run() error {
 		}
 	}
 
+	// Initialize API key service for encrypted exchange credential storage (DB-backed Bitget creds)
+	var apiKeyService *services.APIKeyService
+	if strings.TrimSpace(cfg.Security.EncryptionKey) != "" {
+		var initErr error
+		apiKeyService, initErr = services.NewAPIKeyService(db, cfg.Security.EncryptionKey)
+		if initErr != nil {
+			logger.WithError(initErr).Warn("Failed to initialize API key service; Bitget creds will use config.json fallback only")
+			apiKeyService = nil
+		} else {
+			logger.Info("API key service initialized for encrypted exchange credential storage")
+		}
+	} else {
+		logger.Warn("Encryption key not configured; exchange API keys will not be available from encrypted DB storage")
+	}
+
 	// Setup routes and get cleanup function
-	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security)
+	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService)
 	if err != nil {
 		return fmt.Errorf("failed to setup routes: %w", err)
 	}

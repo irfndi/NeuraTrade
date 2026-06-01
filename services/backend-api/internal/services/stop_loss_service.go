@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -9,10 +10,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
 )
 
 // StopLossConfig holds configuration for stop-loss execution.
+const DefaultRedisSLKeyPrefix = "neuratrade:sl"
+const DefaultRedisSLTTL = 7 * 24 * time.Hour
+
 type StopLossConfig struct {
 	// Default stop-loss percentages
 	DefaultStopLossPct decimal.Decimal // Default stop-loss as % of entry (e.g., 0.02 = 2%)
@@ -166,18 +171,18 @@ type StopLossService struct {
 	ccxtService ccxt.CCXTService
 	logger      *zaplogrus.Logger
 
-	// Active stop-loss orders
-	orders   map[string]*StopLossOrder // orderID -> order
+	orders   map[string]*StopLossOrder
 	ordersMu sync.RWMutex
 
-	// Orders by position for quick lookup
-	positionOrders map[string]string // positionID -> orderID
+	positionOrders map[string]string
 	positionMu     sync.RWMutex
 
-	// Order book imbalance detector for optimal timing
+	redisClient    *redis.Client
+	redisKeyPrefix string
+	redisTTL       time.Duration
+
 	imbalanceDetector *OrderBookImbalanceDetector
 
-	// Callback for execution
 	executionCallback func(ctx context.Context, order *StopLossOrder) (*StopLossExecutionResult, error)
 }
 
@@ -187,6 +192,7 @@ func NewStopLossService(
 	ccxtService ccxt.CCXTService,
 	logger *zaplogrus.Logger,
 	imbalanceDetector *OrderBookImbalanceDetector,
+	redisClient *redis.Client,
 ) *StopLossService {
 	return &StopLossService{
 		config:            config,
@@ -194,8 +200,100 @@ func NewStopLossService(
 		logger:            logger,
 		orders:            make(map[string]*StopLossOrder),
 		positionOrders:    make(map[string]string),
+		redisClient:       redisClient,
+		redisKeyPrefix:    DefaultRedisSLKeyPrefix,
+		redisTTL:          DefaultRedisSLTTL,
 		imbalanceDetector: imbalanceDetector,
 	}
+}
+
+func (s *StopLossService) keyForStopLoss(orderID string) string {
+	return fmt.Sprintf("%s:%s", s.redisKeyPrefix, orderID)
+}
+
+func (s *StopLossService) ReconcileFromRedis(ctx context.Context) error {
+	if s.redisClient == nil {
+		return nil
+	}
+	pattern := fmt.Sprintf("%s:*", s.redisKeyPrefix)
+	var cursor uint64
+	var loaded int
+	for {
+		keys, nextCursor, scanErr := s.redisClient.Scan(ctx, cursor, pattern, 100).Result()
+		if scanErr != nil {
+			s.logger.WithError(scanErr).Warn("stop-loss: Redis scan failed during reconciliation, running in degraded mode")
+			return nil
+		}
+		for _, key := range keys {
+			data, getErr := s.redisClient.Get(ctx, key).Result()
+			if getErr != nil {
+				continue
+			}
+			var order StopLossOrder
+			if json.Unmarshal([]byte(data), &order) != nil {
+				continue
+			}
+			s.ordersMu.Lock()
+			s.orders[order.ID] = &order
+			s.ordersMu.Unlock()
+			s.positionMu.Lock()
+			s.positionOrders[order.PositionID] = order.ID
+			s.positionMu.Unlock()
+			loaded++
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+	s.logger.Info("stop-loss: Reconciled state from Redis", "count", loaded)
+	return nil
+}
+
+func (s *StopLossService) saveToRedis(ctx context.Context, order *StopLossOrder) {
+	if s.redisClient == nil {
+		return
+	}
+	key := s.keyForStopLoss(order.ID)
+	data, err := json.Marshal(order)
+	if err != nil {
+		s.logger.WithError(err).Error("stop-loss: Failed to marshal order for Redis", "order_id", order.ID)
+		return
+	}
+	if err := s.redisClient.Set(ctx, key, data, s.redisTTL).Err(); err != nil {
+		s.logger.WithError(err).Error("stop-loss: Failed to persist order to Redis", "order_id", order.ID)
+	}
+}
+
+func (s *StopLossService) deleteFromRedis(ctx context.Context, orderID string) {
+	if s.redisClient == nil {
+		return
+	}
+	if err := s.redisClient.Del(ctx, s.keyForStopLoss(orderID)).Err(); err != nil {
+		s.logger.WithError(err).Error("stop-loss: Failed to delete order from Redis", "order_id", orderID)
+	}
+}
+
+func (s *StopLossService) loadFromRedis(ctx context.Context, orderID string) *StopLossOrder {
+	if s.redisClient == nil {
+		return nil
+	}
+	key := s.keyForStopLoss(orderID)
+	data, err := s.redisClient.Get(ctx, key).Result()
+	if err != nil {
+		return nil
+	}
+	var order StopLossOrder
+	if json.Unmarshal([]byte(data), &order) != nil {
+		return nil
+	}
+	s.ordersMu.Lock()
+	s.orders[order.ID] = &order
+	s.ordersMu.Unlock()
+	s.positionMu.Lock()
+	s.positionOrders[order.PositionID] = order.ID
+	s.positionMu.Unlock()
+	return &order
 }
 
 // CreateStopLoss creates a new stop-loss order for a position.
@@ -240,6 +338,8 @@ func (s *StopLossService) CreateStopLoss(ctx context.Context, params StopLossPar
 	s.positionMu.Lock()
 	s.positionOrders[order.PositionID] = order.ID
 	s.positionMu.Unlock()
+
+	s.saveToRedis(ctx, order)
 
 	s.logger.Info("Stop-loss order created",
 		"order_id", order.ID,
@@ -341,12 +441,13 @@ func (s *StopLossService) ExecuteStopLoss(ctx context.Context, orderID string, t
 	order.TriggerPrice = triggerPrice
 	s.ordersMu.Unlock()
 
+	s.saveToRedis(ctx, order)
+
 	s.logger.Info("Executing stop-loss",
 		"order_id", order.ID,
 		"symbol", order.Symbol,
 		"trigger_price", triggerPrice)
 
-	// Use callback or default execution
 	var result *StopLossExecutionResult
 	var err error
 	if s.executionCallback != nil {
@@ -356,11 +457,10 @@ func (s *StopLossService) ExecuteStopLoss(ctx context.Context, orderID string, t
 	}
 
 	if err != nil {
-		order.Status = StopLossStatusActive // Reset status
+		order.Status = StopLossStatusActive
 		return nil, fmt.Errorf("stop-loss execution failed: %w", err)
 	}
 
-	// Update order with result
 	s.ordersMu.Lock()
 	order.Status = StopLossStatusExecuted
 	order.ExecutionPrice = result.ExecutionPrice
@@ -370,37 +470,46 @@ func (s *StopLossService) ExecuteStopLoss(ctx context.Context, orderID string, t
 	order.ExecutionTime = &now
 	s.ordersMu.Unlock()
 
+	s.saveToRedis(ctx, order)
+
 	return result, nil
 }
 
 // CancelStopLoss cancels an active stop-loss order.
 func (s *StopLossService) CancelStopLoss(orderID string) error {
 	s.ordersMu.Lock()
-	defer s.ordersMu.Unlock()
-
 	order, exists := s.orders[orderID]
 	if !exists {
+		s.ordersMu.Unlock()
 		return fmt.Errorf("stop-loss order not found: %s", orderID)
 	}
-
 	if !order.IsActive() {
+		s.ordersMu.Unlock()
 		return fmt.Errorf("stop-loss order is not active: %s", orderID)
 	}
-
 	order.Status = StopLossStatusCancelled
 	order.UpdatedAt = time.Now().UTC()
-
-	s.logger.Info("Stop-loss order cancelled", "order_id", orderID)
+	orderIDCopy := order.ID
+	s.ordersMu.Unlock()
+	s.deleteFromRedis(context.Background(), orderIDCopy)
+	s.logger.Info("Stop-loss order cancelled", "order_id", orderIDCopy)
 	return nil
 }
 
 // GetStopLoss retrieves a stop-loss order by ID.
 func (s *StopLossService) GetStopLoss(orderID string) (*StopLossOrder, bool) {
 	s.ordersMu.RLock()
-	defer s.ordersMu.RUnlock()
-
 	order, exists := s.orders[orderID]
-	return order, exists
+	s.ordersMu.RUnlock()
+	if exists {
+		return order, true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if loaded := s.loadFromRedis(ctx, orderID); loaded != nil {
+		return loaded, true
+	}
+	return nil, false
 }
 
 // GetStopLossByPosition retrieves a stop-loss order by position ID.

@@ -135,6 +135,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallback
 		Leverage:          0,
 		AmountUSDT:        decimal.NewFromInt(3),
 		EntryPrice:        &entryPrice,
+		IntentID:          "test-intent-blocks-unprotected-spot",
 	})
 
 	require.Error(t, err)
@@ -175,6 +176,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallback
 		Leverage:          0,
 		AmountUSDT:        decimal.NewFromInt(3),
 		EntryPrice:        &entryPrice,
+		IntentID:          "test-intent-blocks-alias",
 	})
 
 	require.Error(t, err)
@@ -212,6 +214,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksUnprotectedSpotFallback
 		Leverage:          0,
 		AmountUSDT:        decimal.NewFromInt(3),
 		EntryPrice:        &entryPrice,
+		IntentID:          "test-intent-blocks-short-alias",
 	})
 
 	require.Error(t, err)
@@ -550,6 +553,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_BlocksOnLeverageSyncFailure(t
 		Leverage:   5,
 		AmountUSDT: decimal.NewFromInt(10),
 		EntryPrice: &entryPrice,
+		IntentID:   "test-intent-leverage-sync-fail",
 	})
 
 	require.Error(t, err)
@@ -583,6 +587,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_AcceptsNumericLeverageFields(
 		Leverage:   5,
 		AmountUSDT: decimal.NewFromInt(10),
 		EntryPrice: &entryPrice,
+		IntentID:   "test-intent-numeric-leverage",
 	})
 
 	require.NoError(t, err)
@@ -617,6 +622,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_DoesNotSpotFallbackOnLeverage
 		Leverage:          5,
 		AmountUSDT:        decimal.NewFromInt(10),
 		EntryPrice:        &entryPrice,
+		IntentID:          "test-intent-leverage-sync-missing",
 	})
 
 	require.Error(t, err)
@@ -663,6 +669,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_FuturesZeroLeverageSkipsSync(
 		Leverage:   0,
 		AmountUSDT: decimal.NewFromInt(10),
 		EntryPrice: &entryPrice,
+		IntentID:   "test-intent-zero-leverage",
 	})
 
 	require.NoError(t, err)
@@ -760,6 +767,7 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_RiskReductionSkipsLeverageSyn
 		Amount:     decimal.NewFromInt(3),
 		AmountUSDT: decimal.NewFromInt(10),
 		EntryPrice: &entryPrice,
+		IntentID:   "test-intent-risk-reduction",
 	})
 
 	require.NoError(t, err)
@@ -963,6 +971,8 @@ func newBitgetFuturesTestServer(t *testing.T, orderID string) (*httptest.Server,
 			require.NoError(t, err)
 			require.NoError(t, json.Unmarshal(body, &orderBody))
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":"00000","msg":"ok","data":{"orderId":"%s"}}`, orderID)))
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"nextFlag":"false","orderList":[{"orderId":"tpsl-plan-1","holdSide":"long"}]}}`))
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}

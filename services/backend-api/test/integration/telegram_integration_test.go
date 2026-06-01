@@ -80,7 +80,7 @@ func TestTelegramIntegration(t *testing.T) {
 
 	// Call SetupRoutes
 	// We pass nil for services not involved in this test flow
-	_, err = api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil)
+	_, err = api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Test Data

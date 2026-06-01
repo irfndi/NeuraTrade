@@ -216,7 +216,7 @@ func runScalpingLLMDecisionProbeWithService(
 	}
 	result.LLMDegraded = scalpingProbeRuntimeDegraded(result.RuntimeDiagnostics)
 
-	if validationErr := svc.validateDecision(decision, decisionSignals); validationErr != nil {
+	if validationErr := svc.validateDecision(ctx, decision, decisionSignals); validationErr != nil {
 		if isDecisionContractValidationError(decision, validationErr) {
 			result.ContractValid = false
 			result.ContractError = validationErr.Error()
