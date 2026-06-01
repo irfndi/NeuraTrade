@@ -121,7 +121,7 @@ func TestNewRedisConnection_FailsFastOnUnreachableHost(t *testing.T) {
 	assert.Less(t, elapsed, 5*time.Second)
 }
 
-func TestNewRedisConnection_SucceedsWithTCP4Forced(t *testing.T) {
+func TestNewRedisConnection_SucceedsWithIPv4Loopback(t *testing.T) {
 	server, err := miniredis.Run()
 	require.NoError(t, err)
 	defer server.Close()
