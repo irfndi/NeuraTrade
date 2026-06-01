@@ -100,7 +100,11 @@ func (e *CCXTOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, si
 func (e *CCXTOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details TradeDetails) (string, error) {
 	clientOrderID := details.ClientOrderID
 	if clientOrderID == "" {
-		clientOrderID = generateIdempotencyKey("", details.Symbol, details.Side, details.IntentID)
+		key, err := generateIdempotencyKey("", details.Symbol, details.Side, details.IntentID)
+		if err != nil {
+			return "", fmt.Errorf("generate client order id: %w", err)
+		}
+		clientOrderID = key
 	}
 	return e.placeOrderWithKey(ctx, details.Exchange, details.Symbol, details.Side,
 		details.OrderType, details.AmountUSDT, details.EntryPrice, clientOrderID)

@@ -73,7 +73,7 @@ func NewNotificationService(db DBPool, redis *database.RedisClient, telegramServ
 	if telegramGrpcAddress != "" {
 		dialOpts, dialErr := grpcutil.DialOptions(config.GRPCClientConfig{
 			TLSCACertFile: os.Getenv("NEURATRADE_GRPC_TLS_CA_FILE"),
-			ServerName:    telegramGrpcAddress,
+			ServerName:    grpcutil.HostOnly(telegramGrpcAddress),
 		})
 		if dialErr != nil {
 			ns.logger.Error("Failed to resolve Telegram gRPC dial options", "address", telegramGrpcAddress, "error", dialErr)

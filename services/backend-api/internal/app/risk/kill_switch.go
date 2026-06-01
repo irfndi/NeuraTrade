@@ -69,7 +69,8 @@ func (k *KillSwitchImpl) Reconcile(ctx context.Context) error {
 }
 
 func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) {
-	if k.store == nil {
+	store := k.store
+	if store == nil {
 		return
 	}
 	persisted := PersistedKillSwitchState{
@@ -85,7 +86,7 @@ func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = k.store.Save(ctx, persisted)
+		_ = store.Save(ctx, persisted)
 	}()
 }
 

@@ -156,7 +156,7 @@ func NewClient(cfg *config.CCXTConfig) *Client {
 		// TLS is opted into via NEURATRADE_GRPC_TLS_CA_FILE (server-cert validation only).
 		dialOpts, err := grpcutil.DialOptions(config.GRPCClientConfig{
 			TLSCACertFile: cfg.GrpcTLSCACertFile,
-			ServerName:    cfg.GrpcAddress,
+			ServerName:    grpcutil.HostOnly(cfg.GrpcAddress),
 		})
 		if err != nil {
 			zaplogrus.Warnf("Failed to resolve CCXT gRPC dial options: %v (HTTP fallback available)", err)

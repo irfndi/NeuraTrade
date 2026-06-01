@@ -73,6 +73,7 @@ func (e *BitgetOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, 
 		MarketType: "futures",
 		AmountUSDT: amount,
 		EntryPrice: price,
+		IntentID:   fmt.Sprintf("legacy-%d", time.Now().UnixNano()),
 	})
 }
 
@@ -98,7 +99,11 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		clientOidChatID = scopedChatID
 	}
 	if strings.TrimSpace(details.ClientOrderID) == "" {
-		details.ClientOrderID = generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
+		clientOid, err := generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
+		if err != nil {
+			return "", fmt.Errorf("generate client order id: %w", err)
+		}
+		details.ClientOrderID = clientOid
 	}
 
 	fmt.Printf("[BITGET-ORDER] Starting order: %s %s (%.2f USDT) clientOid=%s\n",

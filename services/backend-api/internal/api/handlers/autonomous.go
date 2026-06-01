@@ -1589,15 +1589,13 @@ func (r *ReadinessChecker) Check(c *gin.Context, chatID string) *ReadinessResult
 }
 
 func (r *ReadinessChecker) checkDatabase(c *gin.Context) *CheckResult {
-	start := time.Now()
 	if r.dbPool == nil {
-		latency := time.Since(start).Milliseconds()
 		return &CheckResult{
-			Status:    "warning",
-			Message:   "Database pool not configured for readiness checker (call SetDBPool)",
-			LatencyMs: latency,
+			Status:  "warning",
+			Message: "Database pool not configured for readiness checker (call SetDBPool)",
 		}
 	}
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
 	if _, err := r.dbPool.Exec(ctx, "SELECT 1"); err != nil {

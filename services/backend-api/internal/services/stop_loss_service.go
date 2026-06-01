@@ -504,7 +504,9 @@ func (s *StopLossService) GetStopLoss(orderID string) (*StopLossOrder, bool) {
 	if exists {
 		return order, true
 	}
-	if loaded := s.loadFromRedis(context.Background(), orderID); loaded != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if loaded := s.loadFromRedis(ctx, orderID); loaded != nil {
 		return loaded, true
 	}
 	return nil, false

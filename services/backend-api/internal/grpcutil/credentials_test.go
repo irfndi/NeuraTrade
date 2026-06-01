@@ -16,6 +16,25 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 )
 
+func TestHostOnly(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"localhost:50051", "localhost"},
+		{"telegram-service:50052", "telegram-service"},
+		{"127.0.0.1:443", "127.0.0.1"},
+		{"grpc.example.com", "grpc.example.com"},
+		{"", ""},
+		{"  localhost:50051  ", "localhost"},
+	}
+	for _, c := range cases {
+		got := HostOnly(c.in)
+		if got != c.want {
+			t.Errorf("HostOnly(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestDialOptions_EmptyCAIsInsecure(t *testing.T) {
 	opts, err := DialOptions(config.GRPCClientConfig{})
 	if err != nil {

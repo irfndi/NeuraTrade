@@ -4,7 +4,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"os"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -12,6 +14,20 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/config"
 )
+
+// HostOnly strips the port from a host:port gRPC address so it can be used
+// as a tls.Config.ServerName (which must be hostname-only). Returns the
+// original string when no port is present.
+func HostOnly(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
 
 func DialOptions(cfg config.GRPCClientConfig) ([]grpc.DialOption, error) {
 	if cfg.TLSCACertFile == "" {

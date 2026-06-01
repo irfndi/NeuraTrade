@@ -2,12 +2,15 @@ package risk
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/irfndi/neuratrade/internal/database"
+	"github.com/jackc/pgx/v5"
 )
 
 type PersistedKillSwitchState struct {
@@ -71,7 +74,7 @@ func (s *SQLKillSwitchStore) Load(ctx context.Context) (PersistedKillSwitchState
 	row := s.db.QueryRow(queryCtx, `
 		SELECT engaged, engaged_at, COALESCE(engaged_by, ''), COALESCE(reason, ''), cancel_orders, last_updated_at
 		FROM risk_kill_switch_state
-		WHERE singleton = 1
+		WHERE singleton
 	`)
 
 	var (
@@ -148,7 +151,17 @@ func (s *SQLKillSwitchStore) Save(ctx context.Context, st PersistedKillSwitchSta
 }
 
 func isNoRowsErr(err error) bool {
-	return err != nil && err.Error() == "sql: no rows in result set"
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return true
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	msg := err.Error()
+	return msg == "sql: no rows in result set" || msg == "no rows in result set"
 }
 
 func isTableMissingErr(err error) bool {
@@ -156,17 +169,7 @@ func isTableMissingErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return contains(msg, "no such table") || contains(msg, "relation") && contains(msg, "does not exist")
-}
-
-func contains(haystack, needle string) bool {
-	if len(needle) == 0 {
-		return true
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(msg, "no such table") ||
+		(strings.Contains(msg, "relation") && strings.Contains(msg, "does not exist")) ||
+		strings.Contains(msg, "undefined table")
 }

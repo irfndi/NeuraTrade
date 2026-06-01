@@ -11,4 +11,3 @@ CREATE TABLE IF NOT EXISTS risk_kill_switch_state (
     last_updated_at    BIGINT NOT NULL,
     CONSTRAINT kill_switch_singleton CHECK (singleton = TRUE)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_kill_switch_singleton ON risk_kill_switch_state((singleton));

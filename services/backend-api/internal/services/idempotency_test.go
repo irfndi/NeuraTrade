@@ -20,8 +20,10 @@ func TestGenerateIdempotencyKey_Deterministic(t *testing.T) {
 	side := "buy"
 	intentID := "intent-abc-123"
 
-	key1 := generateIdempotencyKey(chatID, symbol, side, intentID)
-	key2 := generateIdempotencyKey(chatID, symbol, side, intentID)
+	key1, err1 := generateIdempotencyKey(chatID, symbol, side, intentID)
+	require.NoError(t, err1)
+	key2, err2 := generateIdempotencyKey(chatID, symbol, side, intentID)
+	require.NoError(t, err2)
 
 	assert.Equal(t, key1, key2, "same inputs must produce same key")
 	assert.Contains(t, key1, "nt-")
@@ -36,8 +38,10 @@ func TestGenerateIdempotencyKey_DifferentIntentIDs(t *testing.T) {
 	symbol := "ETH/USDT"
 	side := "sell"
 
-	key1 := generateIdempotencyKey(chatID, symbol, side, "intent-1")
-	key2 := generateIdempotencyKey(chatID, symbol, side, "intent-2")
+	key1, err1 := generateIdempotencyKey(chatID, symbol, side, "intent-1")
+	require.NoError(t, err1)
+	key2, err2 := generateIdempotencyKey(chatID, symbol, side, "intent-2")
+	require.NoError(t, err2)
 
 	assert.NotEqual(t, key1, key2, "different intentIDs must produce different keys")
 }
@@ -47,8 +51,10 @@ func TestGenerateIdempotencyKey_DifferentSymbols(t *testing.T) {
 	side := "buy"
 	intentID := "intent-x"
 
-	key1 := generateIdempotencyKey(chatID, "BTC/USDT", side, intentID)
-	key2 := generateIdempotencyKey(chatID, "ETH/USDT", side, intentID)
+	key1, err1 := generateIdempotencyKey(chatID, "BTC/USDT", side, intentID)
+	require.NoError(t, err1)
+	key2, err2 := generateIdempotencyKey(chatID, "ETH/USDT", side, intentID)
+	require.NoError(t, err2)
 
 	assert.NotEqual(t, key1, key2, "different symbols must produce different keys")
 }
@@ -58,13 +64,11 @@ func TestGenerateIdempotencyKey_EmptyIntentID(t *testing.T) {
 	symbol := "BTC/USDT"
 	side := "buy"
 
-	key1 := generateIdempotencyKey(chatID, symbol, side, "")
-	time.Sleep(1 * time.Millisecond)
-	key2 := generateIdempotencyKey(chatID, symbol, side, "")
+	_, err1 := generateIdempotencyKey(chatID, symbol, side, "")
+	_, err2 := generateIdempotencyKey(chatID, symbol, side, "   ")
 
-	assert.NotEqual(t, key1, key2, "empty intentID must use nanosecond timestamp fallback producing different keys")
-	assert.Contains(t, key1, "nt-")
-	assert.Contains(t, key1, "ts-")
+	assert.ErrorIs(t, err1, ErrMissingIntentID, "empty intentID must surface ErrMissingIntentID")
+	assert.ErrorIs(t, err2, ErrMissingIntentID, "whitespace intentID must surface ErrMissingIntentID")
 }
 
 func TestGenerateIdempotencyKey_MaxLength(t *testing.T) {
@@ -72,7 +76,8 @@ func TestGenerateIdempotencyKey_MaxLength(t *testing.T) {
 	longSymbol := strings.Repeat("BTC/USDT/", 5)
 	longIntentID := strings.Repeat("x", 100)
 
-	key := generateIdempotencyKey(longChatID, longSymbol, "buy", longIntentID)
+	key, err := generateIdempotencyKey(longChatID, longSymbol, "buy", longIntentID)
+	require.NoError(t, err)
 
 	assert.LessOrEqual(t, len(key), maxClientOrderIDLen, "key must not exceed %d chars", maxClientOrderIDLen)
 	assert.Contains(t, key, "nt-")
