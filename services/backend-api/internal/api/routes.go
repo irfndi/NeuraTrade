@@ -903,6 +903,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
 	zaplogrus.Infof("Portfolio safety gate enabled for scalping order execution")
 
+	orderExecutor = services.NewAuditedOrderExecutor(orderExecutor, db)
+	zaplogrus.Infof("Audit trail enabled for scalping order execution")
+
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 	integratedHandlers.SetOperationalModeService(opModeService)
