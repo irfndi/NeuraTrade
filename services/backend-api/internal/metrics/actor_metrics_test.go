@@ -23,8 +23,6 @@ func TestMarketTicksTotal(t *testing.T) {
 	))
 }
 
-
-
 func TestStrategySignalsTotal(t *testing.T) {
 	StrategySignalsTotal.WithLabelValues("strat-1", "BTC/USDT", "buy").Inc()
 	StrategySignalsTotal.WithLabelValues("strat-1", "BTC/USDT", "buy").Inc()
@@ -179,5 +177,3 @@ func TestMetricsLabelsAreConsistent(t *testing.T) {
 	// Clean up: unregister the duplicate
 	prometheus.Unregister(MarketTicksTotal)
 }
-
-
