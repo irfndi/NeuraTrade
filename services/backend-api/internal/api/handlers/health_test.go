@@ -351,7 +351,7 @@ func TestCheckTelegramGRPCRequiresHealthRPC(t *testing.T) {
 		}
 	}()
 
-	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String(), "")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "health rpc")
@@ -373,9 +373,15 @@ func TestCheckTelegramGRPCHealthyResponse(t *testing.T) {
 		_ = server.Serve(listener)
 	}()
 
-	err = checkTelegramGRPC(context.Background(), listener.Addr().String())
+	err = checkTelegramGRPC(context.Background(), listener.Addr().String(), "")
 
 	require.NoError(t, err)
+}
+
+func TestCheckTelegramGRPCInvalidCAFile(t *testing.T) {
+	err := checkTelegramGRPC(context.Background(), "127.0.0.1:50052", "/nonexistent/ca-bundle.pem")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "grpc tls config")
 }
 
 func TestCheckTelegramDeliveryRequiresAllConfiguredEndpoints(t *testing.T) {
