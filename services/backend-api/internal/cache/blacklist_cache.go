@@ -13,6 +13,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var deleteExpiredBlacklistScript = redis.NewScript(`
+local ttl = redis.call("TTL", KEYS[1])
+if ttl > 0 then return 0 end
+redis.call("DEL", KEYS[1])
+return 1
+`)
+
 // BlacklistCacheEntry represents a blacklisted symbol with metadata.
 type BlacklistCacheEntry struct {
 	// Symbol is the trading pair identifier that is blacklisted.
@@ -114,6 +121,19 @@ func NewRedisBlacklistCache(client redis.Cmdable, repo BlacklistRepository) *Red
 	}
 }
 
+func (rbc *RedisBlacklistCache) deleteExpiredEntry(key string) bool {
+	scripter, ok := rbc.client.(redis.Scripter)
+	if !ok {
+		return false
+	}
+	deleted, err := deleteExpiredBlacklistScript.Run(rbc.ctx, scripter, []string{key}).Int()
+	if err != nil {
+		zaplogrus.Warnf("Failed to delete expired blacklist entry %s: %v", key, err)
+		return false
+	}
+	return deleted == 1
+}
+
 // IsBlacklisted checks if a symbol is blacklisted.
 // It looks up the symbol in Redis and checks expiration.
 //
@@ -151,8 +171,7 @@ func (rbc *RedisBlacklistCache) IsBlacklisted(symbol string) (bool, string) {
 
 	// Check if entry has expired
 	if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
-		// Remove expired entry
-		rbc.client.Del(rbc.ctx, key)
+		rbc.deleteExpiredEntry(key)
 		rbc.stats.ExpiredEntries++
 		rbc.stats.Misses++
 		return false, ""
@@ -416,10 +435,8 @@ func (rbc *RedisBlacklistCache) GetBlacklistedSymbols() ([]BlacklistCacheEntry, 
 			continue // Skip malformed entries
 		}
 
-		// Check if entry has expired
 		if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
-			// Remove expired entry
-			rbc.client.Del(rbc.ctx, key)
+			rbc.deleteExpiredEntry(key)
 			continue
 		}
 
@@ -452,19 +469,7 @@ func (rbc *RedisBlacklistCache) CleanupExpired() int {
 
 	expiredCount := 0
 	for _, key := range keys {
-		val, err := rbc.client.Get(rbc.ctx, key).Result()
-		if err != nil {
-			continue
-		}
-
-		var entry BlacklistCacheEntry
-		if err := json.Unmarshal([]byte(val), &entry); err != nil {
-			continue
-		}
-
-		// Check if entry has expired
-		if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
-			rbc.client.Del(rbc.ctx, key)
+		if rbc.deleteExpiredEntry(key) {
 			expiredCount++
 		}
 	}

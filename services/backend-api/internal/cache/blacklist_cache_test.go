@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -954,6 +955,39 @@ func TestRedisBlacklistCache_LoadFromDatabase_WithExpired(t *testing.T) {
 	// Verify expired entry was not loaded
 	isBlacklisted, _ = cache.IsBlacklisted("expired-exchange")
 	assert.False(t, isBlacklisted)
+
+	repo.AssertExpectations(t)
+}
+
+func TestRedisBlacklistCache_CleanupExpired_AtomicReadDelete(t *testing.T) {
+	client := setupBlacklistTestRedis(t)
+	defer cleanupBlacklistTestRedis(t, client)
+
+	repo := &MockBlacklistRepository{}
+	cache := NewRedisBlacklistCache(client, repo)
+
+	repo.On("AddExchange", mock.Anything, "test-symbol", "test reason", mock.Anything).Return(&database.ExchangeBlacklistEntry{
+		ID: 1, ExchangeName: "test-symbol", Reason: "test reason",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), IsActive: true,
+	}, nil)
+
+	cache.Add("test-symbol", "test reason", time.Hour)
+	isBlacklisted, _ := cache.IsBlacklisted("test-symbol")
+	assert.True(t, isBlacklisted)
+
+	entry := BlacklistCacheEntry{
+		Symbol:    "expiring-key",
+		Reason:    "about to expire",
+		CreatedAt: time.Now(),
+	}
+	data, _ := json.Marshal(entry)
+	err := client.Set(context.Background(), "blacklist:expiring-key", data, 10*time.Millisecond).Err()
+	require.NoError(t, err)
+
+	time.Sleep(25 * time.Millisecond)
+
+	count := cache.CleanupExpired()
+	assert.Equal(t, 1, count)
 
 	repo.AssertExpectations(t)
 }
