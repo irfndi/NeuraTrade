@@ -57,8 +57,9 @@ func DefaultRateLimitConfig() RateLimitConfig {
 			return c.ClientIP()
 		},
 		SkipFunc: func(c *gin.Context) bool {
-			// Skip health checks
-			return c.Request.URL.Path == "/health"
+			// Skip health and metrics endpoints
+			path := c.Request.URL.Path
+			return path == "/health" || path == "/metrics"
 		},
 	}
 }

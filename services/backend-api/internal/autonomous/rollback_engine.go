@@ -3,10 +3,11 @@ package autonomous
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -196,7 +197,7 @@ func (e *AutoRollbackEngine) executeRollback(
 	// Save event
 	if e.repo != nil {
 		if err := e.repo.SaveRollbackEvent(ctx, event); err != nil {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AUTONOMY] SaveRollbackEvent failed (event_id=%s strategy_id=%s trigger=%s): %v",
 				event.ID,
 				event.StrategyID,
@@ -209,7 +210,7 @@ func (e *AutoRollbackEngine) executeRollback(
 	// Publish event
 	if e.events != nil {
 		if err := e.events.PublishRollbackEvent(ctx, event); err != nil {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AUTONOMY] PublishRollbackEvent failed (event_id=%s strategy_id=%s trigger=%s): %v",
 				event.ID,
 				event.StrategyID,

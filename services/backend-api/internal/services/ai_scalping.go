@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -18,10 +17,13 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/skill"
 	"github.com/shopspring/decimal"
 )
@@ -419,7 +421,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	}
 	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
-	log.Printf(
+	zaplogrus.Infof(
 		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
@@ -584,7 +586,7 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 
 	var fileConfig aiScalpingFileConfig
 	if err := json.Unmarshal(content, &fileConfig); err != nil {
-		log.Printf("[AI-SCALPING] Failed to parse %s: %v", configPath, err)
+		zaplogrus.Warnf("[AI-SCALPING] Failed to parse %s: %v", configPath, err)
 		return cfg
 	}
 
@@ -858,7 +860,7 @@ func (s *AIScalpingService) SetExchange(exchange string) {
 	s.exchangeMu.Lock()
 	defer s.exchangeMu.Unlock()
 	s.config.Exchange = exchange
-	log.Printf("[AI-SCALPING] Exchange set to: %s", exchange)
+	zaplogrus.Infof("[AI-SCALPING] Exchange set to: %s", exchange)
 }
 
 func (s *AIScalpingService) configuredExchange() string {
@@ -1162,7 +1164,7 @@ func (s *AIScalpingService) getLatestFailoverAttemptInfo() llm.FailoverAttemptIn
 }
 
 func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio TradingPortfolio) (decision *AITradingDecision, err error) {
-	log.Printf("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
+	zaplogrus.Infof("[AI-SCALPING] Starting trading cycle for portfolio: %.2f USDT", walletBasis(portfolio).InexactFloat64())
 
 	// Periodic self-learning feedback, once per completed trade-count milestone.
 	if perf := GetScalpingPerformance().GetPerformance(); s.shouldApplyPerformanceFeedback(readIntMetric(perf["total_trades"])) {
@@ -1201,7 +1203,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	}()
 	if !walletBasis(portfolio).GreaterThan(decimal.Zero) {
 		reason := "wallet basis is zero; waiting for funded balance before autonomous execution"
-		log.Printf("[AI-SCALPING] %s", reason)
+		zaplogrus.Infof("[AI-SCALPING] %s", reason)
 		decision = strategyHoldDecision(reason, 0)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
@@ -1218,7 +1220,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			notional.StringFixed(2),
 			effectiveExchange,
 		)
-		log.Printf("[AI-SCALPING] %s", reason)
+		zaplogrus.Infof("[AI-SCALPING] %s", reason)
 		decision = strategyHoldDecision(reason, 0)
 		decision.ExecutionGate = &appautonomy.ExecutionGateSnapshot{
 			Allowed:     false,
@@ -1230,15 +1232,15 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 
 	signals, err := s.gatherMarketSignals(ctx)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Failed to gather signals: %v", err)
+		zaplogrus.Warnf("[AI-SCALPING] Failed to gather signals: %v", err)
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
-	log.Printf("[AI-SCALPING] Gathered %d market signals", len(signals))
+	zaplogrus.Infof("[AI-SCALPING] Gathered %d market signals", len(signals))
 	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy)
 
 	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Failed to get AI decision: %v", err)
+		zaplogrus.Warnf("[AI-SCALPING] Failed to get AI decision: %v", err)
 		return fallbackHoldDecision(err.Error(), err), nil
 	}
 
@@ -1264,16 +1266,16 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.ConfidenceKnown = true
 		}
 	}
-	log.Printf("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
+	zaplogrus.Infof("[AI-SCALPING] AI decision: %s %s (confidence: %.2f)", decision.Action, decision.Symbol, decision.Confidence)
 	annotateDecisionSignalTelemetry(decision, signals)
 	if shouldPromoteGenericHoldToFallback(decision, funnel) {
-		log.Printf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
+		zaplogrus.Warnf("[AI-SCALPING] Promoting generic hold into deterministic fallback because %d viable candidate(s) remain", funnel.CandidateViableCount)
 		s.recordMetaHoldPromotion()
 		decision = s.deterministicFallbackDecision(ctx, signals, portfolio)
 		annotateDecisionSignalTelemetry(decision, signals)
 	}
 
-	if err := s.validateDecision(decision, signals); err != nil {
+	if err := s.validateDecision(ctx, decision, signals); err != nil {
 		if isDecisionContractValidationError(decision, err) {
 			runtimeErr := fmt.Errorf("invalid model decision contract: %w", err)
 			s.updateRuntimeState(
@@ -1313,7 +1315,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		decision.Reasoning = gate.Reason
 		decision.ReasonCategory = reasonCategoryStrategyHold
 		decision.ConfidenceKnown = true
-		log.Printf(
+		zaplogrus.Infof(
 			"[AI-SCALPING] Pre-trade gate blocked %s %s (regime=%s expectancy=%.4f sample=%d): %s",
 			attemptedAction,
 			decision.Symbol,
@@ -1341,7 +1343,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 	decision.PreTradeRegime = gate.Regime
 	decision.PreTradeExpectancy = gate.NetExpectancy
 	decision.PreTradeExpectancySampleSize = gate.SampleSize
-	log.Printf(
+	zaplogrus.Infof(
 		"[AI-SCALPING] Dynamic thresholds: min_confidence=%.2f max_capital_pct=%.2f regime=%s expectancy=%.4f expectancy_n=%d phase=%s risk_drawdown=%.4f",
 		effectiveMinConfidence,
 		effectiveMaxCapital,
@@ -1364,7 +1366,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		} else {
 			decision.ConfidenceKnown = true
 		}
-		log.Printf("[AI-SCALPING] AI decided to hold: %s", decision.Reasoning)
+		zaplogrus.Infof("[AI-SCALPING] AI decided to hold: %s", decision.Reasoning)
 		return decision, nil
 	}
 
@@ -1394,7 +1396,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			decision.PolicyAdjustments = append(decision.PolicyAdjustments, "micro_confidence_grace")
 		} else {
 			sourceDecision := decision
-			log.Printf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
+			zaplogrus.Warnf("[AI-SCALPING] Confidence %.2f below minimum %.2f, skipping", decision.Confidence, effectiveMinConfidence)
 			decision = strategyHoldDecision(
 				fmt.Sprintf("confidence %.2f below dynamic threshold %.2f", decision.Confidence, effectiveMinConfidence),
 				decision.Confidence,
@@ -1436,7 +1438,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			)
 			s.updateAutonomyGateState(scope, rolloutState, gateState, gateErr)
 			if gateErr != nil {
-				log.Printf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
+				zaplogrus.Warnf("[AI-SCALPING] Autonomous gate evaluation failed: %v", gateErr)
 				reason := fmt.Sprintf("autonomy gate evaluation failed: %v", gateErr)
 				sourceDecision := decision
 				decision = runtimeDegradedHoldDecision(reason, reasonCategoryExecutionUnavailable)
@@ -1452,13 +1454,13 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 				return decision, nil
 			}
 			if shouldAllowPaperModeAutonomyExecution(ctx, rolloutState, gateState) {
-				log.Printf("[AI-SCALPING] Paper mode permits simulated execution for %s while rollout stage is paper", scope.StrategyID)
+				zaplogrus.Infof("[AI-SCALPING] Paper mode permits simulated execution for %s while rollout stage is paper", scope.StrategyID)
 			} else if gateState != nil && !gateState.IsOpen {
 				reason := strings.Join(gateState.BlockReasons, "; ")
 				if strings.TrimSpace(reason) == "" {
 					reason = "autonomy live gate closed"
 				}
-				log.Printf("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
+				zaplogrus.Infof("[AI-SCALPING] Autonomous live gate blocked execution for %s: %s", scope.StrategyID, reason)
 				sourceDecision := decision
 				decision = strategyHoldDecision(
 					fmt.Sprintf("autonomy live gate closed: %s", reason),
@@ -1477,7 +1479,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 			}
 		}
 		if autonomyCoordinator != nil && !strategyResolved {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AI-SCALPING] Skipping autonomy gate: unresolved strategy_id (chat_id=%q)",
 				strings.TrimSpace(scope.ChatID),
 			)
@@ -1486,13 +1488,13 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		executionErr := s.executeDecision(ctx, decision, portfolio, effectiveMaxCapital)
 		if autonomyCoordinator != nil && strategyResolved {
 			if recordErr := autonomyCoordinator.RecordExecutionResult(ctx, scope, decision, portfolio, executionErr); recordErr != nil {
-				log.Printf("[AI-SCALPING] Failed to record autonomy rollout metrics: %v", recordErr)
+				zaplogrus.Warnf("[AI-SCALPING] Failed to record autonomy rollout metrics: %v", recordErr)
 			} else if rollback := autonomyCoordinator.LastRollback(scope.StrategyID); rollback != nil {
 				s.updateAutonomyRollbackState(rollback)
 			}
 		}
 		if autonomyCoordinator != nil && !strategyResolved {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AI-SCALPING] Skipping autonomy metrics update: unresolved strategy_id (chat_id=%q)",
 				strings.TrimSpace(scope.ChatID),
 			)
@@ -1516,7 +1518,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 					BlockReason: decision.Reasoning,
 					BlockCode:   blockCode,
 				}
-				log.Printf("[AI-SCALPING] Downgrading execution issue to HOLD: %v", executionErr)
+				zaplogrus.Infof("[AI-SCALPING] Downgrading execution issue to HOLD: %v", executionErr)
 				return decision, nil
 			}
 			return decision, fmt.Errorf("execution failed: %w", executionErr)
@@ -1553,7 +1555,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	markets, err := s.ccxtService.FetchMarkets(ctx, exchange)
 	if err != nil {
 		if cached := s.getAnyCachedPairs(exchange); len(cached) > 0 {
-			log.Printf("[AI-SCALPING] Market discovery failed on %s (%v); reusing stale pair cache (%d symbols)", exchange, err, len(cached))
+			zaplogrus.Warnf("[AI-SCALPING] Market discovery failed on %s (%v); reusing stale pair cache (%d symbols)", exchange, err, len(cached))
 			return cached, nil
 		}
 		return nil, fmt.Errorf("failed to fetch markets: %w", err)
@@ -1607,7 +1609,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(err, &partialErr) && len(partialErr.Data) > 0 {
 			scored = partialErr.Data
-			log.Printf("[AI-SCALPING] Dynamic pair scoring using partial market data: %v", err)
+			zaplogrus.Infof("[AI-SCALPING] Dynamic pair scoring using partial market data: %v", err)
 		}
 	}
 	if len(scored) == 0 {
@@ -1615,7 +1617,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 		if limit > len(candidates) {
 			limit = len(candidates)
 		}
-		log.Printf("[AI-SCALPING] Dynamic pair scoring unavailable (%v), using discovered subset", err)
+		zaplogrus.Warnf("[AI-SCALPING] Dynamic pair scoring unavailable (%v), using discovered subset", err)
 		selected := candidates[:limit]
 		s.updatePairCache(exchange, selected)
 		return selected, nil
@@ -1687,7 +1689,7 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 			tradableCount++
 		}
 	}
-	log.Printf("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s (tradable_spread=%d)", len(selected), len(candidates), exchange, tradableCount)
+	zaplogrus.Infof("[AI-SCALPING] Dynamically selected %d/%d pairs for AI analysis on %s (tradable_spread=%d)", len(selected), len(candidates), exchange, tradableCount)
 	s.updatePairCache(exchange, selected)
 	return selected, nil
 }
@@ -1743,7 +1745,7 @@ func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, exchange s
 	rates, err := s.ccxtService.FetchAllFundingRates(ctx, exchange)
 	if err != nil || len(rates) == 0 {
 		if err != nil {
-			log.Printf("[AI-SCALPING] Futures universe unavailable on %s: %v", exchange, err)
+			zaplogrus.Warnf("[AI-SCALPING] Futures universe unavailable on %s: %v", exchange, err)
 		}
 		return nil
 	}
@@ -1774,11 +1776,11 @@ func (s *AIScalpingService) filterFuturesSymbols(ctx context.Context, exchange s
 	}
 
 	if len(filtered) == 0 {
-		log.Printf("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", exchange)
+		zaplogrus.Infof("[AI-SCALPING] Futures universe filter returned no overlap on %s; using discovered pairs", exchange)
 		return nil
 	}
 
-	log.Printf("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), exchange)
+	zaplogrus.Infof("[AI-SCALPING] Futures universe filtered %d -> %d symbols on %s", len(symbols), len(filtered), exchange)
 	return filtered
 }
 
@@ -1788,7 +1790,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 	pairs, err := s.discoverTradingPairs(ctx)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Failed dynamic pair discovery: %v", err)
+		zaplogrus.Warnf("[AI-SCALPING] Failed dynamic pair discovery: %v", err)
 		return nil, fmt.Errorf("dynamic pair discovery unavailable: %w", err)
 	}
 	if len(pairs) == 0 {
@@ -1802,7 +1804,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		var partialErr *ccxt.PartialMarketDataError
 		if errors.As(bulkErr, &partialErr) && len(partialErr.Data) > 0 {
 			marketData = partialErr.Data
-			log.Printf("[AI-SCALPING] Bulk ticker fetch returned partial data: %v", bulkErr)
+			zaplogrus.Infof("[AI-SCALPING] Bulk ticker fetch returned partial data: %v", bulkErr)
 		}
 	}
 	if bulkErr == nil || len(marketData) > 0 {
@@ -1818,19 +1820,19 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		}
 	}
 	if bulkErr != nil && len(marketData) == 0 {
-		log.Printf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
+		zaplogrus.Warnf("[AI-SCALPING] Bulk ticker fetch unavailable: %v", bulkErr)
 	}
 
 	orderBookPairs := s.effectiveOrderBookPairs(len(pairs))
 
-	log.Printf("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
+	zaplogrus.Infof("[AI-SCALPING] Analyzing %d pairs on %s", len(pairs), exchange)
 	for idx, symbol := range pairs {
 		normalizedSymbol := normalizeSymbolForComparison(symbol)
 		tickerData, ok := tickerBySymbol[normalizedSymbol]
 		if !ok {
 			tickerData, err = s.ccxtService.FetchSingleTicker(ctx, exchange, symbol)
 			if err != nil {
-				log.Printf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
+				zaplogrus.Warnf("[AI-SCALPING] Failed to fetch ticker for %s: %v", symbol, err)
 				continue
 			}
 		}
@@ -1839,7 +1841,7 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		if idx < orderBookPairs {
 			obResp, err = s.ccxtService.FetchOrderBook(ctx, exchange, symbol, 20)
 			if err != nil {
-				log.Printf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
+				zaplogrus.Warnf("[AI-SCALPING] Failed to fetch orderbook for %s: %v", symbol, err)
 			}
 		}
 
@@ -1937,9 +1939,9 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	systemPrompt := s.buildSystemPrompt()
 	userPrompt := s.buildUserPrompt(ctx, signals, portfolio)
 
-	log.Printf("[AI-SCALPING] Calling LLM with %d signals", len(signals))
-	log.Printf("[AI-SCALPING] === SYSTEM PROMPT ===\n%s", systemPrompt)
-	log.Printf("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", walletBasis(portfolio).InexactFloat64(), len(signals))
+	zaplogrus.Infof("[AI-SCALPING] Calling LLM with %d signals", len(signals))
+	zaplogrus.Infof("[AI-SCALPING] System prompt length: %d chars", len(systemPrompt))
+	zaplogrus.Infof("[AI-SCALPING] === USER PROMPT ===\nPortfolio: %.2f USDT, Signals: %d", walletBasis(portfolio).InexactFloat64(), len(signals))
 
 	req := &llm.CompletionRequest{
 		Model: strings.TrimSpace(s.config.Model),
@@ -1958,7 +1960,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 		req.MaxTokens = 1200
 	}
 
-	log.Printf("[AI-SCALPING] Sending LLM request...")
+	zaplogrus.Infof("[AI-SCALPING] Sending LLM request...")
 
 	inferenceCtx, cancelInference := s.withInferenceBudget(ctx)
 	defer cancelInference()
@@ -1972,18 +1974,18 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 			"",
 			s.getLatestFailoverAttemptInfo(),
 		)
-		log.Printf("[AI-SCALPING] LLM completion failed: %v", err)
+		zaplogrus.Warnf("[AI-SCALPING] LLM completion failed: %v", err)
 		return s.deterministicFallbackDecision(ctx, signals, portfolio), nil
 	}
 
-	log.Printf("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
+	zaplogrus.Infof("[AI-SCALPING] === LLM RESPONSE ===\nLatency: %dms\nRaw: %s", resp.LatencyMs, resp.Message.Content)
 
 	decision, parseErr := parseAIDecisionPayload(resp.Message.Content)
 	if parseErr != nil || !isValidDecisionAction(decision.Action) {
-		log.Printf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
+		zaplogrus.Warnf("[AI-SCALPING] Failed to parse AI response: %s", resp.Message.Content)
 		decision, err = s.parseDecisionWithRetries(ctx, resp.Message.Content)
 		if err != nil {
-			log.Printf("[AI-SCALPING] Structured-output retries exhausted: %v", err)
+			zaplogrus.Infof("[AI-SCALPING] Structured-output retries exhausted: %v", err)
 			reasonCategory := classifyReasonCategory(err, resp.Message.Content)
 			if isDecisionContractErrorText(err) {
 				reasonCategory = reasonCategoryLLMParseContract
@@ -2032,7 +2034,7 @@ func (s *AIScalpingService) getAIDecision(ctx context.Context, signals []aiMarke
 	if decision.TakeProfit != nil {
 		takeProfitFloat = decision.TakeProfit.InexactFloat64()
 	}
-	log.Printf("[AI-SCALPING] === AI DECISION PARSED ===\nAction: %s, Symbol: %s, Confidence: %.0f%%, Size: %.1f%%, SL: %.4f, TP: %.4f\nReasoning: %s",
+	zaplogrus.Infof("[AI-SCALPING] === AI DECISION PARSED ===\nAction: %s, Symbol: %s, Confidence: %.0f%%, Size: %.1f%%, SL: %.4f, TP: %.4f\nReasoning: %s",
 		decision.Action, decision.Symbol, decision.Confidence*100, decision.SizePercent,
 		stopLossFloat, takeProfitFloat, decision.Reasoning)
 
@@ -2227,7 +2229,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 	}
 	if portfolio.MinExecutableSizePct > 0 && decision.SizePercent < portfolio.MinExecutableSizePct {
 		if minNotional := decimalValueOrZero(portfolio.MinExecutableNotionalUSDT); minNotional.GreaterThan(decimal.Zero) {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to exchange minimum %s USDT",
 				decision.SizePercent,
 				portfolio.MinExecutableSizePct,
@@ -2235,7 +2237,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 				minNotional.StringFixed(2),
 			)
 		} else {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AI-SCALPING] Requested size %.2f%% below executable floor %.2f%% on %s, bumping to executable floor",
 				decision.SizePercent,
 				portfolio.MinExecutableSizePct,
@@ -2262,14 +2264,20 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	openOrders, err := s.orderExecutor.GetOpenOrders(ctx, exchange, decision.Symbol)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Open-order check skipped for %s: %v", decision.Symbol, err)
+		zaplogrus.Warnf("[AI-SCALPING] Open-order check skipped for %s: %v", decision.Symbol, err)
 	} else if len(openOrders) > 0 {
 		return fmt.Errorf("open position/order already exists for %s (%d open orders)", decision.Symbol, len(openOrders))
 	}
 
-	log.Printf("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.StringFixed(2))
+	zaplogrus.Infof("[AI-SCALPING] Executing: %s %s (%s USDT)", decision.Action, decision.Symbol, amount.StringFixed(2))
 
 	// Build detailed trade info for rich notification
+	intentID := fmt.Sprintf("%s-%s-%d",
+		scalpingChatIDFromContext(ctx),
+		decision.Symbol,
+		time.Now().UnixNano(),
+	)
+
 	details := TradeDetails{
 		Exchange:          exchange,
 		Symbol:            decision.Symbol,
@@ -2287,6 +2295,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		Reasoning:         decision.Reasoning,
 		EntryPrice:        decision.EntryPrice,
 		IsPaperTrade:      paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
+		IntentID:          intentID,
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications
@@ -2298,7 +2307,7 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 
 	decision.OrderID = strings.TrimSpace(orderID)
 	s.recordSymbolGuardResult(decision.Symbol, nil)
-	log.Printf("[AI-SCALPING] Order placed: %s", orderID)
+	zaplogrus.Infof("[AI-SCALPING] Order placed: %s", orderID)
 	return nil
 }
 
@@ -2485,7 +2494,7 @@ func (s *AIScalpingService) estimateNetExpectancy(ctx context.Context, symbol, a
 			0,
 			0,
 		); err != nil {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AI-SCALPING] scoped expectancy unavailable for %s/%s: %v",
 				normalizedSymbol,
 				normalizedAction,
@@ -2582,7 +2591,7 @@ func calculateNetExpectancy(wins, losses int, sumWin, sumLoss float64) float64 {
 	return winRate*avgWin - (1-winRate)*avgLoss
 }
 
-func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signals []aiMarketSignal) error {
+func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITradingDecision, signals []aiMarketSignal) error {
 	if decision == nil {
 		return fmt.Errorf("decision is nil")
 	}
@@ -2637,13 +2646,23 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 	}
 	if decision.StopLoss == nil || decision.TakeProfit == nil {
 		defaultSL, defaultTP := defaultExitLevels(resolved.Price, decision.Action)
+		if err := s.refuseLiveTradeWithSyntheticSLTP(ctx, decision, defaultSL, defaultTP); err != nil {
+			return err
+		}
+		providerName := "unknown"
+		if s.llmClient != nil {
+			providerName = string(s.llmClient.Provider())
+		}
+		zaplogrus.Warnf("[AI-SCALPING] LLM returned incomplete decision (missing SL/TP) in PAPER mode for %s %s — applying synthetic SL=%.4f TP=%.4f | provider=%s model=%s",
+			decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+			providerName, s.config.Model)
+		metrics.LLMNonJSONPaperTotal.WithLabelValues(providerName).Inc()
 		if decision.StopLoss == nil {
 			decision.StopLoss = &defaultSL
 		}
 		if decision.TakeProfit == nil {
 			decision.TakeProfit = &defaultTP
 		}
-		log.Printf("[AI-SCALPING] Applied default SL/TP for %s %s due to incomplete model output", decision.Action, decision.Symbol)
 	}
 	if decision.StopLoss.LessThanOrEqual(decimal.Zero) || decision.TakeProfit.LessThanOrEqual(decimal.Zero) {
 		return fmt.Errorf("stop_loss and take_profit must be positive")
@@ -2672,7 +2691,7 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		if reward/risk < minRiskRewardRatio {
 			adjustedTakeProfit := decimal.NewFromFloat(resolved.Price + risk*minRiskRewardRatio)
 			decision.TakeProfit = &adjustedTakeProfit
-			log.Printf("[AI-SCALPING] Adjusted buy TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
+			zaplogrus.Infof("[AI-SCALPING] Adjusted buy TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
 		}
 	case "sell":
 		if stopLoss <= resolved.Price || takeProfit >= resolved.Price {
@@ -2689,7 +2708,7 @@ func (s *AIScalpingService) validateDecision(decision *AITradingDecision, signal
 		if reward/risk < minRiskRewardRatio {
 			adjustedTakeProfit := decimal.NewFromFloat(resolved.Price - risk*minRiskRewardRatio)
 			decision.TakeProfit = &adjustedTakeProfit
-			log.Printf("[AI-SCALPING] Adjusted sell TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
+			zaplogrus.Infof("[AI-SCALPING] Adjusted sell TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
 		}
 	}
 	return nil
@@ -3173,7 +3192,7 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
-			log.Printf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
+			zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 		}
 	}()
 }
@@ -3271,7 +3290,7 @@ func (s *AIScalpingService) deterministicFallbackDecision(ctx context.Context, s
 	}
 
 	if bestDecision != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[AI-SCALPING] Deterministic fallback selected %s %s (confidence=%.2f score=%.2f)",
 			bestDecision.Action,
 			bestDecision.Symbol,
@@ -3292,7 +3311,7 @@ func (s *AIScalpingService) deterministicFallbackDecision(ctx context.Context, s
 		}
 	}
 	if bestDecision != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[AI-SCALPING] Relaxed deterministic fallback selected %s %s (confidence=%.2f score=%.2f)",
 			bestDecision.Action,
 			bestDecision.Symbol,
@@ -4072,7 +4091,7 @@ Do not include markdown or extra text.`
 	if content == "" {
 		return "", fmt.Errorf("empty repair response")
 	}
-	log.Printf("[AI-SCALPING] Repaired non-JSON decision payload")
+	zaplogrus.Infof("[AI-SCALPING] Repaired non-JSON decision payload")
 	return content, nil
 }
 
@@ -4098,14 +4117,14 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		localDecision, parseErr := parseAIDecisionPayload(repairedLocal)
 		if parseErr == nil && isValidDecisionAction(localDecision.Action) && validateRecoveredDecisionContract(localDecision) == nil {
 			applySLTPFromOriginal(localDecision, raw)
-			log.Printf("[AI-SCALPING] Structured-output recovered via deterministic local repair")
+			zaplogrus.Infof("[AI-SCALPING] Structured-output recovered via deterministic local repair")
 			return localDecision, nil
 		}
 	}
 	if inferred, inferErr := inferDecisionFromLooseText(raw); inferErr == nil {
 		if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
 			applySLTPFromOriginal(inferred, raw)
-			log.Printf("[AI-SCALPING] Structured-output recovered via local decision inference")
+			zaplogrus.Infof("[AI-SCALPING] Structured-output recovered via local decision inference")
 			return inferred, nil
 		}
 	}
@@ -4130,13 +4149,13 @@ func (s *AIScalpingService) parseDecisionWithRetries(ctx context.Context, raw st
 		decision, parseErr := parseAIDecisionPayload(repaired)
 		if parseErr == nil && isValidDecisionAction(decision.Action) && validateRecoveredDecisionContract(decision) == nil {
 			applySLTPFromOriginal(decision, raw)
-			log.Printf("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
+			zaplogrus.Infof("[AI-SCALPING] Structured-output retry succeeded on attempt %d", attempt)
 			return decision, nil
 		}
 		if inferred, inferErr := inferDecisionFromLooseText(repaired); inferErr == nil {
 			if contractErr := validateRecoveredDecisionContract(inferred); contractErr == nil {
 				applySLTPFromOriginal(inferred, raw)
-				log.Printf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
+				zaplogrus.Warnf("[AI-SCALPING] Structured-output retry recovered via local decision inference on attempt %d", attempt)
 				return inferred, nil
 			}
 		}
@@ -4751,6 +4770,21 @@ func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.D
 	}
 }
 
+func (s *AIScalpingService) refuseLiveTradeWithSyntheticSLTP(ctx context.Context, decision *AITradingDecision, defaultSL, defaultTP decimal.Decimal) error {
+	mode, ok := operationalModeFromContext(ctx)
+	if !ok || mode != OpModeLive {
+		return nil
+	}
+	zaplogrus.Warnf(
+		"[AI-SCALPING] Refusing live trade on %s %s: SL/TP missing from model output (defaults would be SL=%.4f TP=%.4f); paper mode will apply defaults for evidence collection",
+		decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+	)
+	return fmt.Errorf(
+		"refusing live trade on %s %s: SL/TP could not be extracted from model output; defaults would be SL=%.4f TP=%.4f",
+		decision.Action, decision.Symbol, defaultSL.InexactFloat64(), defaultTP.InexactFloat64(),
+	)
+}
+
 func (s *AIScalpingService) dynamicRiskThresholds(ctx context.Context, portfolio TradingPortfolio) (minConfidence float64, maxCapitalPct float64) {
 	applyExecutableSizingContext(&portfolio, s.executableSizingConstraints(ctx, portfolio))
 	policy := s.scalpingCyclePolicy(ctx, portfolio)
@@ -5228,7 +5262,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 		)
 		fallbackCfg.ConfidenceFloor = newFloor
 		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: low win rate (%.1f%%) - tightened confidence floor to %.2f, size fraction to %.2f",
+		zaplogrus.Infof("[AI-SCALPING] Self-learning: low win rate (%.1f%%) - tightened confidence floor to %.2f, size fraction to %.2f",
 			winRate*100, newFloor, newSize)
 	} else if winRate > scalpingFeedbackHighWinRate && totalTrades >= scalpingFeedbackIntervalTrades {
 		newFloor := clampFloat(
@@ -5243,7 +5277,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 		)
 		fallbackCfg.ConfidenceFloor = newFloor
 		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: high win rate (%.1f%%) - loosened confidence floor to %.2f, size fraction to %.2f",
+		zaplogrus.Infof("[AI-SCALPING] Self-learning: high win rate (%.1f%%) - loosened confidence floor to %.2f, size fraction to %.2f",
 			winRate*100, newFloor, newSize)
 	}
 
@@ -5260,7 +5294,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 		)
 		fallbackCfg.ConfidenceFloor = newFloor
 		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: %d consecutive losses - tightened to confidence=%.2f, size=%.2f",
+		zaplogrus.Infof("[AI-SCALPING] Self-learning: %d consecutive losses - tightened to confidence=%.2f, size=%.2f",
 			consecutiveLosses, newFloor, newSize)
 	} else if consecutiveWins >= scalpingFeedbackConsecutiveThreshold {
 		newFloor := clampFloat(
@@ -5275,7 +5309,7 @@ func (s *AIScalpingService) ApplyPerformanceFeedback() {
 		)
 		fallbackCfg.ConfidenceFloor = newFloor
 		fallbackCfg.SizeFraction = newSize
-		log.Printf("[AI-SCALPING] Self-learning: %d consecutive wins - loosened to confidence=%.2f, size=%.2f",
+		zaplogrus.Infof("[AI-SCALPING] Self-learning: %d consecutive wins - loosened to confidence=%.2f, size=%.2f",
 			consecutiveWins, newFloor, newSize)
 	}
 
@@ -5289,7 +5323,7 @@ func getEnvInt(key string) int {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Invalid integer %s=%q", key, raw)
+		zaplogrus.Warnf("[AI-SCALPING] Invalid integer %s=%q", key, raw)
 		return 0
 	}
 	return value
@@ -5302,7 +5336,7 @@ func getEnvFloat(key string) (float64, bool) {
 	}
 	value, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		log.Printf("[AI-SCALPING] Invalid float %s=%q", key, raw)
+		zaplogrus.Warnf("[AI-SCALPING] Invalid float %s=%q", key, raw)
 		return 0, false
 	}
 	return value, true
@@ -5319,7 +5353,7 @@ func getEnvBool(key string) (bool, bool) {
 	case "0", "false", "no", "off":
 		return false, true
 	default:
-		log.Printf("[AI-SCALPING] Invalid boolean %s=%q", key, raw)
+		zaplogrus.Warnf("[AI-SCALPING] Invalid boolean %s=%q", key, raw)
 		return false, false
 	}
 }

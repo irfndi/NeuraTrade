@@ -206,6 +206,8 @@ type backfillOpenPosition struct {
 	EntryPrice decimal.Decimal
 	EntryTime  time.Time
 	HoldUntil  int // candle index when this should close
+	StopLoss   decimal.Decimal
+	TakeProfit decimal.Decimal
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +411,9 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 		capital := strategyCapitals[strat.ID]
 		positions := strategyPositions[strat.ID]
 		stats := strategyStats[strat.ID]
+		symbolRecentCloses := make(map[string][]decimal.Decimal)
+		symbolRecentVolumes := make(map[string][]decimal.Decimal)
+		symbolRecentRanges := make(map[string][]decimal.Decimal)
 
 		for candleIdx, candle := range candles {
 			// Check if this symbol is relevant for this strategy
@@ -416,13 +421,48 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				continue
 			}
 
-			// Close expired positions
+			// Close positions: check stop-loss / take-profit first, then hold-until
 			remainingPositions := make([]*backfillOpenPosition, 0)
 			for _, pos := range positions {
-				if candleIdx >= pos.HoldUntil {
-					// Close position
-					exitPrice := v.calculateExitPrice(candle, PaperOrderSide(pos.Side))
-					closedTrade, err := v.recorder.RecordCloseTrade(ctx, pos.TradeID, exitPrice, decimal.Zero)
+				if pos.Symbol != candle.Symbol {
+					remainingPositions = append(remainingPositions, pos)
+					continue
+				}
+
+				var exitPrice decimal.Decimal
+				var closeTimestamp time.Time
+				closed := false
+
+				if pos.Side == PaperOrderSideBuy {
+					if candle.Low.LessThanOrEqual(pos.StopLoss) {
+						exitPrice = pos.StopLoss
+						closeTimestamp = candle.Timestamp
+						closed = true
+					} else if candle.High.GreaterThanOrEqual(pos.TakeProfit) {
+						exitPrice = pos.TakeProfit
+						closeTimestamp = candle.Timestamp
+						closed = true
+					}
+				} else {
+					if candle.High.GreaterThanOrEqual(pos.StopLoss) {
+						exitPrice = pos.StopLoss
+						closeTimestamp = candle.Timestamp
+						closed = true
+					} else if candle.Low.LessThanOrEqual(pos.TakeProfit) {
+						exitPrice = pos.TakeProfit
+						closeTimestamp = candle.Timestamp
+						closed = true
+					}
+				}
+
+				if !closed && candleIdx >= pos.HoldUntil {
+					exitPrice = v.calculateExitPrice(candle, PaperOrderSide(pos.Side))
+					closeTimestamp = candle.Timestamp
+					closed = true
+				}
+
+				if closed {
+					closedTrade, err := v.recorder.RecordCloseTrade(ctx, pos.TradeID, exitPrice, decimal.Zero, closeTimestamp)
 					if err != nil {
 						v.logger.WithFields(map[string]interface{}{
 							"trade_id": pos.TradeID,
@@ -450,13 +490,51 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 			}
 			positions = remainingPositions
 
+			// Build history slices for signal evaluation
+			recentCloses := symbolRecentCloses[candle.Symbol]
+			recentVolumes := symbolRecentVolumes[candle.Symbol]
+			recentRanges := symbolRecentRanges[candle.Symbol]
+
 			// Generate a trading decision for this candle
-			confidence, action, side := v.evaluateCandleSignal(candle, &strat)
+			confidence, action, side := v.evaluateCandleSignal(candle, &strat, recentCloses, recentVolumes)
+
+			// Update history trackers for next iteration
+			recentCloses = append(recentCloses, candle.Close)
+			if len(recentCloses) > 20 {
+				recentCloses = recentCloses[1:]
+			}
+			symbolRecentCloses[candle.Symbol] = recentCloses
+
+			recentVolumes = append(recentVolumes, candle.Volume)
+			if len(recentVolumes) > 5 {
+				recentVolumes = recentVolumes[1:]
+			}
+			symbolRecentVolumes[candle.Symbol] = recentVolumes
+
+			candleRange := candle.High.Sub(candle.Low)
+			recentRanges = append(recentRanges, candleRange)
+			if len(recentRanges) > 5 {
+				recentRanges = recentRanges[1:]
+			}
+			symbolRecentRanges[candle.Symbol] = recentRanges
+
 			if confidence < strat.MinConfidence {
 				continue
 			}
 
 			if action == "hold" || action == "wait" {
+				continue
+			}
+
+			// One open position per symbol per strategy to reduce fee churn
+			hasOpenForSymbol := false
+			for _, pos := range positions {
+				if pos.Symbol == candle.Symbol {
+					hasOpenForSymbol = true
+					break
+				}
+			}
+			if hasOpenForSymbol {
 				continue
 			}
 
@@ -548,6 +626,47 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				continue
 			}
 
+			// Calculate True Range (not just High-Low): TR = max(High-Low,
+			// |High-PrevClose|, |Low-PrevClose|). Then average over the last
+			// 5 candles for an ATR proxy. This is what Welles Wilder intended
+			// and what most trading-platform backtests use.
+			prevClose := decimal.Zero
+			if n := len(recentCloses); n > 0 {
+				prevClose = recentCloses[n-1]
+			}
+			tr := candle.High.Sub(candle.Low)
+			if !prevClose.IsZero() {
+				highGap := candle.High.Sub(prevClose).Abs()
+				lowGap := candle.Low.Sub(prevClose).Abs()
+				if highGap.GreaterThan(tr) {
+					tr = highGap
+				}
+				if lowGap.GreaterThan(tr) {
+					tr = lowGap
+				}
+			}
+			atr := tr
+			if len(symbolRecentRanges[candle.Symbol]) >= 5 {
+				atr = decimal.Zero
+				for _, r := range symbolRecentRanges[candle.Symbol] {
+					atr = atr.Add(r)
+				}
+				atr = atr.Div(decimal.NewFromInt(5))
+			}
+			// SL/TP at 2x ATR. The previous 100x multiplier placed levels
+			// far beyond any reachable move, so trades never closed by
+			// SL/TP and instead always expired at the hold-candle limit.
+			slMultiplier := decimal.NewFromFloat(2.0)
+			tpMultiplier := decimal.NewFromFloat(3.0)
+			var stopLoss, takeProfit decimal.Decimal
+			if orderSide == PaperOrderSideBuy {
+				stopLoss = order.AvgFillPrice.Sub(atr.Mul(slMultiplier))
+				takeProfit = order.AvgFillPrice.Add(atr.Mul(tpMultiplier))
+			} else {
+				stopLoss = order.AvgFillPrice.Add(atr.Mul(slMultiplier))
+				takeProfit = order.AvgFillPrice.Sub(atr.Mul(tpMultiplier))
+			}
+
 			// Record the open trade
 			entryFees := notional.Mul(v.config.ExecutionConfig.SlippagePercentage)
 			pTrade := &PaperTrade{
@@ -560,6 +679,7 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				Size:       order.FilledSize,
 				Fees:       entryFees,
 				CostBasis:  order.AvgFillPrice.Mul(order.FilledSize),
+				OpenedAt:   candle.Timestamp,
 			}
 
 			recorded, err := v.recorder.RecordOpenTrade(ctx, pTrade)
@@ -589,6 +709,8 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				EntryPrice: order.AvgFillPrice,
 				EntryTime:  candle.Timestamp,
 				HoldUntil:  candleIdx + holdCandles,
+				StopLoss:   stopLoss,
+				TakeProfit: takeProfit,
 			})
 
 			capital = capital.Sub(entryFees)
@@ -598,11 +720,23 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 		strategyPositions[strat.ID] = positions
 		strategyCapitals[strat.ID] = capital
 
-		// Close any remaining open positions at end of simulation
+		// Close any remaining open positions at end of simulation using the
+		// last candle that matches the position's symbol.
 		for _, pos := range positions {
-			lastCandle := candles[len(candles)-1]
-			exitPrice := lastCandle.Close
-			closedTrade, err := v.recorder.RecordCloseTrade(ctx, pos.TradeID, exitPrice, decimal.Zero)
+			var exitPrice decimal.Decimal
+			var closeTimestamp time.Time
+			for i := len(candles) - 1; i >= 0; i-- {
+				if candles[i].Symbol == pos.Symbol {
+					exitPrice = candles[i].Close
+					closeTimestamp = candles[i].Timestamp
+					break
+				}
+			}
+			if exitPrice.IsZero() {
+				exitPrice = candles[len(candles)-1].Close
+				closeTimestamp = candles[len(candles)-1].Timestamp
+			}
+			closedTrade, err := v.recorder.RecordCloseTrade(ctx, pos.TradeID, exitPrice, decimal.Zero, closeTimestamp)
 			if err != nil {
 				v.logger.WithFields(map[string]interface{}{
 					"trade_id": pos.TradeID,
@@ -842,29 +976,85 @@ func (v *PaperTradingBackfillValidation) strategyCoversSymbol(strat *PaperTradin
 
 // evaluateCandleSignal generates a deterministic trading signal based on
 // the current candle and strategy configuration.
+// Uses trend-following: in an uptrend, take long entries on green
+// candles closing above SMA-5; in a downtrend, take short entries on
+// red candles closing below SMA-5. Volume above the recent average
+// boosts confidence.
 func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 	candle backfillCandle,
 	strat *PaperTradingStrategy,
+	recentCloses []decimal.Decimal,
+	recentVolumes []decimal.Decimal,
 ) (confidence float64, action string, side string) {
-	// Simple deterministic signal:
-	// - Bullish if close > open (green candle)
-	// - Bearish if close < open (red candle)
-	// - Confidence = |close - open| / open (normalized)
 	if candle.Open.IsZero() {
 		return 0, "hold", ""
+	}
+
+	if len(recentCloses) < 20 || len(recentVolumes) < 5 {
+		return 0, "hold", ""
+	}
+
+	last := recentCloses[len(recentCloses)-1]
+	first := recentCloses[0]
+	if last.Equal(first) {
+		return 0, "hold", ""
+	}
+	trendUp := last.GreaterThan(first)
+
+	sma5 := decimal.Zero
+	for i := len(recentCloses) - 5; i < len(recentCloses); i++ {
+		sma5 = sma5.Add(recentCloses[i])
+	}
+	sma5 = sma5.Div(decimal.NewFromInt(5))
+
+	if trendUp {
+		if candle.Close.LessThanOrEqual(candle.Open) {
+			return 0, "hold", ""
+		}
+		if candle.Close.LessThanOrEqual(sma5) {
+			return 0, "hold", ""
+		}
+	} else {
+		if candle.Close.GreaterThan(candle.Open) {
+			return 0, "hold", ""
+		}
+		if candle.Close.GreaterThanOrEqual(sma5) {
+			return 0, "hold", ""
+		}
 	}
 
 	change := candle.Close.Sub(candle.Open).Div(candle.Open).Abs()
 	confidenceVal, _ := change.Float64()
 
-	// Scale confidence based on range position within high-low
 	if candle.High.GreaterThan(candle.Low) {
-		rangePos := candle.Close.Sub(candle.Low).Div(candle.High.Sub(candle.Low))
-		rp, _ := rangePos.Float64()
-		confidenceVal = confidenceVal * 10 * (1 + rp)
+		if trendUp {
+			highPos := candle.Close.Sub(candle.Low).Div(candle.High.Sub(candle.Low))
+			hp, _ := highPos.Float64()
+			confidenceVal = confidenceVal * 12 * (1 + hp)
+		} else {
+			lowPos := candle.High.Sub(candle.Close).Div(candle.High.Sub(candle.Low))
+			lp, _ := lowPos.Float64()
+			confidenceVal = confidenceVal * 12 * (1 + lp)
+		}
 	}
 
-	// Clamp confidence
+	// Volume confirmation: if the current candle's volume is materially
+	// above the recent average, boost confidence; if materially below,
+	// penalize. This makes the strategy prefer breakouts that have
+	// participation rather than thin moves that get faded.
+	if len(recentVolumes) > 0 {
+		avgVol := decimal.Zero
+		for _, v := range recentVolumes {
+			avgVol = avgVol.Add(v)
+		}
+		avgVol = avgVol.Div(decimal.NewFromInt(int64(len(recentVolumes))))
+		if !avgVol.IsZero() {
+			volRatio := candle.Volume.Div(avgVol)
+			ratio, _ := volRatio.Float64()
+			confidenceVal = confidenceVal * (0.5 + ratio/2.0)
+		}
+	}
+
 	if confidenceVal > 0.99 {
 		confidenceVal = 0.99
 	}
@@ -873,10 +1063,7 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 		return confidenceVal, "hold", ""
 	}
 
-	if candle.Close.Equal(candle.Open) {
-		return confidenceVal, "hold", ""
-	}
-	if candle.Close.GreaterThan(candle.Open) {
+	if trendUp {
 		return confidenceVal, "buy", "long"
 	}
 	return confidenceVal, "sell", "short"

@@ -9,13 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/shopspring/decimal"
@@ -72,6 +73,7 @@ func (e *BitgetOrderExecutor) PlaceOrder(ctx context.Context, exchange, symbol, 
 		MarketType: "futures",
 		AmountUSDT: amount,
 		EntryPrice: price,
+		IntentID:   fmt.Sprintf("legacy-%d", time.Now().UnixNano()),
 	})
 }
 
@@ -92,7 +94,20 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		return "", fmt.Errorf("invalid order amount: %s", details.AmountUSDT.String())
 	}
 
-	fmt.Printf("[BITGET-ORDER] Starting order: %s %s (%.2f USDT)\n", details.Side, apiSymbol, details.AmountUSDT.InexactFloat64())
+	clientOidChatID := strings.TrimSpace(e.chatID)
+	if scopedChatID := strings.TrimSpace(scalpingChatIDFromContext(ctx)); scopedChatID != "" {
+		clientOidChatID = scopedChatID
+	}
+	if strings.TrimSpace(details.ClientOrderID) == "" {
+		clientOid, err := generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
+		if err != nil {
+			return "", fmt.Errorf("generate client order id: %w", err)
+		}
+		details.ClientOrderID = clientOid
+	}
+
+	fmt.Printf("[BITGET-ORDER] Starting order: %s %s (%.2f USDT) clientOid=%s\n",
+		details.Side, apiSymbol, details.AmountUSDT.InexactFloat64(), details.ClientOrderID)
 
 	var orderID string
 	var err error
@@ -136,7 +151,7 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 			return "", spotErr
 		}
 		details.Side = spotSide
-		orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, details.AmountUSDT, details.EntryPrice)
+		orderID, err = e.placeSpotOrder(ctx, apiSymbol, spotSide, details.ClientOrderID, details.AmountUSDT, details.EntryPrice)
 	}
 
 	if err != nil {
@@ -325,6 +340,10 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		body["reduceOnly"] = "YES"
 	}
 
+	if details.ClientOrderID != "" {
+		body["clientOid"] = details.ClientOrderID
+	}
+
 	// Add TP/SL if provided
 	if !isRiskReduction && details.TakeProfit != nil {
 		tpPrice := formatFuturesTriggerPrice(*details.TakeProfit, contractInfo)
@@ -357,13 +376,69 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 		}
 	}
 	if result.Code != "00000" {
+		if isDuplicateOrderError(result.Code, result.Msg) {
+			dedupOrderID := result.OrderID
+			if dedupOrderID == "" {
+				dedupOrderID = details.ClientOrderID
+			}
+			fmt.Printf("[BITGET-ORDER] Duplicate order detected (idempotent retry): code=%s msg=%s, reusing orderID=%s\n",
+				result.Code, result.Msg, dedupOrderID)
+			return dedupOrderID, nil
+		}
 		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
 	fmt.Printf("[BITGET-ORDER] ✅ Futures order placed: %s %s (size: %s contracts) - OrderID: %s\n",
 		details.Side, symbol, size, result.OrderID)
 
+	if !isRiskReduction && (details.TakeProfit != nil || details.StopLoss != nil) {
+		verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		e.verifyFuturesTPSLActive(verifyCtx, symbol, holdSide)
+	}
+
 	return result.OrderID, nil
+}
+
+// verifyFuturesTPSLActive checks whether the exchange has active TP/SL plan orders
+// for a position and logs the result. This verifies that exchange-side protection
+// is in place after order placement.
+func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbol, holdSide string) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/mix/order/orders-plan-pending?productType=USDT-FUTURES&planType=profit_loss&symbol=%s",
+		symbol,
+	)
+	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to verify TP/SL status: %v\n", err)
+		return
+	}
+
+	var result struct {
+		Code string          `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to parse TP/SL verification response: %v\n", err)
+	}
+
+	if result.Code != "00000" {
+		fmt.Printf("[BITGET-ORDER] ⚠️ TP/SL verification API error: %s (code: %s)\n", result.Msg, result.Code)
+		return
+	}
+
+	orders, err := parseBitgetOrderList(result.Data)
+	if err != nil {
+		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to parse TP/SL plan orders: %v\n", err)
+		return
+	}
+	if len(orders) == 0 {
+		fmt.Printf("[BITGET-ORDER] ⚠️ No active TP/SL plans found for holdSide=%s — exchange-side protection may not be set\n", holdSide)
+		return
+	}
+
+	fmt.Printf("[BITGET-ORDER] ✅ Exchange-side TP/SL verified: %d active plan(s) for holdSide=%s\n", len(orders), holdSide)
 }
 
 // getTicker fetches current ticker price from Bitget
@@ -820,7 +895,7 @@ func cloneStringAnyMap(input map[string]interface{}) map[string]interface{} {
 }
 
 // placeSpotOrder places a spot market order
-func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side string, amountUSDT decimal.Decimal, price *decimal.Decimal) (string, error) {
+func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side, clientOrderID string, amountUSDT decimal.Decimal, price *decimal.Decimal) (string, error) {
 	// Get current price if not provided
 	var currentPrice decimal.Decimal
 	if price != nil && !price.IsZero() {
@@ -846,7 +921,11 @@ func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side s
 		"symbol":    symbol,
 		"side":      side,
 		"orderType": "market",
-		"size":      baseSize.String(), // Base currency amount
+		"size":      baseSize.String(),
+	}
+
+	if clientOrderID != "" {
+		body["clientOid"] = clientOrderID
 	}
 
 	jsonBody, _ := json.Marshal(body)
@@ -874,6 +953,15 @@ func (e *BitgetOrderExecutor) placeSpotOrder(ctx context.Context, symbol, side s
 	}
 
 	if result.Code != "00000" {
+		if isDuplicateOrderError(result.Code, result.Msg) {
+			dedupOrderID := result.Data.OrderID
+			if dedupOrderID == "" {
+				dedupOrderID = clientOrderID
+			}
+			fmt.Printf("[BITGET-ORDER] Duplicate spot order detected (idempotent retry): code=%s msg=%s, reusing orderID=%s\n",
+				result.Code, result.Msg, dedupOrderID)
+			return dedupOrderID, nil
+		}
 		return "", fmt.Errorf("bitget API error: %s (code: %s)", result.Msg, result.Code)
 	}
 
@@ -1179,7 +1267,7 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 		if splitErr != nil {
 			return fmt.Errorf("place replacement TP/SL plan order failed: %w (split fallback failed: %v)", err, splitErr)
 		}
-		log.Printf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
+		zaplogrus.Warnf("[BITGET-ORDER] Combined TP/SL sync rejected, split fallback applied for %s", apiSymbol)
 	}
 	return nil
 }

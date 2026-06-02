@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/shopspring/decimal"
 )
@@ -235,7 +236,7 @@ func (m *StagedRolloutManager) promote(ctx context.Context, strategyID string, r
 	// Publish event
 	if m.events != nil {
 		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AUTONOMY] PublishStageTransition failed (strategy_id=%s from=%s to=%s reason=%s): %v",
 				strategyID,
 				transition.FromStage,
@@ -291,7 +292,7 @@ func (m *StagedRolloutManager) Rollback(ctx context.Context, strategyID string, 
 	// Publish event
 	if m.events != nil {
 		if err := m.events.PublishStageTransition(ctx, &transition); err != nil {
-			log.Printf(
+			zaplogrus.Infof(
 				"[AUTONOMY] PublishStageTransition failed (strategy_id=%s from=%s to=%s reason=%s): %v",
 				strategyID,
 				transition.FromStage,

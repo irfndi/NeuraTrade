@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,16 @@ type Config struct {
 	AI AIConfig `mapstructure:"ai"`
 	// Features holds feature flags.
 	Features FeaturesConfig `mapstructure:"features"`
+	// LiveReadiness holds configuration for the live-readiness reconciler.
+	LiveReadiness LiveReadinessConfig `mapstructure:"live_readiness"`
+	// GRPC holds gRPC client transport settings shared across services.
+	GRPC GRPCClientConfig `mapstructure:"grpc"`
+}
+
+type GRPCClientConfig struct {
+	TLSCACertFile string `mapstructure:"tls_ca_file"`
+	TLSAuthType   string `mapstructure:"tls_auth_type"`
+	ServerName    string `mapstructure:"server_name"`
 }
 
 // ServerConfig defines the HTTP server settings.
@@ -145,6 +156,9 @@ type CCXTConfig struct {
 	AdminAPIKey string `mapstructure:"admin_api_key"`
 	// Exchanges holds exchange-specific credentials.
 	Exchanges map[string]ExchangeCredentials `mapstructure:"exchanges"`
+	// GrpcTLSCACertFile is the path to the CA bundle used to verify the
+	// CCXT gRPC server certificate. Empty means insecure (dev only).
+	GrpcTLSCACertFile string `mapstructure:"grpc_tls_ca_file"`
 }
 
 // ExchangeCredentials holds API credentials for an exchange.
@@ -308,6 +322,9 @@ type SecurityConfig struct {
 	// EncryptionKey is the base64-encoded 32-byte key for AES-256-GCM encryption.
 	// Used for encrypting sensitive data like exchange API keys.
 	EncryptionKey string `mapstructure:"encryption_key"`
+	// CORSAllowedOrigins is a list of origins permitted by the CORS middleware.
+	// Empty list defaults to http://localhost:3000 for development.
+	CORSAllowedOrigins []string `mapstructure:"cors_allowed_origins"`
 }
 
 // FeesConfig defines default fees used when exchange-specific data is missing.
@@ -384,6 +401,16 @@ type FeaturesConfig struct {
 	EnableAIArbitrage bool `mapstructure:"enable_ai_arbitrage"`
 }
 
+// LiveReadinessConfig holds configuration for the live-readiness reconciler.
+type LiveReadinessConfig struct {
+	// Enabled controls whether the background reconciler runs.
+	Enabled bool `mapstructure:"enabled"`
+	// IntervalHours is the tick interval between reconciliations.
+	IntervalHours int `mapstructure:"interval_hours"`
+	// LookbackHours is how far back the reconciler looks for evidence.
+	LookbackHours int `mapstructure:"lookback_hours"`
+}
+
 func Load() (*Config, error) {
 	// First: add user-local NeuraTrade config path.
 	if dir := neuratradeHomeDir(); dir != "" {
@@ -429,6 +456,14 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ccxt.service_url", "CCXT_SERVICE_URL")
 	_ = viper.BindEnv("ccxt.grpc_address", "CCXT_GRPC_ADDRESS")
 	_ = viper.BindEnv("ccxt.admin_api_key", "ADMIN_API_KEY")
+
+	_ = viper.BindEnv("security.cors_allowed_origins", "NEURATRADE_CORS_ALLOWED_ORIGINS")
+
+	_ = viper.BindEnv("ccxt.grpc_tls_ca_file", "CCXT_GRPC_TLS_CA_FILE")
+
+	_ = viper.BindEnv("grpc.tls_ca_file", "NEURATRADE_GRPC_TLS_CA_FILE")
+	_ = viper.BindEnv("grpc.tls_auth_type", "NEURATRADE_GRPC_TLS_AUTH_TYPE")
+	_ = viper.BindEnv("grpc.server_name", "NEURATRADE_GRPC_SERVER_NAME")
 
 	// Bind Telegram service environment variables
 	_ = viper.BindEnv("telegram.service_url", "TELEGRAM_SERVICE_URL")
@@ -512,12 +547,17 @@ func setDefaults() {
 	}
 	viper.SetDefault("database.sqlite_vector_extension_path", "")
 
-	// Redis
-	viper.SetDefault("redis.host", "localhost")
+	// Force IPv4 to avoid `localhost` → `[::1]` resolution flakes (NeuraTrade-3ybt).
+	viper.SetDefault("redis.host", "127.0.0.1")
 	viper.SetDefault("redis.port", 6379)
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("redis.max_retries", 3)
+	// Tight timeouts (seconds) so a dead Redis cannot stall /health (NeuraTrade-3ybt).
+	viper.SetDefault("redis.dial_timeout", 2)
+	viper.SetDefault("redis.read_timeout", 1)
+	viper.SetDefault("redis.write_timeout", 1)
+	viper.SetDefault("redis.pool_timeout", 2)
 
 	// CCXT defaults for native deployment. Explicit env vars still take precedence.
 	viper.SetDefault("ccxt.service_url", "http://localhost:3001")
@@ -597,6 +637,13 @@ func setDefaults() {
 
 	// Security
 	viper.SetDefault("security.encryption_key", "")
+	viper.SetDefault("security.cors_allowed_origins", []string{})
+
+	viper.SetDefault("ccxt.grpc_tls_ca_file", "")
+
+	viper.SetDefault("grpc.tls_ca_file", "")
+	viper.SetDefault("grpc.tls_auth_type", "")
+	viper.SetDefault("grpc.server_name", "")
 
 	// Fees
 	viper.SetDefault("fees.default_taker_fee", 0.001)
@@ -638,6 +685,11 @@ func setDefaults() {
 	viper.SetDefault("features.enable_ai_scalping", true)
 	viper.SetDefault("features.enable_ai_signals", false)
 	viper.SetDefault("features.enable_ai_arbitrage", false)
+
+	// Live readiness reconciler defaults
+	viper.SetDefault("live_readiness.enabled", true)
+	viper.SetDefault("live_readiness.interval_hours", 1)
+	viper.SetDefault("live_readiness.lookback_hours", 168)
 }
 
 func neuratradeHomeDir() string {
@@ -714,6 +766,29 @@ func validateConfig(config *Config) error {
 			}
 		}
 
+		// Require encryption key for API key storage in production
+		if strings.TrimSpace(config.Security.EncryptionKey) == "" {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY cannot be empty in %s environment. Exchange API keys must be encrypted", config.Environment)
+		}
+
+		// Validate encryption key decodes to at least 32 bytes for AES-256-GCM
+		decodedKey, decodeErr := base64.StdEncoding.DecodeString(config.Security.EncryptionKey)
+		if decodeErr != nil {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must be valid base64 in %s environment: %w", config.Environment, decodeErr)
+		}
+		if len(decodedKey) < 32 {
+			return fmt.Errorf("SECURITY_ENCRYPTION_KEY must decode to at least 32 bytes for AES-256-GCM in %s environment (got %d bytes)", config.Environment, len(decodedKey))
+		}
+
+	}
+
+	if config.LiveReadiness.Enabled {
+		if config.LiveReadiness.IntervalHours <= 0 {
+			return fmt.Errorf("live_readiness.interval_hours must be > 0 when live_readiness.enabled=true")
+		}
+		if config.LiveReadiness.LookbackHours <= 0 {
+			return fmt.Errorf("live_readiness.lookback_hours must be > 0 when live_readiness.enabled=true")
+		}
 	}
 
 	return nil

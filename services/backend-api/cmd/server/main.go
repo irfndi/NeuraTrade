@@ -28,6 +28,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/observability"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/redis/go-redis/v9"
+
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/shopspring/decimal"
 )
 
@@ -213,7 +215,10 @@ func run() error {
 	ccxtService := ccxt.NewService(&cfg.CCXT, getLogger("ccxt_service"), blacklistCache)
 
 	// Initialize JWT authentication middleware
-	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	authMiddleware, err := middleware.NewAuthMiddleware(cfg.Auth.JWTSecret)
+	if err != nil {
+		return fmt.Errorf("failed to initialize auth middleware: %w", err)
+	}
 
 	// Initialize cache analytics service
 	cacheAnalyticsService := services.NewCacheAnalyticsService(getRedisClient())
@@ -361,7 +366,7 @@ func run() error {
 	defer positionTracker.Stop()
 
 	stopLossConfig := services.DefaultStopLossConfig()
-	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil)
+	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil, getRedisClient())
 
 	stopLossAutoExecConfig := services.DefaultStopLossAutoExecutionConfig()
 	stopLossAutoExecConfig.EnableNotifications = cfg.Telegram.BotToken != ""
@@ -474,8 +479,75 @@ func run() error {
 	// Create operational mode service
 	opModeService := services.NewOperationalModeService(db, services.DefaultOperationalModeConfig(), logger.WithComponent("operational_mode"))
 
+	// Start live-readiness reconciler when enabled and DB is available.
+	if cfg.LiveReadiness.Enabled && db != nil {
+		reconcilerStore := services.NewLiveReadinessManifestStore(db)
+		initCtx, initCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := reconcilerStore.InitSchema(initCtx); err != nil {
+			logger.WithError(err).Warn("Failed to initialize live readiness manifest schema, reconciler may not persist manifests")
+		}
+		initCancel()
+		reconcilerCfg := services.DefaultLiveReadinessReconcilerConfig()
+		if cfg.LiveReadiness.IntervalHours > 0 {
+			reconcilerCfg.Interval = time.Duration(cfg.LiveReadiness.IntervalHours) * time.Hour
+		}
+		if cfg.LiveReadiness.LookbackHours > 0 {
+			reconcilerCfg.LookbackWindow = time.Duration(cfg.LiveReadiness.LookbackHours) * time.Hour
+		}
+		reconciler := services.NewLiveReadinessReconciler(db, reconcilerStore, &reconcilerLoggerAdapter{log: logger.WithComponent("live_readiness_reconciler")}, reconcilerCfg)
+		if err := reconciler.Start(ctx); err != nil {
+			logger.WithError(err).Warn("Failed to start live readiness reconciler")
+		} else {
+			defer reconciler.Stop()
+			logger.Info("Live readiness reconciler started")
+		}
+	} else {
+		if !cfg.LiveReadiness.Enabled {
+			logger.Info("Live readiness reconciler disabled by configuration")
+		} else {
+			logger.Info("Live readiness reconciler skipped: no database available")
+		}
+	}
+
+	// Initialize API key service for encrypted exchange credential storage (DB-backed Bitget creds)
+	var apiKeyService *services.APIKeyService
+	if strings.TrimSpace(cfg.Security.EncryptionKey) != "" {
+		var initErr error
+		apiKeyService, initErr = services.NewAPIKeyService(db, cfg.Security.EncryptionKey)
+		if initErr != nil {
+			logger.WithError(initErr).Warn("Failed to initialize API key service; Bitget creds will use config.json fallback only")
+			apiKeyService = nil
+		} else {
+			logger.Info("API key service initialized for encrypted exchange credential storage")
+		}
+	} else {
+		logger.Warn("Encryption key not configured; exchange API keys will not be available from encrypted DB storage")
+	}
+
+	// Backward-compat: if the legacy server.allowed_origins is set but
+	// the new security.cors_allowed_origins is not, mirror the value so
+	// existing deployments don't silently lose their CORS allowlist.
+	if len(cfg.Security.CORSAllowedOrigins) == 0 && len(cfg.Server.AllowedOrigins) > 0 {
+		cfg.Security.CORSAllowedOrigins = cfg.Server.AllowedOrigins
+	}
+
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	if db != nil {
+		store := apprisk.NewSQLKillSwitchStore(db)
+		sharedKillSwitch.SetStore(store)
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
+			zaplogrus.Warnf("kill switch reconcile: %v", err)
+		}
+		reconcileCancel()
+	}
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
 	// Setup routes and get cleanup function
-	cleanupRoutes := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService)
+	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService, sharedKillSwitch, sharedSafeMode)
+	if err != nil {
+		return fmt.Errorf("failed to setup routes: %w", err)
+	}
 	defer cleanupRoutes()
 	// Create HTTP server with security timeouts
 	srv := &http.Server{
@@ -530,6 +602,19 @@ func (a *positionTrackerHeartbeatAdapter) SyncPositions(ctx context.Context) err
 	}
 	return a.tracker.SyncWithExchange(ctx)
 }
+
+// reconcilerLoggerAdapter wraps logging.Logger to satisfy services.Logger.
+type reconcilerLoggerAdapter struct {
+	log logging.Logger
+}
+
+func (a *reconcilerLoggerAdapter) WithFields(fields map[string]interface{}) services.Logger {
+	return &reconcilerLoggerAdapter{log: a.log.WithFields(fields)}
+}
+
+func (a *reconcilerLoggerAdapter) Info(msg string)  { a.log.Info(msg) }
+func (a *reconcilerLoggerAdapter) Warn(msg string)  { a.log.Warn(msg) }
+func (a *reconcilerLoggerAdapter) Error(msg string) { a.log.Error(msg) }
 
 type stopLossHeartbeatAdapter struct {
 	service *services.StopLossService

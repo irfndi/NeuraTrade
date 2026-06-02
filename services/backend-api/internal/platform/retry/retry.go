@@ -183,7 +183,7 @@ func calculateDelay(config Config, attempt int) time.Duration {
 
 	// Add jitter
 	if config.Jitter > 0 {
-		jitter := delay * config.Jitter * (2*rand.Float64() - 1) // -jitter to +jitter
+		jitter := delay * config.Jitter * (2*rand.Float64() - 1) // non-security: retry jitter, predictability does not affect security
 		delay += jitter
 	}
 

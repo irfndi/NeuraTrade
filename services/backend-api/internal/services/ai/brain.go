@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 )
 
@@ -272,7 +274,7 @@ func (brain *AITradingBrain) Reason(ctx context.Context, req *ReasoningRequest) 
 				ModelUsed:   brain.config.Model,
 				TokensUsed:  llmResp.Usage.TotalTokens,
 			}); err != nil {
-				log.Printf("Failed to record decision for learning: %v", err)
+				zaplogrus.Warnf("Failed to record decision for learning: %v", err)
 			}
 		}()
 	}
@@ -458,7 +460,7 @@ func (brain *AITradingBrain) formatSimilarDecisions(decisions []*DecisionRecord)
 
 // generateDecisionID generates unique decision ID
 func generateDecisionID() string {
-	return fmt.Sprintf("dec_%d_%d", time.Now().Unix(), rand.Intn(10000))
+	return fmt.Sprintf("dec_%d_%d", time.Now().Unix(), rand.Intn(10000)) // non-security: unique ID suffix, not a secret
 }
 
 // SetLogger sets the logger for AI Brain

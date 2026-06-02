@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -109,13 +110,13 @@ func (h *MarketHandler) CacheMarketPrices(ctx context.Context, cacheKey string, 
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Failed to marshal market prices for caching: %v", err)
+		zaplogrus.Warnf("Failed to marshal market prices for caching: %v", err)
 		return
 	}
 
 	ttl := 10 * time.Second
 	if err := h.redis.Set(ctx, cacheKey, string(dataJSON), ttl); err != nil {
-		log.Printf("Failed to cache market prices: %v", err)
+		zaplogrus.Warnf("Failed to cache market prices: %v", err)
 	}
 }
 
@@ -138,7 +139,7 @@ func (h *MarketHandler) GetCachedMarketPrices(ctx context.Context, cacheKey stri
 
 	var data MarketPricesResponse
 	if err := json.Unmarshal([]byte(cachedData), &data); err != nil {
-		log.Printf("Failed to unmarshal cached market prices: %v", err)
+		zaplogrus.Warnf("Failed to unmarshal cached market prices: %v", err)
 		if h.cacheAnalytics != nil {
 			h.cacheAnalytics.RecordMiss("market_data")
 		}
@@ -148,7 +149,7 @@ func (h *MarketHandler) GetCachedMarketPrices(ctx context.Context, cacheKey stri
 	if h.cacheAnalytics != nil {
 		h.cacheAnalytics.RecordHit("market_data")
 	}
-	log.Printf("Cache hit for market prices: %s", cacheKey)
+	zaplogrus.Infof("Cache hit for market prices: %s", cacheKey)
 	return &data, true
 }
 
@@ -160,13 +161,13 @@ func (h *MarketHandler) CacheTicker(ctx context.Context, cacheKey string, data T
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Failed to marshal ticker for caching: %v", err)
+		zaplogrus.Warnf("Failed to marshal ticker for caching: %v", err)
 		return
 	}
 
 	ttl := 10 * time.Second
 	if err := h.redis.Set(ctx, cacheKey, string(dataJSON), ttl); err != nil {
-		log.Printf("Failed to cache ticker: %v", err)
+		zaplogrus.Warnf("Failed to cache ticker: %v", err)
 	}
 }
 
@@ -189,7 +190,7 @@ func (h *MarketHandler) GetCachedTicker(ctx context.Context, cacheKey string) (*
 
 	var data TickerResponse
 	if err := json.Unmarshal([]byte(cachedData), &data); err != nil {
-		log.Printf("Failed to unmarshal cached ticker: %v", err)
+		zaplogrus.Warnf("Failed to unmarshal cached ticker: %v", err)
 		if h.cacheAnalytics != nil {
 			h.cacheAnalytics.RecordMiss("tickers")
 		}
@@ -199,7 +200,7 @@ func (h *MarketHandler) GetCachedTicker(ctx context.Context, cacheKey string) (*
 	if h.cacheAnalytics != nil {
 		h.cacheAnalytics.RecordHit("tickers")
 	}
-	log.Printf("Cache hit for ticker: %s", cacheKey)
+	zaplogrus.Infof("Cache hit for ticker: %s", cacheKey)
 	return &data, true
 }
 
@@ -211,13 +212,13 @@ func (h *MarketHandler) CacheBulkTickers(ctx context.Context, cacheKey string, d
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Failed to marshal bulk tickers for caching: %v", err)
+		zaplogrus.Warnf("Failed to marshal bulk tickers for caching: %v", err)
 		return
 	}
 
 	ttl := 10 * time.Second
 	if err := h.redis.Set(ctx, cacheKey, string(dataJSON), ttl); err != nil {
-		log.Printf("Failed to cache bulk tickers: %v", err)
+		zaplogrus.Warnf("Failed to cache bulk tickers: %v", err)
 	}
 }
 
@@ -240,7 +241,7 @@ func (h *MarketHandler) GetCachedBulkTickers(ctx context.Context, cacheKey strin
 
 	var data BulkTickerResponse
 	if err := json.Unmarshal([]byte(cachedData), &data); err != nil {
-		log.Printf("Failed to unmarshal cached bulk tickers: %v", err)
+		zaplogrus.Warnf("Failed to unmarshal cached bulk tickers: %v", err)
 		if h.cacheAnalytics != nil {
 			h.cacheAnalytics.RecordMiss("bulk_tickers")
 		}
@@ -251,7 +252,7 @@ func (h *MarketHandler) GetCachedBulkTickers(ctx context.Context, cacheKey strin
 	if h.cacheAnalytics != nil {
 		h.cacheAnalytics.RecordHit("bulk_tickers")
 	}
-	log.Printf("Cache hit for bulk tickers: %s", cacheKey)
+	zaplogrus.Infof("Cache hit for bulk tickers: %s", cacheKey)
 	return &data, true
 }
 
@@ -263,13 +264,13 @@ func (h *MarketHandler) CacheOrderBook(ctx context.Context, cacheKey string, dat
 
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Failed to marshal order book for caching: %v", err)
+		zaplogrus.Warnf("Failed to marshal order book for caching: %v", err)
 		return
 	}
 
 	ttl := 5 * time.Second // Shorter TTL for order books as they change frequently
 	if err := h.redis.Set(ctx, cacheKey, string(dataJSON), ttl); err != nil {
-		log.Printf("Failed to cache order book: %v", err)
+		zaplogrus.Warnf("Failed to cache order book: %v", err)
 	}
 }
 
@@ -292,7 +293,7 @@ func (h *MarketHandler) GetCachedOrderBook(ctx context.Context, cacheKey string)
 
 	var data OrderBookResponse
 	if err := json.Unmarshal([]byte(cachedData), &data); err != nil {
-		log.Printf("Failed to unmarshal cached order book: %v", err)
+		zaplogrus.Warnf("Failed to unmarshal cached order book: %v", err)
 		if h.cacheAnalytics != nil {
 			h.cacheAnalytics.RecordMiss("order_books")
 		}
@@ -303,7 +304,7 @@ func (h *MarketHandler) GetCachedOrderBook(ctx context.Context, cacheKey string)
 	if h.cacheAnalytics != nil {
 		h.cacheAnalytics.RecordHit("order_books")
 	}
-	log.Printf("Cache hit for order book: %s", cacheKey)
+	zaplogrus.Infof("Cache hit for order book: %s", cacheKey)
 	return &data, true
 }
 
@@ -316,7 +317,7 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 
 	// Create cache key based on query parameters
-	cacheKey := fmt.Sprintf("market_prices:%s:%s:%d:%d", exchange, symbol, page, limit)
+	cacheKey := fmt.Sprintf("market_prices:%s:%s:%d:%d", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol), page, limit)
 
 	// Try to get cached data first
 	if cachedData, found := h.GetCachedMarketPrices(c.Request.Context(), cacheKey); found {
@@ -443,7 +444,7 @@ func (h *MarketHandler) GetTicker(c *gin.Context) {
 	}
 
 	// Create cache key for ticker
-	cacheKey := fmt.Sprintf("ticker:%s:%s", exchange, symbol)
+	cacheKey := fmt.Sprintf("ticker:%s:%s", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol))
 
 	// Try to get cached ticker first
 	if cachedTicker, found := h.GetCachedTicker(c.Request.Context(), cacheKey); found {
@@ -538,7 +539,7 @@ func (h *MarketHandler) GetOrderBook(c *gin.Context) {
 	}
 
 	// Create cache key for order book
-	cacheKey := fmt.Sprintf("orderbook:%s:%s:%d", exchange, symbol, limit)
+	cacheKey := fmt.Sprintf("orderbook:%s:%s:%d", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol), limit)
 
 	// Try to get cached order book first
 	if cachedOrderBook, found := h.GetCachedOrderBook(c.Request.Context(), cacheKey); found {
@@ -622,7 +623,7 @@ func (h *MarketHandler) GetBulkTickers(c *gin.Context) {
 	}
 
 	// Create cache key for bulk tickers
-	cacheKey := fmt.Sprintf("bulk_tickers:%s", exchange)
+	cacheKey := fmt.Sprintf("bulk_tickers:%s", sanitizeCacheKey(exchange))
 
 	// Try to get cached bulk tickers first
 	if cachedTickers, found := h.GetCachedBulkTickers(c.Request.Context(), cacheKey); found {

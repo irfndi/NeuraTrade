@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/utils"
+
 	"github.com/irfndi/neuratrade/internal/ai/llm"
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
 	"github.com/irfndi/neuratrade/internal/autonomous"
@@ -60,6 +63,8 @@ type IntegratedQuestHandlers struct {
 	tradeJournalMu       sync.Mutex
 	tradeJournalReady    bool
 	tradeJournalReadyFor *sql.DB
+	killSwitch           interface{ IsEngaged() bool }
+	safeMode             interface{ IsEnabled() bool }
 }
 
 const (
@@ -97,6 +102,8 @@ func NewIntegratedQuestHandlers(
 	futuresArb interface{},
 	notif *NotificationService,
 	monitoring *AutonomousMonitorManager,
+	killSwitch interface{ IsEngaged() bool },
+	safeMode interface{ IsEnabled() bool },
 ) *IntegratedQuestHandlers {
 	return &IntegratedQuestHandlers{
 		technicalAnalysis:   ta,
@@ -105,6 +112,8 @@ func NewIntegratedQuestHandlers(
 		futuresArbService:   futuresArb,
 		notificationService: notif,
 		monitoring:          monitoring,
+		killSwitch:          killSwitch,
+		safeMode:            safeMode,
 	}
 }
 
@@ -118,8 +127,10 @@ func NewIntegratedQuestHandlersWithAutonomyStore(
 	monitoring *AutonomousMonitorManager,
 	db *sql.DB,
 	store *AutonomousRolloutStore,
+	killSwitch interface{ IsEngaged() bool },
+	safeMode interface{ IsEnabled() bool },
 ) (*IntegratedQuestHandlers, error) {
-	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring)
+	handlers := NewIntegratedQuestHandlers(ta, ccxt, arb, futuresArb, notif, monitoring, killSwitch, safeMode)
 	handlers.SetDB(db)
 	if err := handlers.setAutonomyStoreWithInit(context.Background(), store); err != nil {
 		return nil, fmt.Errorf("failed to set autonomy store in NewIntegratedQuestHandlersWithAutonomyStore: %w", err)
@@ -185,7 +196,7 @@ func (h *IntegratedQuestHandlers) SetDB(db *sql.DB) {
 	}
 	h.tradeJournalMu.Unlock()
 	if err := h.ensureTradeJournalSchema(); err != nil {
-		log.Printf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
+		zaplogrus.Warnf("[SCALPING] Failed to initialize legacy trade journal schema: %v", err)
 	}
 }
 
@@ -301,7 +312,7 @@ func (h *IntegratedQuestHandlers) AutonomyCoordinator() *ScalpingAutonomyCoordin
 func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegistry *skill.Registry) {
 	ccxtSvc, ok := h.ccxtService.(ccxt.CCXTService)
 	if !ok {
-		log.Printf("[SCALPING] Warning: CCXT service does not support CCXTService interface for AI scalping")
+		zaplogrus.Warnf("[SCALPING] Warning: CCXT service does not support CCXTService interface for AI scalping")
 		return
 	}
 
@@ -325,7 +336,7 @@ func (h *IntegratedQuestHandlers) SetAIScalping(llmClient llm.Client, skillRegis
 	h.aiScalpingService = svc
 	h.aiScalpingMu.Unlock()
 	h.configureScalpingAutonomy()
-	log.Printf("[SCALPING] AI-driven scalping service initialized")
+	zaplogrus.Infof("[SCALPING] AI-driven scalping service initialized")
 }
 
 func (h *IntegratedQuestHandlers) SetShadowEvaluationCoordinator(coordinator *ShadowEvaluationCoordinator) {
@@ -653,7 +664,7 @@ func (h *IntegratedQuestHandlers) handleFundGrowthGoal(_ context.Context, quest 
 
 // handleMarketScanWithTA scans markets using technical analysis
 func (h *IntegratedQuestHandlers) handleMarketScanWithTA(ctx context.Context, quest *Quest) error {
-	log.Printf("Executing market scan with TA: %s", quest.Name)
+	zaplogrus.Infof("Executing market scan with TA: %s", quest.Name)
 
 	startTime := time.Now()
 	symbolsScanned := 0
@@ -689,13 +700,13 @@ func (h *IntegratedQuestHandlers) handleMarketScanWithTA(ctx context.Context, qu
 	quest.Checkpoint["scan_duration_ms"] = time.Since(startTime).Milliseconds()
 	quest.Checkpoint["chat_id"] = chatID
 
-	log.Printf("Market scan complete: scanned %d symbols, %d with strong signals", symbolsScanned, symbolsWithSignals)
+	zaplogrus.Infof("Market scan complete: scanned %d symbols, %d with strong signals", symbolsScanned, symbolsWithSignals)
 	return nil
 }
 
 // handleFundingRateScan scans funding rates for arbitrage
 func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, quest *Quest) error {
-	log.Printf("Executing funding rate scan: %s", quest.Name)
+	zaplogrus.Infof("Executing funding rate scan: %s", quest.Name)
 
 	startTime := time.Now()
 	ratesCollected := 0
@@ -728,13 +739,13 @@ func (h *IntegratedQuestHandlers) handleFundingRateScan(ctx context.Context, que
 	quest.Checkpoint["scan_duration_ms"] = time.Since(startTime).Milliseconds()
 	quest.Checkpoint["chat_id"] = chatID
 
-	log.Printf("Funding rate scan complete: %d exchanges, %d rates", len(exchanges), ratesCollected)
+	zaplogrus.Infof("Funding rate scan complete: %d exchanges, %d rates", len(exchanges), ratesCollected)
 	return nil
 }
 
 // handlePortfolioHealthWithRisk checks portfolio health with risk management
 func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Context, quest *Quest) error {
-	log.Printf("Executing portfolio health check with risk: %s", quest.Name)
+	zaplogrus.Infof("Executing portfolio health check with risk: %s", quest.Name)
 
 	startTime := time.Now()
 
@@ -780,13 +791,13 @@ func (h *IntegratedQuestHandlers) handlePortfolioHealthWithRisk(ctx context.Cont
 	quest.Checkpoint["check_duration_ms"] = time.Since(startTime).Milliseconds()
 	quest.Checkpoint["chat_id"] = chatID
 
-	log.Printf("Portfolio health check complete: status=%s, checks=%d/%d passed", healthStatus, checksPassed, checksPassed+checksFailed)
+	zaplogrus.Warnf("Portfolio health check complete: status=%s, checks=%d/%d passed", healthStatus, checksPassed, checksPassed+checksFailed)
 	return nil
 }
 
 // handleScalpingExecution executes scalping trades using integrated services
 func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, quest *Quest) error {
-	log.Printf("[SCALPING] === START AI-DRIVEN SCALPING QUEST ===")
+	zaplogrus.Infof("[SCALPING] === START AI-DRIVEN SCALPING QUEST ===")
 
 	if quest.Checkpoint == nil {
 		quest.Checkpoint = make(map[string]interface{})
@@ -801,7 +812,7 @@ func (h *IntegratedQuestHandlers) handleScalpingExecution(ctx context.Context, q
 		return h.executeAIScalping(ctx, quest, chatID, aiSvc)
 	}
 
-	log.Printf("[SCALPING] AI scalping service not available, using fallback")
+	zaplogrus.Warnf("[SCALPING] AI scalping service not available, using fallback")
 	return h.executeFallbackScalping(ctx, quest, chatID)
 }
 
@@ -830,7 +841,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	})
 	if !ok {
 		err := fmt.Errorf("CCXT service does not implement FetchBalance")
-		log.Printf("[SCALPING] ERROR: %v", err)
+		zaplogrus.Errorf("[SCALPING] ERROR: %v", err)
 		quest.Checkpoint["status"] = "balance_unavailable"
 		quest.Checkpoint["error"] = err.Error()
 		return err
@@ -838,7 +849,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	// Get user's preferred exchange from database or default to bitget
 	userExchange := h.getUserExchange(chatID)
-	log.Printf("[SCALPING] Using exchange: %s for chat: %s", userExchange, chatID)
+	zaplogrus.Infof("[SCALPING] Using exchange: %s for chat: %s", userExchange, utils.MaskString(chatID, utils.DefaultMaskingConfig))
 	currentMode := h.resolveOperationalMode(chatID, quest)
 	isDryRun := currentMode != OpModeLive
 	ctx = WithOperationalMode(ctx, currentMode)
@@ -854,7 +865,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		Exchange:   userExchange,
 	})
 	if err := h.syncScalpingStrategyMode(ctx, chatID, currentMode); err != nil {
-		log.Printf("[SCALPING] Failed to sync rollout mode for chat %s (%s): %v", chatID, currentMode, err)
+		zaplogrus.Warnf("[SCALPING] Failed to sync rollout mode for chat %s (%s): %v", chatID, currentMode, err)
 		quest.Checkpoint["autonomy_mode_sync_error"] = err.Error()
 		quest.Checkpoint["status"] = "hold"
 		quest.Checkpoint["runtime_entry_gate_reason"] = "failed to synchronize scalping rollout mode"
@@ -865,7 +876,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if h.protectionManager != nil {
 		protectionSummary, protectErr := h.protectionManager.ReconcileOpenPositions(ctx, chatID, userExchange)
 		if protectErr != nil {
-			log.Printf("[SCALPING] Dynamic protection reconciliation failed: %v", protectErr)
+			zaplogrus.Warnf("[SCALPING] Dynamic protection reconciliation failed: %v", protectErr)
 			quest.Checkpoint["protection_reconcile_error"] = protectErr.Error()
 		} else {
 			quest.Checkpoint["protection_positions_evaluated"] = protectionSummary.PositionsEvaluated
@@ -874,7 +885,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			quest.Checkpoint["protection_missing_recovered"] = protectionSummary.RecoveredProtection
 			quest.Checkpoint["protection_errors"] = protectionSummary.Errors
 			if protectionSummary.ProtectionsUpdated > 0 {
-				log.Printf(
+				zaplogrus.Infof(
 					"[SCALPING] Dynamic protection updates applied: positions=%d updates=%d",
 					protectionSummary.PositionsEvaluated,
 					protectionSummary.ProtectionsUpdated,
@@ -897,7 +908,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// In dry-run mode, use virtual balance instead of requiring real exchange API keys
 	if isDryRun {
 		usdtBalance = 1000.0 // Virtual balance for paper trading
-		log.Printf("[SCALPING] DRY-RUN MODE: Using virtual balance of %.2f USDT", usdtBalance)
+		zaplogrus.Infof("[SCALPING] DRY-RUN MODE: Using virtual balance of %.2f USDT", usdtBalance)
 		quest.Checkpoint["dry_run"] = true
 		quest.Checkpoint["virtual_balance"] = usdtBalance
 	} else {
@@ -907,7 +918,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 		balanceSnapshot, err = balanceFetcher.FetchBalance(balanceCtx, userExchange)
 		if err != nil {
-			log.Printf("[SCALPING] Failed to fetch balance from %s: %v, skipping this cycle", userExchange, err)
+			zaplogrus.Warnf("[SCALPING] Failed to fetch balance from %s: %v, skipping this cycle", userExchange, err)
 			quest.Checkpoint["balance_warning"] = err.Error()
 			quest.Checkpoint["status"] = "hold"
 			return nil
@@ -917,13 +928,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			quest.Checkpoint["wallet_basis_source"] = resolveScalpingWalletBasisSource(balanceSnapshot)
 			quest.Checkpoint["wallet_basis_usdt"] = usdtBalance
 			if strings.HasPrefix(checkpointString(quest.Checkpoint["wallet_basis_source"]), "summary:") {
-				log.Printf("[SCALPING] Futures wallet basis for %s is summary-only; available funds unknown, skipping this cycle", userExchange)
+				zaplogrus.Warnf("[SCALPING] Futures wallet basis for %s is summary-only; available funds unknown, skipping this cycle", userExchange)
 				quest.Checkpoint["balance_warning"] = "summary-only futures wallet balance lacks free-funds breakdown"
 				quest.Checkpoint["status"] = "hold"
 				return nil
 			}
 			if usdtBalance <= 0 {
-				log.Printf("[SCALPING] USDT balance is zero, using minimum balance for trading")
+				zaplogrus.Infof("[SCALPING] USDT balance is zero, using minimum balance for trading")
 				usdtBalance = 100.0 // Minimum balance
 				usingFallbackBalance = true
 				quest.Checkpoint["fallback_balance"] = true
@@ -936,7 +947,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			spotClosed, spotErr := h.autoDeriskSpotInventory(ctx, quest, chatID, userExchange, balanceSnapshot)
 			quest.Checkpoint["spot_unwind_checked_at"] = time.Now().UTC().Format(time.RFC3339)
 			if spotErr != nil {
-				log.Printf("[SCALPING] Spot unwind pass failed: %v", spotErr)
+				zaplogrus.Warnf("[SCALPING] Spot unwind pass failed: %v", spotErr)
 				quest.Checkpoint["spot_unwind_error"] = spotErr.Error()
 			} else if spotClosed > 0 {
 				quest.Checkpoint["spot_unwind_closed_positions"] = spotClosed
@@ -960,7 +971,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		} else {
 			deriskClosed, exposureRatio, guardErr := h.autoDeriskIfExposureTooHigh(ctx, quest, chatID, userExchange, usdtBalance)
 			if guardErr != nil {
-				log.Printf("[SCALPING] Exposure guard check failed: %v", guardErr)
+				zaplogrus.Warnf("[SCALPING] Exposure guard check failed: %v", guardErr)
 				quest.Checkpoint["exposure_guard_error"] = guardErr.Error()
 			} else {
 				quest.Checkpoint["exposure_ratio"] = fmt.Sprintf("%.4f", exposureRatio)
@@ -985,7 +996,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 
 	driftState, driftErr := h.refreshStateDriftGate(ctx, quest, chatID, userExchange)
 	if driftErr != nil {
-		log.Printf("[SCALPING] State drift refresh failed: %v", driftErr)
+		zaplogrus.Warnf("[SCALPING] State drift refresh failed: %v", driftErr)
 		quest.Checkpoint["state_drift_error"] = driftErr.Error()
 	}
 	quest.Checkpoint["state_drift_active"] = driftState.Active
@@ -1023,12 +1034,12 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	h.recordScalpingPortfolioSnapshot(ctx, chatID, userExchange, portfolio)
 
-	log.Printf("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
+	zaplogrus.Infof("[SCALPING] Portfolio: %.2f USDT available", usdtBalance)
 
 	if currentMode == ModePaper {
 		paperClosed, paperCloseErr := h.closeTriggeredPaperScalpingPositions(ctx, quest, chatID, userExchange)
 		if paperCloseErr != nil {
-			log.Printf("[SCALPING] Paper close check failed: %v", paperCloseErr)
+			zaplogrus.Warnf("[SCALPING] Paper close check failed: %v", paperCloseErr)
 			quest.Checkpoint["paper_close_error"] = paperCloseErr.Error()
 		} else if paperClosed > 0 {
 			quest.Checkpoint["status"] = "paper_close"
@@ -1050,7 +1061,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	if !isDryRun {
 		timeStopClosed, timeStopErr := h.enforceAdaptiveTimeStop(ctx, quest, chatID, userExchange, portfolio.StrategyPhase)
 		if timeStopErr != nil {
-			log.Printf("[SCALPING] Adaptive time-stop check failed: %v", timeStopErr)
+			zaplogrus.Warnf("[SCALPING] Adaptive time-stop check failed: %v", timeStopErr)
 			quest.Checkpoint["time_stop_error"] = timeStopErr.Error()
 		} else if timeStopClosed > 0 {
 			quest.Checkpoint["status"] = "risk_reduction"
@@ -1076,7 +1087,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.updateHoldStateCheckpoint(quest, true)
 		unlockClosed, unlockErr := h.maybeApplyRiskUnlock(gateCtx, quest, chatID, userExchange, portfolio.RiskDrawdown)
 		if unlockErr != nil {
-			log.Printf("[SCALPING] Risk unlock check failed during risk lock: %v", unlockErr)
+			zaplogrus.Warnf("[SCALPING] Risk unlock check failed during risk lock: %v", unlockErr)
 			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
 		}
 
@@ -1265,7 +1276,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		}
 		unlockClosed, unlockErr := h.maybeApplyRiskUnlock(gateCtx, quest, chatID, userExchange, portfolio.RiskDrawdown)
 		if unlockErr != nil {
-			log.Printf("[SCALPING] Risk unlock check failed during derisk-only mode: %v", unlockErr)
+			zaplogrus.Warnf("[SCALPING] Risk unlock check failed during derisk-only mode: %v", unlockErr)
 			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
 		} else if unlockClosed > 0 {
 			reasons = append(reasons, fmt.Sprintf("Risk unlock trimmed %d position(s) by 35%%", unlockClosed))
@@ -1388,16 +1399,8 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		connectionChecked = true
 		exchangeConnected = healthChecker.IsHealthy(ctx)
 	}
-	safeMode := checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"])
-	if envSafeMode, ok := getEnvBool("NEURATRADE_SAFE_MODE_ENABLED"); ok && envSafeMode {
-		safeMode = true
-	}
-	killSwitchEngaged := false
-	if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH_ENGAGED"); ok {
-		killSwitchEngaged = envKillSwitch
-	} else if envKillSwitch, ok := getEnvBool("NEURATRADE_KILL_SWITCH"); ok {
-		killSwitchEngaged = envKillSwitch
-	}
+	safeMode := checkpointBool(quest.Checkpoint["runtime_entry_blocked_by_risk_lock"]) || (h.safeMode != nil && h.safeMode.IsEnabled())
+	killSwitchEngaged := h.killSwitch != nil && h.killSwitch.IsEngaged()
 	strategyID := ScalpingStrategyID(chatID)
 	cycleCtx := WithScalpingAutonomyScope(ctx, ScalpingAutonomyScope{
 		ChatID:            chatID,
@@ -1425,12 +1428,12 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		if decision != nil {
 			rejectionJSON, marshalErr := json.Marshal(decision.CandidateFunnel.RejectionCounts)
 			if marshalErr != nil {
-				log.Printf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
+				zaplogrus.Warnf("[TELEMETRY] Failed to marshal rejection counts: %v", marshalErr)
 				rejectionJSON = []byte("{}")
 			}
 			policyJSON, marshalErr := json.Marshal(decision.PolicyAdjustments)
 			if marshalErr != nil {
-				log.Printf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
+				zaplogrus.Warnf("[TELEMETRY] Failed to marshal policy adjustments: %v", marshalErr)
 				policyJSON = []byte("[]")
 			}
 			gateBlockCode := ""
@@ -1461,7 +1464,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		persistedCycleID, insertErr := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec)
 		writeCancel()
 		if insertErr != nil {
-			log.Printf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
+			zaplogrus.Warnf("[TELEMETRY] Failed to insert cycle record: %v", insertErr)
 		} else {
 			if strings.TrimSpace(persistedCycleID) != "" {
 				cycleID = strings.TrimSpace(persistedCycleID)
@@ -1474,13 +1477,13 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	}
 	if err != nil {
 		h.updateRecoveryCleanCycles(quest, false, "runtime_error")
-		log.Printf("[SCALPING] AI decision error: %v", err)
+		zaplogrus.Infof("[SCALPING] AI decision error: %v", err)
 		reasonCategory := classifyAIRuntimeReason(err.Error(), aiReasonExecutionUnavailable)
 		deriskClosed := 0
 		if strings.Contains(strings.ToLower(err.Error()), "portfolio safety blocked") {
 			closed, deriskErr := h.autoDeriskBlockedExposure(ctx, quest, chatID, userExchange, err.Error())
 			if deriskErr != nil {
-				log.Printf("[SCALPING] Auto de-risk attempt failed: %v", deriskErr)
+				zaplogrus.Warnf("[SCALPING] Auto de-risk attempt failed: %v", deriskErr)
 				quest.Checkpoint["auto_derisk_error"] = deriskErr.Error()
 			} else if closed > 0 {
 				deriskClosed = closed
@@ -1517,7 +1520,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 	// Safety check: decision should not be nil
 	if decision == nil {
 		h.updateRecoveryCleanCycles(quest, false, "decision_nil")
-		log.Printf("[SCALPING] AI returned nil decision - treating as hold")
+		zaplogrus.Infof("[SCALPING] AI returned nil decision - treating as hold")
 		streak, cooldown := h.recordScalpingFailure(quest, "decision payload was nil")
 		quest.Checkpoint["status"] = "hold"
 		quest.Checkpoint["ai_action"] = "hold"
@@ -1550,7 +1553,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.updateHoldStateCheckpoint(quest, true)
 		unlockClosed, unlockErr := h.maybeApplyRiskUnlock(ctx, quest, chatID, userExchange, portfolio.RiskDrawdown)
 		if unlockErr != nil {
-			log.Printf("[SCALPING] Risk unlock check failed: %v", unlockErr)
+			zaplogrus.Warnf("[SCALPING] Risk unlock check failed: %v", unlockErr)
 			quest.Checkpoint["risk_unlock_error"] = unlockErr.Error()
 		}
 
@@ -1590,7 +1593,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 			h.resetScalpingFailureState(quest)
 			recordAIRuntimeEvent(quest, time.Now().UTC(), reasonCategory, true, h.getAIScalpingRuntimeSnapshot())
 		}
-		log.Printf("[SCALPING] AI decided to hold: %s", decision.Reasoning)
+		zaplogrus.Infof("[SCALPING] AI decided to hold: %s", decision.Reasoning)
 		quest.Checkpoint["status"] = "hold"
 		reasons := []string{decision.Reasoning}
 		if unlockClosed > 0 {
@@ -1679,7 +1682,7 @@ func (h *IntegratedQuestHandlers) executeAIScalping(ctx context.Context, quest *
 		h.assertPostEntryProtectionAsync(chatID, userExchange, decision.OrderID, decision.Symbol, decision.Action)
 	}
 
-	log.Printf("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
+	zaplogrus.Infof("[SCALPING] AI decision executed: %s %s (%.0f%% confidence)",
 		decision.Action, decision.Symbol, decision.Confidence*100)
 
 	if currentMode == OpModeLive {
@@ -1729,12 +1732,12 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 			}); ok {
 				if ticker, err := tickerSource.FetchSingleTicker(ctx, userExchange, decision.Symbol); err == nil && ticker != nil && ticker.GetPrice() > 0 {
 					entryPrice = decimal.NewFromFloat(ticker.GetPrice())
-					log.Printf("[SCALPING] Fetched fallback entry price for %s: %s", decision.Symbol, entryPrice.String())
+					zaplogrus.Warnf("[SCALPING] Fetched fallback entry price for %s: %s", decision.Symbol, entryPrice.String())
 				}
 			}
 		}
 		if entryPrice.LessThanOrEqual(decimal.Zero) {
-			log.Printf("[SCALPING] SKIPPING lifecycle persistence for %s: entry price is zero (cannot calculate PnL or TP/SL)", decision.Symbol)
+			zaplogrus.Warnf("[SCALPING] SKIPPING lifecycle persistence for %s: entry price is zero (cannot calculate PnL or TP/SL)", decision.Symbol)
 		} else {
 			// Auto-derive SL/TP from entry price if AI didn't provide them
 			stopLoss := decimalValueOrZero(decision.StopLoss)
@@ -1746,7 +1749,7 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 				} else {
 					stopLoss = entryPrice.Mul(decimal.NewFromInt(1).Add(slPct))
 				}
-				log.Printf("[SCALPING] Auto-derived stop-loss for %s at %s (entry=%s)", decision.Symbol, stopLoss.String(), entryPrice.String())
+				zaplogrus.Infof("[SCALPING] Auto-derived stop-loss for %s at %s (entry=%s)", decision.Symbol, stopLoss.String(), entryPrice.String())
 			}
 			if takeProfit.LessThanOrEqual(decimal.Zero) {
 				tpPct := decimal.NewFromFloat(0.002) // 0.2% default scalping TP
@@ -1755,7 +1758,7 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 				} else {
 					takeProfit = entryPrice.Mul(decimal.NewFromInt(1).Sub(tpPct))
 				}
-				log.Printf("[SCALPING] Auto-derived take-profit for %s at %s (entry=%s)", decision.Symbol, takeProfit.String(), entryPrice.String())
+				zaplogrus.Infof("[SCALPING] Auto-derived take-profit for %s at %s (entry=%s)", decision.Symbol, takeProfit.String(), entryPrice.String())
 			}
 			if err := h.lifecycleStore.RecordOrderExecution(ctx, LifecycleExecutionRecord{
 				OrderID:    decision.OrderID,
@@ -1772,7 +1775,7 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 				Source:     scalpingExecutionLifecycleSource(currentMode),
 				OpenedAt:   time.Now().UTC(),
 			}); err != nil {
-				log.Printf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
+				zaplogrus.Warnf("[SCALPING] Failed to persist execution lifecycle for %s: %v", decision.OrderID, err)
 			} else {
 				lifecyclePersisted = true
 			}
@@ -1789,7 +1792,7 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 	err := h.telemetryStore.LinkOrderToCycle(writeCtx, cycleID, strings.TrimSpace(decision.OrderID))
 	writeCancel()
 	if err != nil {
-		log.Printf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
+		zaplogrus.Warnf("[TELEMETRY] Failed to link order %s to cycle: %v", decision.OrderID, err)
 	}
 }
 
@@ -1877,12 +1880,12 @@ func (h *IntegratedQuestHandlers) autoDeriskBlockedExposure(
 		}
 		placeCancel()
 		if placeErr != nil {
-			log.Printf("[SCALPING] Auto de-risk failed for %s %s: %v", pos.Symbol, pos.Side, placeErr)
+			zaplogrus.Warnf("[SCALPING] Auto de-risk failed for %s %s: %v", pos.Symbol, pos.Side, placeErr)
 			continue
 		}
 
 		closed++
-		log.Printf("[SCALPING] Auto de-risk order placed: close %s %s (size=%s, notional=%s)", pos.Side, pos.Symbol, size.String(), notional.StringFixed(4))
+		zaplogrus.Infof("[SCALPING] Auto de-risk order placed: close %s %s (size=%s, notional=%s)", pos.Side, pos.Symbol, size.String(), notional.StringFixed(4))
 	}
 
 	if closed > 0 {
@@ -2094,12 +2097,12 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 		}
 		cancel()
 		if placeErr != nil {
-			log.Printf("[SCALPING] Spot unwind failed for %s on %s: %v", symbol, exchange, placeErr)
+			zaplogrus.Warnf("[SCALPING] Spot unwind failed for %s on %s: %v", symbol, exchange, placeErr)
 			continue
 		}
 
 		closed++
-		log.Printf("[SCALPING] Spot unwind order placed: sell %s (notional=%s, chat=%s)", symbol, notional.StringFixed(4), chatID)
+		zaplogrus.Infof("[SCALPING] Spot unwind order placed: sell %s (notional=%s, chat=%s)", symbol, notional.StringFixed(4), chatID)
 	}
 
 	if closed > 0 && quest != nil {
@@ -2602,7 +2605,7 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		if cleaned, err := h.lifecycleStore.CloseClosedOrderBackedGhostPositions(ctx, chatID, exchange); err == nil {
 			ghostCleaned = cleaned
 		} else {
-			log.Printf("[SCALPING] Ghost lifecycle cleanup failed for chat %s exchange %s: %v", chatID, exchange, err)
+			zaplogrus.Warnf("[SCALPING] Ghost lifecycle cleanup failed for chat %s exchange %s: %v", chatID, exchange, err)
 		}
 		positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
 		if err == nil {
@@ -2694,13 +2697,13 @@ func (h *IntegratedQuestHandlers) enrichPortfolioControlPlane(
 		peakValue := decimal.NewFromFloat(peakEquity)
 		if state, exists := h.drawdownHalt.GetState(chatID); !exists || state.PeakValue.LessThan(peakValue) {
 			if err := h.drawdownHalt.ResetPeak(ctx, chatID, peakValue); err != nil {
-				log.Printf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
+				zaplogrus.Warnf("[SCALPING] Drawdown halt peak reset failed for chat %s: %v", chatID, err)
 			}
 		}
 		marketValue := decimal.NewFromFloat(rawEquity)
 		state, err := h.drawdownHalt.CheckDrawdown(ctx, chatID, marketValue)
 		if err != nil {
-			log.Printf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
+			zaplogrus.Warnf("[SCALPING] Drawdown halt check failed for chat %s: %v", chatID, err)
 		} else if state != nil {
 			portfolio.CurrentDrawdown = state.CurrentDrawdown.InexactFloat64()
 			if portfolio.CurrentDrawdown < 0 {
@@ -2812,7 +2815,7 @@ func (h *IntegratedQuestHandlers) recordScalpingPortfolioSnapshot(
 		NoFillMinutes:           finiteDecimalFromFloat(portfolio.NoFillMinutes),
 	})
 	if err != nil {
-		log.Printf("[SCALPING] Portfolio snapshot persist failed for chat %s exchange %s: %v", chatID, exchange, err)
+		zaplogrus.Warnf("[SCALPING] Portfolio snapshot persist failed for chat %s exchange %s: %v", chatID, exchange, err)
 	}
 }
 
@@ -2841,7 +2844,7 @@ func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
 	rejectionJSON := "{}"
 	policyJSON, marshalErr := json.Marshal([]string{gateBlockCode})
 	if marshalErr != nil {
-		log.Printf("[TELEMETRY] Failed to marshal gate policy adjustments: %v", marshalErr)
+		zaplogrus.Warnf("[TELEMETRY] Failed to marshal gate policy adjustments: %v", marshalErr)
 		policyJSON = []byte("[]")
 	}
 	cycleRec := CycleRecord{
@@ -2867,7 +2870,7 @@ func (h *IntegratedQuestHandlers) recordScalpingGateCycle(
 	writeCtx, writeCancel := withBoundedTimeoutContext(baseCtx, 2*time.Second)
 	defer writeCancel()
 	if _, err := h.telemetryStore.InsertCycleRecord(writeCtx, cycleRec); err != nil {
-		log.Printf("[TELEMETRY] Failed to insert gated scalping cycle: %v", err)
+		zaplogrus.Warnf("[TELEMETRY] Failed to insert gated scalping cycle: %v", err)
 	}
 }
 
@@ -2919,7 +2922,7 @@ func oppositeCloseSide(positionSide string) string {
 }
 
 func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, quest *Quest, chatID string) error {
-	log.Printf("[SCALPING] AI scalping service unavailable; static fallback execution disabled")
+	zaplogrus.Warnf("[SCALPING] AI scalping service unavailable; static fallback execution disabled")
 	quest.Checkpoint["status"] = "ai_unavailable_hold"
 	quest.Checkpoint["fallback_mode"] = "observe_only"
 	quest.Checkpoint["note"] = "No rule-based orders are placed when AI service is unavailable"
@@ -2947,7 +2950,7 @@ func (h *IntegratedQuestHandlers) executeFallbackScalping(ctx context.Context, q
 }
 
 func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, quest *Quest) error {
-	log.Printf("[ARBITRAGE] Executing arbitrage quest: %s", quest.Name)
+	zaplogrus.Infof("[ARBITRAGE] Executing arbitrage quest: %s", quest.Name)
 
 	if quest.Checkpoint == nil {
 		quest.Checkpoint = make(map[string]interface{})
@@ -2955,7 +2958,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 
 	if h.ccxtService == nil {
 		err := fmt.Errorf("CCXT service not available for arbitrage")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["status"] = "ccxt_unavailable"
 		quest.Checkpoint["error"] = err.Error()
 		return err
@@ -2970,7 +2973,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	symbol, ok := quest.Checkpoint["symbol"].(string)
 	if !ok {
 		err := fmt.Errorf("symbol not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -2978,7 +2981,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	buyExchange, ok := quest.Checkpoint["buy_exchange"].(string)
 	if !ok {
 		err := fmt.Errorf("buy exchange not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -2986,7 +2989,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	sellExchange, ok := quest.Checkpoint["sell_exchange"].(string)
 	if !ok {
 		err := fmt.Errorf("sell exchange not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -2994,7 +2997,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	buyPriceStr, ok := quest.Checkpoint["buy_price"].(string)
 	if !ok {
 		err := fmt.Errorf("buy price not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -3002,7 +3005,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	sellPriceStr, ok := quest.Checkpoint["sell_price"].(string)
 	if !ok {
 		err := fmt.Errorf("sell price not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -3010,7 +3013,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	buyPrice, err := decimal.NewFromString(buyPriceStr)
 	if err != nil {
 		err := fmt.Errorf("invalid buy price format: %v", err)
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -3018,7 +3021,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	sellPrice, err := decimal.NewFromString(sellPriceStr)
 	if err != nil {
 		err := fmt.Errorf("invalid sell price format: %v", err)
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
@@ -3027,19 +3030,19 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 	profitPctStr, ok := quest.Checkpoint["profit_pct"].(string)
 	if !ok {
 		err := fmt.Errorf("profit percentage not found in arbitrage quest checkpoint")
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
 	profitPct, err := decimal.NewFromString(profitPctStr)
 	if err != nil {
 		err := fmt.Errorf("invalid profit percentage format: %v", err)
-		log.Printf("[ARBITRAGE] ERROR: %v", err)
+		zaplogrus.Errorf("[ARBITRAGE] ERROR: %v", err)
 		quest.Checkpoint["error"] = err.Error()
 		return err
 	}
 
-	log.Printf("[ARBITRAGE] Opportunity: %s - Buy on %s at %.4f, Sell on %s at %.4f, Profit: %.2f%%",
+	zaplogrus.Infof("[ARBITRAGE] Opportunity: %s - Buy on %s at %.4f, Sell on %s at %.4f, Profit: %.2f%%",
 		symbol, buyExchange, buyPrice.InexactFloat64(), sellExchange, sellPrice.InexactFloat64(), profitPct.InexactFloat64())
 
 	// Check if we have an order executor for arbitrage trades
@@ -3048,39 +3051,39 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 		// First, buy on the cheaper exchange
 		amount := decimal.NewFromFloat(10.0) // Use a conservative amount for testing
 
-		log.Printf("[ARBITRAGE] Placing BUY order: %s on %s at %.4f, amount: %.2f",
+		zaplogrus.Infof("[ARBITRAGE] Placing BUY order: %s on %s at %.4f, amount: %.2f",
 			symbol, buyExchange, buyPrice.InexactFloat64(), amount.InexactFloat64())
 
 		// Place buy order
 		buyOrderID, err := h.orderExecutor.PlaceOrder(ctx, buyExchange, symbol, "buy", "market", amount, &buyPrice)
 		if err != nil {
-			log.Printf("[ARBITRAGE] BUY ORDER FAILED: %v", err)
+			zaplogrus.Errorf("[ARBITRAGE] BUY ORDER FAILED: %v", err)
 			quest.Checkpoint["buy_execution_error"] = err.Error()
 			quest.Checkpoint["buy_execution_status"] = "failed"
 			return fmt.Errorf("buy order execution failed: %w", err)
 		}
 
-		log.Printf("[ARBITRAGE] BUY ORDER PLACED: %s %s %s, orderID: %s", "buy", buyExchange, symbol, buyOrderID)
+		zaplogrus.Infof("[ARBITRAGE] BUY ORDER PLACED: %s %s %s, orderID: %s", "buy", buyExchange, symbol, buyOrderID)
 		quest.Checkpoint["buy_order_id"] = buyOrderID
 		quest.Checkpoint["buy_execution_status"] = "placed"
 
 		// Then, sell on the more expensive exchange
-		log.Printf("[ARBITRAGE] Placing SELL order: %s on %s at %.4f, amount: %.2f",
+		zaplogrus.Infof("[ARBITRAGE] Placing SELL order: %s on %s at %.4f, amount: %.2f",
 			symbol, sellExchange, sellPrice.InexactFloat64(), amount.InexactFloat64())
 
 		sellOrderID, err := h.orderExecutor.PlaceOrder(ctx, sellExchange, symbol, "sell", "market", amount, &sellPrice)
 		if err != nil {
-			log.Printf("[ARBITRAGE] SELL ORDER FAILED: %v", err)
+			zaplogrus.Errorf("[ARBITRAGE] SELL ORDER FAILED: %v", err)
 			quest.Checkpoint["sell_execution_error"] = err.Error()
 			quest.Checkpoint["sell_execution_status"] = "failed"
 			return fmt.Errorf("sell order execution failed: %w", err)
 		}
 
-		log.Printf("[ARBITRAGE] SELL ORDER PLACED: %s %s %s, orderID: %s", "sell", sellExchange, symbol, sellOrderID)
+		zaplogrus.Infof("[ARBITRAGE] SELL ORDER PLACED: %s %s %s, orderID: %s", "sell", sellExchange, symbol, sellOrderID)
 		quest.Checkpoint["sell_order_id"] = sellOrderID
 		quest.Checkpoint["sell_execution_status"] = "placed"
 
-		log.Printf("[ARBITRAGE] ARBITRAGE EXECUTED: Buy %s on %s, Sell %s on %s, Expected profit: %s%%",
+		zaplogrus.Infof("[ARBITRAGE] ARBITRAGE EXECUTED: Buy %s on %s, Sell %s on %s, Expected profit: %s%%",
 			symbol, buyExchange, symbol, sellExchange, profitPct.String())
 
 		quest.Checkpoint["status"] = "executed_both_legs"
@@ -3093,7 +3096,7 @@ func (h *IntegratedQuestHandlers) handleArbitrageExecution(ctx context.Context, 
 		quest.Checkpoint["profit_percentage"] = profitPct.String()
 		quest.Checkpoint["amount"] = amount.String()
 	} else {
-		log.Printf("[ARBITRAGE] WARNING: Order executor not configured - arbitrage opportunity not executed")
+		zaplogrus.Warnf("[ARBITRAGE] WARNING: Order executor not configured - arbitrage opportunity not executed")
 		quest.Checkpoint["execution_status"] = "no_executor"
 		return fmt.Errorf("order executor not configured for arbitrage")
 	}
@@ -3280,7 +3283,7 @@ func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, ch
 	}
 	notif = normalizeAINotificationSemantics(notif)
 	if !shouldSendScalpingDecisionNotification(notif) {
-		log.Printf(
+		zaplogrus.Infof(
 			"[NOTIFICATION] Suppressed non-actionable scalping update (type=%s action=%s)",
 			notif.DecisionType,
 			notif.Action,
@@ -3294,7 +3297,7 @@ func (h *IntegratedQuestHandlers) notifyScalpingDecision(ctx context.Context, ch
 	notifyCtx, cancelNotify := withBoundedTimeoutContext(ctx, questNotificationTimeout())
 	defer cancelNotify()
 	if err := h.notificationService.NotifyAIReasoning(notifyCtx, chatIDInt, notif); err != nil {
-		log.Printf("[NOTIFICATION] Failed to send scalping status notification: %v", err)
+		zaplogrus.Warnf("[NOTIFICATION] Failed to send scalping status notification: %v", err)
 	}
 }
 
@@ -3744,7 +3747,7 @@ func (h *IntegratedQuestHandlers) scopedScalpingPerformance(
 	defer cancel()
 	summary, err := h.lifecycleStore.GetRecentLossStreak(queryCtx, chatID, exchange, since)
 	if err != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[SCALPING] Failed to read scoped recent loss streak (chat=%s exchange=%s): %v",
 			chatID,
 			exchange,
@@ -3949,7 +3952,7 @@ func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchang
 
 			positions, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, exchange, 100)
 			if err != nil {
-				log.Printf("[SCALPING] Post-entry protection assertion failed to list positions: %v", err)
+				zaplogrus.Warnf("[SCALPING] Post-entry protection assertion failed to list positions: %v", err)
 				return
 			}
 			targets := filterManagedPositionsForEntryProtection(positions, orderID, symbol, side)
@@ -3963,7 +3966,7 @@ func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchang
 			h.ensureDynamicProtectionManager()
 			if h.protectionManager != nil {
 				if _, err := h.protectionManager.ReconcileOpenPositions(ctx, chatID, exchange); err != nil {
-					log.Printf("[SCALPING] Post-entry protection reconcile warning: %v", err)
+					zaplogrus.Warnf("[SCALPING] Post-entry protection reconcile warning: %v", err)
 				}
 			}
 
@@ -3972,7 +3975,7 @@ func (h *IntegratedQuestHandlers) assertPostEntryProtectionAsync(chatID, exchang
 				for _, pos := range targets {
 					trimmed, trimErr := h.trimManagedPosition(ctx, pos, decimal.NewFromInt(1), "post_entry_protection_assertion")
 					if trimErr != nil {
-						log.Printf("[SCALPING] Post-entry protection forced close failed for %s: %v", pos.PositionID, trimErr)
+						zaplogrus.Warnf("[SCALPING] Post-entry protection forced close failed for %s: %v", pos.PositionID, trimErr)
 						continue
 					}
 					closed += trimmed
@@ -4061,7 +4064,7 @@ func allManagedPositionsProtected(positions []ManagedOpenPosition) bool {
 // Returns the first connected exchange, or "bitget" as default
 func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 	if h.db == nil {
-		log.Printf("[SCALPING] No database available, using default exchange: bitget")
+		zaplogrus.Infof("[SCALPING] No database available, using default exchange: bitget")
 		return "bitget"
 	}
 
@@ -4072,11 +4075,11 @@ func (h *IntegratedQuestHandlers) getUserExchange(chatID string) string {
 
 	err := h.db.QueryRow(query, chatID).Scan(&exchange)
 	if err != nil {
-		log.Printf("[SCALPING] No exchange found for chat %s, using default: bitget (%v)", chatID, err)
+		zaplogrus.Infof("[SCALPING] No exchange found for chat %s, using default: bitget (%v)", chatID, err)
 		return "bitget"
 	}
 
-	log.Printf("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
+	zaplogrus.Infof("[SCALPING] Found user exchange: %s for chat: %s", exchange, chatID)
 	return exchange
 }
 
@@ -4397,7 +4400,7 @@ func (h *IntegratedQuestHandlers) recordTradeDecision(
 			),
 		}
 		if err := h.tradeMemory.RecordDecision(ctx, record); err != nil {
-			log.Printf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
+			zaplogrus.Warnf("[AI-MEMORY] Failed to record decision %s: %v", tradeID, err)
 		}
 	}
 
@@ -4425,7 +4428,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 		return
 	}
 	if err := h.ensureTradeJournalSchema(); err != nil {
-		log.Printf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
+		zaplogrus.Warnf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
 		return
 	}
 
@@ -4433,7 +4436,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 	strategyID := ScalpingStrategyID(chatID)
 	side := normalizeLifecycleSide(decision.Action)
 	if side == "" {
-		log.Printf("[SCALPING] Skipping legacy trade journal entry %s with unsupported side %q", tradeID, decision.Action)
+		zaplogrus.Warnf("[SCALPING] Skipping legacy trade journal entry %s with unsupported side %q", tradeID, decision.Action)
 		return
 	}
 	entryPrice := decimal.Zero
@@ -4475,7 +4478,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeEntry(
 		costBasis.InexactFloat64(),
 		now,
 	); err != nil {
-		log.Printf("[SCALPING] Failed to persist legacy trade journal entry %s: %v", tradeID, err)
+		zaplogrus.Warnf("[SCALPING] Failed to persist legacy trade journal entry %s: %v", tradeID, err)
 	}
 }
 
@@ -4598,7 +4601,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 		return
 	}
 	if err := h.ensureTradeJournalSchema(); err != nil {
-		log.Printf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
+		zaplogrus.Warnf("[SCALPING] Legacy trade journal schema unavailable: %v", err)
 		return
 	}
 
@@ -4651,7 +4654,7 @@ func (h *IntegratedQuestHandlers) persistLegacyTradeClose(
 		closedAt,
 		closedAt,
 	); err != nil {
-		log.Printf("[SCALPING] Failed to persist legacy trade journal close %s: %v", orderID, err)
+		zaplogrus.Warnf("[SCALPING] Failed to persist legacy trade journal close %s: %v", orderID, err)
 	}
 }
 
@@ -4665,7 +4668,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 
 	closedOrders, err := h.orderExecutor.GetClosedOrders(ctx, exchange, symbol, 20)
 	if err != nil {
-		log.Printf("[SCALPING] Failed to fetch closed orders for feedback (%s %s): %v", exchange, symbol, err)
+		zaplogrus.Warnf("[SCALPING] Failed to fetch closed orders for feedback (%s %s): %v", exchange, symbol, err)
 		return
 	}
 
@@ -4680,7 +4683,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 	if h.lifecycleStore != nil {
 		positions, listErr := h.lifecycleStore.ListManagedOpenPositions(ctx, quest.Metadata["chat_id"], exchange, 200)
 		if listErr != nil {
-			log.Printf("[SCALPING] Failed to load managed open positions for closed-order filter (%s): %v", exchange, listErr)
+			zaplogrus.Warnf("[SCALPING] Failed to load managed open positions for closed-order filter (%s): %v", exchange, listErr)
 		} else {
 			for _, pos := range positions {
 				key := normalizeSymbolForComparison(pos.Symbol) + ":" + normalizeLifecycleSide(pos.Side)
@@ -4700,7 +4703,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 		pnl, ok := decimalFromOrder(order, "totalProfits", "totalProfit", "pnl", "profit", "realizedPnl", "achievedProfits")
 		if !ok {
 			quest.Checkpoint["closed_order_feedback_missing_pnl"] = checkpointInt(quest.Checkpoint["closed_order_feedback_missing_pnl"]) + 1
-			log.Printf("[SCALPING] Skipped closed-order feedback due to missing pnl: order=%s symbol=%s keys=%v",
+			zaplogrus.Warnf("[SCALPING] Skipped closed-order feedback due to missing pnl: order=%s symbol=%s keys=%v",
 				orderID,
 				symbol,
 				sortedOrderKeys(order),
@@ -4716,7 +4719,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			processed[orderID] = true
 			updatedProcessed = true
 			quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"] = checkpointInt(quest.Checkpoint["closed_order_feedback_skipped_zero_pnl"]) + 1
-			log.Printf("[SCALPING] Skipped closed-order feedback as probable entry fill: order=%s symbol=%s side=%s pnl=%s tradeSide=%s reduceOnly=%s",
+			zaplogrus.Warnf("[SCALPING] Skipped closed-order feedback as probable entry fill: order=%s symbol=%s side=%s pnl=%s tradeSide=%s reduceOnly=%s",
 				orderID,
 				symbol,
 				side,
@@ -4789,7 +4792,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				outcome = "loss"
 			}
 			if err := h.tradeMemory.UpdateOutcome(ctx, orderID, outcome, exitPrice.InexactFloat64(), pnl); err != nil {
-				log.Printf("[AI-MEMORY] Failed to update outcome for %s: %v", orderID, err)
+				zaplogrus.Warnf("[AI-MEMORY] Failed to update outcome for %s: %v", orderID, err)
 			}
 		}
 
@@ -4819,7 +4822,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 				Source:      "exchange_reconciliation",
 				ClosedAt:    closedAt,
 			}); err != nil {
-				log.Printf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
+				zaplogrus.Warnf("[SCALPING] Failed to persist closed-order lifecycle for %s: %v", orderID, err)
 			}
 		}
 		if h.telemetryStore != nil {
@@ -4857,7 +4860,7 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			})
 			writeCancel()
 			if err != nil {
-				log.Printf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
+				zaplogrus.Warnf("[TELEMETRY] Failed to update outcome for order %s: %v", orderID, err)
 			}
 		}
 	}
@@ -5198,14 +5201,14 @@ func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, q
 		snapshot.OpenOrders = openOrders.Orders
 		snapshot.OrdersFresh = true
 	} else if err != nil {
-		log.Printf("[SCALPING] Bootstrap open-order sync failed on %s: %v", exchange, err)
+		zaplogrus.Warnf("[SCALPING] Bootstrap open-order sync failed on %s: %v", exchange, err)
 	}
 
 	if positions, err := ccxtSvc.FetchPositions(bootstrapCtx, exchange); err == nil && positions != nil {
 		snapshot.Positions = positions.Positions
 		snapshot.PositionsFresh = true
 	} else if err != nil {
-		log.Printf("[SCALPING] Bootstrap position sync failed on %s: %v", exchange, err)
+		zaplogrus.Warnf("[SCALPING] Bootstrap position sync failed on %s: %v", exchange, err)
 	}
 
 	reconcileSummary, err := h.lifecycleStore.ReconcileExchangeSnapshot(
@@ -5216,7 +5219,7 @@ func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, q
 		"bootstrap_reconciliation",
 	)
 	if err != nil {
-		log.Printf("[SCALPING] Bootstrap lifecycle reconciliation failed on %s: %v", exchange, err)
+		zaplogrus.Warnf("[SCALPING] Bootstrap lifecycle reconciliation failed on %s: %v", exchange, err)
 		quest.Checkpoint["runtime_bootstrap_error"] = err.Error()
 	}
 
@@ -5229,12 +5232,12 @@ func (h *IntegratedQuestHandlers) bootstrapLifecycleState(ctx context.Context, q
 			"startup_drift_repair_exchange_missing",
 		)
 		if repairErr != nil {
-			log.Printf("[SCALPING] Startup drift repair failed on %s: %v", exchange, repairErr)
+			zaplogrus.Warnf("[SCALPING] Startup drift repair failed on %s: %v", exchange, repairErr)
 			quest.Checkpoint["runtime_startup_drift_repair_error"] = repairErr.Error()
 		} else if repaired > 0 {
 			quest.Checkpoint["runtime_startup_drift_repair_closed"] = repaired
 			quest.Checkpoint["state_drift_last_repair_at"] = time.Now().UTC().Format(time.RFC3339)
-			log.Printf("[SCALPING] Startup drift repair closed %d stale lifecycle position(s) on %s", repaired, exchange)
+			zaplogrus.Warnf("[SCALPING] Startup drift repair closed %d stale lifecycle position(s) on %s", repaired, exchange)
 		}
 	}
 
@@ -5760,7 +5763,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 	}
 	now := time.Now().UTC()
 	if h.shouldSkipStalePositionRetry(position, now) {
-		log.Printf(
+		zaplogrus.Infof(
 			"[SCALPING] Skipping stale position retry due to cooldown: %s %s %s",
 			position.Exchange,
 			position.Symbol,
@@ -5820,7 +5823,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 			if isExchangePositionMissingError(err) {
 				h.markStalePositionRetry(position, now)
 				if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
-					log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
+					zaplogrus.Warnf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
 				}
 				return 0, nil
 			}
@@ -5832,7 +5835,7 @@ func (h *IntegratedQuestHandlers) trimManagedPosition(
 		if isExchangePositionMissingError(err) {
 			h.markStalePositionRetry(position, now)
 			if closeErr := h.reconcileMissingManagedPosition(ctx, position, source, err); closeErr != nil {
-				log.Printf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
+				zaplogrus.Warnf("[SCALPING] Failed to close stale lifecycle row for %s: %v", position.PositionID, closeErr)
 			}
 			return 0, nil
 		}
@@ -5917,7 +5920,7 @@ func (h *IntegratedQuestHandlers) reconcileMissingManagedPosition(
 		return err
 	}
 
-	log.Printf(
+	zaplogrus.Infof(
 		"[SCALPING] Reconciled stale managed position %s (%s %s) as closed after exchange reported missing position: %v",
 		position.PositionID,
 		position.Exchange,

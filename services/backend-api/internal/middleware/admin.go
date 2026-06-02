@@ -5,13 +5,14 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 // Package middleware provides HTTP middleware components for authentication,
@@ -27,7 +28,7 @@ func generateSecureKey(length int) string {
 	bytes := make([]byte, length/2)
 	if _, err := rand.Read(bytes); err != nil {
 		// Fallback to a less secure but functional key in edge cases
-		log.Printf("WARNING: Failed to generate secure random key: %v", err)
+		zaplogrus.WithError(err).Warn("Failed to generate secure random key")
 		hostname := os.Getenv("HOSTNAME")
 		if hostname == "" {
 			hostname = "unknown-host"
@@ -93,7 +94,7 @@ func getAdminAPIKeyFromConfig() string {
 	return ""
 }
 
-func NewAdminMiddleware() *AdminMiddleware {
+func NewAdminMiddleware() (*AdminMiddleware, error) {
 	// Prefer explicit environment override first for tests/ops, then config.json fallback.
 	apiKey := strings.TrimSpace(os.Getenv("ADMIN_API_KEY"))
 	if apiKey == "" {
@@ -103,34 +104,43 @@ func NewAdminMiddleware() *AdminMiddleware {
 	// Handle missing API key based on environment
 	if apiKey == "" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY must be set in config.json or environment variable in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY must be set in config.json or environment variable in production")
 		}
 		// Generate temporary key for non-production environments
 		apiKey = generateSecureKey(32)
-		log.Println("INFO: Generated temporary admin key for non-production environment")
+		zaplogrus.Info("Generated temporary admin key for non-production environment")
 	}
 
 	// Prevent use of default/example keys in any environment
 	// #nosec G101 -- these are explicit denylisted example values, not embedded credentials
 	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY cannot use default/example values in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY cannot use default/example values in production")
 		}
-		log.Printf("WARNING: Using example ADMIN_API_KEY in non-production environment")
+		zaplogrus.Warn("Using example ADMIN_API_KEY in non-production environment")
 	}
 
 	// Ensure minimum security requirements
 	if len(apiKey) < 32 {
 		if isProductionEnvironment() {
-			log.Fatal("ADMIN_API_KEY must be at least 32 characters long for security in production")
+			return nil, fmt.Errorf("ADMIN_API_KEY must be at least 32 characters long for security in production")
 		}
 		// Pad short keys in non-production
-		log.Printf("WARNING: ADMIN_API_KEY is shorter than 32 characters in non-production environment")
+		zaplogrus.Warn("ADMIN_API_KEY is shorter than 32 characters in non-production environment")
 	}
 
 	return &AdminMiddleware{
 		apiKey: apiKey,
+	}, nil
+}
+
+// MustNewAdminMiddleware is like NewAdminMiddleware but panics on error.
+func MustNewAdminMiddleware() *AdminMiddleware {
+	am, err := NewAdminMiddleware()
+	if err != nil {
+		panic(err)
 	}
+	return am
 }
 
 // RequireAdminAuth middleware validates admin API keys.
@@ -155,7 +165,7 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 					return
 				}
 				// Log invalid Bearer token (without exposing actual keys)
-				log.Printf("WARN: Admin auth failed for %s - invalid Bearer token", requestPath)
+				zaplogrus.Warnf("Admin auth failed for %s - invalid Bearer token", requestPath)
 			}
 		}
 
@@ -169,9 +179,9 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 
 		// Log authentication failure with helpful debugging info
 		if apiKeyHeader == "" {
-			log.Printf("WARN: Admin auth failed for %s - no X-API-Key header provided", requestPath)
+			zaplogrus.Warnf("Admin auth failed for %s - no X-API-Key header provided", requestPath)
 		} else {
-			log.Printf("WARN: Admin auth failed for %s - X-API-Key mismatch", requestPath)
+			zaplogrus.Warnf("Admin auth failed for %s - X-API-Key mismatch", requestPath)
 		}
 
 		// Query parameter authentication removed for security reasons

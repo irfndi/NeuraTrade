@@ -2,9 +2,13 @@ package services
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMaxDrawdownConfig_Defaults(t *testing.T) {
@@ -317,4 +321,179 @@ func TestMaxDrawdownHalt_GetStatusSummary(t *testing.T) {
 	if !ok || total != 2 {
 		t.Errorf("expected 2 total accounts, got %v", summary["total_accounts"])
 	}
+}
+
+func TestMaxDrawdownHalt_DB_InitSchema(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+
+	require.NoError(t, halt.InitSchema(ctx))
+}
+
+func TestMaxDrawdownHalt_DB_CheckDrawdownPersists(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-persist.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+
+	state, err := halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(1000))
+	require.NoError(t, err)
+	require.NotNil(t, state)
+
+	// Create a new instance and load states to verify persistence
+	halt2 := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	require.NoError(t, halt2.LoadStates(ctx))
+
+	loaded, exists := halt2.GetState("chat-1")
+	require.True(t, exists)
+	assert.True(t, loaded.PeakValue.Equal(decimal.NewFromInt(1000)))
+	assert.True(t, loaded.CurrentValue.Equal(decimal.NewFromInt(1000)))
+	assert.Equal(t, DrawdownStatusNormal, loaded.Status)
+}
+
+func TestMaxDrawdownHalt_DB_ForceHaltPersists(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-force.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+
+	require.NoError(t, halt.ForceHalt(ctx, "chat-1", "manual"))
+
+	halt2 := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	require.NoError(t, halt2.LoadStates(ctx))
+
+	assert.True(t, halt2.IsTradingHalted("chat-1"))
+	loaded, exists := halt2.GetState("chat-1")
+	require.True(t, exists)
+	assert.Equal(t, DrawdownStatusHalted, loaded.Status)
+	assert.Equal(t, 1, loaded.HaltCount)
+}
+
+func TestMaxDrawdownHalt_DB_ResumeTradingPersists(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-resume.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+
+	_, _ = halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(800))
+	require.True(t, halt.IsTradingHalted("chat-1"))
+
+	require.NoError(t, halt.ResumeTrading(ctx, "chat-1"))
+
+	halt2 := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	require.NoError(t, halt2.LoadStates(ctx))
+
+	assert.False(t, halt2.IsTradingHalted("chat-1"))
+	loaded, exists := halt2.GetState("chat-1")
+	require.True(t, exists)
+	assert.Equal(t, DrawdownStatusNormal, loaded.Status)
+	require.NotNil(t, loaded.RecoveredAt)
+}
+
+func TestMaxDrawdownHalt_DB_ResetPeakPersists(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-reset.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+
+	_, _ = halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(1000))
+	require.NoError(t, halt.ResetPeak(ctx, "chat-1", decimal.NewFromInt(900)))
+
+	halt2 := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	require.NoError(t, halt2.LoadStates(ctx))
+
+	loaded, exists := halt2.GetState("chat-1")
+	require.True(t, exists)
+	assert.True(t, loaded.PeakValue.Equal(decimal.NewFromInt(900)))
+	assert.True(t, loaded.CurrentValue.Equal(decimal.NewFromInt(900)))
+	assert.True(t, loaded.CurrentDrawdown.IsZero())
+}
+
+func TestMaxDrawdownHalt_DB_ForceResumeAllPersists(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-resume-all.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+
+	_, _ = halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(800))
+	_, _ = halt.CheckDrawdown(ctx, "chat-2", decimal.NewFromInt(1000))
+	_, _ = halt.CheckDrawdown(ctx, "chat-2", decimal.NewFromInt(700))
+
+	require.True(t, halt.IsTradingHalted("chat-1"))
+	require.True(t, halt.IsTradingHalted("chat-2"))
+
+	resumed := halt.ForceResumeAll(ctx)
+	require.Len(t, resumed, 2)
+
+	halt2 := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	require.NoError(t, halt2.LoadStates(ctx))
+
+	assert.False(t, halt2.IsTradingHalted("chat-1"))
+	assert.False(t, halt2.IsTradingHalted("chat-2"))
+}
+
+func TestMaxDrawdownHalt_DB_LoadStatesEmpty(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "drawdown-halt-empty.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = sqliteDB.Close()
+	})
+
+	halt := NewMaxDrawdownHalt(sqliteDB, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+	require.NoError(t, halt.InitSchema(ctx))
+	require.NoError(t, halt.LoadStates(ctx))
+
+	assert.False(t, halt.IsTradingHalted("any-chat"))
+}
+
+func TestMaxDrawdownHalt_DB_NilDatabase(t *testing.T) {
+	halt := NewMaxDrawdownHalt(nil, DefaultMaxDrawdownConfig())
+	ctx := context.Background()
+
+	// InitSchema should return error when db is nil
+	err := halt.InitSchema(ctx)
+	require.Error(t, err)
+
+	// LoadStates should return nil (no-op) when db is nil
+	err = halt.LoadStates(ctx)
+	require.NoError(t, err)
+
+	// Operations should work without DB
+	state, err := halt.CheckDrawdown(ctx, "chat-1", decimal.NewFromInt(1000))
+	require.NoError(t, err)
+	require.NotNil(t, state)
 }

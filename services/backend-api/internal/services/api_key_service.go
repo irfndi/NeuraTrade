@@ -26,8 +26,8 @@ type APIKeyService struct {
 }
 
 func NewAPIKeyService(db database.DBPool, encryptionKey string) (*APIKeyService, error) {
-	if encryptionKey == "" {
-		return &APIKeyService{db: db, encryptor: nil}, nil
+	if strings.TrimSpace(encryptionKey) == "" {
+		return nil, ErrEncryptionKeyNotConfigured
 	}
 
 	key, err := utils.ParseKey(encryptionKey)
@@ -65,27 +65,36 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, userID string, req *mo
 		return nil, fmt.Errorf("failed to encrypt API secret: %w", err)
 	}
 
+	encryptedPassphrase := ""
+	if strings.TrimSpace(req.Passphrase) != "" {
+		encryptedPassphrase, err = s.encryptor.EncryptString(req.Passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encrypt API passphrase: %w", err)
+		}
+	}
+
 	permissions := req.Permissions
 	if len(permissions) == 0 {
 		permissions = []string{"read"}
 	}
 
 	apiKey := &models.ExchangeAPIKey{
-		ID:              uuid.New().String(),
-		UserID:          userID,
-		ExchangeName:    req.ExchangeName,
-		KeyName:         req.KeyName,
-		EncryptedKey:    encryptedKey,
-		EncryptedSecret: encryptedSecret,
-		Permissions:     permissions,
-		IsActive:        true,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:                  uuid.New().String(),
+		UserID:              userID,
+		ExchangeName:        req.ExchangeName,
+		KeyName:             req.KeyName,
+		EncryptedKey:        encryptedKey,
+		EncryptedSecret:     encryptedSecret,
+		EncryptedPassphrase: encryptedPassphrase,
+		Permissions:         permissions,
+		IsActive:            true,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
 	}
 
 	query := `
-		INSERT INTO exchange_api_keys (id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, permissions, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO exchange_api_keys (id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, encrypted_passphrase, permissions, is_active, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id`
 
 	row := s.db.QueryRow(ctx, query,
@@ -95,6 +104,7 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, userID string, req *mo
 		apiKey.KeyName,
 		apiKey.EncryptedKey,
 		apiKey.EncryptedSecret,
+		apiKey.EncryptedPassphrase,
 		apiKey.Permissions,
 		apiKey.IsActive,
 		apiKey.CreatedAt,
@@ -114,7 +124,7 @@ func (s *APIKeyService) CreateAPIKey(ctx context.Context, userID string, req *mo
 
 func (s *APIKeyService) GetAPIKey(ctx context.Context, userID, keyID string) (*models.ExchangeAPIKey, error) {
 	query := `
-		SELECT id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, permissions, is_active, last_used_at, expires_at, created_at, updated_at
+		SELECT id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, COALESCE(encrypted_passphrase, ''), permissions, is_active, last_used_at, expires_at, created_at, updated_at
 		FROM exchange_api_keys
 		WHERE id = $1 AND user_id = $2`
 
@@ -130,6 +140,7 @@ func (s *APIKeyService) GetAPIKey(ctx context.Context, userID, keyID string) (*m
 		&apiKey.KeyName,
 		&apiKey.EncryptedKey,
 		&apiKey.EncryptedSecret,
+		&apiKey.EncryptedPassphrase,
 		&apiKey.Permissions,
 		&apiKey.IsActive,
 		&lastUsedAt,
@@ -226,6 +237,49 @@ func (s *APIKeyService) DecryptAPIKey(ctx context.Context, userID, keyID string)
 	return decryptedKey, decryptedSecret, nil
 }
 
+func (s *APIKeyService) GetExchangeKeysByExchange(ctx context.Context, userID, exchangeName string) (apiKey, apiSecret, passphrase string, err error) {
+	if s.encryptor == nil {
+		return "", "", "", ErrEncryptionKeyNotConfigured
+	}
+
+	query := `
+		SELECT encrypted_key, encrypted_secret, COALESCE(encrypted_passphrase, '')
+		FROM exchange_api_keys
+		WHERE user_id = $1
+		  AND LOWER(exchange_name) = LOWER($2)
+		  AND is_active = true
+		ORDER BY created_at DESC
+		LIMIT 1`
+
+	row := s.db.QueryRow(ctx, query, userID, exchangeName)
+
+	var encKey, encSecret, encPassphrase string
+	err = row.Scan(&encKey, &encSecret, &encPassphrase)
+	if err != nil {
+		return "", "", "", fmt.Errorf("no active API key found for exchange %s: %w", exchangeName, err)
+	}
+
+	decryptedKey, err := s.encryptor.DecryptString(encKey)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to decrypt API key: %w", err)
+	}
+
+	decryptedSecret, err := s.encryptor.DecryptString(encSecret)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to decrypt API secret: %w", err)
+	}
+
+	decryptedPassphrase := ""
+	if strings.TrimSpace(encPassphrase) != "" {
+		decryptedPassphrase, err = s.encryptor.DecryptString(encPassphrase)
+		if err != nil {
+			return "", "", "", fmt.Errorf("failed to decrypt passphrase: %w", err)
+		}
+	}
+
+	return decryptedKey, decryptedSecret, decryptedPassphrase, nil
+}
+
 func (s *APIKeyService) DeleteAPIKey(ctx context.Context, userID, keyID string) error {
 	query := `DELETE FROM exchange_api_keys WHERE id = $1 AND user_id = $2`
 	result, err := s.db.Exec(ctx, query, keyID, userID)
@@ -269,7 +323,6 @@ func isDuplicateKeyError(err error) bool {
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return true
 	}
-	// SQLite unique constraint violation
 	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed:") {
 		return true
 	}

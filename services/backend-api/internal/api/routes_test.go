@@ -14,7 +14,6 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
-	"github.com/pashagolub/pgxmock/v4"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,65 +28,13 @@ func (m mockRouteDB) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// setupMockDB creates a mock database pool with all expected initialization queries
+// setupMockDB creates a real SQLite in-memory database for route tests.
+// Using a real database avoids fragile pgxmock expectations for schema init SQL.
 func setupMockDB(t *testing.T) mockRouteDB {
 	t.Helper()
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err, "Failed to create mock pool")
-
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-
-	// Lifecycle store initialization
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_orders").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS trading_positions").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS realized_pnl_journal").
-		WillReturnResult(pgxmock.NewResult("CREATE TABLE", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_position_id").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_orders_chat_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_symbol_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_trading_positions_chat_status").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_chat_closed").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS idx_realized_pnl_journal_symbol_closed").
-		WillReturnResult(pgxmock.NewResult("CREATE INDEX", 0))
-
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN chat_id TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN market_type TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN filled_amount NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN source TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_orders ADD COLUMN closed_at TIMESTAMP").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN chat_id TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN market_type TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN close_price NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN realized_pnl NUMERIC").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN source TEXT").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-	mock.ExpectExec("ALTER TABLE trading_positions ADD COLUMN closed_at TIMESTAMP").
-		WillReturnResult(pgxmock.NewResult("ALTER TABLE", 0))
-
-	return mockRouteDB{DBPool: database.NewMockDBPool(mock)}
+	db, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err, "Failed to create SQLite database")
+	return mockRouteDB{DBPool: db}
 }
 
 // Helper functions for environment variable management with proper error handling
@@ -385,7 +332,7 @@ func TestSetupRoutes_PanicHandling(t *testing.T) {
 	assert.NotNil(t, router)
 
 	assert.Panics(t, func() {
-		SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		_, _ = SetupRoutes(router, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should panic with nil dependencies")
 }
 
@@ -426,10 +373,10 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 		BotToken: "test-token",
 	}
 
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
 	assert.NotPanics(t, func() {
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should handle minimal dependencies gracefully")
 
 	// Verify routes were registered
@@ -444,6 +391,7 @@ func TestSetupRoutes_RouteRegistration(t *testing.T) {
 
 	// Check for essential routes
 	assert.Contains(t, routePaths, "/health", "Health endpoint should be registered")
+	assert.Contains(t, routePaths, "/metrics", "Prometheus metrics endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/market/prices", "Market prices endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/exchanges/config", "Exchanges config endpoint should be registered")
 	assert.Contains(t, routePaths, "/api/v1/arbitrage/opportunities", "Arbitrage opportunities endpoint should be registered")
@@ -485,8 +433,8 @@ func TestSetupRoutes_RouteGroups(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -550,8 +498,8 @@ func TestSetupRoutes_HttpMethods(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	// Get all routes
 	routes := router.Routes()
@@ -618,8 +566,8 @@ func TestSetupRoutes_Middleware(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	// Test that router has middleware configured
 	// Gin router should have middleware registered
@@ -674,8 +622,8 @@ func TestSetupRoutes_MissingAdminKey(t *testing.T) {
 				Addr: "localhost:6379",
 			}),
 		}
-		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should handle missing admin key gracefully")
 }
 
@@ -718,8 +666,8 @@ func TestSetupRoutes_MissingTelegramConfig(t *testing.T) {
 				Addr: "localhost:6379",
 			}),
 		}
-		mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-		SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+		mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+		_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 	}, "SetupRoutes should not panic when telegram config is missing")
 
 	// Verify routes were still registered
@@ -756,8 +704,8 @@ func TestSetupRoutes_AIUserRoutesRequireAuth(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ai/status/user-123", nil)
 	rec := httptest.NewRecorder()
@@ -796,8 +744,8 @@ func TestSetupRoutes_TelegramInternalRequiresAdminAuth(t *testing.T) {
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/telegram/internal/quests", nil)
 	rec := httptest.NewRecorder()
@@ -836,8 +784,8 @@ func TestSetupRoutes_TelegramLegacyInternalAliasesRequireAdminAuth(t *testing.T)
 			Addr: "localhost:6379",
 		}),
 	}
-	mockAuthMiddleware := middleware.NewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
-	SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil)
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	_, _ = SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil)
 
 	legacyPaths := []struct {
 		method string
@@ -953,6 +901,10 @@ func TestProviderBaseURL(t *testing.T) {
 }
 
 func TestResolveProviderNodeUsesCentralProviderEnvNames(t *testing.T) {
+	// Prevent external env vars (e.g., ANTHROPIC_MODEL set by the runtime)
+	// from leaking into test assertions for providers we don't explicitly configure.
+	t.Setenv("ANTHROPIC_MODEL", "")
+
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_API_KEY", "key")
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_BASE_URL", "https://override.example/v1")
 	t.Setenv("NEURATRADE_AI_PROVIDER_ZAI_CODING_PLAN_MODEL", "model-override")
@@ -988,4 +940,180 @@ func TestProviderRequiresAPIKeyUsesProviderDefaults(t *testing.T) {
 	assert.False(t, providerRequiresAPIKey("mlx"))
 	assert.True(t, providerRequiresAPIKey("deepseek"))
 	assert.True(t, providerRequiresAPIKey("unknown-provider"))
+}
+
+func TestHasConnectedExchangeWallet_NilDBReturnsFalse(t *testing.T) {
+	assert.False(t, hasConnectedExchangeWallet(nil, "chat-1", "bitget"))
+}
+
+func TestHasConnectedExchangeWallet_EmptyChatIDReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "", "bitget"))
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "  ", "bitget"))
+}
+
+func TestHasConnectedExchangeWallet_EmptyProviderReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "chat-1", ""))
+	assert.False(t, hasConnectedExchangeWallet(mock.DBPool.(*database.SQLiteDB).DB, "chat-1", "  "))
+}
+
+func TestHasConnectedExchangeWallet_NotConnectedRowReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'pending', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"),
+		"pending status must not be treated as connected")
+}
+
+func TestHasConnectedExchangeWallet_ConnectedRowReturnsTrue(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'connected', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.True(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"))
+	assert.True(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "BITGET"),
+		"provider match should be case-insensitive")
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "binance"),
+		"different provider must not match")
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-2", "bitget"),
+		"different chat_id must not match")
+}
+
+func TestHasConnectedExchangeWallet_DisconnectedRowReturnsFalse(t *testing.T) {
+	mock := setupMockDB(t)
+	sqlDB := mock.DBPool.(*database.SQLiteDB).DB
+	ctx := context.Background()
+	_, err := sqlDB.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS telegram_operator_wallets (
+			wallet_id TEXT PRIMARY KEY,
+			chat_id TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			wallet_type TEXT NOT NULL,
+			wallet_address TEXT NOT NULL,
+			account_label TEXT,
+			status TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			UNIQUE(chat_id, provider, wallet_address)
+		)`)
+	require.NoError(t, err)
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO telegram_operator_wallets (wallet_id, chat_id, provider, wallet_type, wallet_address, status, created_at, updated_at)
+		VALUES (?, ?, 'bitget', 'cex', 'key-1', 'disconnected', ?, ?)
+	`, "w-1", "chat-1", time.Now().UTC(), time.Now().UTC())
+	require.NoError(t, err)
+
+	assert.False(t, hasConnectedExchangeWallet(sqlDB, "chat-1", "bitget"),
+		"disconnected status must not be treated as connected")
+}
+
+func TestSetupRoutes_CORSAllowedOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	defer restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{Addr: "localhost:6379"}),
+	}
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	securityConfig := &config.SecurityConfig{
+		CORSAllowedOrigins: []string{"https://app.example.com"},
+	}
+
+	_, err := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, securityConfig, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code, "preflight for allowed origin should be 204")
+	assert.Equal(t, "https://app.example.com", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestSetupRoutes_CORSDisallowedOrigin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldAdminKey, adminKeyExists := os.LookupEnv("ADMIN_API_KEY")
+	defer restoreEnv(t, "ADMIN_API_KEY", oldAdminKey, adminKeyExists)
+	mustSetEnv(t, "ADMIN_API_KEY", "test-admin-key-that-is-at-least-32-chars")
+
+	router := gin.New()
+
+	mockCCXT := &testmocks.MockCCXTService{}
+	mockCCXT.On("GetServiceURL").Return("test-url")
+	mockCCXT.On("GetSupportedExchanges").Return([]string{"binance"})
+
+	mockDB := setupMockDB(t)
+	mockRedis := &database.RedisClient{
+		Client: redis.NewClient(&redis.Options{Addr: "localhost:6379"}),
+	}
+	mockTelegramConfig := &config.TelegramConfig{BotToken: "test-token"}
+	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
+	securityConfig := &config.SecurityConfig{
+		CORSAllowedOrigins: []string{"https://app.example.com"},
+	}
+
+	_, err := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, nil, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, securityConfig, nil, nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "https://evil.example.org")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"),
+		"disallowed origin must not receive Access-Control-Allow-Origin header")
 }

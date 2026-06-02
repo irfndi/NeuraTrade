@@ -94,13 +94,14 @@ func (s *TelegramE2ETestSuite) SetupSuite() {
 	}
 
 	// Create required middlewares
-	authMiddleware := middleware.NewAuthMiddleware(jwtSecret)
+	authMiddleware := middleware.MustNewAuthMiddleware(jwtSecret)
 	mockCCXT := &testmocks.MockCCXTService{}
 	mockCCXT.On("GetServiceURL").Return("http://ccxt-service:3001")
 	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)
 
 	// Setup routes
-	api.SetupRoutes(s.router, s.db, s.redisClient, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil)
+	_, err = api.SetupRoutes(s.router, s.db, s.redisClient, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil, nil, nil, nil)
+	require.NoError(s.T(), err)
 
 	// Create test user
 	s.testChatID = fmt.Sprintf("e2e_test_%d", time.Now().UnixNano())

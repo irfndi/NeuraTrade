@@ -8,9 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/autonomous"
 )
@@ -241,7 +242,7 @@ func (s *AutonomousRolloutStore) GetRollbackHistory(ctx context.Context, strateg
 	redactedID := redactStrategyID(strategyID)
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			log.Printf("autonomous rollout store: failed to close rollback rows for strategy %s: %v", redactedID, closeErr)
+			zaplogrus.Warnf("autonomous rollout store: failed to close rollback rows for strategy %s: %v", redactedID, closeErr)
 		}
 	}()
 

@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/shopspring/decimal"
@@ -200,7 +201,7 @@ func (e *scalpingExchangeConnector) IsConnected(ctx context.Context, exchange st
 }
 
 func (e *scalpingExchangeConnector) CancelAllOrders(ctx context.Context, strategyID, exchange string) error {
-	log.Printf(
+	zaplogrus.Infof(
 		"[AUTONOMY] rollback cancel-all-orders is not wired for strategy=%s exchange=%s; continuing best-effort rollback",
 		strings.TrimSpace(strategyID),
 		strings.TrimSpace(exchange),
@@ -209,7 +210,7 @@ func (e *scalpingExchangeConnector) CancelAllOrders(ctx context.Context, strateg
 }
 
 func (e *scalpingExchangeConnector) FlattenPositions(ctx context.Context, strategyID, exchange string) error {
-	log.Printf(
+	zaplogrus.Infof(
 		"[AUTONOMY] rollback flatten-positions is not wired for strategy=%s exchange=%s; continuing best-effort rollback",
 		strings.TrimSpace(strategyID),
 		strings.TrimSpace(exchange),

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 const learningDataDirEnv = "NEURATRADE_AI_LEARNING_DATA_DIR"
@@ -44,7 +45,7 @@ type OptimalStrategy struct {
 func NewInMemoryLearningSystem() *InMemoryLearningSystem {
 	dataDir := resolveLearningDataDir()
 	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		log.Printf("Failed to create AI learning data directory: %v", err)
+		zaplogrus.Warnf("Failed to create AI learning data directory: %v", err)
 	}
 
 	return &InMemoryLearningSystem{
@@ -64,7 +65,7 @@ func resolveLearningDataDir() string {
 	}
 	resolved, ok := sanitizeLearningDataDir(configured)
 	if !ok {
-		log.Printf("Ignoring unsafe AI learning data directory override: %q", configured)
+		zaplogrus.Infof("Ignoring unsafe AI learning data directory override: %q", configured)
 		return defaultDir
 	}
 	return resolved

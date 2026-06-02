@@ -1,8 +1,9 @@
 package services
 
 import (
-	"log"
 	"math"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 func calculateMeanFloat64(values []float64) float64 {
@@ -118,7 +119,7 @@ func garch11Forecast(returns []float64, horizon int, omega float64, alpha float6
 	// GARCH(1,1) stationarity constraint: alpha + beta < 1
 	// If violated, use safe defaults and log warning
 	if alpha+beta >= 1 {
-		log.Printf("WARNING: GARCH parameters violate stationarity (alpha=%.4f + beta=%.4f = %.4f >= 1). Using safe defaults (alpha=0.1, beta=0.8)", alpha, beta, alpha+beta)
+		zaplogrus.Warnf("WARNING: GARCH parameters violate stationarity (alpha=%.4f + beta=%.4f = %.4f >= 1). Using safe defaults (alpha=0.1, beta=0.8)", alpha, beta, alpha+beta)
 		alpha = 0.1
 		beta = 0.8
 	}

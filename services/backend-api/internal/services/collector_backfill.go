@@ -586,7 +586,8 @@ func (c *CollectorService) generateHistoricalDataPoints(ctx context.Context, exc
 		err := c.errorRecoveryManager.ExecuteWithRetry(ctx, "database_operation", func() error {
 			_, execErr := c.db.Exec(ctx,
 				`INSERT INTO market_data (exchange_id, trading_pair_id, last_price, volume_24h, timestamp, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?)`,
+				 VALUES (?, ?, ?, ?, ?, ?)
+				 ON CONFLICT (exchange_id, trading_pair_id, timestamp) DO NOTHING`,
 				exchangeDBID, tradingPairID, candle.Close, candle.Volume, candleTime, candleTime)
 			return execErr
 		})

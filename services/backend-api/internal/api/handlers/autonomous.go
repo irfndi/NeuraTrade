@@ -3,18 +3,21 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/redis/go-redis/v9"
 )
 
 // AutonomousHandler handles autonomous mode endpoints
@@ -26,13 +29,18 @@ type AutonomousHandler struct {
 	reconciler          *services.ExchangePositionReconciler
 	lifecycleStore      *services.TradingLifecycleStore
 	telemetryStore      *services.ScalpingTelemetryStore
+	dbPool              database.DBPool
+	redisClient         *redis.Client
+	exchangeLiquidator  ExchangeLiquidator
 }
 
 // NewAutonomousHandler creates a new autonomous handler
 func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string) *AutonomousHandler {
+	rc := NewReadinessChecker()
+	rc.SetPortfolioSafety(portfolioSafety)
 	return &AutonomousHandler{
 		questEngine:         questEngine,
-		readiness:           NewReadinessChecker(),
+		readiness:           rc,
 		portfolioSafety:     portfolioSafety,
 		configuredExchanges: exchanges,
 	}
@@ -40,12 +48,30 @@ func NewAutonomousHandler(questEngine *services.QuestEngine, portfolioSafety *se
 
 // NewAutonomousHandlerWithReconciler creates a new autonomous handler with reconciler
 func NewAutonomousHandlerWithReconciler(questEngine *services.QuestEngine, portfolioSafety *services.PortfolioSafetyService, exchanges []string, reconciler *services.ExchangePositionReconciler) *AutonomousHandler {
+	rc := NewReadinessChecker()
+	rc.SetPortfolioSafety(portfolioSafety)
 	return &AutonomousHandler{
 		questEngine:         questEngine,
-		readiness:           NewReadinessChecker(),
+		readiness:           rc,
 		portfolioSafety:     portfolioSafety,
 		configuredExchanges: exchanges,
 		reconciler:          reconciler,
+	}
+}
+
+// SetDBPool wires the database pool for direct liquidation and readiness checks.
+func (h *AutonomousHandler) SetDBPool(dbPool database.DBPool) {
+	h.dbPool = dbPool
+	if h.readiness != nil {
+		h.readiness.SetDBPool(dbPool)
+	}
+}
+
+// SetRedisClient wires the Redis client for readiness checks.
+func (h *AutonomousHandler) SetRedisClient(client *redis.Client) {
+	h.redisClient = client
+	if h.readiness != nil {
+		h.readiness.SetRedisClient(client)
 	}
 }
 
@@ -55,6 +81,10 @@ func (h *AutonomousHandler) SetLifecycleStore(store *services.TradingLifecycleSt
 
 func (h *AutonomousHandler) SetTelemetryStore(store *services.ScalpingTelemetryStore) {
 	h.telemetryStore = store
+}
+
+func (h *AutonomousHandler) SetExchangeLiquidator(l ExchangeLiquidator) {
+	h.exchangeLiquidator = l
 }
 
 // BeginRequest represents the request body for /begin
@@ -211,6 +241,7 @@ type WalletInfo struct {
 	Type          string `json:"type"`
 	Provider      string `json:"provider"`
 	AddressMasked string `json:"address_masked"`
+	Label         string `json:"label,omitempty"`
 	Status        string `json:"status"`
 	ConnectedAt   string `json:"connected_at,omitempty"`
 }
@@ -1064,11 +1095,71 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual liquidation logic
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, LiquidationResponse{
+			Ok:      false,
+			Message: "Database pool not wired into autonomous handler; cannot persist liquidation",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	row := h.dbPool.QueryRow(ctx, `
+		SELECT position_id, order_id, exchange, symbol
+		FROM trading_positions
+		WHERE status = 'OPEN' AND LOWER(symbol) = LOWER(?)
+		ORDER BY opened_at ASC
+		LIMIT 1
+	`, req.Symbol)
+
+	var positionID, orderID, exchange, symbol string
+	if err := row.Scan(&positionID, &orderID, &exchange, &symbol); err != nil {
+		if isNoRowsError(err) {
+			c.JSON(http.StatusOK, LiquidationResponse{
+				Ok:              true,
+				Message:         "No open position for symbol " + req.Symbol,
+				LiquidatedCount: 0,
+				RequestID:       generateRequestID(),
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to look up position: %v", err)})
+		return
+	}
+
+	if h.exchangeLiquidator != nil {
+		if err := h.exchangeLiquidator.ClosePosition(ctx, exchange, orderID, positionID, symbol); err != nil {
+			zaplogrus.Errorf("AutonomousHandler.Liquidate: exchange close failed for position %s on %s: %v", positionID, exchange, err)
+			c.JSON(http.StatusBadGateway, LiquidationResponse{
+				Ok:      false,
+				Message: fmt.Sprintf("Exchange close failed for %q on %q: %v", symbol, exchange, err),
+			})
+			return
+		}
+	}
+
+	now := time.Now().UTC()
+	if _, err := h.dbPool.Exec(ctx, `
+		UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
+	`, now, positionID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to mark position liquidated: %v", err)})
+		return
+	}
+	if orderID != "" {
+		if _, err := h.dbPool.Exec(ctx, `
+			UPDATE trading_orders SET status = 'CLOSED', updated_at = ? WHERE order_id = ? AND status = 'OPEN'
+		`, now, orderID); err != nil {
+			zaplogrus.Warnf("AutonomousHandler.Liquidate: failed to close order %s for position %s: %v", orderID, positionID, err)
+		}
+	}
+
+	zaplogrus.Infof("AutonomousHandler.Liquidate: position_id=%s symbol=%s marked LIQUIDATED", positionID, req.Symbol)
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
-		Message:         "Liquidation request submitted for " + req.Symbol,
-		LiquidatedCount: 0,
+		Message:         "Position liquidated for " + req.Symbol,
+		LiquidatedCount: 1,
 		RequestID:       generateRequestID(),
 	})
 }
@@ -1083,16 +1174,87 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual liquidation logic
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, LiquidationResponse{
+			Ok:      false,
+			Message: "Database pool not wired into autonomous handler; cannot persist liquidation",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	rows, err := h.dbPool.Query(ctx, `
+		SELECT position_id, order_id, exchange, symbol FROM trading_positions WHERE status = 'OPEN'
+	`)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list open positions: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type pendingRow struct {
+		positionID string
+		orderID    string
+		exchange   string
+		symbol     string
+	}
+	var pending []pendingRow
+	for rows.Next() {
+		var pr pendingRow
+		if err := rows.Scan(&pr.positionID, &pr.orderID, &pr.exchange, &pr.symbol); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan position: " + err.Error()})
+			return
+		}
+		pending = append(pending, pr)
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "position iteration failed: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	liquidated := 0
+	for _, p := range pending {
+		if ctx.Err() != nil {
+			zaplogrus.Errorf("AutonomousHandler.LiquidateAll: context cancelled or timed out: %v", ctx.Err())
+			break
+		}
+		if h.exchangeLiquidator != nil {
+			if err := h.exchangeLiquidator.ClosePosition(ctx, p.exchange, p.orderID, p.positionID, p.symbol); err != nil {
+				zaplogrus.Warnf("AutonomousHandler.LiquidateAll: exchange close failed for position %s on %s: %v", p.positionID, p.exchange, err)
+				continue
+			}
+		}
+		if _, err := h.dbPool.Exec(ctx, `
+			UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
+		`, now, p.positionID); err != nil {
+			zaplogrus.Warnf("AutonomousHandler.LiquidateAll: failed to liquidate position %s: %v", p.positionID, err)
+			continue
+		}
+		if p.orderID != "" {
+			if _, err := h.dbPool.Exec(ctx, `
+				UPDATE trading_orders SET status = 'CLOSED', updated_at = ? WHERE order_id = ? AND status = 'OPEN'
+			`, now, p.orderID); err != nil {
+				zaplogrus.Warnf("AutonomousHandler.LiquidateAll: failed to close order %s: %v", p.orderID, err)
+			}
+		}
+		liquidated++
+	}
+
+	zaplogrus.Infof("AutonomousHandler.LiquidateAll: liquidated %d/%d open positions", liquidated, len(pending))
 	c.JSON(http.StatusOK, LiquidationResponse{
 		Ok:              true,
-		Message:         "Full liquidation request submitted",
-		LiquidatedCount: 0,
+		Message:         fmt.Sprintf("Liquidated %d of %d open positions", liquidated, len(pending)),
+		LiquidatedCount: liquidated,
 		RequestID:       generateRequestID(),
 	})
 }
 
-// ConnectExchange connects an exchange account
+// ConnectExchange verifies an exchange connection for the chat.
+// Actual credentials are added via the exchange_api_keys create endpoint;
+// this handler confirms the link between chat_id and the user's stored keys.
 func (h *AutonomousHandler) ConnectExchange(c *gin.Context) {
 	var req struct {
 		ChatID       string `json:"chat_id" binding:"required"`
@@ -1104,14 +1266,55 @@ func (h *AutonomousHandler) ConnectExchange(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual exchange connection
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot verify exchange connection",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	var count int
+	if err := h.dbPool.QueryRow(ctx,
+		"SELECT COUNT(1) FROM exchange_api_keys WHERE user_id = ? AND exchange_name = ? AND is_active = 1",
+		userID, req.Exchange).Scan(&count); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "count keys: " + err.Error()})
+		return
+	}
+
+	if count == 0 {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok:      false,
+			Message: fmt.Sprintf("No active %s keys for this user. Use the create-key endpoint to add credentials.", req.Exchange),
+		})
+		return
+	}
+
+	label := req.AccountLabel
+	if label == "" {
+		label = req.Exchange
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Exchange connection initiated for " + req.Exchange,
+		Message: fmt.Sprintf("%s connected (%d active key(s), label=%s)", req.Exchange, count, label),
 	})
 }
 
-// ConnectPolymarket connects a Polymarket wallet
+// ConnectPolymarket verifies a Polymarket wallet address is bound to the chat.
 func (h *AutonomousHandler) ConnectPolymarket(c *gin.Context) {
 	var req struct {
 		ChatID        string `json:"chat_id" binding:"required"`
@@ -1122,19 +1325,51 @@ func (h *AutonomousHandler) ConnectPolymarket(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual Polymarket connection
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot record wallet",
+		})
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(req.WalletAddress), "0x") || len(req.WalletAddress) != 42 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet_address must be a 0x-prefixed 42-char EVM address"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	if err := h.upsertWallet(ctx, userID, "polygon", strings.ToLower(req.WalletAddress),
+		"polymarket", "polymarket:"+strings.ToLower(req.WalletAddress)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "record wallet: " + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Polymarket wallet connection initiated",
+		Message: "Polymarket wallet " + strings.ToLower(req.WalletAddress) + " linked",
 	})
 }
 
-// AddWallet adds a watch-only wallet
+// AddWallet adds a watch-only wallet.
 func (h *AutonomousHandler) AddWallet(c *gin.Context) {
 	var req struct {
 		ChatID        string `json:"chat_id" binding:"required"`
 		WalletAddress string `json:"wallet_address" binding:"required"`
+		Chain         string `json:"chain"`
 		WalletType    string `json:"wallet_type"`
+		Label         string `json:"label,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
@@ -1144,15 +1379,49 @@ func (h *AutonomousHandler) AddWallet(c *gin.Context) {
 	if req.WalletType == "" {
 		req.WalletType = "external"
 	}
+	if req.Chain == "" {
+		req.Chain = "evm"
+	}
 
-	// TODO: Implement actual wallet addition
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot add wallet",
+		})
+		return
+	}
+	if !strings.HasPrefix(strings.ToLower(req.WalletAddress), "0x") || len(req.WalletAddress) != 42 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wallet_address must be a 0x-prefixed 42-char EVM address"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id; user must register via /api/v1/auth/register first",
+		})
+		return
+	}
+
+	if err := h.upsertWallet(ctx, userID, strings.ToLower(req.Chain),
+		strings.ToLower(req.WalletAddress), req.WalletType, req.Label); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "add wallet: " + err.Error()})
+		return
+	}
+
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Wallet added successfully",
+		Message: "Wallet " + strings.ToLower(req.WalletAddress) + " added",
 	})
 }
 
-// RemoveWallet removes a wallet
+// RemoveWallet removes a wallet by id or address.
 func (h *AutonomousHandler) RemoveWallet(c *gin.Context) {
 	var req struct {
 		ChatID            string `json:"chat_id" binding:"required"`
@@ -1163,14 +1432,56 @@ func (h *AutonomousHandler) RemoveWallet(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual wallet removal
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletCommandResponse{
+			Ok: false, Message: "Database pool not wired into autonomous handler; cannot remove wallet",
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, req.ChatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No user registered for chat_id",
+		})
+		return
+	}
+
+	var res database.Result
+	if isNumeric(req.WalletIDOrAddress) {
+		res, err = h.dbPool.Exec(ctx,
+			"DELETE FROM wallets WHERE user_id = ? AND id = ?",
+			userID, req.WalletIDOrAddress)
+	} else {
+		res, err = h.dbPool.Exec(ctx,
+			"DELETE FROM wallets WHERE user_id = ? AND LOWER(address) = ?",
+			userID, strings.ToLower(req.WalletIDOrAddress))
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "remove wallet: " + err.Error()})
+		return
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		c.JSON(http.StatusNotFound, WalletCommandResponse{
+			Ok: false, Message: "No wallet matched the given id or address",
+		})
+		return
+	}
 	c.JSON(http.StatusOK, WalletCommandResponse{
 		Ok:      true,
-		Message: "Wallet removed successfully",
+		Message: "Wallet removed",
 	})
 }
 
-// GetWallets returns connected wallets
+// GetWallets returns connected wallets for the chat.
 func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 	chatID := c.Query("chat_id")
 	if chatID == "" {
@@ -1178,10 +1489,120 @@ func (h *AutonomousHandler) GetWallets(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement actual wallet retrieval
-	c.JSON(http.StatusOK, WalletsResponse{
-		Wallets: []WalletInfo{},
-	})
+	if h.dbPool == nil {
+		c.JSON(http.StatusServiceUnavailable, WalletsResponse{Wallets: []WalletInfo{}})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	userID, err := h.resolveUserIDByChatID(ctx, chatID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "lookup user: " + err.Error()})
+		return
+	}
+	if userID == "" {
+		c.JSON(http.StatusOK, WalletsResponse{Wallets: []WalletInfo{}})
+		return
+	}
+
+	rows, err := h.dbPool.Query(ctx,
+		"SELECT id, chain, address, wallet_type, COALESCE(label, ''), created_at FROM wallets WHERE user_id = ? ORDER BY created_at DESC",
+		userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "list wallets: " + err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	out := make([]WalletInfo, 0, 4)
+	for rows.Next() {
+		var (
+			id        int64
+			chain     string
+			address   string
+			wtype     string
+			label     string
+			createdAt string
+		)
+		if err := rows.Scan(&id, &chain, &address, &wtype, &label, &createdAt); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "scan wallet: " + err.Error()})
+			return
+		}
+		out = append(out, WalletInfo{
+			WalletID:      fmt.Sprintf("%d", id),
+			Type:          wtype,
+			Provider:      chain,
+			AddressMasked: maskAddress(address),
+			Label:         label,
+			Status:        "active",
+			ConnectedAt:   createdAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "iterate wallets: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, WalletsResponse{Wallets: out})
+}
+
+func (h *AutonomousHandler) resolveUserIDByChatID(ctx context.Context, chatID string) (string, error) {
+	if h.dbPool == nil {
+		return "", nil
+	}
+	var userID string
+	err := h.dbPool.QueryRow(ctx,
+		"SELECT id FROM users WHERE telegram_chat_id = ?", chatID).Scan(&userID)
+	if err != nil {
+		if isNoRowsError(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return userID, nil
+}
+
+// upsertWallet inserts a wallet row or refreshes its label/type if it already
+// exists. The check-then-insert pattern works regardless of whether the
+// wallets table has a unique (user_id, chain, address) constraint.
+func (h *AutonomousHandler) upsertWallet(ctx context.Context, userID, chain, address, wtype, label string) error {
+	if h.dbPool == nil {
+		return errors.New("db pool not wired")
+	}
+	var existingID int64
+	err := h.dbPool.QueryRow(ctx,
+		"SELECT id FROM wallets WHERE user_id = ? AND chain = ? AND address = ? LIMIT 1",
+		userID, chain, address).Scan(&existingID)
+	if err == nil {
+		_, err = h.dbPool.Exec(ctx,
+			"UPDATE wallets SET wallet_type = ?, label = ? WHERE id = ?",
+			wtype, label, existingID)
+		return err
+	}
+	if !isNoRowsError(err) {
+		return err
+	}
+	_, err = h.dbPool.Exec(ctx,
+		"INSERT INTO wallets (user_id, chain, address, wallet_type, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		userID, chain, address, wtype, label, time.Now().UTC())
+	return err
+}
+
+func isNumeric(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func maskAddress(addr string) string {
+	if len(addr) < 10 {
+		return addr
+	}
+	return addr[:6] + "..." + addr[len(addr)-4:]
 }
 
 // Helper functions
@@ -1227,7 +1648,7 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 	if err == nil {
 		response.OpenOrders = openOrders
 	} else {
-		log.Printf("Failed to count open orders for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed to count open orders for chat %s: %v", chatID, err)
 	}
 
 	if len(response.Positions) > 0 {
@@ -1236,7 +1657,7 @@ func (h *AutonomousHandler) enrichPortfolioWithLifecycle(ctx context.Context, ch
 
 	managed, err := h.lifecycleStore.ListManagedOpenPositions(ctx, chatID, "", 25)
 	if err != nil {
-		log.Printf("Failed to list managed open positions for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed to list managed open positions for chat %s: %v", chatID, err)
 		return false
 	}
 	if len(managed) == 0 {
@@ -1315,7 +1736,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 
 	perf, err := h.lifecycleStore.GetRealizedPerformance(ctx, chatID, "", since)
 	if err != nil {
-		log.Printf("Failed lifecycle performance query for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed lifecycle performance query for chat %s: %v", chatID, err)
 		return PerformanceSummaryResponse{}, false
 	}
 	if perf.Trades == 0 {
@@ -1323,7 +1744,7 @@ func (h *AutonomousHandler) buildLifecyclePerformanceSummary(ctx context.Context
 	}
 	returns, err := h.lifecycleStore.GetNetRealizedReturnSeries(ctx, chatID, "", since)
 	if err != nil {
-		log.Printf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
+		zaplogrus.Warnf("Failed lifecycle return-series query for chat %s: %v", chatID, err)
 		returns = nil
 	}
 	risk := services.ComputeRiskAdjustedMetrics(returns)
@@ -1362,7 +1783,26 @@ func formatDrawdown(value float64, sampleSize int) string {
 }
 
 // ReadinessChecker checks system readiness for autonomous mode
-type ReadinessChecker struct{}
+type ReadinessChecker struct {
+	dbPool          database.DBPool
+	redisClient     *redis.Client
+	portfolioSafety *services.PortfolioSafetyService
+}
+
+// SetDBPool wires the database pool used by checkDatabase.
+func (r *ReadinessChecker) SetDBPool(dbPool database.DBPool) {
+	r.dbPool = dbPool
+}
+
+// SetRedisClient wires the Redis client used by checkRedis.
+func (r *ReadinessChecker) SetRedisClient(client *redis.Client) {
+	r.redisClient = client
+}
+
+// SetPortfolioSafety wires the portfolio safety service used by checkRiskLimits.
+func (r *ReadinessChecker) SetPortfolioSafety(svc *services.PortfolioSafetyService) {
+	r.portfolioSafety = svc
+}
 
 // CheckResult represents the result of a single check
 type CheckResult struct {
@@ -1440,25 +1880,55 @@ func (r *ReadinessChecker) Check(c *gin.Context, chatID string) *ReadinessResult
 }
 
 func (r *ReadinessChecker) checkDatabase(c *gin.Context) *CheckResult {
+	if r.dbPool == nil {
+		return &CheckResult{
+			Status:  "warning",
+			Message: "Database pool not configured for readiness checker (call SetDBPool)",
+		}
+	}
 	start := time.Now()
-	// TODO: Actual database ping
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := r.dbPool.Exec(ctx, "SELECT 1"); err != nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "critical",
+			Message:   fmt.Sprintf("Database ping failed: %v", err),
+			LatencyMs: latency,
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Database connection successful",
+		Message:   "Database ping successful",
 		LatencyMs: latency,
 	}
 }
 
 func (r *ReadinessChecker) checkRedis(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual Redis ping
+	if r.redisClient == nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "Redis client not configured for readiness checker (call SetRedisClient or run with Redis disabled)",
+			LatencyMs: latency,
+		}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	if err := r.redisClient.Ping(ctx).Err(); err != nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   fmt.Sprintf("Redis ping failed (degraded mode OK): %v", err),
+			LatencyMs: latency,
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Redis connection successful",
+		Message:   "Redis ping successful",
 		LatencyMs: latency,
 	}
 }
@@ -1587,21 +2057,21 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 	configHasBinance := false
 	// nolint:gosec // Fixed config path, not user input
 	configPath := os.ExpandEnv("$HOME/.neuratrade/config.json") // Fixed config path, not user input
-	log.Printf("DEBUG: Checking config at %s", configPath)
+	zaplogrus.Infof("DEBUG: Checking config at %s", configPath)
 	// #nosec G304 -- fixed operator config path under $HOME/.neuratrade
 	if content, err := os.ReadFile(configPath); err == nil {
 		var config map[string]interface{}
 		if err := json.Unmarshal(content, &config); err == nil {
-			log.Printf("DEBUG: Config loaded, has ccxt: %v", config["ccxt"] != nil)
+			zaplogrus.Infof("DEBUG: Config loaded, has ccxt: %v", config["ccxt"] != nil)
 			// Check new config structure: ccxt.exchanges.binance.api_key
 			if ccxt, ok := config["ccxt"].(map[string]interface{}); ok {
-				log.Printf("DEBUG: Has ccxt section")
+				zaplogrus.Infof("DEBUG: Has ccxt section")
 				if exchanges, ok := ccxt["exchanges"].(map[string]interface{}); ok {
-					log.Printf("DEBUG: Has exchanges section")
+					zaplogrus.Infof("DEBUG: Has exchanges section")
 					if binance, ok := exchanges["binance"].(map[string]interface{}); ok {
-						log.Printf("DEBUG: Has binance section")
+						zaplogrus.Infof("DEBUG: Has binance section")
 						if apiKey, ok := binance["api_key"].(string); ok && apiKey != "" {
-							log.Printf("DEBUG: Binance API key is configured")
+							zaplogrus.Infof("DEBUG: Binance API key is configured")
 							configHasBinance = true
 						}
 					}
@@ -1670,17 +2140,38 @@ func (r *ReadinessChecker) checkWallets(c *gin.Context, chatID string) *CheckRes
 
 func (r *ReadinessChecker) checkRiskLimits(c *gin.Context) *CheckResult {
 	start := time.Now()
-	// TODO: Actual risk limits check
+	if r.portfolioSafety == nil {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "warning",
+			Message:   "PortfolioSafetyService not wired into readiness checker (call SetPortfolioSafety)",
+			LatencyMs: latency,
+		}
+	}
+	cfg := r.portfolioSafety.GetConfig()
+	if cfg.MaxPositionSizePct <= 0 || cfg.MaxExposurePct <= 0 {
+		latency := time.Since(start).Milliseconds()
+		return &CheckResult{
+			Status:    "critical",
+			Message:   fmt.Sprintf("Risk limits are not configured (max_position_size_pct=%.4f, max_exposure_pct=%.4f)", cfg.MaxPositionSizePct, cfg.MaxExposurePct),
+			LatencyMs: latency,
+			Details: map[string]string{
+				"max_position_size_pct":  fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
+				"max_position_floor_pct": fmt.Sprintf("%.4f", cfg.MaxPositionFloorPct),
+				"max_exposure_pct":       fmt.Sprintf("%.4f", cfg.MaxExposurePct),
+			},
+		}
+	}
 	latency := time.Since(start).Milliseconds()
-
 	return &CheckResult{
 		Status:    "healthy",
-		Message:   "Risk limits configured",
+		Message:   fmt.Sprintf("Risk limits configured (max_position=%.1f%%, max_exposure=%.1f%%)", cfg.MaxPositionSizePct*100, cfg.MaxExposurePct*100),
 		LatencyMs: latency,
 		Details: map[string]string{
-			"max_drawdown":   "5%",
-			"daily_loss_cap": "2%",
-			"position_limit": "10%",
+			"max_position_size_pct":  fmt.Sprintf("%.4f", cfg.MaxPositionSizePct),
+			"max_position_floor_pct": fmt.Sprintf("%.4f", cfg.MaxPositionFloorPct),
+			"max_exposure_pct":       fmt.Sprintf("%.4f", cfg.MaxExposurePct),
+			"default_quote_currency": cfg.DefaultQuoteCurrency,
 		},
 	}
 }

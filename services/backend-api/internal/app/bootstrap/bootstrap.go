@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
+
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"log/slog"
 
@@ -122,15 +123,16 @@ type Application struct {
 
 // Builder builds an Application.
 type Builder struct {
-	config     Config
-	exchanges  ports.ExchangeRegistry
-	state      ports.StateStore
-	notifier   ports.Notifier
-	policy     ports.PolicyEngine
-	killSwitch ports.KillSwitch
-	safeMode   *risk.SafeModeImpl
-	collector  *marketdata.CollectorActor
-	strategy   *strategy.StrategyActor
+	config          Config
+	exchanges       ports.ExchangeRegistry
+	state           ports.StateStore
+	notifier        ports.Notifier
+	policy          ports.PolicyEngine
+	killSwitch      ports.KillSwitch
+	killSwitchStore risk.KillSwitchStore
+	safeMode        *risk.SafeModeImpl
+	collector       *marketdata.CollectorActor
+	strategy        *strategy.StrategyActor
 }
 
 // NewBuilder creates a new Builder.
@@ -176,6 +178,14 @@ func (b *Builder) WithKillSwitch(ks ports.KillSwitch) *Builder {
 	return b
 }
 
+// WithKillSwitchStore installs a persistence backend on the kill switch.
+// When the kill switch is a *risk.KillSwitchImpl, Engage/Disengage writes
+// are mirrored to the store and Reconcile() loads previous state on startup.
+func (b *Builder) WithKillSwitchStore(store risk.KillSwitchStore) *Builder {
+	b.killSwitchStore = store
+	return b
+}
+
 // WithSafeMode sets the safe mode controller.
 func (b *Builder) WithSafeMode(sm *risk.SafeModeImpl) *Builder {
 	b.safeMode = sm
@@ -195,6 +205,12 @@ func (b *Builder) WithStrategy(actor *strategy.StrategyActor) *Builder {
 
 // Build builds the Application.
 func (b *Builder) Build() (*Application, error) {
+	return b.BuildWithContext(context.Background())
+}
+
+// BuildWithContext builds the application with an explicit context for
+// startup-reconciliation calls (e.g. kill switch state restore).
+func (b *Builder) BuildWithContext(ctx context.Context) (*Application, error) {
 	app := &Application{
 		Config:      b.config,
 		Supervisor:  supervisor.New(),
@@ -207,20 +223,36 @@ func (b *Builder) Build() (*Application, error) {
 		Notifier:    b.notifier,
 	}
 
-	// Build risk components if not provided
-	if err := app.buildRiskComponents(b); err != nil {
+	if err := app.buildRiskComponents(ctx, b); err != nil {
+		app.rollbackPartialBuild()
 		return nil, fmt.Errorf("build risk components: %w", err)
 	}
 
 	if err := app.buildStrategyComponents(b); err != nil {
+		app.rollbackPartialBuild()
 		return nil, fmt.Errorf("build strategy components: %w", err)
 	}
 
 	return app, nil
 }
 
+func (a *Application) rollbackPartialBuild() {
+	if a.RiskRef != nil {
+		a.RiskRef.Stop()
+	}
+	if a.ActorSystem != nil {
+		a.ActorSystem.StopAll()
+	}
+	if a.Supervisor != nil {
+		_ = a.Supervisor.Shutdown(5 * time.Second)
+	}
+	if a.EventBus != nil {
+		a.EventBus.Stop()
+	}
+}
+
 // buildRiskComponents builds the risk system components.
-func (a *Application) buildRiskComponents(b *Builder) error {
+func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error {
 	// Create safe mode if not provided
 	if b.safeMode != nil {
 		a.SafeMode = b.safeMode
@@ -233,6 +265,15 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 		a.KillSwitch = b.killSwitch
 	} else {
 		a.KillSwitch = risk.NewKillSwitch()
+	}
+
+	if b.killSwitchStore != nil {
+		if ks, ok := a.KillSwitch.(*risk.KillSwitchImpl); ok {
+			ks.SetStore(b.killSwitchStore)
+			if err := ks.Reconcile(ctx); err != nil {
+				return fmt.Errorf("kill switch reconcile: %w", err)
+			}
+		}
 	}
 
 	// Create policy engine if not provided
@@ -287,7 +328,7 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	// Create risk actor
 	ks, ok := a.KillSwitch.(*risk.KillSwitchImpl)
 	if !ok && a.KillSwitch != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[bootstrap] warning: KillSwitch type assertion to *risk.KillSwitchImpl failed for a.KillSwitch (%T); RiskActor and RiskRef will remain nil",
 			a.KillSwitch,
 		)
@@ -300,7 +341,7 @@ func (a *Application) buildRiskComponents(b *Builder) error {
 	if pe, ok := a.Policy.(*risk.Engine); ok {
 		policyEngine = pe
 	} else if a.Policy != nil {
-		log.Printf(
+		zaplogrus.Infof(
 			"[bootstrap] warning: a.Policy (%T) is not *risk.Engine; RiskActorConfig will use nil policyEngine when creating RiskActor",
 			a.Policy,
 		)
