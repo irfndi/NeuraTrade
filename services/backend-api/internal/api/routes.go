@@ -863,7 +863,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	credentialSource := "config.json"
 	if (bitgetAPIKey == "" || bitgetSecret == "" || bitgetPassphrase == "") && apiKeyService != nil && chatID != "" {
 		dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer dbCancel()
 
 		var userID string
 		lookupErr := db.QueryRow(dbCtx, "SELECT id FROM users WHERE telegram_chat_id = $1", chatID).Scan(&userID)
@@ -882,6 +881,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 				zaplogrus.Infof("[BITGET-CREDS] DB lookup for Bitget keys: %v", dbErr)
 			}
 		}
+		dbCancel()
 	}
 	zaplogrus.Infof("[BITGET-CREDS] Credential source: %s", credentialSource)
 
