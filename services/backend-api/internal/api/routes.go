@@ -1543,6 +1543,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			cache.POST("/miss", cacheHandler.RecordCacheMiss)
 		}
 
+		// Trade audit log query (admin only, sensitive data)
+		auditGroup := v1.Group("/audit")
+		auditGroup.Use(adminMiddleware.RequireAdminAuth())
+		{
+			if db != nil {
+				auditLogger := services.NewTradeAuditLogger(db)
+				auditHandler := handlers.NewAuditHandler(auditLogger)
+				auditGroup.GET("/trades", auditHandler.GetTrades)
+			}
+		}
+
 		// Admin endpoints (require admin authentication)
 		admin := v1.Group("/admin")
 		admin.Use(adminMiddleware.RequireAdminAuth())
