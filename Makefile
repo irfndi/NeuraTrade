@@ -119,7 +119,9 @@ test-backend: mod-download ## Run backend tests
 		SQLITE_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
 		SQLITE_DB_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
 		go test -v -race -timeout=20m ./cmd/... ./internal/... ./pkg/... ./test/integration/... ./test/e2e/; \
-		rm -rf "$$TEST_HOME"
+		TEST_EXIT=$$?; \
+		rm -rf "$$TEST_HOME"; \
+		exit $$TEST_EXIT
 
 test-frontend: ## Run Telegram service tests
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
