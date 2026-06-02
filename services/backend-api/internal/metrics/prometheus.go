@@ -67,6 +67,78 @@ var (
 		},
 		[]string{"provider"},
 	)
+
+	// Actor pipeline metrics
+	MarketTicksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_market_ticks_total",
+			Help: "Total number of market ticks collected, labeled by exchange and symbol.",
+		},
+		[]string{"exchange", "symbol"},
+	)
+
+	StrategySignalsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_strategy_signals_total",
+			Help: "Total number of signals proposed by strategies, labeled by strategy, symbol, and side.",
+		},
+		[]string{"strategy_id", "symbol", "side"},
+	)
+
+	RiskDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_risk_decisions_total",
+			Help: "Total number of risk decisions made, labeled by outcome and reason.",
+		},
+		[]string{"outcome", "reason"},
+	)
+
+	RiskDecisionDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "neuratrade_risk_decision_duration_seconds",
+			Help:    "Duration of risk evaluation decisions in seconds.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+		},
+	)
+
+	ExecutionOrdersTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_execution_orders_total",
+			Help: "Total number of orders processed, labeled by exchange, symbol, side, and status.",
+		},
+		[]string{"exchange", "symbol", "side", "status"},
+	)
+
+	ExecutionOrderLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "neuratrade_execution_order_latency_seconds",
+			Help:    "Order placement latency in seconds, labeled by exchange.",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{"exchange"},
+	)
+
+	ExecutionPendingOrders = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "neuratrade_execution_pending_orders",
+			Help: "Number of pending (in-flight) orders.",
+		},
+	)
+
+	PortfolioPositionsActive = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "neuratrade_portfolio_positions_active",
+			Help: "Number of currently active positions.",
+		},
+	)
+
+	ActorLoopIterationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "neuratrade_actor_loop_iterations_total",
+			Help: "Total number of actor loop iterations (liveness signal).",
+		},
+		[]string{"actor"},
+	)
 )
 
 func init() {
@@ -78,6 +150,15 @@ func init() {
 	_ = prometheus.Register(RedisPingDuration)
 	_ = prometheus.Register(DatabasePingDuration)
 	_ = prometheus.Register(LLMNonJSONPaperTotal)
+	_ = prometheus.Register(MarketTicksTotal)
+	_ = prometheus.Register(StrategySignalsTotal)
+	_ = prometheus.Register(RiskDecisionsTotal)
+	_ = prometheus.Register(RiskDecisionDuration)
+	_ = prometheus.Register(ExecutionOrdersTotal)
+	_ = prometheus.Register(ExecutionOrderLatency)
+	_ = prometheus.Register(ExecutionPendingOrders)
+	_ = prometheus.Register(PortfolioPositionsActive)
+	_ = prometheus.Register(ActorLoopIterationsTotal)
 	_ = prometheus.Register(collectors.NewGoCollector())
 	_ = prometheus.Register(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 }

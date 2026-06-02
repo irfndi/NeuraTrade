@@ -9,6 +9,7 @@ import (
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
@@ -285,6 +286,7 @@ func (a *RiskActor) Receive(ctx context.Context, env actor.Envelope) error {
 }
 
 func (a *RiskActor) handleEvaluateIntent(ctx context.Context, traceID string, msg EvaluateIntentMsg) {
+	start := time.Now()
 	decision, err := a.policy.Evaluate(ctx, msg.Intent)
 
 	// Publish decision event
@@ -300,6 +302,17 @@ func (a *RiskActor) handleEvaluateIntent(ctx context.Context, traceID string, ms
 			"rule":      decision.RuleName,
 		})
 	}
+
+	outcome := "approved"
+	if err != nil || !decision.Approved {
+		outcome = "rejected"
+	}
+	reason := decision.Reason
+	if err != nil {
+		reason = err.Error()
+	}
+	metrics.RiskDecisionsTotal.WithLabelValues(outcome, reason).Inc()
+	metrics.RiskDecisionDuration.Observe(time.Since(start).Seconds())
 
 	if msg.Reply != nil {
 		msg.Reply <- EvaluateIntentReply{

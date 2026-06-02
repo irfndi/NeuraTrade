@@ -10,6 +10,7 @@ import (
 
 	"github.com/irfndi/neuratrade/internal/domain/marketdata"
 	"github.com/irfndi/neuratrade/internal/domain/signals"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
@@ -199,6 +200,8 @@ func (s *StrategyActor) handleTick(ctx context.Context, env actor.Envelope, tick
 		return fmt.Errorf("publish SignalProposed event: %w", err)
 	}
 
+	metrics.StrategySignalsTotal.WithLabelValues(s.strategyID, payload.Symbol, string(payload.Side)).Inc()
+
 	return nil
 }
 
@@ -287,6 +290,9 @@ func (s *StrategyActor) tryComposeScalpingSignal(ctx context.Context, traceID st
 		s.logger.Warn("failed to publish scalping signal", "error", err)
 		return
 	}
+
+	metrics.StrategySignalsTotal.WithLabelValues(s.strategyID, payload.Symbol, payload.Direction).Inc()
+
 	if fingerprint != "" {
 		s.lastScalpingKeys[key] = fingerprint
 	}
