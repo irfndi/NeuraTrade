@@ -367,6 +367,9 @@ func run() error {
 
 	stopLossConfig := services.DefaultStopLossConfig()
 	stopLossService := services.NewStopLossService(stopLossConfig, ccxtService, logrusLogger, nil, getRedisClient())
+	if err := stopLossService.ReconcileFromRedis(ctx); err != nil {
+		logrusLogger.WithError(err).Warn("stop-loss: Failed to reconcile from Redis on startup")
+	}
 
 	stopLossAutoExecConfig := services.DefaultStopLossAutoExecutionConfig()
 	stopLossAutoExecConfig.EnableNotifications = cfg.Telegram.BotToken != ""
