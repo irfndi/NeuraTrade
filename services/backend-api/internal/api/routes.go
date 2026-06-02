@@ -1219,6 +1219,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	if telemetryStore != nil {
 		autonomousHandler.SetTelemetryStore(telemetryStore)
 	}
+	autonomousHandler.SetExchangeLiquidator(handlers.NewStopLossLiquidator(ccxtService))
 	telegramInternalHandler := handlers.NewTelegramInternalHandler(db, userHandler, questEngine)
 
 	// Internal service-to-service routes (admin auth required for defense-in-depth)

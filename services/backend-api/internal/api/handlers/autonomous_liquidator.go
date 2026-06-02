@@ -7,5 +7,5 @@ import "context"
 // (paper mode / no exchange gateway). When wired, ClosePosition is
 // called before the DB row is marked LIQUIDATED.
 type ExchangeLiquidator interface {
-	ClosePosition(ctx context.Context, exchangeID, orderID, positionID string) error
+	ClosePosition(ctx context.Context, exchangeID, orderID, positionID, symbol string) error
 }

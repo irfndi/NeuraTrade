@@ -528,12 +528,14 @@ type stubExchangeLiquidator struct {
 	calledExchange   string
 	calledOrderID    string
 	calledPositionID string
+	calledSymbol     string
 }
 
-func (s *stubExchangeLiquidator) ClosePosition(_ context.Context, exchangeID, orderID, positionID string) error {
+func (s *stubExchangeLiquidator) ClosePosition(_ context.Context, exchangeID, orderID, positionID, symbol string) error {
 	s.calledExchange = exchangeID
 	s.calledOrderID = orderID
 	s.calledPositionID = positionID
+	s.calledSymbol = symbol
 	return s.err
 }
 
