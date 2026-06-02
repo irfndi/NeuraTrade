@@ -317,7 +317,7 @@ func (h *MarketHandler) GetMarketPrices(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 
 	// Create cache key based on query parameters
-	cacheKey := fmt.Sprintf("market_prices:%s:%s:%d:%d", exchange, symbol, page, limit)
+	cacheKey := fmt.Sprintf("market_prices:%s:%s:%d:%d", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol), page, limit)
 
 	// Try to get cached data first
 	if cachedData, found := h.GetCachedMarketPrices(c.Request.Context(), cacheKey); found {
@@ -444,7 +444,7 @@ func (h *MarketHandler) GetTicker(c *gin.Context) {
 	}
 
 	// Create cache key for ticker
-	cacheKey := fmt.Sprintf("ticker:%s:%s", exchange, symbol)
+	cacheKey := fmt.Sprintf("ticker:%s:%s", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol))
 
 	// Try to get cached ticker first
 	if cachedTicker, found := h.GetCachedTicker(c.Request.Context(), cacheKey); found {
@@ -539,7 +539,7 @@ func (h *MarketHandler) GetOrderBook(c *gin.Context) {
 	}
 
 	// Create cache key for order book
-	cacheKey := fmt.Sprintf("orderbook:%s:%s:%d", exchange, symbol, limit)
+	cacheKey := fmt.Sprintf("orderbook:%s:%s:%d", sanitizeCacheKey(exchange), sanitizeCacheKey(symbol), limit)
 
 	// Try to get cached order book first
 	if cachedOrderBook, found := h.GetCachedOrderBook(c.Request.Context(), cacheKey); found {
@@ -623,7 +623,7 @@ func (h *MarketHandler) GetBulkTickers(c *gin.Context) {
 	}
 
 	// Create cache key for bulk tickers
-	cacheKey := fmt.Sprintf("bulk_tickers:%s", exchange)
+	cacheKey := fmt.Sprintf("bulk_tickers:%s", sanitizeCacheKey(exchange))
 
 	// Try to get cached bulk tickers first
 	if cachedTickers, found := h.GetCachedBulkTickers(c.Request.Context(), cacheKey); found {
