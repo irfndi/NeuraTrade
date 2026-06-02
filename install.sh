@@ -18,9 +18,10 @@ TMP_DIR=""
 SKIP_BUILD="${SKIP_BUILD:-false}"
 BOOTSTRAP_MODE="none"
 BOOTSTRAP_LOCATION=""
-ENABLE_AUTOSTART="${ENABLE_AUTOSTART:-false}"
+ENABLE_AUTOSTART="${ENABLE_AUTOSTART:-}"
 AUTOSTART_MODE="disabled"
 AUTOSTART_LOCATION=""
+AUTOSTART_EXPLICIT="false"
 
 log() {
   printf '[install] %s\n' "$1"
@@ -64,9 +65,11 @@ parse_args() {
         ;;
       --enable-autostart)
         ENABLE_AUTOSTART="true"
+        AUTOSTART_EXPLICIT="true"
         ;;
       --disable-autostart)
         ENABLE_AUTOSTART="false"
+        AUTOSTART_EXPLICIT="true"
         ;;
       *)
         die "unknown argument: $1"
@@ -178,6 +181,16 @@ install_launchd_autostart() {
   local launch_plist="$launch_agents_dir/$AUTOSTART_LABEL.plist"
 
   if [[ "$ENABLE_AUTOSTART" != "true" ]]; then
+    if [[ "$AUTOSTART_EXPLICIT" != "true" ]]; then
+      if [[ -f "$launch_plist" ]]; then
+        log "autostart already installed; preserving existing launchd plist (pass --disable-autostart to remove)"
+        AUTOSTART_MODE="preserved"
+        AUTOSTART_LOCATION="$launch_plist"
+        return
+      fi
+      AUTOSTART_MODE="skipped"
+      return
+    fi
     if [[ "$(uname -s)" == "Darwin" ]]; then
       launchctl bootout "gui/$UID/$AUTOSTART_LABEL" >/dev/null 2>&1 || true
       launchctl unload "$launch_plist" >/dev/null 2>&1 || true
