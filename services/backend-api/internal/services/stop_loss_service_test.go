@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/irfndi/neuratrade/internal/ccxt"
@@ -222,6 +224,46 @@ func TestStopLossService_DegradedMode_NoRedis(t *testing.T) {
 
 	err = svc.ReconcileFromRedis(ctx)
 	assert.NoError(t, err)
+}
+
+func TestStopLossService_ReconcileFromRedis_SkipsExpired(t *testing.T) {
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	rc := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	defer func() { _ = rc.Close() }()
+
+	svc1 := newTestStopLossService(rc)
+	ctx := t.Context()
+
+	active, err := svc1.CreateStopLoss(ctx, newTestStopLossParams())
+	require.NoError(t, err)
+
+	expiredParams := newTestStopLossParams()
+	expiredParams.PositionID = "pos-expired"
+	expiredOrder, err := svc1.CreateStopLoss(ctx, expiredParams)
+	require.NoError(t, err)
+	expiredKey := svc1.keyForStopLoss(expiredOrder.ID)
+	raw, err := rc.Get(ctx, expiredKey).Result()
+	require.NoError(t, err)
+	var expired StopLossOrder
+	require.NoError(t, json.Unmarshal([]byte(raw), &expired))
+	expired.ExpiresAt = time.Now().UTC().Add(-1 * time.Hour)
+	encoded, err := json.Marshal(&expired)
+	require.NoError(t, err)
+	require.NoError(t, rc.Set(ctx, expiredKey, encoded, 0).Err())
+
+	svc2 := newTestStopLossService(rc)
+	require.NoError(t, svc2.ReconcileFromRedis(ctx))
+
+	_, exists := svc2.GetStopLoss(active.ID)
+	assert.True(t, exists, "active order should be reconciled")
+
+	_, exists = svc2.GetStopLoss(expiredOrder.ID)
+	assert.False(t, exists, "expired order should be skipped")
+
+	_, err = rc.Get(ctx, expiredKey).Result()
+	assert.ErrorIs(t, err, redis.Nil, "expired order key should be removed from Redis")
 }
 
 func TestStopLossService_ExecuteStopLoss_UpdatesRedis(t *testing.T) {
