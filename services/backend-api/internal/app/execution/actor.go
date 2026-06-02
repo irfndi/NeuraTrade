@@ -15,6 +15,7 @@ import (
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
+	"github.com/irfndi/neuratrade/internal/app/execution/liveguard"
 	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/ports"
@@ -117,6 +118,9 @@ type ExecutionActor struct {
 	eventBus         ports.EventBus
 	idempotencyStore IdempotencyStore
 	auditLog         AuditLogger
+	liveGuard        *liveguard.Guard
+
+	chatLiveChecker func(ctx context.Context, chatID string) bool
 
 	// In-memory state (actor-owned, single-writer)
 	intents               map[string]*OrderIntent // IntentID -> Intent
@@ -204,6 +208,24 @@ func NewExecutionActor(
 	}
 }
 
+// WithLiveGuard installs the process-level live trading safety guard. Returns
+// the actor for chaining. Pass nil to remove the guard.
+func (a *ExecutionActor) WithLiveGuard(guard *liveguard.Guard) *ExecutionActor {
+	if a == nil {
+		return a
+	}
+	a.liveGuard = guard
+	return a
+}
+
+func (a *ExecutionActor) WithChatLiveChecker(fn func(ctx context.Context, chatID string) bool) *ExecutionActor {
+	if a == nil {
+		return a
+	}
+	a.chatLiveChecker = fn
+	return a
+}
+
 // ID implements actor.Actor
 func (a *ExecutionActor) ID() string {
 	return a.id
@@ -230,6 +252,30 @@ func (a *ExecutionActor) Receive(ctx context.Context, env actor.Envelope) error 
 // handlePlaceOrder processes a new order placement with idempotency
 func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg) error {
 	start := time.Now()
+
+	if a.liveGuard != nil {
+		chatIsLive := a.chatIsLive(ctx, msg.Metadata)
+		strategyID, symbol, side, orderType := orderIdentityFromMsg(msg)
+		result, err := a.liveGuard.CheckOrder(msg.IntentID, msg.Request.Exchange, strategyID, symbol, side, orderType, msg.Request.Amount, chatIsLive)
+		if err != nil {
+			a.logAuditEvent(ctx, msg.IntentID, "live_guard_rejected", msg.Request.Exchange, msg.Request.Symbol, err.Error(), nil)
+			return fmt.Errorf("live guard: %w", err)
+		}
+		if !result.Allowed {
+			if result.Pending {
+				a.logAuditEvent(ctx, msg.IntentID, "live_guard_pending", msg.Request.Exchange, msg.Request.Symbol, result.Reason, nil)
+				return fmt.Errorf("live guard: %w", liveguard.ErrOrderPending)
+			}
+			return fmt.Errorf("live guard: %s", result.Reason)
+		}
+		if result.WasCapped {
+			zaplogrus.Warnf("EXEC: live guard capped order %s: %s -> %s (%s)",
+				msg.IntentID, msg.Request.Amount.String(), result.CappedAmount.String(), result.Reason)
+			msg.Request.Amount = result.CappedAmount
+		} else {
+			zaplogrus.Debugf("EXEC: live guard approved order %s amount=%s", msg.IntentID, msg.Request.Amount.String())
+		}
+	}
 
 	// Check for duplicate intent
 	existing, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID)
@@ -387,6 +433,10 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 	intent.FilledAmount = result.Filled
 	intent.FillPrice = result.AveragePrice
 	intent.UpdatedAt = time.Now()
+
+	if a.liveGuard != nil {
+		a.liveGuard.RecordPlaced(msg.IntentID)
+	}
 
 	// Persist updated intent
 	if err := a.idempotencyStore.UpdateIntent(ctx, intent); err != nil {
@@ -811,3 +861,55 @@ func sanitizeMessage(message string) string {
 
 // Compile-time interface check
 var _ actor.Actor = (*ExecutionActor)(nil)
+
+func (a *ExecutionActor) chatIsLive(ctx context.Context, metadata map[string]interface{}) bool {
+	if a.chatLiveChecker == nil {
+		return true
+	}
+	chatID := strings.TrimSpace(stringFromMetadata(metadata, "chat_id"))
+	if chatID == "" {
+		chatID = strings.TrimSpace(stringFromMetadata(metadata, "chatID"))
+	}
+	if chatID == "" {
+		return false
+	}
+	return a.chatLiveChecker(ctx, chatID)
+}
+
+func orderIdentityFromMsg(msg PlaceOrderMsg) (strategyID, symbol, side, orderType string) {
+	if v, ok := msg.Metadata["strategy_id"].(string); ok {
+		strategyID = v
+	} else if v, ok := msg.Metadata["strategy"].(string); ok {
+		strategyID = v
+	}
+	symbol = msg.Request.Symbol
+	switch msg.Request.Side {
+	case ports.OrderSideBuy:
+		side = "buy"
+	case ports.OrderSideSell:
+		side = "sell"
+	default:
+		side = strings.ToLower(string(msg.Request.Side))
+	}
+	switch msg.Request.Type {
+	case ports.OrderTypeMarket:
+		orderType = "market"
+	case ports.OrderTypeLimit:
+		orderType = "limit"
+	default:
+		orderType = strings.ToLower(string(msg.Request.Type))
+	}
+	return strategyID, symbol, side, orderType
+}
+
+func stringFromMetadata(metadata map[string]interface{}, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	if v, ok := metadata[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
