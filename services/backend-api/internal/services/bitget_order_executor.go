@@ -99,6 +99,9 @@ func (e *BitgetOrderExecutor) PlaceOrderWithDetails(ctx context.Context, details
 		clientOidChatID = scopedChatID
 	}
 	if strings.TrimSpace(details.ClientOrderID) == "" {
+		if strings.TrimSpace(details.IntentID) == "" && isRiskReductionOrder(details) {
+			details.IntentID = fmt.Sprintf("derisk-%s-%s", details.Symbol, details.Side)
+		}
 		clientOid, err := generateIdempotencyKey(clientOidChatID, apiSymbol, details.Side, details.IntentID)
 		if err != nil {
 			return "", fmt.Errorf("generate client order id: %w", err)

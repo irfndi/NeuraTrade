@@ -20,10 +20,11 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_Validation(t *testing.T) {
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 
 	tests := []struct {
-		name        string
-		details     TradeDetails
-		wantErr     bool
-		errContains string
+		name           string
+		details        TradeDetails
+		wantErr        bool
+		errContains    string
+		errNotContains string
 	}{
 		{
 			name: "zero amount",
@@ -45,6 +46,38 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_Validation(t *testing.T) {
 			wantErr:     true,
 			errContains: "invalid order amount",
 		},
+		{
+			name: "non-de-risk with empty IntentID rejects",
+			details: TradeDetails{
+				Symbol:     "BTCUSDT",
+				Side:       "buy",
+				AmountUSDT: decimal.NewFromFloat(100),
+			},
+			wantErr:     true,
+			errContains: "IntentID is required",
+		},
+		{
+			name: "de-risk (TradeType=risk_reduction) with empty IntentID synthesizes ID",
+			details: TradeDetails{
+				Symbol:     "BTCUSDT",
+				Side:       "sell",
+				AmountUSDT: decimal.NewFromFloat(100),
+				TradeType:  "risk_reduction",
+			},
+			wantErr:        true,
+			errNotContains: "IntentID is required",
+		},
+		{
+			name: "de-risk (ReduceOnly=true) with empty IntentID synthesizes ID",
+			details: TradeDetails{
+				Symbol:     "ETHUSDT",
+				Side:       "buy",
+				AmountUSDT: decimal.NewFromFloat(50),
+				ReduceOnly: true,
+			},
+			wantErr:        true,
+			errNotContains: "IntentID is required",
+		},
 	}
 
 	for _, tt := range tests {
@@ -54,6 +87,9 @@ func TestBitgetOrderExecutor_PlaceOrderWithDetails_Validation(t *testing.T) {
 				assert.Error(t, err)
 				if tt.errContains != "" {
 					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				if tt.errNotContains != "" {
+					assert.NotContains(t, err.Error(), tt.errNotContains)
 				}
 			} else {
 				assert.NoError(t, err)
