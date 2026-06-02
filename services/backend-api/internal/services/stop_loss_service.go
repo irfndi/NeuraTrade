@@ -215,22 +215,35 @@ func (s *StopLossService) ReconcileFromRedis(ctx context.Context) error {
 	if s.redisClient == nil {
 		return nil
 	}
+	scanCtx, scanCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer scanCancel()
 	pattern := fmt.Sprintf("%s:*", s.redisKeyPrefix)
 	var cursor uint64
-	var loaded int
+	var loaded, expired, skipped int
 	for {
-		keys, nextCursor, scanErr := s.redisClient.Scan(ctx, cursor, pattern, 100).Result()
+		keys, nextCursor, scanErr := s.redisClient.Scan(scanCtx, cursor, pattern, 100).Result()
 		if scanErr != nil {
 			s.logger.WithError(scanErr).Warn("stop-loss: Redis scan failed during reconciliation, running in degraded mode")
-			return nil
+			return fmt.Errorf("redis scan: %w", scanErr)
 		}
 		for _, key := range keys {
-			data, getErr := s.redisClient.Get(ctx, key).Result()
+			data, getErr := s.redisClient.Get(scanCtx, key).Result()
 			if getErr != nil {
+				skipped++
 				continue
 			}
 			var order StopLossOrder
 			if json.Unmarshal([]byte(data), &order) != nil {
+				skipped++
+				continue
+			}
+			if !order.ExpiresAt.IsZero() && time.Now().UTC().After(order.ExpiresAt) {
+				expired++
+				s.redisClient.Del(scanCtx, key)
+				continue
+			}
+			if order.Status != StopLossStatusActive {
+				skipped++
 				continue
 			}
 			s.ordersMu.Lock()
@@ -246,7 +259,7 @@ func (s *StopLossService) ReconcileFromRedis(ctx context.Context) error {
 			break
 		}
 	}
-	s.logger.Info("stop-loss: Reconciled state from Redis", "count", loaded)
+	s.logger.Info("stop-loss: Reconciled state from Redis", "loaded", loaded, "expired", expired, "skipped", skipped)
 	return nil
 }
 
