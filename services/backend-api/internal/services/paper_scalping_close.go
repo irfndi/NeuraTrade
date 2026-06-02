@@ -155,7 +155,7 @@ func (h *IntegratedQuestHandlers) resolvePaperScalpingMarkPrice(
 			slipBps = parsed
 		}
 	}
-	slipFactor := decimal.NewFromFloat(1.0 + (rand.Float64()*2.0-1.0)*slipBps.InexactFloat64())
+	slipFactor := decimal.NewFromFloat(1.0 + (rand.Float64()*2.0-1.0)*slipBps.InexactFloat64()) // non-security: slippage simulation for paper trading
 	return rawPrice.Mul(slipFactor).Round(8), true
 }
 

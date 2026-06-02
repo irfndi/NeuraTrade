@@ -58,9 +58,9 @@ func (e *CCXTOrderExecutor) doWithRetry(ctx context.Context, makeReq func() (*ht
 
 	for attempt := 0; attempt <= e.maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(200*attempt+rand.Intn(100)) * time.Millisecond
+			backoff := time.Duration(200*attempt+rand.Intn(100)) * time.Millisecond // non-security: retry backoff jitter
 			if attempt > 1 {
-				backoff = time.Duration(200*(1<<(attempt-1))+rand.Intn(100)) * time.Millisecond
+				backoff = time.Duration(200*(1<<(attempt-1))+rand.Intn(100)) * time.Millisecond // non-security: retry backoff jitter
 			}
 			select {
 			case <-ctx.Done():

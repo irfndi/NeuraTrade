@@ -210,7 +210,7 @@ func (sp *AISignalProcessor) mapActionToSignal(action TradingAction) string {
 	case ActionSell:
 		return "sell"
 	case ActionScalp:
-		if rand.Float64() > 0.5 {
+		if rand.Float64() > 0.5 { // non-security: signal randomization for AI output variety
 			return "strong_buy"
 		}
 		return "buy"

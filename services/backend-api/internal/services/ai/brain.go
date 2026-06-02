@@ -460,7 +460,7 @@ func (brain *AITradingBrain) formatSimilarDecisions(decisions []*DecisionRecord)
 
 // generateDecisionID generates unique decision ID
 func generateDecisionID() string {
-	return fmt.Sprintf("dec_%d_%d", time.Now().Unix(), rand.Intn(10000))
+	return fmt.Sprintf("dec_%d_%d", time.Now().Unix(), rand.Intn(10000)) // non-security: unique ID suffix, not a secret
 }
 
 // SetLogger sets the logger for AI Brain
