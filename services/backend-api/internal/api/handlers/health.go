@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/irfndi/neuratrade/internal/config"
+	"github.com/irfndi/neuratrade/internal/grpcutil"
 	"github.com/irfndi/neuratrade/internal/services"
 	telegrampb "github.com/irfndi/neuratrade/pkg/pb/telegram"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // DatabaseHealthChecker interface for database health checks.
@@ -43,9 +44,10 @@ type HealthHandler struct {
 
 // TelegramHealthConfig contains backend-to-Telegram delivery endpoints checked by /health.
 type TelegramHealthConfig struct {
-	ServiceURL  string
-	GrpcAddress string
-	BotToken    string
+	ServiceURL    string
+	GrpcAddress   string
+	BotToken      string
+	GRPCTLSCAFile string
 }
 
 // HealthResponse represents the health status response.
@@ -285,7 +287,7 @@ func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
 		failures = append(failures, "http health probe not configured")
 	}
 	if grpcAddress := strings.TrimSpace(h.telegram.GrpcAddress); grpcAddress != "" {
-		if err := checkTelegramGRPC(ctx, grpcAddress); err != nil {
+		if err := checkTelegramGRPC(ctx, grpcAddress, h.telegram.GRPCTLSCAFile); err != nil {
 			failures = append(failures, "grpc "+err.Error())
 		}
 	}
@@ -300,11 +302,19 @@ func (h *HealthHandler) checkTelegramDelivery(ctx context.Context) error {
 	return errors.New(strings.Join(failures, "; "))
 }
 
-func checkTelegramGRPC(ctx context.Context, address string) error {
+func checkTelegramGRPC(ctx context.Context, address, tlsCAFile string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, telegramHealthProbeTimeout())
 	defer cancel()
 
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	dialOpts, err := grpcutil.DialOptions(config.GRPCClientConfig{
+		TLSCACertFile: strings.TrimSpace(tlsCAFile),
+		ServerName:    grpcutil.HostOnly(address),
+	})
+	if err != nil {
+		return fmt.Errorf("grpc tls config: %w", err)
+	}
+
+	conn, err := grpc.NewClient(address, dialOpts...)
 	if err != nil {
 		return fmt.Errorf("%s: %w", address, err)
 	}

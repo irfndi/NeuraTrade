@@ -474,9 +474,10 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	telegramHealth := handlers.TelegramHealthConfig{}
 	if telegramConfig != nil {
 		telegramHealth = handlers.TelegramHealthConfig{
-			ServiceURL:  telegramConfig.ServiceURL,
-			GrpcAddress: telegramConfig.GrpcAddress,
-			BotToken:    telegramConfig.BotToken,
+			ServiceURL:    telegramConfig.ServiceURL,
+			GrpcAddress:   telegramConfig.GrpcAddress,
+			BotToken:      telegramConfig.BotToken,
+			GRPCTLSCAFile: os.Getenv("NEURATRADE_GRPC_TLS_CA_FILE"),
 		}
 	}
 	healthHandler := handlers.NewHealthHandlerWithTelegram(db, redis, ccxtService.GetServiceURL(), telegramHealth, cacheAnalyticsService, nil)
