@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/config"
 	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/irfndi/neuratrade/internal/middleware"
+	"github.com/irfndi/neuratrade/internal/services"
+	"github.com/irfndi/neuratrade/internal/utils"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1116,4 +1119,90 @@ func TestSetupRoutes_CORSDisallowedOrigin(t *testing.T) {
 
 	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"),
 		"disallowed origin must not receive Access-Control-Allow-Origin header")
+}
+
+func TestSetupRoutes_ChatIDToUserIDExchangeKeyLookup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx := context.Background()
+
+	_, err = db.Exec(ctx, `CREATE TABLE users (
+		id TEXT PRIMARY KEY,
+		email TEXT NOT NULL DEFAULT '',
+		password_hash TEXT NOT NULL DEFAULT '',
+		telegram_chat_id TEXT,
+		subscription_tier TEXT DEFAULT 'free',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	require.NoError(t, err)
+
+	_, err = db.Exec(ctx, `CREATE TABLE exchange_api_keys (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		exchange_name TEXT NOT NULL,
+		key_name TEXT NOT NULL,
+		encrypted_key TEXT NOT NULL,
+		encrypted_secret TEXT NOT NULL,
+		encrypted_passphrase TEXT NOT NULL DEFAULT '',
+		permissions TEXT DEFAULT '["read"]',
+		is_active INTEGER DEFAULT 1,
+		last_used_at TEXT,
+		expires_at TEXT,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	require.NoError(t, err)
+
+	userUUID := "b1a2c3d4-e5f6-7890-abcd-ef1234567890"
+	chatID := "test-chat-987654"
+	_, err = db.Exec(ctx,
+		`INSERT INTO users (id, email, password_hash, telegram_chat_id) VALUES ($1, $2, $3, $4)`,
+		userUUID, "test@example.com", "hashed-password", chatID)
+	require.NoError(t, err)
+
+	encKey := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	apiKeySvc, err := services.NewAPIKeyService(db, encKey)
+	require.NoError(t, err)
+
+	rawKey, err := utils.ParseKey(encKey)
+	require.NoError(t, err)
+	encryptor, err := utils.NewEncryptor(rawKey, true)
+	require.NoError(t, err)
+
+	expectedKey := "test-exchange-key-abc123"
+	expectedSecret := "test-exchange-secret-xyz789"
+	expectedPassphrase := "test-passphrase-000"
+
+	encKeyStr, err := encryptor.EncryptString(expectedKey)
+	require.NoError(t, err)
+	encSecretStr, err := encryptor.EncryptString(expectedSecret)
+	require.NoError(t, err)
+	encPassStr, err := encryptor.EncryptString(expectedPassphrase)
+	require.NoError(t, err)
+
+	_, err = db.Exec(ctx,
+		`INSERT INTO exchange_api_keys (id, user_id, exchange_name, key_name, encrypted_key, encrypted_secret, encrypted_passphrase, permissions, is_active)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		"key-001", userUUID, "bitget", "test-key", encKeyStr, encSecretStr, encPassStr,
+		`["spot","margin"]`, 1)
+	require.NoError(t, err)
+
+	var resolvedUserID string
+	lookupErr := db.QueryRow(ctx, "SELECT id FROM users WHERE telegram_chat_id = $1", chatID).Scan(&resolvedUserID)
+	require.NoError(t, lookupErr)
+	require.Equal(t, userUUID, resolvedUserID)
+
+	gotKey, gotSecret, gotPassphrase, getErr := apiKeySvc.GetExchangeKeysByExchange(ctx, resolvedUserID, "bitget")
+	require.NoError(t, getErr)
+	assert.Equal(t, expectedKey, gotKey)
+	assert.Equal(t, expectedSecret, gotSecret)
+	assert.Equal(t, expectedPassphrase, gotPassphrase)
+
+	_, _, _, chatErr := apiKeySvc.GetExchangeKeysByExchange(ctx, chatID, "bitget")
+	assert.Error(t, chatErr)
 }

@@ -863,17 +863,24 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	credentialSource := "config.json"
 	if (bitgetAPIKey == "" || bitgetSecret == "" || bitgetPassphrase == "") && apiKeyService != nil && chatID != "" {
 		dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		dbKey, dbSecret, dbPassphrase, dbErr := apiKeyService.GetExchangeKeysByExchange(dbCtx, chatID, "bitget")
-		dbCancel()
-		if dbErr == nil && dbKey != "" && dbSecret != "" {
-			bitgetAPIKey = dbKey
-			bitgetSecret = dbSecret
-			if dbPassphrase != "" {
-				bitgetPassphrase = dbPassphrase
+		defer dbCancel()
+
+		var userID string
+		lookupErr := db.QueryRow(dbCtx, "SELECT id FROM users WHERE telegram_chat_id = $1", chatID).Scan(&userID)
+		if lookupErr != nil || userID == "" {
+			zaplogrus.Infof("[BITGET-CREDS] No user found for chat_id: %v", lookupErr)
+		} else {
+			dbKey, dbSecret, dbPassphrase, dbErr := apiKeyService.GetExchangeKeysByExchange(dbCtx, userID, "bitget")
+			if dbErr == nil && dbKey != "" && dbSecret != "" {
+				bitgetAPIKey = dbKey
+				bitgetSecret = dbSecret
+				if dbPassphrase != "" {
+					bitgetPassphrase = dbPassphrase
+				}
+				credentialSource = "exchange_api_keys (DB)"
+			} else if dbErr != nil {
+				zaplogrus.Infof("[BITGET-CREDS] DB lookup for Bitget keys: %v", dbErr)
 			}
-			credentialSource = "exchange_api_keys (DB)"
-		} else if dbErr != nil {
-			zaplogrus.Infof("[BITGET-CREDS] DB lookup for Bitget keys: %v", dbErr)
 		}
 	}
 	zaplogrus.Infof("[BITGET-CREDS] Credential source: %s", credentialSource)
