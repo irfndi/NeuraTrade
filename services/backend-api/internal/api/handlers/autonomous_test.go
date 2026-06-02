@@ -436,6 +436,58 @@ func TestAutonomousHandler_Liquidate_MarksDBOnExchangeCloseSuccess(t *testing.T)
 	assert.Equal(t, "pos-1", stub.calledPositionID)
 }
 
+func TestAutonomousHandler_LiquidateAll_SkipsDBMarkWhenExchangeCloseFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupAutonomousLiquidationDB(t)
+	insertOpenPosition(t, db, "pos-1", "ord-1", "DOGE/USDT", "buy", time.Now().UTC().Add(-2*time.Minute))
+	insertOpenPosition(t, db, "pos-2", "ord-2", "ADA/USDT", "buy", time.Now().UTC().Add(-time.Minute))
+
+	stub := &stubExchangeLiquidator{err: errors.New("exchange unreachable")}
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetDBPool(db)
+	handler.SetExchangeLiquidator(stub)
+	router := gin.New()
+	router.POST("/liquidate_all", handler.LiquidateAll)
+
+	req := httptest.NewRequest(http.MethodPost, "/liquidate_all", strings.NewReader(`{"chat_id":"c1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "Liquidated 0 of 2")
+	assert.Equal(t, "OPEN", positionStatus(t, db, "pos-1"), "position must remain OPEN when exchange close fails")
+	assert.Equal(t, "OPEN", orderStatus(t, db, "ord-1"), "order must remain OPEN when exchange close fails")
+	assert.Equal(t, "OPEN", positionStatus(t, db, "pos-2"))
+	assert.Equal(t, "OPEN", orderStatus(t, db, "ord-2"))
+}
+
+func TestAutonomousHandler_LiquidateAll_MarksDBOnExchangeCloseSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupAutonomousLiquidationDB(t)
+	insertOpenPosition(t, db, "pos-1", "ord-1", "DOGE/USDT", "buy", time.Now().UTC().Add(-2*time.Minute))
+	insertOpenPosition(t, db, "pos-2", "ord-2", "ADA/USDT", "buy", time.Now().UTC().Add(-time.Minute))
+
+	stub := &stubExchangeLiquidator{err: nil}
+	handler := NewAutonomousHandler(nil, nil, nil)
+	handler.SetDBPool(db)
+	handler.SetExchangeLiquidator(stub)
+	router := gin.New()
+	router.POST("/liquidate_all", handler.LiquidateAll)
+
+	req := httptest.NewRequest(http.MethodPost, "/liquidate_all", strings.NewReader(`{"chat_id":"c1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"liquidated_count":2`)
+	assert.Equal(t, "LIQUIDATED", positionStatus(t, db, "pos-1"))
+	assert.Equal(t, "CLOSED", orderStatus(t, db, "ord-1"))
+	assert.Equal(t, "LIQUIDATED", positionStatus(t, db, "pos-2"))
+	assert.Equal(t, "CLOSED", orderStatus(t, db, "ord-2"))
+}
+
 func TestReadinessChecker_CheckDatabase_WithoutDBPoolReportsWarning(t *testing.T) {
 	rc := NewReadinessChecker()
 	gin.SetMode(gin.TestMode)
