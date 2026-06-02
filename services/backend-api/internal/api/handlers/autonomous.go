@@ -31,6 +31,7 @@ type AutonomousHandler struct {
 	telemetryStore      *services.ScalpingTelemetryStore
 	dbPool              database.DBPool
 	redisClient         *redis.Client
+	exchangeLiquidator  ExchangeLiquidator
 }
 
 // NewAutonomousHandler creates a new autonomous handler
@@ -80,6 +81,10 @@ func (h *AutonomousHandler) SetLifecycleStore(store *services.TradingLifecycleSt
 
 func (h *AutonomousHandler) SetTelemetryStore(store *services.ScalpingTelemetryStore) {
 	h.telemetryStore = store
+}
+
+func (h *AutonomousHandler) SetExchangeLiquidator(l ExchangeLiquidator) {
+	h.exchangeLiquidator = l
 }
 
 // BeginRequest represents the request body for /begin
@@ -1102,15 +1107,15 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 	defer cancel()
 
 	row := h.dbPool.QueryRow(ctx, `
-		SELECT position_id, order_id
+		SELECT position_id, order_id, exchange, symbol
 		FROM trading_positions
 		WHERE status = 'OPEN' AND LOWER(symbol) = LOWER(?)
 		ORDER BY opened_at ASC
 		LIMIT 1
 	`, req.Symbol)
 
-	var positionID, orderID string
-	if err := row.Scan(&positionID, &orderID); err != nil {
+	var positionID, orderID, exchange, symbol string
+	if err := row.Scan(&positionID, &orderID, &exchange, &symbol); err != nil {
 		if isNoRowsError(err) {
 			c.JSON(http.StatusOK, LiquidationResponse{
 				Ok:              true,
@@ -1122,6 +1127,17 @@ func (h *AutonomousHandler) Liquidate(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to look up position: %v", err)})
 		return
+	}
+
+	if h.exchangeLiquidator != nil {
+		if err := h.exchangeLiquidator.ClosePosition(ctx, exchange, orderID, positionID, symbol); err != nil {
+			zaplogrus.Errorf("AutonomousHandler.Liquidate: exchange close failed for position %s on %s: %v", positionID, exchange, err)
+			c.JSON(http.StatusBadGateway, LiquidationResponse{
+				Ok:      false,
+				Message: fmt.Sprintf("Exchange close failed for %q on %q: %v", symbol, exchange, err),
+			})
+			return
+		}
 	}
 
 	now := time.Now().UTC()
@@ -1170,7 +1186,7 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 	defer cancel()
 
 	rows, err := h.dbPool.Query(ctx, `
-		SELECT position_id, order_id FROM trading_positions WHERE status = 'OPEN'
+		SELECT position_id, order_id, exchange, symbol FROM trading_positions WHERE status = 'OPEN'
 	`)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list open positions: " + err.Error()})
@@ -1181,11 +1197,13 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 	type pendingRow struct {
 		positionID string
 		orderID    string
+		exchange   string
+		symbol     string
 	}
 	var pending []pendingRow
 	for rows.Next() {
 		var pr pendingRow
-		if err := rows.Scan(&pr.positionID, &pr.orderID); err != nil {
+		if err := rows.Scan(&pr.positionID, &pr.orderID, &pr.exchange, &pr.symbol); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan position: " + err.Error()})
 			return
 		}
@@ -1199,6 +1217,16 @@ func (h *AutonomousHandler) LiquidateAll(c *gin.Context) {
 	now := time.Now().UTC()
 	liquidated := 0
 	for _, p := range pending {
+		if ctx.Err() != nil {
+			zaplogrus.Errorf("AutonomousHandler.LiquidateAll: context cancelled or timed out: %v", ctx.Err())
+			break
+		}
+		if h.exchangeLiquidator != nil {
+			if err := h.exchangeLiquidator.ClosePosition(ctx, p.exchange, p.orderID, p.positionID, p.symbol); err != nil {
+				zaplogrus.Warnf("AutonomousHandler.LiquidateAll: exchange close failed for position %s on %s: %v", p.positionID, p.exchange, err)
+				continue
+			}
+		}
 		if _, err := h.dbPool.Exec(ctx, `
 			UPDATE trading_positions SET status = 'LIQUIDATED', updated_at = ? WHERE position_id = ?
 		`, now, p.positionID); err != nil {
