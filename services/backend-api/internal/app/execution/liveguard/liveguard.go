@@ -45,11 +45,11 @@ var (
 
 // Config holds guard configuration loaded from environment.
 type Config struct {
-	Enabled         bool
-	ArmRequired     bool
-	SizeCapPct      decimal.Decimal
-	FirstNHold      int
-	ConfirmPhrase   string
+	Enabled       bool
+	ArmRequired   bool
+	SizeCapPct    decimal.Decimal
+	FirstNHold    int
+	ConfirmPhrase string
 }
 
 // LoadConfig reads guard configuration from the process environment.
@@ -107,24 +107,24 @@ type Guard struct {
 
 // PendingOrder is a live order held for explicit operator approval.
 type PendingOrder struct {
-	IntentID    string          `json:"intent_id"`
-	Symbol      string          `json:"symbol"`
-	Side        string          `json:"side"`
-	Type        string          `json:"type"`
-	Amount      decimal.Decimal `json:"amount"`
+	IntentID     string          `json:"intent_id"`
+	Symbol       string          `json:"symbol"`
+	Side         string          `json:"side"`
+	Type         string          `json:"type"`
+	Amount       decimal.Decimal `json:"amount"`
 	CappedAmount decimal.Decimal `json:"capped_amount"`
-	ChatID      string          `json:"chat_id"`
-	StrategyID  string          `json:"strategy_id"`
-	QueuedAt    time.Time       `json:"queued_at"`
-	QueuedBy    string          `json:"queued_by"`
+	ChatID       string          `json:"chat_id"`
+	StrategyID   string          `json:"strategy_id"`
+	QueuedAt     time.Time       `json:"queued_at"`
+	QueuedBy     string          `json:"queued_by"`
 }
 
 // RejectEvent records a refused live order for audit.
 type RejectEvent struct {
-	At      time.Time `json:"at"`
-	Intent  string    `json:"intent_id"`
-	Reason  string    `json:"reason"`
-	ChatID  string    `json:"chat_id"`
+	At     time.Time `json:"at"`
+	Intent string    `json:"intent_id"`
+	Reason string    `json:"reason"`
+	ChatID string    `json:"chat_id"`
 }
 
 // ArmDisarmEvent records arm/disarm transitions.
@@ -152,11 +152,11 @@ func (g *Guard) Cfg() Config { return g.cfg }
 
 // CheckResult describes the outcome of a live-order check.
 type CheckResult struct {
-	Allowed      bool          // true if the order may proceed
+	Allowed      bool            // true if the order may proceed
 	CappedAmount decimal.Decimal // possibly-capped amount (zero if not allowed)
-	WasCapped    bool          // true if SizeCap was applied
-	Pending      bool          // true if order is queued for manual approval
-	Reason       string        // human-readable explanation
+	WasCapped    bool            // true if SizeCap was applied
+	Pending      bool            // true if order is queued for manual approval
+	Reason       string          // human-readable explanation
 }
 
 // CheckOrder evaluates a candidate live order against the guard. It returns
@@ -430,23 +430,23 @@ func (g *Guard) IsArmed() bool {
 // Status is a point-in-time snapshot of guard state for /status and admin
 // endpoints.
 type Status struct {
-	Enabled          bool            `json:"enabled"`
-	ArmRequired      bool            `json:"arm_required"`
-	Armed            bool            `json:"armed"`
-	ArmedBy          string          `json:"armed_by,omitempty"`
-	ArmedAt          time.Time       `json:"armed_at,omitempty"`
-	ArmReason        string          `json:"arm_reason,omitempty"`
-	SizeCapPct       decimal.Decimal `json:"size_cap_pct"`
-	FirstNHold       int             `json:"first_n_hold"`
-	FirstNHoldPlaced int             `json:"first_n_hold_placed"`
-	PlacedLive       int             `json:"placed_live"`
-	Approved         int             `json:"approved"`
-	Rejected         int             `json:"rejected"`
-	Capped           int             `json:"capped"`
-	Pending          []PendingOrder  `json:"pending"`
-	RecentRejects    []RejectEvent   `json:"recent_rejects,omitempty"`
+	Enabled          bool             `json:"enabled"`
+	ArmRequired      bool             `json:"arm_required"`
+	Armed            bool             `json:"armed"`
+	ArmedBy          string           `json:"armed_by,omitempty"`
+	ArmedAt          time.Time        `json:"armed_at,omitempty"`
+	ArmReason        string           `json:"arm_reason,omitempty"`
+	SizeCapPct       decimal.Decimal  `json:"size_cap_pct"`
+	FirstNHold       int              `json:"first_n_hold"`
+	FirstNHoldPlaced int              `json:"first_n_hold_placed"`
+	PlacedLive       int              `json:"placed_live"`
+	Approved         int              `json:"approved"`
+	Rejected         int              `json:"rejected"`
+	Capped           int              `json:"capped"`
+	Pending          []PendingOrder   `json:"pending"`
+	RecentRejects    []RejectEvent    `json:"recent_rejects,omitempty"`
 	ArmDisarmEvents  []ArmDisarmEvent `json:"arm_disarm_events,omitempty"`
-	PhraseHint       string          `json:"phrase_hint,omitempty"`
+	PhraseHint       string           `json:"phrase_hint,omitempty"`
 }
 
 // Status returns a snapshot of the guard's state. phraseHint is the last 6

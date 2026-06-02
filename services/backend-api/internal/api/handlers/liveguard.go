@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/app/execution/liveguard"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 )
 
 // LiveGuardHandler exposes the live-trading safety guard over HTTP.
@@ -16,9 +16,9 @@ import (
 // All endpoints are mounted under the admin middleware group in routes.go.
 // Operators must:
 //
-//	1. POST /api/v1/admin/live-guard/arm    with the configured confirmation phrase
-//	2. POST /api/v1/admin/live-guard/approve/:intentID  to release each pending live order
-//	3. POST /api/v1/admin/live-guard/disarm  to stop accepting live orders
+//  1. POST /api/v1/admin/live-guard/arm    with the configured confirmation phrase
+//  2. POST /api/v1/admin/live-guard/approve/:intentID  to release each pending live order
+//  3. POST /api/v1/admin/live-guard/disarm  to stop accepting live orders
 //
 // The guard is process-local: arming it on one process does not arm others.
 // This is intentional — every process that may place live orders must be
