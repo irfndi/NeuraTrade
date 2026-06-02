@@ -11,6 +11,7 @@ import (
 	domainmarketdata "github.com/irfndi/neuratrade/internal/domain/marketdata"
 	"github.com/irfndi/neuratrade/internal/logging"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
 	"github.com/irfndi/neuratrade/internal/ports"
@@ -469,6 +470,7 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 		}); err != nil {
 			a.logger.WithError(err).Warnf("failed to publish market tick for %s:%s", exchangeID, symbol)
 		}
+		metrics.MarketTicksTotal.WithLabelValues(exchangeID, symbol).Inc()
 
 		key := exchangeID + ":" + symbol
 		now := time.Now()

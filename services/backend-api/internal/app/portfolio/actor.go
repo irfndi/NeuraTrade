@@ -7,6 +7,7 @@ import (
 	"time"
 
 	domainportfolio "github.com/irfndi/neuratrade/internal/domain/portfolio"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/ports"
 )
@@ -115,6 +116,8 @@ func (a *PortfolioActor) handleOrderFilled(ctx context.Context, event OrderFille
 	if err != nil {
 		return err
 	}
+
+	metrics.PortfolioPositionsActive.Set(float64(len(a.portfolio.Snapshot().Positions)))
 
 	if a.eventBus == nil {
 		return nil

@@ -15,6 +15,7 @@ import (
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
 	"github.com/google/uuid"
+	"github.com/irfndi/neuratrade/internal/metrics"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
@@ -228,6 +229,8 @@ func (a *ExecutionActor) Receive(ctx context.Context, env actor.Envelope) error 
 
 // handlePlaceOrder processes a new order placement with idempotency
 func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg) error {
+	start := time.Now()
+
 	// Check for duplicate intent
 	existing, err := a.idempotencyStore.GetIntent(ctx, msg.IntentID)
 	if err != nil {
@@ -338,6 +341,10 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 			"rejection_source": "execution_actor",
 		})
 		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
+		metrics.ExecutionOrdersTotal.WithLabelValues(
+			intent.Request.Exchange, intent.Request.Symbol, string(intent.Request.Side), "rejected",
+		).Inc()
+		a.updatePendingGauge()
 		if updateErr != nil {
 			return errors.Join(
 				ErrRiskNotApproved,
@@ -361,6 +368,10 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 
 		a.logAuditEvent(ctx, msg.IntentID, "rejected", req.Exchange, req.Symbol, reason, nil)
 		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
+		metrics.ExecutionOrdersTotal.WithLabelValues(
+			req.Exchange, req.Symbol, string(req.Side), "rejected",
+		).Inc()
+		a.updatePendingGauge()
 		if updateErr != nil {
 			return errors.Join(
 				fmt.Errorf("%w: %s", ErrExecutionRejected, reason),
@@ -393,6 +404,10 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 
 	// Publish event
 	a.publishEvent(ctx, ports.EventTypeOrderPlaced, intent)
+	metrics.ExecutionOrdersTotal.WithLabelValues(
+		req.Exchange, req.Symbol, string(req.Side), "placed",
+	).Inc()
+	a.updatePendingGauge()
 
 	// If already filled, emit fill event
 	if result.Status == ports.OrderStatusFilled {
@@ -401,7 +416,13 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 			"fill_price":    result.AveragePrice,
 		})
 		a.publishEvent(ctx, ports.EventTypeOrderFilled, intent)
+		metrics.ExecutionOrdersTotal.WithLabelValues(
+			req.Exchange, req.Symbol, string(req.Side), "filled",
+		).Inc()
+		metrics.ExecutionPendingOrders.Set(0)
 	}
+
+	metrics.ExecutionOrderLatency.WithLabelValues(req.Exchange).Observe(time.Since(start).Seconds())
 
 	return nil
 }
@@ -711,6 +732,17 @@ func (a *ExecutionActor) publishEvent(ctx context.Context, eventType string, int
 	if err := a.eventBus.Publish(ctx, orderEvent); err != nil {
 		zaplogrus.Warnf("[EVENT] failed to publish intent=%s type=%s: %s", intent.IntentID, eventType, sanitizeExternalError(err))
 	}
+}
+
+// updatePendingGauge recalculates pending orders gauge from in-memory state.
+func (a *ExecutionActor) updatePendingGauge() {
+	count := 0
+	for _, intent := range a.intents {
+		if !intent.IsTerminal() {
+			count++
+		}
+	}
+	metrics.ExecutionPendingOrders.Set(float64(count))
 }
 
 // OrderEvent wraps domain events with order data
