@@ -60,13 +60,17 @@ func (a *TalibAdapter) Stochastic(high, low, close []decimal.Decimal, kPeriod, d
 	floatClose := decimalsToFloats(close)
 
 	kResult, dResult := talib.StochF(floatHigh, floatLow, floatClose, kPeriod, dPeriod, MATypeSMA)
-	return floatsToDecimals(kResult), floatsToDecimals(dResult)
+	return alignTwo(floatsToDecimals(kResult), floatsToDecimals(dResult))
 }
 
 func (a *TalibAdapter) MACD(prices []decimal.Decimal, fastPeriod, slowPeriod, signalPeriod int) (macd, signal, histogram []decimal.Decimal) {
 	floatPrices := decimalsToFloats(prices)
 	macdResult, signalResult, histResult := talib.Macd(floatPrices, fastPeriod, slowPeriod, signalPeriod)
-	return floatsToDecimals(macdResult), floatsToDecimals(signalResult), floatsToDecimals(histResult)
+	return alignThree(
+		floatsToDecimals(macdResult),
+		floatsToDecimals(signalResult),
+		floatsToDecimals(histResult),
+	)
 }
 
 func (a *TalibAdapter) BollingerBands(prices []decimal.Decimal, period int, stdDev float64) (upper, middle, lower []decimal.Decimal) {

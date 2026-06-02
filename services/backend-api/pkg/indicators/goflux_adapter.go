@@ -8,6 +8,25 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func alignThree[T any](a, b, c []T) ([]T, []T, []T) {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	if len(c) < minLen {
+		minLen = len(c)
+	}
+	return a[:minLen], b[:minLen], c[:minLen]
+}
+
+func alignTwo[T any](a, b []T) ([]T, []T) {
+	minLen := len(a)
+	if len(b) < minLen {
+		minLen = len(b)
+	}
+	return a[:minLen], b[:minLen]
+}
+
 // GoFluxAdapter implements IndicatorProvider using the GoFlux library.
 type GoFluxAdapter struct {
 	name    string
@@ -54,13 +73,17 @@ func (a *GoFluxAdapter) Stochastic(high, low, close []decimal.Decimal, kPeriod, 
 	floatClose := decimalsToFloats(close)
 
 	kResult, dResult := talib.StochF(floatHigh, floatLow, floatClose, kPeriod, dPeriod, 0)
-	return floatsToDecimals(kResult), floatsToDecimals(dResult)
+	return alignTwo(floatsToDecimals(kResult), floatsToDecimals(dResult))
 }
 
 func (a *GoFluxAdapter) MACD(prices []decimal.Decimal, fastPeriod, slowPeriod, signalPeriod int) (macd, signal, histogram []decimal.Decimal) {
 	floatPrices := decimalsToFloats(prices)
 	macdResult, signalResult, histResult := talib.Macd(floatPrices, fastPeriod, slowPeriod, signalPeriod)
-	return floatsToDecimals(macdResult), floatsToDecimals(signalResult), floatsToDecimals(histResult)
+	return alignThree(
+		floatsToDecimals(macdResult),
+		floatsToDecimals(signalResult),
+		floatsToDecimals(histResult),
+	)
 }
 
 func (a *GoFluxAdapter) BollingerBands(prices []decimal.Decimal, period int, stdDev float64) (upper, middle, lower []decimal.Decimal) {
