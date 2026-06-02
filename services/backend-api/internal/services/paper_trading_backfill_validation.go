@@ -511,8 +511,25 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 			}
 			symbolRecentVolumes[candle.Symbol] = recentVolumes
 
-			candleRange := candle.High.Sub(candle.Low)
-			recentRanges = append(recentRanges, candleRange)
+			// Calculate True Range (not just High-Low): TR = max(High-Low,
+			// |High-PrevClose|, |Low-PrevClose|). Uses the previous close from
+			// before the current candle's close was appended.
+			prevClose := decimal.Zero
+			if n := len(recentCloses); n > 0 {
+				prevClose = recentCloses[n-1]
+			}
+			tr := candle.High.Sub(candle.Low)
+			if !prevClose.IsZero() {
+				highGap := candle.High.Sub(prevClose).Abs()
+				lowGap := candle.Low.Sub(prevClose).Abs()
+				if highGap.GreaterThan(tr) {
+					tr = highGap
+				}
+				if lowGap.GreaterThan(tr) {
+					tr = lowGap
+				}
+			}
+			recentRanges = append(recentRanges, tr) // store True Range, not raw High-Low
 			if len(recentRanges) > 5 {
 				recentRanges = recentRanges[1:]
 			}
@@ -626,32 +643,18 @@ func (v *PaperTradingBackfillValidation) Run(ctx context.Context) (*PaperTrading
 				continue
 			}
 
-			// Calculate True Range (not just High-Low): TR = max(High-Low,
-			// |High-PrevClose|, |Low-PrevClose|). Then average over the last
-			// 5 candles for an ATR proxy. This is what Welles Wilder intended
-			// and what most trading-platform backtests use.
-			prevClose := decimal.Zero
-			if n := len(recentCloses); n > 0 {
-				prevClose = recentCloses[n-1]
-			}
-			tr := candle.High.Sub(candle.Low)
-			if !prevClose.IsZero() {
-				highGap := candle.High.Sub(prevClose).Abs()
-				lowGap := candle.Low.Sub(prevClose).Abs()
-				if highGap.GreaterThan(tr) {
-					tr = highGap
-				}
-				if lowGap.GreaterThan(tr) {
-					tr = lowGap
-				}
-			}
-			atr := tr
-			if len(symbolRecentRanges[candle.Symbol]) >= 5 {
+			// ATR from stored True Range history (calculated during history update
+			// using the correct previous close, not the current close).
+			recentRanges = symbolRecentRanges[candle.Symbol]
+			atr := candle.High.Sub(candle.Low) // fallback
+			if len(recentRanges) >= 5 {
 				atr = decimal.Zero
-				for _, r := range symbolRecentRanges[candle.Symbol] {
+				for _, r := range recentRanges {
 					atr = atr.Add(r)
 				}
 				atr = atr.Div(decimal.NewFromInt(5))
+			} else if len(recentRanges) > 0 {
+				atr = recentRanges[len(recentRanges)-1]
 			}
 			// SL/TP at 2x ATR. The previous 100x multiplier placed levels
 			// far beyond any reachable move, so trades never closed by
@@ -996,6 +999,14 @@ func (v *PaperTradingBackfillValidation) evaluateCandleSignal(
 
 	last := recentCloses[len(recentCloses)-1]
 	first := recentCloses[0]
+	// Require at least 0.5% net move over the 20-candle window to avoid
+	// treating noise or flat consolidation as a trend direction.
+	if !first.IsZero() {
+		changePct := last.Sub(first).Div(first).Abs()
+		if changePct.LessThan(decimal.NewFromFloat(0.005)) {
+			return 0, "hold", ""
+		}
+	}
 	if last.Equal(first) {
 		return 0, "hold", ""
 	}
