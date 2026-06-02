@@ -22,6 +22,14 @@ on:
         description: Docker image tag to deploy
         required: false
         default: latest
+      action:
+        description: Action to perform
+        required: false
+        default: deploy
+        type: choice
+        options:
+          - deploy
+          - rollback
 
 permissions:
   contents: read
@@ -83,7 +91,9 @@ jobs:
     needs: [build-and-push-image]
     if: >
       github.ref == 'refs/heads/main' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.environment == 'staging' &&
+       github.event.inputs.action != 'rollback')
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -149,10 +159,12 @@ jobs:
 
   deploy-production:
     name: Deploy to Production
-    needs: [build-and-push-image]
+    needs: [deploy-staging]
     if: >
       github.ref == 'refs/heads/main' ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+      (github.event_name == 'workflow_dispatch' &&
+       github.event.inputs.environment == 'production' &&
+       github.event.inputs.action != 'rollback')
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -260,7 +272,7 @@ jobs:
 
   rollback:
     name: Rollback
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'rollback'
     runs-on: ubuntu-latest
     steps:
       - name: Rollback to previous version
