@@ -23,6 +23,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/api/handlers"
 	autonomyruntime "github.com/irfndi/neuratrade/internal/app/autonomy/runtime"
 	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
+	"github.com/irfndi/neuratrade/internal/app/execution/liveguard"
 	"github.com/irfndi/neuratrade/internal/autonomous"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	"github.com/irfndi/neuratrade/internal/config"
@@ -915,6 +916,20 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	}
 	orderExecutor = services.NewModeAwareOrderExecutor(liveOrderExecutor, paperOrderExec, opModeService)
 
+	liveGuard := liveguard.New(liveguard.LoadConfig())
+	zaplogrus.Infof("Live trading safety guard loaded (phrase hint %s). POST /api/v1/admin/live-guard/arm to enable live orders.", liveGuard.Status().PhraseHint)
+	orderExecutor.(*services.ModeAwareOrderExecutor).WithLiveGuard(liveGuard)
+	chatLiveFn := func(ctx context.Context, id string) bool {
+		if opModeService == nil {
+			return false
+		}
+		return opModeService.GetMode(id) == services.OpModeLive
+	}
+	orderExecutor.(*services.ModeAwareOrderExecutor).WithChatLiveLookups(
+		func(ctx context.Context) string { return chatID },
+		chatLiveFn,
+	)
+
 	orderExecutor = services.NewSafeOrderExecutor(orderExecutor, portfolioSafety, chatID)
 	zaplogrus.Infof("Portfolio safety gate enabled for scalping order execution")
 
@@ -1471,6 +1486,18 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 					"accounts":      resumed,
 				})
 			})
+		}
+
+		liveGuardHandler := handlers.NewLiveGuardHandler(liveGuard)
+		adminLiveGuard := v1.Group("/admin/live-guard")
+		adminLiveGuard.Use(adminMiddleware.RequireAdminAuth())
+		{
+			adminLiveGuard.GET("/status", liveGuardHandler.LiveGuardStatus)
+			adminLiveGuard.GET("/pending", liveGuardHandler.LiveGuardPending)
+			adminLiveGuard.POST("/arm", liveGuardHandler.ArmLiveTrading)
+			adminLiveGuard.POST("/disarm", liveGuardHandler.DisarmLiveTrading)
+			adminLiveGuard.POST("/approve/:intentID", liveGuardHandler.ApprovePendingOrder)
+			adminLiveGuard.POST("/reject/:intentID", liveGuardHandler.RejectPendingOrder)
 		}
 
 		trading := v1.Group("/trading")

@@ -10,6 +10,7 @@ import (
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
+	"github.com/irfndi/neuratrade/internal/app/execution/liveguard"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
@@ -30,6 +31,8 @@ type ServiceConfig struct {
 	IdempotencyStore IdempotencyStore
 	AuditLog         AuditLogger
 	AuthorizeIntent  func(ctx context.Context, intentID string) error
+	LiveGuard        *liveguard.Guard
+	ChatLiveChecker  func(ctx context.Context, chatID string) bool
 }
 
 // NewExecutionService creates and initializes the execution service
@@ -54,7 +57,7 @@ func NewExecutionService(config ServiceConfig) (*ExecutionService, error) {
 		config.EventBus,
 		config.IdempotencyStore,
 		config.AuditLog,
-	)
+	).WithLiveGuard(config.LiveGuard).WithChatLiveChecker(config.ChatLiveChecker)
 
 	// Create actor reference with mailbox
 	actorRef := actor.NewRef(execActor, config.ActorConfig)

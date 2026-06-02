@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
+	"github.com/irfndi/neuratrade/internal/app/execution/liveguard"
 	"github.com/shopspring/decimal"
 )
 
@@ -43,9 +45,12 @@ func paperTradeFlagForContext(ctx context.Context, fallback bool) bool {
 }
 
 type ModeAwareOrderExecutor struct {
-	liveExecutor  ScalpingOrderExecutor
-	paperExecutor ScalpingOrderExecutor
-	opModeService *OperationalModeService
+	liveExecutor   ScalpingOrderExecutor
+	paperExecutor  ScalpingOrderExecutor
+	opModeService  *OperationalModeService
+	liveGuard      *liveguard.Guard
+	chatLiveLookup func(ctx context.Context, chatID string) bool
+	chatIDLookup   func(ctx context.Context) string
 }
 
 func NewModeAwareOrderExecutor(liveExecutor, paperExecutor ScalpingOrderExecutor, opModeService *OperationalModeService) *ModeAwareOrderExecutor {
@@ -54,6 +59,27 @@ func NewModeAwareOrderExecutor(liveExecutor, paperExecutor ScalpingOrderExecutor
 		paperExecutor: paperExecutor,
 		opModeService: opModeService,
 	}
+}
+
+// WithLiveGuard installs the process-level live trading safety guard. The
+// guard fires only when the resolved mode is OpModeLive.
+func (e *ModeAwareOrderExecutor) WithLiveGuard(guard *liveguard.Guard) *ModeAwareOrderExecutor {
+	if e == nil {
+		return e
+	}
+	e.liveGuard = guard
+	return e
+}
+
+// WithChatLiveLookups installs the chat-ID extractor and live-mode check used
+// by the live guard. Both may be nil in test setups.
+func (e *ModeAwareOrderExecutor) WithChatLiveLookups(chatIDLookup func(ctx context.Context) string, liveLookup func(ctx context.Context, chatID string) bool) *ModeAwareOrderExecutor {
+	if e == nil {
+		return e
+	}
+	e.chatIDLookup = chatIDLookup
+	e.chatLiveLookup = liveLookup
+	return e
 }
 
 func (e *ModeAwareOrderExecutor) resolveMode(ctx context.Context) OperationalMode {
@@ -100,7 +126,42 @@ func (e *ModeAwareOrderExecutor) PlaceOrderWithDetails(ctx context.Context, deta
 		return "", err
 	}
 	details.IsPaperTrade = mode != OpModeLive
-	return executor.PlaceOrderWithDetails(ctx, details)
+
+	if mode == OpModeLive && e.liveGuard != nil {
+		chatID := ""
+		if e.chatIDLookup != nil {
+			chatID = strings.TrimSpace(e.chatIDLookup(ctx))
+		}
+		chatIsLive := true
+		if e.chatLiveLookup != nil && chatID != "" {
+			chatIsLive = e.chatLiveLookup(ctx, chatID)
+		}
+		intentID := strings.TrimSpace(details.IntentID)
+		if intentID == "" {
+			intentID = strings.TrimSpace(details.ClientOrderID)
+		}
+		if intentID == "" {
+			intentID = fmt.Sprintf("scalping-%d", time.Now().UTC().UnixNano())
+		}
+		result, gerr := e.liveGuard.CheckOrder(intentID, chatID, details.TradeType, details.Symbol, strings.ToLower(details.Side), strings.ToLower(details.OrderType), details.Amount, chatIsLive)
+		if gerr != nil {
+			zaplogrus.Errorf("[ORDER-EXECUTOR] live guard rejected: %v", gerr)
+			return "", fmt.Errorf("live guard: %w", gerr)
+		}
+		if !result.Allowed {
+			return "", fmt.Errorf("live guard: %s", result.Reason)
+		}
+		if result.WasCapped {
+			zaplogrus.Warnf("[ORDER-EXECUTOR] live guard capped order %s: %s -> %s", intentID, details.Amount.String(), result.CappedAmount.String())
+			details.Amount = result.CappedAmount
+		}
+	}
+
+	orderID, err := executor.PlaceOrderWithDetails(ctx, details)
+	if err == nil && mode == OpModeLive && e.liveGuard != nil {
+		e.liveGuard.RecordPlaced(strings.TrimSpace(details.IntentID))
+	}
+	return orderID, err
 }
 
 func (e *ModeAwareOrderExecutor) GetOpenOrders(ctx context.Context, exchange, symbol string) ([]map[string]interface{}, error) {
