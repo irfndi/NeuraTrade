@@ -26,7 +26,7 @@ func TestNewProvider_GoFlux(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, provider)
 	assert.Equal(t, "goflux", provider.Name())
-	assert.Equal(t, "0.0.4", provider.Version())
+	assert.Equal(t, "0.0.7", provider.Version())
 }
 
 func TestNewProvider_UnknownType(t *testing.T) {

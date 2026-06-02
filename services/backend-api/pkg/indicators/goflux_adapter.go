@@ -37,7 +37,7 @@ type GoFluxAdapter struct {
 func NewGoFluxAdapter() *GoFluxAdapter {
 	return &GoFluxAdapter{
 		name:    "goflux",
-		version: "0.0.4",
+		version: "0.0.7",
 	}
 }
 
