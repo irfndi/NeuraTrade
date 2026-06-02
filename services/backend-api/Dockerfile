@@ -27,11 +27,16 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 
+RUN apk add --no-cache curl
+
 # Copy binary
 COPY --from=builder /bin/server /bin/server
 
 USER appuser
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["/bin/server"]
