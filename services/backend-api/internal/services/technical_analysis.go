@@ -539,16 +539,17 @@ func (tas *TechnicalAnalysisService) calculateStochastic(high, low, close []floa
 	dh := float64SliceToDecimal(high)
 	dl := float64SliceToDecimal(low)
 	dc := float64SliceToDecimal(close)
-	_, d := tas.indicatorProvider.Stochastic(dh, dl, dc, kPeriod, dPeriod)
-	if len(d) == 0 {
+	k, d := tas.indicatorProvider.Stochastic(dh, dl, dc, kPeriod, dPeriod)
+	if len(k) == 0 || len(d) == 0 {
 		return nil
 	}
+	fk := decimalSliceToFloat64(k)
 	fd := decimalSliceToFloat64(d)
 
 	values := make([]decimal.Decimal, len(d))
 	copy(values, d)
 
-	signal, strength := tas.analyzeStochasticSignal(fd)
+	signal, strength := tas.analyzeStochasticSignal(fk, fd)
 
 	return &IndicatorResult{
 		Name:      "STOCH",
@@ -817,18 +818,30 @@ func (tas *TechnicalAnalysisService) analyzeBollingerBandsSignal(prices, smaValu
 }
 
 // analyzeStochasticSignal determines the signal based on Stochastic Oscillator levels.
-func (tas *TechnicalAnalysisService) analyzeStochasticSignal(stoch []float64) (string, decimal.Decimal) {
-	if len(stoch) == 0 {
+func (tas *TechnicalAnalysisService) analyzeStochasticSignal(k, d []float64) (string, decimal.Decimal) {
+	if len(k) == 0 || len(d) == 0 {
 		return "hold", decimal.NewFromFloat(0.5)
 	}
 
-	current := stoch[len(stoch)-1]
+	currentK := k[len(k)-1]
+	currentD := d[len(d)-1]
 
-	if current < 20 {
-		return "buy", decimal.NewFromFloat(0.75) // Oversold
+	if len(k) > 1 && len(d) > 1 {
+		prevK := k[len(k)-2]
+		prevD := d[len(d)-2]
+		if prevK <= prevD && currentK > currentD && currentK < 20 {
+			return "buy", decimal.NewFromFloat(0.85)
+		}
+		if prevK >= prevD && currentK < currentD && currentK > 80 {
+			return "sell", decimal.NewFromFloat(0.85)
+		}
 	}
-	if current > 80 {
-		return "sell", decimal.NewFromFloat(0.75) // Overbought
+
+	if currentK < 20 {
+		return "buy", decimal.NewFromFloat(0.75)
+	}
+	if currentK > 80 {
+		return "sell", decimal.NewFromFloat(0.75)
 	}
 
 	return "hold", decimal.NewFromFloat(0.5)
