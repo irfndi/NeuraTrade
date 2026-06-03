@@ -538,84 +538,9 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 	}
 	bestBid := ob.Bids[0].Price
 	bestAsk := ob.Asks[0].Price
-	spread := bestAsk.Sub(bestBid)
 	midPrice := bestBid.Add(bestAsk).Div(decimal.NewFromInt(2))
 
-	// 1% USD depth filter: only count levels within 1% of mid price.
-	// The client.CalculateOrderBookMetrics helper applies the same filter;
-	// without it the imbalance/liquidity scores diverge from what an
-	// operator sees in the UI, which made the backtest look much
-	// shallower than reality.
-	thresholdPct := decimal.NewFromFloat(0.01)
-	var thresholdAbs decimal.Decimal
-	if !midPrice.IsZero() {
-		thresholdAbs = midPrice.Mul(thresholdPct)
-	}
-	bidDepth := decimal.Zero
-	askDepth := decimal.Zero
-	if !thresholdAbs.IsZero() {
-		for _, lvl := range ob.Bids {
-			if lvl.Price.GreaterThanOrEqual(midPrice.Sub(thresholdAbs)) {
-				bidDepth = bidDepth.Add(lvl.Amount)
-			}
-		}
-		for _, lvl := range ob.Asks {
-			if lvl.Price.LessThanOrEqual(midPrice.Add(thresholdAbs)) {
-				askDepth = askDepth.Add(lvl.Amount)
-			}
-		}
-	} else {
-		for _, lvl := range ob.Bids {
-			bidDepth = bidDepth.Add(lvl.Amount)
-		}
-		for _, lvl := range ob.Asks {
-			askDepth = askDepth.Add(lvl.Amount)
-		}
-	}
-	totalDepth := bidDepth.Add(askDepth)
-
-	var imbalance decimal.Decimal
-	if !totalDepth.IsZero() {
-		imbalance = bidDepth.Sub(askDepth).Div(totalDepth)
-	}
-
-	var spreadPct decimal.Decimal
-	if !midPrice.IsZero() {
-		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
-	}
-
-	var liquidityScore decimal.Decimal
-	if !midPrice.IsZero() {
-		// USD-weighted depth: totalDepth is in base currency (e.g., BTC),
-		// multiply by midPrice to get USD-denominated depth.
-		// Formula mirrors client.CalculateOrderBookMetrics.calculateLiquidityScore:
-		//   spreadScore(40%) + depthScore(50%) - imbalancePenalty(10%)
-		totalDepthUSD := totalDepth.Mul(midPrice)
-
-		// Spread score: 0.01% spread → 100, 1% spread → 0
-		spreadScore := decimal.NewFromInt(100).Sub(spreadPct.Mul(decimal.NewFromInt(100)))
-		if spreadScore.LessThan(decimal.Zero) {
-			spreadScore = decimal.Zero
-		}
-
-		// Depth score: $1M depth → 100, $10k depth → 10
-		depthScore := totalDepthUSD.Div(decimal.NewFromInt(10000)).Mul(decimal.NewFromInt(10))
-		if depthScore.GreaterThan(decimal.NewFromInt(100)) {
-			depthScore = decimal.NewFromInt(100)
-		}
-
-		imbalancePenalty := imbalance.Abs().Mul(decimal.NewFromInt(20))
-
-		liquidityScore = spreadScore.Mul(decimal.NewFromFloat(0.4)).
-			Add(depthScore.Mul(decimal.NewFromFloat(0.5))).
-			Sub(imbalancePenalty.Mul(decimal.NewFromFloat(0.1)))
-	}
-	if liquidityScore.LessThan(decimal.Zero) {
-		liquidityScore = decimal.Zero
-	}
-	if liquidityScore.GreaterThan(decimal.NewFromInt(100)) {
-		liquidityScore = decimal.NewFromInt(100)
-	}
+	_, _, imbalance, spreadPct, liquidityScore := computeOrderBookMetrics(ob.Bids, ob.Asks)
 
 	if err := a.publishEvent(ctx, "market.orderbook", "market.orderbook", domainmarketdata.OrderBookMetricsEvent{
 		TraceID:        uuid.New().String(),
@@ -632,6 +557,77 @@ func (a *CollectorActor) collectOrderBook(ctx context.Context, gw ports.MarketDa
 	}); err != nil {
 		a.logger.WithError(err).Warnf("failed to publish orderbook metrics for %s:%s", exchangeID, symbol)
 	}
+}
+
+// computeOrderBookMetrics derives imbalance, spread, and liquidity score from
+// raw order book levels. It mirrors internal/ccxt/client.go CalculateOrderBookMetrics:
+// the 1% USD-weighted depth filter, USD-denominated depth, and the same scoring
+// formula. Exposed package-level so tests can assert the math without a live
+// event bus.
+func computeOrderBookMetrics(bids, asks []ports.PriceLevel) (bidDepth, askDepth, imbalance, spreadPct, liquidityScore decimal.Decimal) {
+	bidDepth = decimal.Zero
+	askDepth = decimal.Zero
+	imbalance = decimal.Zero
+	spreadPct = decimal.Zero
+	liquidityScore = decimal.Zero
+	if len(bids) == 0 || len(asks) == 0 {
+		return
+	}
+
+	bestBid := bids[0].Price
+	bestAsk := asks[0].Price
+	spread := bestAsk.Sub(bestBid)
+	midPrice := bestBid.Add(bestAsk).Div(decimal.NewFromInt(2))
+
+	thresholdPct := decimal.NewFromFloat(0.01)
+	var thresholdAbs decimal.Decimal
+	if !midPrice.IsZero() {
+		thresholdAbs = midPrice.Mul(thresholdPct)
+	}
+	if !thresholdAbs.IsZero() {
+		for _, lvl := range bids {
+			if midPrice.Sub(lvl.Price).LessThanOrEqual(thresholdAbs) {
+				bidDepth = bidDepth.Add(lvl.Price.Mul(lvl.Amount))
+			}
+		}
+		for _, lvl := range asks {
+			if lvl.Price.Sub(midPrice).LessThanOrEqual(thresholdAbs) {
+				askDepth = askDepth.Add(lvl.Price.Mul(lvl.Amount))
+			}
+		}
+	}
+	totalDepth := bidDepth.Add(askDepth)
+
+	if !totalDepth.IsZero() {
+		imbalance = bidDepth.Sub(askDepth).Div(totalDepth)
+	}
+
+	if !midPrice.IsZero() {
+		spreadPct = spread.Div(midPrice).Mul(decimal.NewFromInt(100))
+
+		spreadScore := decimal.NewFromInt(100).Sub(spreadPct.Mul(decimal.NewFromInt(100)))
+		if spreadScore.LessThan(decimal.Zero) {
+			spreadScore = decimal.Zero
+		}
+
+		depthScore := totalDepth.Div(decimal.NewFromInt(10000)).Mul(decimal.NewFromInt(10))
+		if depthScore.GreaterThan(decimal.NewFromInt(100)) {
+			depthScore = decimal.NewFromInt(100)
+		}
+
+		imbalancePenalty := imbalance.Abs().Mul(decimal.NewFromInt(20))
+
+		liquidityScore = spreadScore.Mul(decimal.NewFromFloat(0.4)).
+			Add(depthScore.Mul(decimal.NewFromFloat(0.5))).
+			Sub(imbalancePenalty.Mul(decimal.NewFromFloat(0.1)))
+	}
+	if liquidityScore.LessThan(decimal.Zero) {
+		liquidityScore = decimal.Zero
+	}
+	if liquidityScore.GreaterThan(decimal.NewFromInt(100)) {
+		liquidityScore = decimal.NewFromInt(100)
+	}
+	return
 }
 
 func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType string, payload interface{}) error {

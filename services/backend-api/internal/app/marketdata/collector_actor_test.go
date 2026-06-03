@@ -8,6 +8,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/domain/marketdata"
 	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/irfndi/neuratrade/internal/platform/eventbus"
+	"github.com/irfndi/neuratrade/internal/ports"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -141,10 +143,62 @@ func TestCollectorActor_Receive_PauseResumeExchange(t *testing.T) {
 	err = a.Receive(ctx, actor.Envelope{Message: pauseCmd})
 	assert.NoError(t, err)
 
-	// Resume exchange
 	resumeCmd := marketdata.ResumeExchangeCommand{
 		ExchangeID: "binance",
 	}
 	err = a.Receive(ctx, actor.Envelope{Message: resumeCmd})
 	assert.NoError(t, err)
+}
+
+func TestComputeOrderBookMetrics_USDWeightedOnePct(t *testing.T) {
+	bids := []ports.PriceLevel{
+		{Price: decimal.NewFromInt(100), Amount: decimal.NewFromInt(5)},
+		{Price: decimal.NewFromFloat(99.5), Amount: decimal.NewFromInt(2)},
+		{Price: decimal.NewFromInt(90), Amount: decimal.NewFromInt(50)},
+	}
+	asks := []ports.PriceLevel{
+		{Price: decimal.NewFromInt(100), Amount: decimal.NewFromInt(3)},
+		{Price: decimal.NewFromFloat(100.5), Amount: decimal.NewFromInt(4)},
+		{Price: decimal.NewFromInt(110), Amount: decimal.NewFromInt(50)},
+	}
+	bidDepth, askDepth, imbalance, spreadPct, liquidityScore := computeOrderBookMetrics(bids, asks)
+
+	wantBid := decimal.NewFromInt(699)
+	wantAsk := decimal.NewFromInt(702)
+	assert.True(t, bidDepth.Equal(wantBid), "BidDepth1Pct: want %s, got %s", wantBid, bidDepth)
+	assert.True(t, askDepth.Equal(wantAsk), "AskDepth1Pct: want %s, got %s", wantAsk, askDepth)
+
+	wantImbalance, _ := decimal.NewFromString("-0.0021")
+	gotRounded := imbalance.Round(4)
+	assert.True(t, gotRounded.Equal(wantImbalance),
+		"Imbalance1Pct: want %s, got %s (raw=%s)", wantImbalance, gotRounded, imbalance)
+
+	assert.True(t, spreadPct.IsZero(), "BidAskSpread: want 0, got %s", spreadPct)
+
+	assert.True(t, liquidityScore.GreaterThan(decimal.NewFromInt(40)),
+		"LiquidityScore should be >40 with 0 spread, got %s", liquidityScore)
+	assert.True(t, liquidityScore.LessThan(decimal.NewFromInt(41)),
+		"LiquidityScore should be <41 with $1401 depth, got %s", liquidityScore)
+}
+
+func TestComputeOrderBookMetrics_EmptyBook(t *testing.T) {
+	bidDepth, askDepth, imbalance, spreadPct, liquidityScore := computeOrderBookMetrics(nil, nil)
+	assert.True(t, bidDepth.IsZero())
+	assert.True(t, askDepth.IsZero())
+	assert.True(t, imbalance.IsZero())
+	assert.True(t, spreadPct.IsZero())
+	assert.True(t, liquidityScore.IsZero())
+}
+
+func TestComputeOrderBookMetrics_AllLevelsOutsideOnePct(t *testing.T) {
+	bids := []ports.PriceLevel{
+		{Price: decimal.NewFromInt(80), Amount: decimal.NewFromInt(1)},
+	}
+	asks := []ports.PriceLevel{
+		{Price: decimal.NewFromInt(120), Amount: decimal.NewFromInt(1)},
+	}
+	bidDepth, askDepth, imbalance, _, _ := computeOrderBookMetrics(bids, asks)
+	assert.True(t, bidDepth.IsZero(), "all-out-of-range bids should yield 0 depth")
+	assert.True(t, askDepth.IsZero(), "all-out-of-range asks should yield 0 depth")
+	assert.True(t, imbalance.IsZero(), "zero depth means zero imbalance")
 }
