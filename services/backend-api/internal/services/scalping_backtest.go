@@ -359,6 +359,27 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 		e.positions[positionKey] = position
 	}
 
+	for positionKey, position := range e.positions {
+		parts := strings.SplitN(positionKey, "|", 2)
+		exchange := ""
+		if len(parts) == 2 {
+			exchange = parts[0]
+		}
+		closeSignal := HistoricalSignal{
+			Timestamp: e.config.EndTime,
+			Symbol:    position.Symbol,
+			Exchange:  exchange,
+			Signal:    position.Signal,
+		}
+		if closeSignal.Timestamp.IsZero() && len(signals) > 0 {
+			closeSignal.Timestamp = signals[len(signals)-1].Timestamp
+		}
+		trade := e.closeSimulatedPosition(closeSignal, position)
+		e.tradeHistory = append(e.tradeHistory, trade)
+		e.capital = e.capital.Add(trade.PnL)
+		delete(e.positions, positionKey)
+	}
+
 	result := &ScalpingBacktestResult{
 		RunID:       runID,
 		Config:      e.config,
