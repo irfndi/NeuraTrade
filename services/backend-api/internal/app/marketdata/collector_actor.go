@@ -502,7 +502,7 @@ func (a *CollectorActor) shouldCollect(lastCollected *map[string]time.Time, key 
 
 func (a *CollectorActor) collectOHLCV(ctx context.Context, gw ports.MarketDataGateway, exchangeID, symbol string) {
 	timeframe := a.ohlcvTimeframe()
-	candles, err := gw.FetchOHLCV(ctx, exchangeID, symbol, timeframe, time.Time{}, 60)
+	candles, err := gw.FetchOHLCV(ctx, exchangeID, symbol, timeframe, time.Time{}, 1)
 	if err != nil {
 		a.logger.WithError(fmt.Errorf("fetch ohlcv for %s:%s: %w", exchangeID, symbol, err)).
 			Warn("collector fetch ohlcv failed")
