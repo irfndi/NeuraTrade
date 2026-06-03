@@ -1366,28 +1366,22 @@ func TestScalpingBacktestEngine_RunSignalsForceClosesOpenPositionsAtEnd(t *testi
 
 func TestScalpingBacktestEngine_ForceCloseSweepEmptiesPositions(t *testing.T) {
 	now := time.Date(2026, 5, 12, 3, 0, 0, 0, time.UTC)
-	engine := NewScalpingBacktestEngine(nil, ScalpingBacktestConfig{
-		StartTime:          now.Add(-time.Minute),
-		EndTime:            now.Add(5 * time.Minute),
-		Symbols:            []string{"AAA/USDT"},
-		Exchange:           "bitget",
-		InitialCapital:     decimal.NewFromInt(48),
-		FeeRate:            decimal.NewFromFloat(0.0006),
-		SlippagePct:        decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
-		MaxBidAskSpreadPct: 1,
-		MinConfidence:      0.55,
-		MinExpectancyN:     99,
-		MaxCapitalPct:      5,
-		DefaultHoldPeriod:  time.Minute,
-	})
+	engine := newRunSignalsTestEngine(now)
 
-	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{
-		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
-		runSignalsTestSignal(now.Add(90*time.Second), "AAA/USDT", 102, 0.50, 35),
-	})
+	engine.positions["bitget|AAA/USDT"] = &SimulatedPosition{
+		Symbol:     "AAA/USDT",
+		Side:       "buy",
+		Size:       decimal.NewFromInt(1),
+		Notional:   decimal.NewFromInt(100),
+		EntryPrice: decimal.NewFromInt(100),
+		EntryTime:  now.Add(-time.Minute),
+		Signal:     MarketSignal{Symbol: "AAA/USDT", Price: 100},
+	}
 
-	require.NoError(t, err)
+	engine.sweepRemainingPositions(map[string]float64{"AAA/USDT": 102}, nil)
+
 	require.Equal(t, 0, len(engine.positions), "no positions remain after sweep")
-	require.Len(t, result.Trades, 1)
-	require.Equal(t, "take_profit", result.Trades[0].ExitReason)
+	require.Len(t, engine.tradeHistory, 1)
+	require.Equal(t, "force_close_end_of_run", engine.tradeHistory[0].ExitReason)
+	require.Equal(t, "AAA/USDT", engine.tradeHistory[0].Symbol)
 }

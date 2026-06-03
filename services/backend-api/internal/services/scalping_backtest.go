@@ -292,11 +292,13 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 		return signals[i].Exchange < signals[j].Exchange
 	})
 	lastSignalAtByPosition := make(map[string]time.Time, len(signals))
+	lastPriceBySymbol := make(map[string]float64)
 	for _, signal := range signals {
 		positionKey := simulatedPositionKey(signal.Exchange, signal.Symbol)
 		if signal.Timestamp.After(lastSignalAtByPosition[positionKey]) {
 			lastSignalAtByPosition[positionKey] = signal.Timestamp
 		}
+		lastPriceBySymbol[signal.Symbol] = signal.Signal.Price
 	}
 
 	for _, signal := range signals {
@@ -359,26 +361,11 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 		e.positions[positionKey] = position
 	}
 
-	for positionKey, position := range e.positions {
-		parts := strings.SplitN(positionKey, "|", 2)
-		exchange := ""
-		if len(parts) == 2 {
-			exchange = parts[0]
-		}
-		closeSignal := HistoricalSignal{
-			Timestamp: e.config.EndTime,
-			Symbol:    position.Symbol,
-			Exchange:  exchange,
-			Signal:    position.Signal,
-		}
-		if closeSignal.Timestamp.IsZero() && len(signals) > 0 {
-			closeSignal.Timestamp = signals[len(signals)-1].Timestamp
-		}
-		trade := e.closeSimulatedPosition(closeSignal, position)
-		e.tradeHistory = append(e.tradeHistory, trade)
-		e.capital = e.capital.Add(trade.PnL)
-		delete(e.positions, positionKey)
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("run scalping backtest signals (end-of-run sweep): %w", err)
 	}
+
+	e.sweepRemainingPositions(lastPriceBySymbol, signals)
 
 	result := &ScalpingBacktestResult{
 		RunID:       runID,
@@ -403,6 +390,31 @@ func (e *ScalpingBacktestEngine) hasObservableClose(signal HistoricalSignal, las
 		holdFor = DefaultScalpingBacktestHoldPeriod
 	}
 	return !lastSignalAt.Before(signal.Timestamp.Add(holdFor))
+}
+
+func (e *ScalpingBacktestEngine) sweepRemainingPositions(lastPriceBySymbol map[string]float64, signals []HistoricalSignal) {
+	for positionKey, position := range e.positions {
+		parts := strings.SplitN(positionKey, "|", 2)
+		exchange := ""
+		if len(parts) == 2 {
+			exchange = parts[0]
+		}
+		closePrice := lastPriceBySymbol[position.Symbol]
+		closeSignal := HistoricalSignal{
+			Timestamp: e.config.EndTime,
+			Symbol:    position.Symbol,
+			Exchange:  exchange,
+			Signal:    MarketSignal{Price: closePrice, OrderBookImbalance: position.Signal.OrderBookImbalance, ConfidenceHint: position.Signal.ConfidenceHint},
+		}
+		if closeSignal.Timestamp.IsZero() && len(signals) > 0 {
+			closeSignal.Timestamp = signals[len(signals)-1].Timestamp
+		}
+		trade := e.closeSimulatedPosition(closeSignal, position)
+		trade.ExitReason = "force_close_end_of_run"
+		e.tradeHistory = append(e.tradeHistory, trade)
+		e.capital = e.capital.Add(trade.PnL)
+		delete(e.positions, positionKey)
+	}
 }
 
 func (e *ScalpingBacktestEngine) loadHistoricalSignals(ctx context.Context, startTime, endTime time.Time) ([]HistoricalSignal, error) {
