@@ -87,20 +87,20 @@ func LoadConfig() Config {
 type Guard struct {
 	cfg Config
 
-	mu             sync.RWMutex
-	armed          bool
-	armedBy        string
-	armedAt        time.Time
-	armReason      string
-	placedLive     int
-	approved       int
-	rejected       int
-	capped         int
-	pendingByID    map[string]PendingOrder
-	recentRejects  []RejectEvent
-	disarmHistory  []ArmDisarmEvent
-	chatCache      map[string]bool
-	chatCacheTTL   time.Duration
+	mu            sync.RWMutex
+	armed         bool
+	armedBy       string
+	armedAt       time.Time
+	armReason     string
+	placedLive    int
+	approved      int
+	rejected      int
+	capped        int
+	pendingByID   map[string]PendingOrder
+	recentRejects []RejectEvent
+	disarmHistory []ArmDisarmEvent
+	chatCache     map[string]bool
+	chatCacheTTL  time.Duration
 }
 
 // PendingOrder is a live order held for explicit operator approval.
