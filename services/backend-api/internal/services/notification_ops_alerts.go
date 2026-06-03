@@ -246,6 +246,7 @@ func (ns *NotificationService) NotifyAIReasoning(ctx context.Context, chatID int
 
 func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNotification) string {
 	confidenceKnown := reasoning.ConfidenceKnown
+	originalConfidenceKnown := confidenceKnown
 	if !confidenceKnown &&
 		strings.TrimSpace(reasoning.ReasonCategory) == "" &&
 		strings.TrimSpace(reasoning.HoldCategory) == "" &&
@@ -265,7 +266,7 @@ func (ns *NotificationService) formatAIReasoningMessage(reasoning AIReasoningNot
 			evidence := strings.TrimSpace(reasoning.Summary + " " + strings.Join(reasoning.Reasons, " "))
 			category = classifyAIRuntimeReason(evidence, "execution_unavailable")
 		}
-		if isRuntimeReasonCategory(category) {
+		if isRuntimeReasonCategory(category) && !originalConfidenceKnown {
 			confidenceKnown = false
 		}
 		if !confidenceKnown && strings.EqualFold(category, "strategy_hold") {
@@ -332,7 +333,7 @@ func buildAIReasoningMessageLines(reasoning AIReasoningNotification, category st
 		lines = append(lines, "Confidence: ⏸️ (reconcile blocked)")
 	case infraHold && !confidenceKnown:
 		lines = append(lines, "Confidence: ⏸️ (infrastructure hold)")
-	case llmDegraded:
+	case llmDegraded && !confidenceKnown:
 		lines = append(lines, "Confidence: ⚪ N/A (runtime-degraded)")
 	case confidenceKnown:
 		confidencePercent := int(reasoning.Confidence * 100)
