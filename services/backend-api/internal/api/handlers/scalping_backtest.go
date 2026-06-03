@@ -38,6 +38,7 @@ type RunScalpingBacktestRequest struct {
 	MinConfidence      *float64 `json:"min_confidence"`
 	SpreadMultiplier   *float64 `json:"spread_multiplier"`
 	FeeRate            *string  `json:"fee_rate"`
+	NoisePct           *float64 `json:"noise_pct"`
 }
 
 type RunScalpingBacktestResponse struct {
@@ -446,6 +447,14 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 
 	symbols := normalizeSymbols(req.Symbols)
 
+	noisePct := services.DefaultScalpingBacktestNoise
+	if req.NoisePct != nil {
+		noisePct = *req.NoisePct
+	}
+	if noisePct < 0 || noisePct > 1.0 {
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("noise_pct must be between 0 and 1.0")
+	}
+
 	return services.ScalpingBacktestConfig{
 		StartTime:          start.UTC(),
 		EndTime:            end.UTC(),
@@ -457,6 +466,7 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		SpreadMultiplier:   spreadMultiplier,
 		FeeRate:            feeRateDecimal,
 		SlippagePct:        decimal.NewFromFloat(services.DefaultScalpingBacktestSlippage),
+		NoisePct:           noisePct,
 		MaxCapitalPct:      services.DefaultScalpingBacktestMaxCapitalPct,
 		DefaultHoldPeriod:  services.DefaultScalpingBacktestHoldPeriod,
 	}, nil

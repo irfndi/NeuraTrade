@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	randv2 "math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 const (
 	DefaultScalpingBacktestSlippage         = 0.001
+	DefaultScalpingBacktestNoise            = 0.0
 	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
@@ -49,6 +51,7 @@ type ScalpingBacktestConfig struct {
 	InitialCapital        decimal.Decimal
 	FeeRate               decimal.Decimal
 	SlippagePct           decimal.Decimal
+	NoisePct              float64
 	MaxBidAskSpreadPct    float64
 	MinConfidence         float64
 	MinExpectancyN        int
@@ -60,6 +63,8 @@ type ScalpingBacktestConfig struct {
 	MinRecentMomentumPct  float64
 	SpreadMultiplier      float64
 	DeterministicFallback DeterministicFallbackConfig
+	RegimeHighBand        float64
+	RegimeLowBand         float64
 }
 
 type ScalpingBacktestResult struct {
@@ -498,6 +503,11 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 		entryPrice = entryPriceRaw.Mul(one.Sub(slippage))
 	}
 
+	if e.config.NoisePct > 0 {
+		noiseFactor := randv2.Float64()*e.config.NoisePct*2 - e.config.NoisePct
+		entryPrice = entryPrice.Mul(one.Add(decimal.NewFromFloat(noiseFactor)))
+	}
+
 	sizePercent := clampFloat(decision.SizePercent, 0, e.config.MaxCapitalPct)
 	if sizePercent <= 0 {
 		sizePercent = math.Min(e.config.MaxCapitalPct, 1)
@@ -592,6 +602,11 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 		exitPrice = exitPrice.Mul(one.Sub(slippage))
 	} else {
 		exitPrice = exitPrice.Mul(one.Add(slippage))
+	}
+
+	if e.config.NoisePct > 0 {
+		noiseFactor := randv2.Float64()*e.config.NoisePct*2 - e.config.NoisePct
+		exitPrice = exitPrice.Mul(one.Add(decimal.NewFromFloat(noiseFactor)))
 	}
 
 	var grossPnL decimal.Decimal
@@ -1692,9 +1707,15 @@ func cloneMap(input map[string]int) map[string]int {
 }
 
 func (e *ScalpingBacktestEngine) configRegimeHighBand() float64 {
+	if e.config.RegimeHighBand > 0 {
+		return e.config.RegimeHighBand
+	}
 	return 85
 }
 
 func (e *ScalpingBacktestEngine) configRegimeLowBand() float64 {
+	if e.config.RegimeLowBand > 0 {
+		return e.config.RegimeLowBand
+	}
 	return 15
 }
