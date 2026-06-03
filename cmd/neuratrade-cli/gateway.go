@@ -258,7 +258,6 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "backend.pid"),
 	)
 	if err != nil {
-		signalAndWait(nil, signalTimeout)
 		cleanupGatewayRuntimeArtifacts(statePath, "backend failed to start", servicePIDFiles...)
 		return fmt.Errorf("failed to start backend API: %w", err)
 	}
@@ -273,7 +272,6 @@ func gatewayStart(cCtx *cli.Context) error {
 		writeGatewayStateMode(statePath, "warming", "backend warming up")
 	} else {
 		signalAndWait(backendCmd, signalTimeout)
-		signalAndWait(nil, signalTimeout)
 		writeGatewayServiceState(statePath, "backend", "down", backendProbe.detail, backendHealthURL)
 		cleanupGatewayRuntimeArtifacts(statePath, "backend health check failed", servicePIDFiles...)
 		return fmt.Errorf("%s", backendProbe.detail)
@@ -306,7 +304,6 @@ func gatewayStart(cCtx *cli.Context) error {
 		)
 		if err != nil {
 			signalAndWait(backendCmd, signalTimeout)
-			signalAndWait(nil, signalTimeout)
 			cleanupGatewayRuntimeArtifacts(statePath, "telegram failed to start", servicePIDFiles...)
 			return fmt.Errorf("failed to start Telegram service: %w", err)
 		}
@@ -321,7 +318,6 @@ func gatewayStart(cCtx *cli.Context) error {
 		} else {
 			signalAndWait(telegramCmd, signalTimeout)
 			signalAndWait(backendCmd, signalTimeout)
-			signalAndWait(nil, signalTimeout)
 			writeGatewayServiceState(statePath, "telegram", "down", telegramProbe.detail, telegramHealthURL)
 			cleanupGatewayRuntimeArtifacts(statePath, "telegram health check failed", servicePIDFiles...)
 			return fmt.Errorf("%s", telegramProbe.detail)
@@ -374,7 +370,6 @@ func gatewayStart(cCtx *cli.Context) error {
 	// Graceful shutdown: signal and wait for all processes.
 	signalAndWait(backendCmd, gracefulTimeout)
 	signalAndWait(telegramCmd, gracefulTimeout)
-	signalAndWait(nil, gracefulTimeout)
 	cleanupGatewayRuntimeArtifacts(statePath, "gateway stopped", servicePIDFiles...)
 
 	fmt.Println("✅ All services stopped")
