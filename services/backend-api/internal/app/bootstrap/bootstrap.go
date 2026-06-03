@@ -430,7 +430,14 @@ func (a *Application) buildStrategyComponents(b *Builder) error {
 	}
 
 	if createdStrategy {
-		scalpingComposer := scalping.NewScalpingComposer(nil)
+		weights, err := loadScalpingWeightsFromEnv()
+		if err != nil {
+			return fmt.Errorf("load scalping weights: %w", err)
+		}
+		scalpingComposer, err := scalping.NewScalpingComposerWithWeights(nil, weights)
+		if err != nil {
+			return fmt.Errorf("create scalping composer: %w", err)
+		}
 		b.strategy.SetScalpingComposer(scalpingComposer)
 	}
 
@@ -628,6 +635,33 @@ func (b *ExchangeRegistryBuilder) AddExchange(exchange string, service ccxtservi
 	adapter := ccxt.NewAdapter(service)
 	b.registry.Register(exchange, adapter)
 	return b
+}
+
+func loadScalpingWeightsFromEnv() (scalping.ComponentWeights, error) {
+	w := scalping.DefaultComponentWeights()
+	overrides := map[string]*decimal.Decimal{
+		"NEURATRADE_SCALPING_WEIGHT_SPREAD":     &w.Spread,
+		"NEURATRADE_SCALPING_WEIGHT_IMBALANCE":  &w.Imbalance,
+		"NEURATRADE_SCALPING_WEIGHT_VOLATILITY": &w.Volatility,
+		"NEURATRADE_SCALPING_WEIGHT_TREND":      &w.Trend,
+		"NEURATRADE_SCALPING_WEIGHT_LIQUIDITY":  &w.Liquidity,
+		"NEURATRADE_SCALPING_WEIGHT_RSI":        &w.RSI,
+	}
+	for name, target := range overrides {
+		raw, ok := os.LookupEnv(name)
+		if !ok || raw == "" {
+			continue
+		}
+		v, err := decimal.NewFromString(raw)
+		if err != nil {
+			return scalping.ComponentWeights{}, fmt.Errorf("parse %s=%q: %w", name, raw, err)
+		}
+		*target = v
+	}
+	if err := w.Validate(); err != nil {
+		return scalping.ComponentWeights{}, err
+	}
+	return w, nil
 }
 
 // Build returns the built registry.

@@ -98,3 +98,95 @@ func testCandle(offsetMinutes int, close string) OHLCVCandle {
 		Volume:    decimal.RequireFromString("1000"),
 	}
 }
+
+func TestDefaultComponentWeights_SumToOne(t *testing.T) {
+	w := DefaultComponentWeights()
+	require.NoError(t, w.Validate())
+}
+
+func TestComponentWeights_Validate(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(w *ComponentWeights)
+		wantErr bool
+	}{
+		{"defaults valid", func(w *ComponentWeights) {}, false},
+		{"all zero rejected", func(w *ComponentWeights) {
+			*w = ComponentWeights{}
+		}, true},
+		{"negative rejected", func(w *ComponentWeights) {
+			w.Trend = decimal.RequireFromString("-0.10")
+		}, true},
+		{"sum > 1.0 rejected", func(w *ComponentWeights) {
+			w.Trend = decimal.RequireFromString("0.50")
+		}, true},
+		{"sum < 1.0 within tolerance accepted", func(w *ComponentWeights) {
+			w.Trend = decimal.RequireFromString("0.3499")
+		}, false},
+		{"sum < 1.0 outside tolerance rejected", func(w *ComponentWeights) {
+			w.Trend = decimal.RequireFromString("0.30")
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := DefaultComponentWeights()
+			tc.mutate(&w)
+			err := w.Validate()
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNewScalpingComposerWithWeights_RejectsInvalid(t *testing.T) {
+	bad := DefaultComponentWeights()
+	bad.Trend = decimal.RequireFromString("-0.10")
+	_, err := NewScalpingComposerWithWeights(nil, bad)
+	require.Error(t, err)
+}
+
+func TestNewScalpingComposerWithWeights_AcceptsValid(t *testing.T) {
+	w := DefaultComponentWeights()
+	composer, err := NewScalpingComposerWithWeights(nil, w)
+	require.NoError(t, err)
+	got := composer.Weights()
+	require.True(t, got.Spread.Equal(w.Spread))
+	require.True(t, got.Trend.Equal(w.Trend))
+}
+
+func TestScalpingSignalComposer_CustomWeightsFlipDecision(t *testing.T) {
+	obMetrics := mockOrderBookMetrics{
+		spread:    decimal.RequireFromString("0.04"),
+		imbalance: decimal.RequireFromString("0.25"),
+		midPrice:  decimal.RequireFromString("100.00"),
+		bestBid:   decimal.RequireFromString("99.99"),
+		bestAsk:   decimal.RequireFromString("100.01"),
+		liquidity: decimal.RequireFromString("80"),
+	}
+	candles := []OHLCVCandle{
+		testCandle(0, "100.00"),
+		testCandle(1, "100.05"),
+		testCandle(2, "100.10"),
+		testCandle(3, "100.20"),
+		testCandle(4, "100.30"),
+	}
+	ohlcv := OHLCVData{
+		Exchange:  "bitget",
+		Symbol:    "BTC/USDT",
+		Timeframe: "1m",
+		Candles:   candles,
+	}
+
+	weakTrend := DefaultComponentWeights()
+	weakTrend.Trend = decimal.RequireFromString("0.05")
+	weakTrend.Imbalance = decimal.RequireFromString("0.50")
+	composer, err := NewScalpingComposerWithWeights(nil, weakTrend)
+	require.NoError(t, err)
+	signal, err := composer.ComposeSignal(context.Background(), ohlcv, obMetrics)
+	require.NoError(t, err)
+	require.Equal(t, DirectionBuy, signal.Direction)
+	require.True(t, signal.Components[1].Weight.Equal(decimal.RequireFromString("0.50")), "imbalance weight should reflect override")
+}

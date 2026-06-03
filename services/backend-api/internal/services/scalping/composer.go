@@ -46,16 +46,92 @@ type SignalQualityScorer interface {
 	Score(ctx context.Context, signal *ScalpingSignal) *QualityAssessment
 }
 
+// ComponentWeights holds the per-component contribution weights used when
+// composing a scalping signal. Weights are interpreted as ratios (0.10 == 10%).
+// Sum should equal 1.0; Validate() rejects otherwise.
+type ComponentWeights struct {
+	Spread     decimal.Decimal
+	Imbalance  decimal.Decimal
+	Volatility decimal.Decimal
+	Trend      decimal.Decimal
+	Liquidity  decimal.Decimal
+	RSI        decimal.Decimal
+}
+
+// DefaultComponentWeights returns the production default weights tuned against
+// the paper-trading soak. Sum == 1.0.
+func DefaultComponentWeights() ComponentWeights {
+	return ComponentWeights{
+		Spread:     decimal.NewFromFloat(0.10),
+		Imbalance:  decimal.NewFromFloat(0.20),
+		Volatility: decimal.NewFromFloat(0.10),
+		Trend:      decimal.NewFromFloat(0.35),
+		Liquidity:  decimal.NewFromFloat(0.10),
+		RSI:        decimal.NewFromFloat(0.15),
+	}
+}
+
+// Validate returns an error when any weight is negative, NaN, or the sum is
+// not within sumTolerance of 1.0. A small tolerance is permitted to absorb
+// float round-trip in config loaders.
+func (w ComponentWeights) Validate() error {
+	sumTolerance := decimal.NewFromFloat(0.001)
+	one := decimal.NewFromInt(1)
+
+	parts := []struct {
+		name  string
+		value decimal.Decimal
+	}{
+		{"spread", w.Spread},
+		{"imbalance", w.Imbalance},
+		{"volatility", w.Volatility},
+		{"trend", w.Trend},
+		{"liquidity", w.Liquidity},
+		{"rsi", w.RSI},
+	}
+	var sum decimal.Decimal
+	for _, p := range parts {
+		if p.value.IsNegative() {
+			return fmt.Errorf("component weight %q must be non-negative (got %s)", p.name, p.value.String())
+		}
+		sum = sum.Add(p.value)
+	}
+	diff := sum.Sub(one).Abs()
+	if diff.GreaterThan(sumTolerance) {
+		return fmt.Errorf("component weights must sum to 1.0 (got %s, tolerance %s)", sum.String(), sumTolerance.String())
+	}
+	return nil
+}
+
 // ScalpingSignalComposer composes scalping signals from OHLCV data and order book metrics.
 type ScalpingSignalComposer struct {
 	qualityScorer SignalQualityScorer
+	weights       ComponentWeights
 }
 
-// NewScalpingSignalComposer creates a new composer.
+// NewScalpingSignalComposer creates a new composer with default component weights.
 func NewScalpingComposer(qualityScorer SignalQualityScorer) *ScalpingSignalComposer {
 	return &ScalpingSignalComposer{
 		qualityScorer: qualityScorer,
+		weights:       DefaultComponentWeights(),
 	}
+}
+
+// NewScalpingComposerWithWeights creates a composer with caller-supplied
+// component weights. Returns an error if the weights fail Validate().
+func NewScalpingComposerWithWeights(qualityScorer SignalQualityScorer, weights ComponentWeights) (*ScalpingSignalComposer, error) {
+	if err := weights.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid component weights: %w", err)
+	}
+	return &ScalpingSignalComposer{
+		qualityScorer: qualityScorer,
+		weights:       weights,
+	}, nil
+}
+
+// Weights returns the active component weights (copy; safe to inspect).
+func (c *ScalpingSignalComposer) Weights() ComponentWeights {
+	return c.weights
 }
 
 // ComposeSignal creates a scalping signal from OHLCV data and order book metrics.
@@ -74,86 +150,23 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 	}
 
 	var components []SignalComponent
-
-	// 1. Spread factor
-	if obMetrics != nil {
-		spread := obMetrics.GetSpreadPct()
-		spreadSignal, spreadStrength := classifySpread(spread)
-		components = append(components, SignalComponent{
-			Name:        "spread",
-			Description: "bid-ask spread",
-			Value:       spread,
-			Signal:      spreadSignal,
-			Strength:    spreadStrength,
-			Weight:      decimal.NewFromFloat(0.10),
-		})
+	if comp := c.buildSpreadComponent(obMetrics); comp != nil {
+		components = append(components, *comp)
 	}
-
-	// 2. Imbalance factor
-	if obMetrics != nil {
-		imbalance := obMetrics.GetImbalance1Pct()
-		imbalanceDir, imbStrength := classifyImbalance(imbalance)
-		components = append(components, SignalComponent{
-			Name:        "imbalance",
-			Description: "order book imbalance",
-			Value:       imbalance,
-			Signal:      imbalanceDir,
-			Strength:    imbStrength,
-			Weight:      decimal.NewFromFloat(0.20),
-		})
+	if comp := c.buildImbalanceComponent(obMetrics); comp != nil {
+		components = append(components, *comp)
 	}
-
-	// 3. Volatility factor
-	volatility := calculateVolatility(ohlcv.Candles)
-	volDirection, volStrength := classifyVolatility(volatility)
-	components = append(components, SignalComponent{
-		Name:        "volatility",
-		Description: "recent price volatility",
-		Value:       volatility,
-		Signal:      volDirection,
-		Strength:    volStrength,
-		Weight:      decimal.NewFromFloat(0.10),
-	})
-
-	// 4. Trend factor (EMA crossover with 5 candles)
-	if len(ohlcv.Candles) >= 5 {
-		trendDir, trendStrength, trendValue := classifyTrendEMA(ohlcv.Candles)
-		components = append(components, SignalComponent{
-			Name:        "trend",
-			Description: "EMA crossover trend (3/5 period)",
-			Value:       trendValue,
-			Signal:      trendDir,
-			Strength:    trendStrength,
-			Weight:      decimal.NewFromFloat(0.35),
-		})
+	if comp := c.buildVolatilityComponent(ohlcv.Candles); comp != nil {
+		components = append(components, *comp)
 	}
-
-	// 5. Liquidity factor
-	if obMetrics != nil {
-		liqScore := obMetrics.GetLiquidityScore()
-		liqDir, liqStrength := classifyLiquidity(liqScore)
-		components = append(components, SignalComponent{
-			Name:        "liquidity",
-			Description: "order book liquidity score",
-			Value:       liqScore,
-			Signal:      liqDir,
-			Strength:    liqStrength,
-			Weight:      decimal.NewFromFloat(0.10),
-		})
+	if comp := c.buildTrendComponent(ohlcv.Candles); comp != nil {
+		components = append(components, *comp)
 	}
-
-	// 6. RSI factor (14-period)
-	if len(ohlcv.Candles) >= 15 {
-		rsi := calculateRSI(ohlcv.Candles)
-		rsiDir, rsiStrength := classifyRSI(rsi)
-		components = append(components, SignalComponent{
-			Name:        "rsi",
-			Description: "RSI (14-period)",
-			Value:       rsi,
-			Signal:      rsiDir,
-			Strength:    rsiStrength,
-			Weight:      decimal.NewFromFloat(0.15),
-		})
+	if comp := c.buildLiquidityComponent(obMetrics); comp != nil {
+		components = append(components, *comp)
+	}
+	if comp := c.buildRSIComponent(ohlcv.Candles); comp != nil {
+		components = append(components, *comp)
 	}
 
 	totalWeight := decimal.Zero
@@ -211,7 +224,6 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 
 	signal.Components = components
 
-	// Build attribution weights
 	for _, comp := range components {
 		strengthValue := decimal.NewFromFloat(0.3)
 		switch comp.Strength {
@@ -231,7 +243,6 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		signal.AttributionWeights[comp.Name] = contribution
 	}
 
-	// Build microstructure context
 	if obMetrics != nil {
 		signal.Microstructure = &MicrostructureContext{
 			SpreadPct:      obMetrics.GetSpreadPct(),
@@ -245,12 +256,103 @@ func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVD
 		}
 	}
 
-	// Quality assessment
 	if c.qualityScorer != nil {
 		signal.Quality = c.qualityScorer.Score(ctx, signal)
 	}
 
 	return signal, nil
+}
+
+func (c *ScalpingSignalComposer) buildSpreadComponent(obMetrics OrderBookMetrics) *SignalComponent {
+	if obMetrics == nil {
+		return nil
+	}
+	spread := obMetrics.GetSpreadPct()
+	dir, strength := classifySpread(spread)
+	return &SignalComponent{
+		Name:        "spread",
+		Description: "bid-ask spread",
+		Value:       spread,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.Spread,
+	}
+}
+
+func (c *ScalpingSignalComposer) buildImbalanceComponent(obMetrics OrderBookMetrics) *SignalComponent {
+	if obMetrics == nil {
+		return nil
+	}
+	imbalance := obMetrics.GetImbalance1Pct()
+	dir, strength := classifyImbalance(imbalance)
+	return &SignalComponent{
+		Name:        "imbalance",
+		Description: "order book imbalance",
+		Value:       imbalance,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.Imbalance,
+	}
+}
+
+func (c *ScalpingSignalComposer) buildVolatilityComponent(candles []OHLCVCandle) *SignalComponent {
+	volatility := calculateVolatility(candles)
+	dir, strength := classifyVolatility(volatility)
+	return &SignalComponent{
+		Name:        "volatility",
+		Description: "recent price volatility",
+		Value:       volatility,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.Volatility,
+	}
+}
+
+func (c *ScalpingSignalComposer) buildTrendComponent(candles []OHLCVCandle) *SignalComponent {
+	if len(candles) < 5 {
+		return nil
+	}
+	dir, strength, value := classifyTrendEMA(candles)
+	return &SignalComponent{
+		Name:        "trend",
+		Description: "EMA crossover trend (3/5 period)",
+		Value:       value,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.Trend,
+	}
+}
+
+func (c *ScalpingSignalComposer) buildLiquidityComponent(obMetrics OrderBookMetrics) *SignalComponent {
+	if obMetrics == nil {
+		return nil
+	}
+	score := obMetrics.GetLiquidityScore()
+	dir, strength := classifyLiquidity(score)
+	return &SignalComponent{
+		Name:        "liquidity",
+		Description: "order book liquidity score",
+		Value:       score,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.Liquidity,
+	}
+}
+
+func (c *ScalpingSignalComposer) buildRSIComponent(candles []OHLCVCandle) *SignalComponent {
+	if len(candles) < 15 {
+		return nil
+	}
+	rsi := calculateRSI(candles)
+	dir, strength := classifyRSI(rsi)
+	return &SignalComponent{
+		Name:        "rsi",
+		Description: "RSI (14-period)",
+		Value:       rsi,
+		Signal:      dir,
+		Strength:    strength,
+		Weight:      c.weights.RSI,
+	}
 }
 
 func classifySpread(spread decimal.Decimal) (Direction, SignalStrength) {
