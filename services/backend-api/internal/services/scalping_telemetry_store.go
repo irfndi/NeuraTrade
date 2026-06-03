@@ -858,3 +858,21 @@ func (p sqlDBPool) Begin(ctx context.Context) (database.Tx, error) {
 	}
 	return database.SQLTx{Tx: tx}, nil
 }
+
+func (s *ScalpingTelemetryStore) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("scalping telemetry store unavailable")
+	}
+	result, err := s.db.Exec(ctx, s.bindQuery(`
+		DELETE FROM scalping_cycle_telemetry
+		WHERE cycle_at < ?
+	`), cutoff.UTC())
+	if err != nil {
+		return 0, fmt.Errorf("delete old telemetry rows: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete old telemetry rows: %w", err)
+	}
+	return affected, nil
+}
