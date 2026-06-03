@@ -36,36 +36,36 @@ type ScalpingOrderExecutor interface {
 }
 
 type IntegratedQuestHandlers struct {
-	technicalAnalysis    *TechnicalAnalysisService
-	ccxtService          interface{}
-	arbitrageService     interface{}
-	futuresArbService    interface{}
-	notificationService  *NotificationService
-	monitoring           *AutonomousMonitorManager
-	questEngine          *QuestEngine
-	drawdownHalt         *MaxDrawdownHalt
-	orderExecutor        ScalpingOrderExecutor
-	aiScalpingService    *AIScalpingService
-	aiScalpingMu         sync.RWMutex
-	tradeMemory          *TradeMemory
-	lifecycleStore       *TradingLifecycleStore
-	telemetryStore       *ScalpingTelemetryStore
-	protectionManager    *DynamicProtectionManager
-	db                   *sql.DB // Database for user settings
-	opModeService        *OperationalModeService
-	autonomyStore        *AutonomousRolloutStore
-	autonomyStoreMu      sync.RWMutex
-	autonomyCoordinator  *ScalpingAutonomyCoordinator
+	technicalAnalysis     *TechnicalAnalysisService
+	ccxtService           interface{}
+	arbitrageService      interface{}
+	futuresArbService     interface{}
+	notificationService   *NotificationService
+	monitoring            *AutonomousMonitorManager
+	questEngine           *QuestEngine
+	drawdownHalt          *MaxDrawdownHalt
+	orderExecutor         ScalpingOrderExecutor
+	aiScalpingService     *AIScalpingService
+	aiScalpingMu          sync.RWMutex
+	tradeMemory           *TradeMemory
+	lifecycleStore        *TradingLifecycleStore
+	telemetryStore        *ScalpingTelemetryStore
+	protectionManager     *DynamicProtectionManager
+	db                    *sql.DB // Database for user settings
+	opModeService         *OperationalModeService
+	autonomyStore         *AutonomousRolloutStore
+	autonomyStoreMu       sync.RWMutex
+	autonomyCoordinator   *ScalpingAutonomyCoordinator
 	autonomyCoordinatorMu sync.RWMutex
-	shadowCoordinator    *ShadowEvaluationCoordinator
-	shadowCoordinatorMu  sync.RWMutex
-	stalePositionMu      sync.Mutex
-	stalePositionWindow  map[string]time.Time
-	tradeJournalMu       sync.Mutex
-	tradeJournalReady    bool
-	tradeJournalReadyFor *sql.DB
-	killSwitch           interface{ IsEngaged() bool }
-	safeMode             interface{ IsEnabled() bool }
+	shadowCoordinator     *ShadowEvaluationCoordinator
+	shadowCoordinatorMu   sync.RWMutex
+	stalePositionMu       sync.Mutex
+	stalePositionWindow   map[string]time.Time
+	tradeJournalMu        sync.Mutex
+	tradeJournalReady     bool
+	tradeJournalReadyFor  *sql.DB
+	killSwitch            interface{ IsEngaged() bool }
+	safeMode              interface{ IsEnabled() bool }
 }
 
 const (

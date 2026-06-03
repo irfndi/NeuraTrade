@@ -3193,21 +3193,21 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 	decisionSnapshot := cloneAITradingDecision(decision)
 	portfolioSnapshot := portfolio
 	policySnapshot := policy
-		go func() {
-			shadowTimeout := 10 * time.Second
-			if s.config.ShadowMirrorTimeout > 0 {
-				shadowTimeout = s.config.ShadowMirrorTimeout
+	go func() {
+		shadowTimeout := 10 * time.Second
+		if s.config.ShadowMirrorTimeout > 0 {
+			shadowTimeout = s.config.ShadowMirrorTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), shadowTimeout)
+		defer cancel()
+		if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision timed out after %v — data gap likely", shadowTimeout)
+			} else {
+				zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), shadowTimeout)
-			defer cancel()
-			if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
-				if ctx.Err() == context.DeadlineExceeded {
-					zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision timed out after %v — data gap likely", shadowTimeout)
-				} else {
-					zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
-				}
-			}
-		}()
+		}
+	}()
 }
 
 // cloneAITradingDecision returns an independent copy of the provided AITradingDecision.

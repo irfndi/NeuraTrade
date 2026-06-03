@@ -831,25 +831,25 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			if err != nil {
 				zaplogrus.Warnf("Warning: failed to initialize scalping telemetry store: %v", err)
 				telemetryStore = nil
-		} else {
-			integratedHandlers.SetTelemetryStore(telemetryStore)
-			retentionDays := 90
-			if v := os.Getenv("NEURATRADE_SCALPING_TELEMETRY_RETENTION_DAYS"); v != "" {
-				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
-					retentionDays = n
+			} else {
+				integratedHandlers.SetTelemetryStore(telemetryStore)
+				retentionDays := 90
+				if v := os.Getenv("NEURATRADE_SCALPING_TELEMETRY_RETENTION_DAYS"); v != "" {
+					if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+						retentionDays = n
+					}
+				}
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+				deleted, err := telemetryStore.DeleteOlderThan(cleanupCtx, cutoff)
+				cleanupCancel()
+				if err != nil {
+					zaplogrus.Warnf("Warning: telemetry cleanup failed: %v", err)
+				} else if deleted > 0 {
+					zaplogrus.Infof("Telemetry cleanup: deleted %d rows older than %d days", deleted, retentionDays)
 				}
 			}
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
-			deleted, err := telemetryStore.DeleteOlderThan(cleanupCtx, cutoff)
-			cleanupCancel()
-			if err != nil {
-				zaplogrus.Warnf("Warning: telemetry cleanup failed: %v", err)
-			} else if deleted > 0 {
-				zaplogrus.Infof("Telemetry cleanup: deleted %d rows older than %d days", deleted, retentionDays)
-			}
 		}
-	}
 	}
 
 	// Wire order executor to integrated handlers for scalping execution
