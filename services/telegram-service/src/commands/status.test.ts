@@ -270,9 +270,7 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain("Subscription: free");
     expect(ctx.replies[0]).toContain("Health: unavailable (doctor timeout)");
     expect(ctx.replies[0]).toContain("Mode: unavailable (mode unavailable)");
-    expect(ctx.replies[0]).toContain(
-      "AI: unavailable (ai status unavailable)",
-    );
+    expect(ctx.replies[0]).toContain("AI: unavailable (ai status unavailable)");
   });
 
   test("renders recovery diagnostics using *_current fields", async () => {

@@ -100,9 +100,7 @@ type Guard struct {
 	recentRejects  []RejectEvent
 	disarmHistory  []ArmDisarmEvent
 	chatCache      map[string]bool
-	chatCacheAt    time.Time
 	chatCacheTTL   time.Duration
-	phraseLoggedAt time.Time
 }
 
 // PendingOrder is a live order held for explicit operator approval.
