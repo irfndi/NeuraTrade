@@ -40,6 +40,16 @@ type SignalComponent struct {
 // MicrostructureContext snapshots the order book and spread state at the
 // moment the signal was composed. Optional fields (Imbalance2Pct) may be
 // left zero if the source exchange does not provide them.
+//
+// Unit model (must match marketdata.OrderBookMetricsEvent and
+// scalping.OrderBookMetrics interface):
+//   - SpreadPct:        percentage (%). 0.05 == 0.05%.
+//   - Imbalance1Pct:    ratio in [-1, 1] (raw, not percentage).
+//   - Imbalance2Pct:    ratio in [-1, 1] (raw, not percentage).
+//   - BidDepth1Pct,
+//     AskDepth1Pct:     base-asset depth inside the 1% band, raw units.
+//   - MidPrice, BestBid, BestAsk: absolute price in quote currency.
+//   - LiquidityScore:   base-asset notional size, raw units.
 type MicrostructureContext struct {
 	SpreadPct      decimal.Decimal `json:"spread_pct"`
 	Imbalance1Pct  decimal.Decimal `json:"imbalance_1pct"`

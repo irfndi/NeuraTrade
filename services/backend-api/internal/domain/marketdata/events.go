@@ -37,6 +37,15 @@ type MarketCandleEvent struct {
 }
 
 // OrderBookMetricsEvent is published when order book metrics are collected.
+//
+// Unit model (canonical, do not change without coordinating with consumers):
+//   - BidAskSpread:    percentage (%). 0.05 == 0.05%, not 5%.
+//   - Imbalance1Pct:   ratio in [-1, 1] (despite the "Pct" suffix in the
+//                     name; the value is the raw (bid-ask)/(bid+ask)
+//                     imbalance, not a percentage).
+//   - LiquidityScore:  base-asset notional size, raw units. Number of BTC
+//                     for BTC/USDT pairs, number of ETH for ETH/USDT, etc.
+//   - MidPrice, BestBid, BestAsk: absolute price in quote currency.
 type OrderBookMetricsEvent struct {
 	TraceID        string
 	Exchange       string

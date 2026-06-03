@@ -30,6 +30,14 @@ type OHLCVCandle struct {
 }
 
 // OrderBookMetrics provides order book metrics for signal composition.
+//
+// Unit model (must match marketdata.OrderBookMetricsEvent):
+//   - GetSpreadPct:       percentage (%). 0.05 == 0.05%, not 5%.
+//   - GetImbalance1Pct:   ratio in [-1, 1] (raw (bid-ask)/(bid+ask), not %).
+//   - GetLiquidityScore:  base-asset notional size, raw units.
+//   - GetBidDepth1Pct,
+//     GetAskDepth1Pct:    base-asset depth inside the 1% band, raw units.
+//   - GetMidPrice, GetBestBid, GetBestAsk: absolute price in quote currency.
 type OrderBookMetrics interface {
 	GetSpreadPct() decimal.Decimal
 	GetImbalance1Pct() decimal.Decimal
