@@ -58,6 +58,7 @@ type AIScalpingConfig struct {
 	MinExpectancyN        int
 	RegimeHighBand        float64
 	RegimeLowBand         float64
+	ShadowMirrorTimeout   time.Duration
 	DeterministicFallback DeterministicFallbackConfig
 }
 
@@ -300,6 +301,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		MinExpectancyN:        8,
 		RegimeHighBand:        85,
 		RegimeLowBand:         15,
+		ShadowMirrorTimeout:   10 * time.Second,
 		DeterministicFallback: DefaultDeterministicFallbackConfig(),
 	}
 }
@@ -396,6 +398,9 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_LOW_BAND"); ok {
 		cfg.RegimeLowBand = clampFloat(value, 1, 45)
+	}
+	if value := getEnvInt("NEURATRADE_SCALPING_SHADOW_TIMEOUT_SECONDS"); value > 0 {
+		cfg.ShadowMirrorTimeout = time.Duration(clampInt(value, 1, 60)) * time.Second
 	}
 
 	if cfg.MaxCandidatePairs < cfg.MaxPairsToAnalyze {
@@ -3189,11 +3194,15 @@ func (s *AIScalpingService) mirrorShadowDecisionAsync(
 	portfolioSnapshot := portfolio
 	policySnapshot := policy
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			shadowTimeout := 10 * time.Second
+			if s.config.ShadowMirrorTimeout > 0 {
+				shadowTimeout = s.config.ShadowMirrorTimeout
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), shadowTimeout)
 			defer cancel()
 			if _, err := coordinator.MirrorDecision(ctx, decisionSnapshot, portfolioSnapshot, policySnapshot); err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
-					zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision timed out after 10s — data gap likely")
+					zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision timed out after %v — data gap likely", shadowTimeout)
 				} else {
 					zaplogrus.Warnf("[AI-SCALPING] Shadow mirror decision failed: %v", err)
 				}

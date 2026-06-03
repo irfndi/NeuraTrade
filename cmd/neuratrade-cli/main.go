@@ -35,9 +35,9 @@ type cliAIProviderDefault struct {
 
 func defaultCLIAIProviderConfig() cliAIProviderDefault {
 	return cliAIProviderDefault{
-		Provider: "zhipu",
-		Model:    "glm-5-turbo",
-		BaseURL:  "https://api.z.ai/api/paas/v4",
+		Provider: "deepseek",
+		Model:    "deepseek-chat",
+		BaseURL:  "",
 	}
 }
 
