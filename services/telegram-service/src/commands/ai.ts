@@ -178,17 +178,27 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
       switch (readiness) {
         case "ready":
           lines.push("✅ AI Ready");
-          lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
+          lines.push(`📊 Pinned Model: ${result.selected_model}`);
           lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
+          if (result.provider_chain_configured) {
+            lines.push(
+              `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
+            );
+          }
           break;
         case "ready_auto_route":
           lines.push("✅ AI Ready (auto-routing)");
-          lines.push(`📊 Selected Model: none (auto-routing active)`);
+          lines.push(`📊 No model pinned — using auto-route`);
           if (result.effective_provider) {
             lines.push(`🔗 Effective Provider: ${result.effective_provider}`);
           }
           if (result.effective_model) {
             lines.push(`🤖 Effective Model: ${result.effective_model}`);
+          }
+          if (result.provider_chain_configured) {
+            lines.push(
+              `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
+            );
           }
           lines.push(
             "\n💡 AI is available via provider-chain. Pin a model with /ai_select or let the system auto-route.",
@@ -199,7 +209,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
           lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
           lines.push(
-            `⚡ Provider chain: ${result.provider_chain_usable}/${result.provider_chain_configured} usable`,
+            `⚡ Provider chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
           );
           break;
         default:
@@ -220,16 +230,6 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           budgetLimit === "Unlimited" ? budgetLimit : `$${budgetLimit}`
         }`,
       );
-
-      if (
-        result.provider_chain_configured != null &&
-        readiness !== "degraded" &&
-        readiness !== "unavailable"
-      ) {
-        lines.push(
-          `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
-        );
-      }
 
       if (result.daily_budget_exceeded) {
         lines.push("\n⚠️ Daily budget exceeded. AI features limited.");

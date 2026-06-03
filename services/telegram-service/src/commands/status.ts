@@ -66,13 +66,19 @@ function summarizeAI(ai: AIStatusResponse): string {
   if (readiness === "ready_auto_route") {
     const effectiveProvider = ai.effective_provider || provider;
     const effectiveModel = ai.effective_model || "auto";
-    return `${effectiveModel} (${effectiveProvider}, auto-route, ${budget})`;
+    const chainInfo = ai.provider_chain_usable
+      ? `chain ${ai.provider_chain_usable} usable`
+      : "";
+    return `auto-route → ${effectiveModel} (${effectiveProvider}${chainInfo ? ", " + chainInfo : ""}, ${budget})`;
   }
   if (readiness === "ready") {
     return `${model} (${provider}, ${budget})`;
   }
   if (readiness === "degraded") {
-    return `${model} (${provider}, degraded, ${budget})`;
+    const chainInfo = ai.provider_chain_configured
+      ? `chain ${ai.provider_chain_usable || 0}/${ai.provider_chain_configured} usable`
+      : "degraded";
+    return `${model} (${provider}, ${chainInfo}, ${budget})`;
   }
   if (readiness === "unavailable") {
     return `unavailable (n/a, ${budget})`;
@@ -666,9 +672,9 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
       lines.push("", "🤖 AI Snapshot");
 
       if (aiResult.status === "fulfilled") {
-        lines.push(`• Model: ${summarizeAI(aiResult.value)}`);
+        lines.push(`• AI: ${summarizeAI(aiResult.value)}`);
       } else {
-        lines.push(`• Model: unavailable (${shortError(aiResult.reason)})`);
+        lines.push(`• AI: unavailable (${shortError(aiResult.reason)})`);
       }
 
       if (logsResult.status === "fulfilled") {
