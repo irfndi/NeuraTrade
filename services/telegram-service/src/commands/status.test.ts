@@ -224,7 +224,7 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain("⚙️ Trading Snapshot");
     expect(ctx.replies[0]).toContain("🤖 AI Snapshot");
     expect(ctx.replies[0]).toContain("Mode: DRY (1/2 confirmations)");
-    expect(ctx.replies[0]).toContain("Model: gpt-4o-mini (openai, budget ok)");
+    expect(ctx.replies[0]).toContain("AI: gpt-4o-mini (openai, budget ok)");
   });
 
   test("degrades gracefully when optional status probes fail", async () => {
@@ -271,7 +271,7 @@ describe("Status command", () => {
     expect(ctx.replies[0]).toContain("Health: unavailable (doctor timeout)");
     expect(ctx.replies[0]).toContain("Mode: unavailable (mode unavailable)");
     expect(ctx.replies[0]).toContain(
-      "Model: unavailable (ai status unavailable)",
+      "AI: unavailable (ai status unavailable)",
     );
   });
 

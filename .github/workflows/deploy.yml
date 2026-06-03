@@ -38,7 +38,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/neuratrade-backend
-  GO_VERSION: "1.26.3"
+  GO_VERSION: "1.26.4"
 
 concurrency:
   group: deploy-${{ github.ref }}
