@@ -21,6 +21,8 @@ import (
 const CollectorActorID = "marketdata-collector"
 const minimumInterval = time.Second
 
+const ohlcvTimeframeDefault = "1m"
+
 type CollectorActor struct {
 	logger           *zaplogrus.Logger
 	db               database.DBPool
@@ -84,7 +86,7 @@ func NewCollectorActor(db database.DBPool, exchange ports.ExchangeRegistry, even
 		lastOHLCVCollect: make(map[string]time.Time),
 		lastOBCollect:    make(map[string]time.Time),
 		defaultInterval:  defaultInterval,
-		ohlcvInterval:    30 * time.Second,
+		ohlcvInterval:    1 * time.Minute,
 		obInterval:       15 * time.Second,
 	}
 }
@@ -474,7 +476,7 @@ func (a *CollectorActor) collectFromExchange(ctx context.Context, exchangeID str
 
 		key := exchangeID + ":" + symbol
 		now := time.Now()
-		if a.shouldCollect(&a.lastOHLCVCollect, key, now, a.ohlcvInterval) {
+		if a.shouldCollect(&a.lastOHLCVCollect, key+":"+a.ohlcvTimeframe(), now, a.ohlcvInterval) {
 			a.collectOHLCV(ctx, gw, exchangeID, symbol)
 		}
 		if a.shouldCollect(&a.lastOBCollect, key, now, a.obInterval) {
@@ -499,7 +501,8 @@ func (a *CollectorActor) shouldCollect(lastCollected *map[string]time.Time, key 
 }
 
 func (a *CollectorActor) collectOHLCV(ctx context.Context, gw ports.MarketDataGateway, exchangeID, symbol string) {
-	candles, err := gw.FetchOHLCV(ctx, exchangeID, symbol, "1m", time.Time{}, 60)
+	timeframe := a.ohlcvTimeframe()
+	candles, err := gw.FetchOHLCV(ctx, exchangeID, symbol, timeframe, time.Time{}, 60)
 	if err != nil {
 		a.logger.WithError(fmt.Errorf("fetch ohlcv for %s:%s: %w", exchangeID, symbol, err)).
 			Warn("collector fetch ohlcv failed")
@@ -628,6 +631,13 @@ func computeOrderBookMetrics(bids, asks []ports.PriceLevel) (bidDepth, askDepth,
 		liquidityScore = decimal.NewFromInt(100)
 	}
 	return
+}
+
+// ohlcvTimeframe returns the OHLCV timeframe. Currently a constant; the
+// rate-limit key in collectForSymbol is namespaced by this so a future
+// per-symbol/timeframe config won't double-fetch across cadences.
+func (a *CollectorActor) ohlcvTimeframe() string {
+	return ohlcvTimeframeDefault
 }
 
 func (a *CollectorActor) publishEvent(ctx context.Context, topic, eventType string, payload interface{}) error {
