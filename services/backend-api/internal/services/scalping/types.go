@@ -6,6 +6,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// Direction enumerates the possible actions a scalping signal may recommend.
 type Direction string
 
 const (
@@ -14,6 +15,8 @@ const (
 	DirectionHold Direction = "hold"
 )
 
+// SignalStrength conveys the magnitude of a single component's contribution
+// to the final direction decision. Used by the composer to scale attribution.
 type SignalStrength string
 
 const (
@@ -22,6 +25,9 @@ const (
 	StrengthStrong SignalStrength = "strong"
 )
 
+// SignalComponent captures one factor's read of the market and how it would
+// vote. Weight is the configured per-component weight (sum to 1.0); Value
+// is the raw measurement that the classifier consumed.
 type SignalComponent struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -31,6 +37,9 @@ type SignalComponent struct {
 	Weight      decimal.Decimal `json:"weight"`
 }
 
+// MicrostructureContext snapshots the order book and spread state at the
+// moment the signal was composed. Optional fields (Imbalance2Pct) may be
+// left zero if the source exchange does not provide them.
 type MicrostructureContext struct {
 	SpreadPct      decimal.Decimal `json:"spread_pct"`
 	Imbalance1Pct  decimal.Decimal `json:"imbalance_1pct"`
@@ -43,6 +52,9 @@ type MicrostructureContext struct {
 	LiquidityScore decimal.Decimal `json:"liquidity_score"`
 }
 
+// QualityAssessment is the output of the optional SignalQualityScorer.
+// PassReason is set when VolatilityOK is true; FailReasons lists every
+// rejection criterion that failed otherwise.
 type QualityAssessment struct {
 	OverallScore   decimal.Decimal `json:"overall_score"`
 	DataFreshness  decimal.Decimal `json:"data_freshness"`
@@ -52,6 +64,9 @@ type QualityAssessment struct {
 	FailReasons    []string        `json:"fail_reasons,omitempty"`
 }
 
+// ScalpingSignal is the canonical output of the composer. Confidence is a
+// 0..1 ratio scaled by signal strength. AttributionWeights mirrors the
+// per-component contribution, signed for sell-side reads.
 type ScalpingSignal struct {
 	ID                 string                     `json:"id"`
 	Exchange           string                     `json:"exchange"`
@@ -68,6 +83,8 @@ type ScalpingSignal struct {
 	GeneratedAt        time.Time                  `json:"generated_at"`
 }
 
+// ToMap renders a flat representation suitable for logging and Telegram
+// delivery. Decimals are fixed-precision strings to avoid JSON float drift.
 func (s *ScalpingSignal) ToMap() map[string]interface{} {
 	m := map[string]interface{}{
 		"id":           s.ID,
@@ -104,6 +121,8 @@ func (s *ScalpingSignal) ToMap() map[string]interface{} {
 	return m
 }
 
+// SignalOutcomeRecord captures the realized result of a signal for later
+// attribution analysis. Components maps component name -> weight (not value).
 type SignalOutcomeRecord struct {
 	SignalID   string
 	Exchange   string
@@ -118,6 +137,10 @@ type SignalOutcomeRecord struct {
 	RecordedAt time.Time
 }
 
+// RecordOutcome produces an outcome record from the signal's identity and
+// the realized trade parameters. Components are populated with the
+// configured weights (not the raw measurements) so the record is stable
+// against future weight re-tuning.
 func (s *ScalpingSignal) RecordOutcome(entryPrice, exitPrice, pnl decimal.Decimal, outcome string) SignalOutcomeRecord {
 	record := SignalOutcomeRecord{
 		SignalID:   s.ID,
