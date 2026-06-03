@@ -365,58 +365,13 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 	}
 
 	// Spawn risk actor in actor system
-	ref, err := a.ActorSystem.Spawn(a.RiskActor, actor.DefaultConfig())
+	sa, err := a.spawnActorAndWait("RiskActor", a.RiskActor, actor.DefaultConfig())
 	if err != nil {
-		return fmt.Errorf("spawn RiskActor via ActorSystem.Spawn: %w", err)
+		return err
 	}
 
-	runErrCh := make(chan error, 1)
-	actorRunCtx, actorRunCancel := context.WithCancel(context.Background())
-	go func() {
-		runErrCh <- ref.Run(actorRunCtx)
-	}()
-
-	startTimeout := time.NewTimer(5 * time.Second)
-	startTicker := time.NewTicker(10 * time.Millisecond)
-	defer startTimeout.Stop()
-	defer startTicker.Stop()
-
-	for !ref.IsRunning() {
-		select {
-		case runErr := <-runErrCh:
-			actorRunCancel()
-			ref.Stop()
-			if runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run RiskActor before RiskRef assignment: %w", runErr)
-			}
-			return fmt.Errorf("risk actor stopped before RiskRef assignment")
-		case <-startTimeout.C:
-			actorRunCancel()
-			ref.Stop()
-			return fmt.Errorf("timeout waiting for RiskActor to start before creating RiskRef")
-		case <-startTicker.C:
-		}
-	}
-
-	a.RiskRef = risk.NewRiskActorRef(ref)
-	a.Supervisor.AddFunc(riskActorIDValue, func(ctx context.Context) error {
-		select {
-		case runErr := <-runErrCh:
-			actorRunCancel()
-			ref.Stop()
-			if runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run risk actor: %w", runErr)
-			}
-			return nil
-		case <-ctx.Done():
-			actorRunCancel()
-			ref.Stop()
-			if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run risk actor: %w", runErr)
-			}
-			return nil
-		}
-	})
+	a.RiskRef = risk.NewRiskActorRef(sa.ref)
+	a.superviseActor(riskActorIDValue, "risk actor", sa)
 
 	return nil
 }
@@ -443,69 +398,41 @@ func (a *Application) buildStrategyComponents(b *Builder) error {
 
 	a.StrategyActor = b.strategy
 
-	ref, err := a.ActorSystem.Spawn(a.StrategyActor, actor.DefaultConfig())
+	sa, err := a.spawnActorAndWait("StrategyActor", a.StrategyActor, actor.DefaultConfig())
 	if err != nil {
-		return fmt.Errorf("spawn StrategyActor: %w", err)
+		return err
 	}
 
-	runErrCh := make(chan error, 1)
-	actorRunCtx, actorRunCancel := context.WithCancel(context.Background())
-	go func() {
-		runErrCh <- ref.Run(actorRunCtx)
-	}()
+	a.StrategyActorRef = sa.ref
 
-	startTimeout := time.NewTimer(5 * time.Second)
-	startTicker := time.NewTicker(10 * time.Millisecond)
-	defer startTimeout.Stop()
-	defer startTicker.Stop()
-
-	for !ref.IsRunning() {
-		select {
-		case runErr := <-runErrCh:
-			actorRunCancel()
-			ref.Stop()
-			if runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run StrategyActor: %w", runErr)
-			}
-			return fmt.Errorf("strategy actor stopped before assignment")
-		case <-startTimeout.C:
-			actorRunCancel()
-			ref.Stop()
-			return fmt.Errorf("timeout waiting for StrategyActor to start")
-		case <-startTicker.C:
-		}
-	}
-
-	a.StrategyActorRef = ref
-
-	tickSub, err := strategy.SubscribeMarketTicks(context.Background(), a.EventBus, ref)
+	tickSub, err := strategy.SubscribeMarketTicks(context.Background(), a.EventBus, sa.ref)
 	if err != nil {
-		actorRunCancel()
-		ref.Stop()
-		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+		sa.runCancel()
+		sa.ref.Stop()
+		if runErr := <-sa.runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
 			return fmt.Errorf("subscribe strategy actor to market ticks after run failure: %w", runErr)
 		}
 		return fmt.Errorf("subscribe strategy actor to market ticks: %w", err)
 	}
 
-	candleSub, err := strategy.SubscribeCandleEvents(context.Background(), a.EventBus, ref)
+	candleSub, err := strategy.SubscribeCandleEvents(context.Background(), a.EventBus, sa.ref)
 	if err != nil {
 		tickSub.Unsubscribe()
-		actorRunCancel()
-		ref.Stop()
-		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+		sa.runCancel()
+		sa.ref.Stop()
+		if runErr := <-sa.runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
 			return fmt.Errorf("subscribe strategy actor to candle events after run failure: %w", runErr)
 		}
 		return fmt.Errorf("subscribe strategy actor to candle events: %w", err)
 	}
 
-	orderBookSub, err := strategy.SubscribeOrderBookMetricsEvents(context.Background(), a.EventBus, ref)
+	orderBookSub, err := strategy.SubscribeOrderBookMetricsEvents(context.Background(), a.EventBus, sa.ref)
 	if err != nil {
 		candleSub.Unsubscribe()
 		tickSub.Unsubscribe()
-		actorRunCancel()
-		ref.Stop()
-		if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+		sa.runCancel()
+		sa.ref.Stop()
+		if runErr := <-sa.runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
 			return fmt.Errorf("subscribe strategy actor to order book events after run failure: %w", runErr)
 		}
 		return fmt.Errorf("subscribe strategy actor to order book events: %w", err)
@@ -519,24 +446,7 @@ func (a *Application) buildStrategyComponents(b *Builder) error {
 		return nil
 	})
 
-	a.Supervisor.AddFunc(strategy.DefaultActorID, func(ctx context.Context) error {
-		select {
-		case runErr := <-runErrCh:
-			actorRunCancel()
-			ref.Stop()
-			if runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run strategy actor: %w", runErr)
-			}
-			return nil
-		case <-ctx.Done():
-			actorRunCancel()
-			ref.Stop()
-			if runErr := <-runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
-				return fmt.Errorf("run strategy actor: %w", runErr)
-			}
-			return nil
-		}
-	})
+	a.superviseActor(strategy.DefaultActorID, "strategy actor", sa)
 
 	return nil
 }
@@ -662,6 +572,73 @@ func loadScalpingWeightsFromEnv() (scalping.ComponentWeights, error) {
 		return scalping.ComponentWeights{}, err
 	}
 	return w, nil
+}
+
+const (
+	actorStartTimeout = 5 * time.Second
+	actorStartPoll    = 10 * time.Millisecond
+)
+
+type spawnedActor struct {
+	ref       *actor.Ref
+	runErrCh  <-chan error
+	runCancel context.CancelFunc
+}
+
+func (a *Application) spawnActorAndWait(name string, instance actor.Actor, cfg actor.Config) (*spawnedActor, error) {
+	ref, err := a.ActorSystem.Spawn(instance, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("spawn %s via ActorSystem.Spawn: %w", name, err)
+	}
+	runErrCh := make(chan error, 1)
+	runCtx, runCancel := context.WithCancel(context.Background())
+	go func() {
+		runErrCh <- ref.Run(runCtx)
+	}()
+
+	startTimeout := time.NewTimer(actorStartTimeout)
+	startTicker := time.NewTicker(actorStartPoll)
+	defer startTimeout.Stop()
+	defer startTicker.Stop()
+
+	for !ref.IsRunning() {
+		select {
+		case runErr := <-runErrCh:
+			runCancel()
+			ref.Stop()
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return nil, fmt.Errorf("run %s: %w", name, runErr)
+			}
+			return nil, fmt.Errorf("%s stopped before assignment", name)
+		case <-startTimeout.C:
+			runCancel()
+			ref.Stop()
+			return nil, fmt.Errorf("timeout waiting for %s to start", name)
+		case <-startTicker.C:
+		}
+	}
+	return &spawnedActor{ref: ref, runErrCh: runErrCh, runCancel: runCancel}, nil
+}
+
+func (a *Application) superviseActor(supervisorID, name string, sa *spawnedActor) {
+	a.Supervisor.AddFunc(supervisorID, func(ctx context.Context) error {
+		select {
+		case runErr := <-sa.runErrCh:
+			sa.runCancel()
+			sa.ref.Stop()
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return fmt.Errorf("run %s: %w", name, runErr)
+			}
+			return nil
+		case <-ctx.Done():
+			sa.runCancel()
+			sa.ref.Stop()
+			if runErr := <-sa.runErrCh; runErr != nil && !errors.Is(runErr, context.Canceled) {
+				return fmt.Errorf("run %s: %w", name, runErr)
+			}
+			return nil
+		}
+	})
 }
 
 // Build returns the built registry.

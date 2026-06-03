@@ -1,9 +1,11 @@
 package bootstrap
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/irfndi/neuratrade/internal/platform/actor"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -44,4 +46,19 @@ func TestLoadScalpingWeightsFromEnv_RejectsInvalidNumber(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_WEIGHT_RSI", "not-a-number")
 	_, err := loadScalpingWeightsFromEnv()
 	require.Error(t, err)
+}
+
+type noopActor struct{}
+
+func (noopActor) Receive(ctx context.Context, env actor.Envelope) error { return nil }
+func (noopActor) ID() string                                            { return "noop" }
+
+func TestSpawnActorAndWait_Success(t *testing.T) {
+	a := &Application{ActorSystem: actor.NewSystem(actor.DefaultConfig())}
+	sa, err := a.spawnActorAndWait("noop", noopActor{}, actor.DefaultConfig())
+	require.NoError(t, err)
+	require.NotNil(t, sa.ref)
+	require.NotNil(t, sa.runCancel)
+	sa.runCancel()
+	sa.ref.Stop()
 }
