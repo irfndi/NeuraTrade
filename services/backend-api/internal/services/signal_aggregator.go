@@ -719,39 +719,30 @@ func (sa *SignalAggregator) removeDuplicateStrings(slice []string) []string {
 }
 
 // calculateTechnicalIndicators computes various technical indicators from price history.
-func (sa *SignalAggregator) calculateTechnicalIndicators(prices []decimal.Decimal) map[string][]float64 {
-	indicators := make(map[string][]float64)
+func (sa *SignalAggregator) calculateTechnicalIndicators(prices []decimal.Decimal) map[string][]decimal.Decimal {
+	indicators := make(map[string][]decimal.Decimal)
 
 	if len(prices) < technicalAnalysisMinHistory || sa.indicatorProvider == nil {
 		return indicators
 	}
 
-	sma20 := sa.indicatorProvider.SMA(prices, 20)
-	if len(sma20) > 0 {
-		indicators["sma_20"] = decimalSliceToFloat64(sma20)
+	if sma20 := sa.indicatorProvider.SMA(prices, 20); len(sma20) > 0 {
+		indicators["sma_20"] = sma20
 	}
-
-	sma50 := sa.indicatorProvider.SMA(prices, 50)
-	if len(sma50) > 0 {
-		indicators["sma_50"] = decimalSliceToFloat64(sma50)
+	if sma50 := sa.indicatorProvider.SMA(prices, 50); len(sma50) > 0 {
+		indicators["sma_50"] = sma50
 	}
-
-	ema12 := sa.indicatorProvider.EMA(prices, 12)
-	if len(ema12) > 0 {
-		indicators["ema_12"] = decimalSliceToFloat64(ema12)
+	if ema12 := sa.indicatorProvider.EMA(prices, 12); len(ema12) > 0 {
+		indicators["ema_12"] = ema12
 	}
-
-	rsi14 := sa.indicatorProvider.RSI(prices, 14)
-	if len(rsi14) > 0 {
-		indicators["rsi_14"] = decimalSliceToFloat64(rsi14)
+	if rsi14 := sa.indicatorProvider.RSI(prices, 14); len(rsi14) > 0 {
+		indicators["rsi_14"] = rsi14
 	}
-
-	macdLine, signalLine, _ := sa.indicatorProvider.MACD(prices, 12, 26, 9)
-	if len(macdLine) > 0 {
-		indicators["macd_line"] = decimalSliceToFloat64(macdLine)
-	}
-	if len(signalLine) > 0 {
-		indicators["macd_signal"] = decimalSliceToFloat64(signalLine)
+	if macdLine, signalLine, _ := sa.indicatorProvider.MACD(prices, 12, 26, 9); len(macdLine) > 0 {
+		indicators["macd_line"] = macdLine
+		if len(signalLine) > 0 {
+			indicators["macd_signal"] = signalLine
+		}
 	}
 
 	return indicators
@@ -766,26 +757,25 @@ func decimalSliceToFloat64(vals []decimal.Decimal) []float64 {
 }
 
 // generateTechnicalSignals interprets technical indicators to generate buy/sell signals.
-func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, indicators map[string][]float64) []*AggregatedSignal {
-	// Collect individual signal components
+func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, indicators map[string][]decimal.Decimal) []*AggregatedSignal {
 	buySignals := make([]SignalComponent, 0)
 	sellSignals := make([]SignalComponent, 0)
 
-	// RSI-based signals
+	rsiThresholdLow := decimal.NewFromInt(30)
+	rsiThresholdHigh := decimal.NewFromInt(70)
+
 	if rsi, exists := indicators["rsi_14"]; exists && len(rsi) > 0 {
 		currentRSI := rsi[len(rsi)-1]
-		if currentRSI < 30 {
-			// Oversold - Buy signal
+		if currentRSI.LessThan(rsiThresholdLow) {
 			buySignals = append(buySignals, SignalComponent{
 				Indicator:   "rsi_oversold",
 				Description: "RSI oversold recovery",
 				Confidence:  decimal.NewFromFloat(0.7),
 				Strength:    0.7,
 			})
-		} else if currentRSI > 70 {
-			// Overbought - Sell signal
+		} else if currentRSI.GreaterThan(rsiThresholdHigh) {
 			sellSignals = append(sellSignals, SignalComponent{
-				Indicator:   "rsi_overbought",
+				Indicator:   "rsi overbought",
 				Description: "RSI overbought condition",
 				Confidence:  decimal.NewFromFloat(0.7),
 				Strength:    0.7,
@@ -793,7 +783,6 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// Moving Average crossover (Golden/Death Cross: SMA20 vs SMA50)
 	if sma20, exists := indicators["sma_20"]; exists && len(sma20) > 1 {
 		if sma50, sma50Exists := indicators["sma_50"]; sma50Exists && len(sma50) > 1 {
 			currentSMA20 := sma20[len(sma20)-1]
@@ -801,7 +790,7 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 			prevSMA20 := sma20[len(sma20)-2]
 			prevSMA50 := sma50[len(sma50)-2]
 
-			if currentSMA20 > currentSMA50 && prevSMA20 <= prevSMA50 {
+			if currentSMA20.GreaterThan(currentSMA50) && prevSMA20.LessThanOrEqual(prevSMA50) {
 				buySignals = append(buySignals, SignalComponent{
 					Indicator:   "golden_cross",
 					Description: "SMA20 crossed above SMA50 (Golden Cross)",
@@ -809,7 +798,7 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 					Strength:    0.8,
 				})
 			}
-			if currentSMA20 < currentSMA50 && prevSMA20 >= prevSMA50 {
+			if currentSMA20.LessThan(currentSMA50) && prevSMA20.GreaterThanOrEqual(prevSMA50) {
 				sellSignals = append(sellSignals, SignalComponent{
 					Indicator:   "death_cross",
 					Description: "SMA20 crossed below SMA50 (Death Cross)",
@@ -820,7 +809,6 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 		}
 	}
 
-	// MACD crossover
 	if macdLine, exists := indicators["macd_line"]; exists && len(macdLine) > 1 {
 		if macdSignal, signalExists := indicators["macd_signal"]; signalExists && len(macdSignal) > 1 {
 			currentMACD := macdLine[len(macdLine)-1]
@@ -828,7 +816,7 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 			prevMACD := macdLine[len(macdLine)-2]
 			prevSignal := macdSignal[len(macdSignal)-2]
 
-			if currentMACD > currentSignal && prevMACD <= prevSignal {
+			if currentMACD.GreaterThan(currentSignal) && prevMACD.LessThanOrEqual(prevSignal) {
 				buySignals = append(buySignals, SignalComponent{
 					Indicator:   "macd_bullish",
 					Description: "MACD bullish crossover",
@@ -836,7 +824,7 @@ func (sa *SignalAggregator) generateTechnicalSignals(symbol, exchange string, in
 					Strength:    0.75,
 				})
 			}
-			if currentMACD < currentSignal && prevMACD >= prevSignal {
+			if currentMACD.LessThan(currentSignal) && prevMACD.GreaterThanOrEqual(prevSignal) {
 				sellSignals = append(sellSignals, SignalComponent{
 					Indicator:   "macd_bearish",
 					Description: "MACD bearish crossover",
