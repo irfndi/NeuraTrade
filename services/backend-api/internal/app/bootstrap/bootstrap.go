@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -80,13 +79,13 @@ func DefaultRiskConfig() RiskConfig {
 	}
 
 	if v := os.Getenv("NEURATRADE_RISK_MAX_DRAWDOWN"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
-			cfg.MaxDrawdown = decimal.NewFromFloat(f)
+		if d, err := decimal.NewFromString(v); err == nil && d.GreaterThan(decimal.Zero) && d.LessThanOrEqual(decimal.NewFromInt(1)) {
+			cfg.MaxDrawdown = d
 		}
 	}
 	if v := os.Getenv("NEURATRADE_RISK_MAX_DAILY_LOSS"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
-			cfg.MaxDailyLoss = decimal.NewFromFloat(f)
+		if d, err := decimal.NewFromString(v); err == nil && d.GreaterThan(decimal.Zero) && d.LessThanOrEqual(decimal.NewFromInt(1)) {
+			cfg.MaxDailyLoss = d
 		}
 	}
 
