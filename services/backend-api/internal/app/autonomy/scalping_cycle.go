@@ -304,10 +304,19 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.75
 		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "negative_expectancy_cap")
 	}
-	if input.RiskDrawdown > 0.12 {
+	switch {
+	case input.RiskDrawdown > 0.12:
 		policy.EffectiveMinConfidence += 0.05
 		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.70
 		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "drawdown_tightening")
+	case input.RiskDrawdown > 0.08:
+		policy.EffectiveMinConfidence += 0.03
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.80
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "drawdown_tightening_moderate")
+	case input.RiskDrawdown > 0.05:
+		policy.EffectiveMinConfidence += 0.02
+		policy.EffectiveMaxCapitalPct = policy.EffectiveMaxCapitalPct * 0.90
+		policy.PolicyAdjustments = append(policy.PolicyAdjustments, "drawdown_tightening_early")
 	}
 
 	switch recoveryMode {

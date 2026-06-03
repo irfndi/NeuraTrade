@@ -264,6 +264,49 @@ func TestEvaluateScalpingPolicy_LossStreakAndNegativeExpectancyTightening(t *tes
 	require.Contains(t, withLossAndNegativeExpectancy.PolicyAdjustments, "negative_expectancy_cap")
 }
 
+func TestEvaluateScalpingPolicy_GraduatedDrawdownTightening(t *testing.T) {
+	config := DefaultScalpingPolicyConfig()
+
+	baseline := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+	}, config)
+
+	early := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+		RiskDrawdown:      0.06,
+	}, config)
+
+	moderate := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+		RiskDrawdown:      0.09,
+	}, config)
+
+	heavy := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(1_000),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+		RiskDrawdown:      0.15,
+	}, config)
+
+	require.Contains(t, early.PolicyAdjustments, "drawdown_tightening_early")
+	require.Greater(t, early.EffectiveMinConfidence, baseline.EffectiveMinConfidence)
+	require.Less(t, early.EffectiveMaxCapitalPct, baseline.EffectiveMaxCapitalPct)
+
+	require.Contains(t, moderate.PolicyAdjustments, "drawdown_tightening_moderate")
+	require.Greater(t, moderate.EffectiveMinConfidence, early.EffectiveMinConfidence)
+	require.Less(t, moderate.EffectiveMaxCapitalPct, early.EffectiveMaxCapitalPct)
+
+	require.Contains(t, heavy.PolicyAdjustments, "drawdown_tightening")
+	require.Greater(t, heavy.EffectiveMinConfidence, moderate.EffectiveMinConfidence)
+	require.Less(t, heavy.EffectiveMaxCapitalPct, moderate.EffectiveMaxCapitalPct)
+}
+
 func TestEvaluateScalpingPolicy_UsesInclusiveTierThresholdsAndStandardConcurrentCap(t *testing.T) {
 	cfg := DefaultScalpingPolicyConfig()
 

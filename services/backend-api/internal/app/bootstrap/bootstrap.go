@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,13 +71,26 @@ type RiskConfig struct {
 
 // DefaultRiskConfig returns default risk configuration.
 func DefaultRiskConfig() RiskConfig {
-	return RiskConfig{
+	cfg := RiskConfig{
 		MaxDrawdown:         decimal.NewFromFloat(0.1),  // 10%
 		MaxDailyLoss:        decimal.NewFromFloat(0.05), // 5%
 		CooldownPeriod:      5 * time.Minute,
 		CooldownAfterLosses: 3,
 		SafeMode:            risk.DefaultSafeModeConfig(),
 	}
+
+	if v := os.Getenv("NEURATRADE_RISK_MAX_DRAWDOWN"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			cfg.MaxDrawdown = decimal.NewFromFloat(f)
+		}
+	}
+	if v := os.Getenv("NEURATRADE_RISK_MAX_DAILY_LOSS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			cfg.MaxDailyLoss = decimal.NewFromFloat(f)
+		}
+	}
+
+	return cfg
 }
 
 // DefaultConfig returns a Config with sensible defaults.
