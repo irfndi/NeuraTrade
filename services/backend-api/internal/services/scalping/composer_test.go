@@ -2,6 +2,7 @@ package scalping
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -155,6 +156,13 @@ func TestNewScalpingComposerWithWeights_AcceptsValid(t *testing.T) {
 	got := composer.Weights()
 	require.True(t, got.Spread.Equal(w.Spread))
 	require.True(t, got.Trend.Equal(w.Trend))
+}
+
+func TestScalpingSignalComposer_EmptyOHLCVReturnsSentinel(t *testing.T) {
+	composer := NewScalpingComposer(nil)
+	_, err := composer.ComposeSignal(context.Background(), OHLCVData{Exchange: "x", Symbol: "y"}, nil)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInsufficientOHLCVData))
 }
 
 func TestScalpingSignalComposer_CustomWeightsFlipDecision(t *testing.T) {

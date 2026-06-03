@@ -2,6 +2,7 @@ package scalping
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +11,11 @@ import (
 )
 
 const minComposerConfidenceSpread = 0.10
+
+// ErrInsufficientOHLCVData is returned by ComposeSignal when the supplied
+// OHLCV payload contains zero candles. Callers can detect it with
+// errors.Is for retry/back-off decisions without parsing the message.
+var ErrInsufficientOHLCVData = errors.New("insufficient OHLCV data for signal composition")
 
 // OHLCVData provides candlestick data for signal composition.
 type OHLCVData struct {
@@ -145,7 +151,7 @@ func (c *ScalpingSignalComposer) Weights() ComponentWeights {
 // ComposeSignal creates a scalping signal from OHLCV data and order book metrics.
 func (c *ScalpingSignalComposer) ComposeSignal(ctx context.Context, ohlcv OHLCVData, obMetrics OrderBookMetrics) (*ScalpingSignal, error) {
 	if len(ohlcv.Candles) == 0 {
-		return nil, fmt.Errorf("insufficient OHLCV data for signal composition")
+		return nil, fmt.Errorf("%w", ErrInsufficientOHLCVData)
 	}
 
 	signal := &ScalpingSignal{
