@@ -56,6 +56,7 @@ type IntegratedQuestHandlers struct {
 	autonomyStore        *AutonomousRolloutStore
 	autonomyStoreMu      sync.RWMutex
 	autonomyCoordinator  *ScalpingAutonomyCoordinator
+	autonomyCoordinatorMu sync.RWMutex
 	shadowCoordinator    *ShadowEvaluationCoordinator
 	shadowCoordinatorMu  sync.RWMutex
 	stalePositionMu      sync.Mutex
@@ -306,6 +307,8 @@ func (h *IntegratedQuestHandlers) AutonomyCoordinator() *ScalpingAutonomyCoordin
 	if h == nil {
 		return nil
 	}
+	h.autonomyCoordinatorMu.RLock()
+	defer h.autonomyCoordinatorMu.RUnlock()
 	return h.autonomyCoordinator
 }
 
@@ -374,12 +377,17 @@ func (h *IntegratedQuestHandlers) configureScalpingAutonomy() {
 		h.clearScalpingAutonomyCoordinator()
 		return
 	}
-	h.autonomyCoordinator = NewScalpingAutonomyCoordinator(store, aiSvc.config)
-	aiSvc.SetAutonomyCoordinator(h.autonomyCoordinator)
+	coord := NewScalpingAutonomyCoordinator(store, aiSvc.config)
+	h.autonomyCoordinatorMu.Lock()
+	h.autonomyCoordinator = coord
+	h.autonomyCoordinatorMu.Unlock()
+	aiSvc.SetAutonomyCoordinator(coord)
 }
 
 func (h *IntegratedQuestHandlers) clearScalpingAutonomyCoordinator() {
+	h.autonomyCoordinatorMu.Lock()
 	h.autonomyCoordinator = nil
+	h.autonomyCoordinatorMu.Unlock()
 	h.aiScalpingMu.RLock()
 	aiSvc := h.aiScalpingService
 	h.aiScalpingMu.RUnlock()
@@ -414,7 +422,13 @@ func (h *IntegratedQuestHandlers) resolveOperationalMode(chatID string, quest *Q
 }
 
 func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, chatID string, mode OperationalMode) error {
-	if h == nil || h.autonomyCoordinator == nil {
+	if h == nil {
+		return nil
+	}
+	h.autonomyCoordinatorMu.RLock()
+	coord := h.autonomyCoordinator
+	h.autonomyCoordinatorMu.RUnlock()
+	if coord == nil {
 		return nil
 	}
 	strategyID := ScalpingStrategyID(chatID)
@@ -434,7 +448,7 @@ func (h *IntegratedQuestHandlers) syncScalpingStrategyMode(ctx context.Context, 
 			return err
 		}
 	}
-	_, err := h.autonomyCoordinator.SetStrategyMode(ctx, strategyID, targetMode)
+	_, err := coord.SetStrategyMode(ctx, strategyID, targetMode)
 	return err
 }
 
