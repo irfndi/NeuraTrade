@@ -1341,3 +1341,47 @@ func runSignalsTestPriceChange(imbalance float64) float64 {
 	}
 	return 2.5
 }
+
+func TestScalpingBacktestEngine_RunSignalsForceClosesOpenPositionsAtEnd(t *testing.T) {
+	now := time.Date(2026, 5, 12, 3, 0, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	signals := []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+		runSignalsTestSignal(now.Add(90*time.Second), "AAA/USDT", 102, 0.50, 35),
+		runSignalsTestSignal(now.Add(120*time.Second), "BBB/USDT", 49, -0.45, 65),
+	}
+
+	result, err := engine.RunSignals(context.Background(), signals)
+
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Summary.TotalSignals)
+	require.Len(t, result.Trades, 2)
+	require.Equal(t, 0, len(engine.positions), "all positions closed after run completes")
+	for _, trade := range result.Trades {
+		require.NotEqual(t, "end_of_run", trade.ExitReason)
+	}
+}
+
+func TestScalpingBacktestEngine_ForceCloseSweepEmptiesPositions(t *testing.T) {
+	now := time.Date(2026, 5, 12, 3, 0, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+
+	engine.positions["bitget|AAA/USDT"] = &SimulatedPosition{
+		Symbol:     "AAA/USDT",
+		Side:       "buy",
+		Size:       decimal.NewFromInt(1),
+		Notional:   decimal.NewFromInt(100),
+		EntryPrice: decimal.NewFromInt(100),
+		EntryTime:  now.Add(-time.Minute),
+		Signal:     MarketSignal{Symbol: "AAA/USDT", Price: 100},
+	}
+
+	engine.sweepRemainingPositions(map[string]float64{"AAA/USDT": 102}, nil)
+
+	require.Equal(t, 0, len(engine.positions), "no positions remain after sweep")
+	require.Len(t, engine.tradeHistory, 1)
+	require.Equal(t, "force_close_end_of_run", engine.tradeHistory[0].ExitReason)
+	require.Equal(t, "AAA/USDT", engine.tradeHistory[0].Symbol)
+}
