@@ -40,11 +40,15 @@ type RunScalpingBacktestRequest struct {
 	SpreadMultiplier   *float64 `json:"spread_multiplier"`
 	FeeRate            *string  `json:"fee_rate"`
 	NoisePct           *float64 `json:"noise_pct"`
+	// Mode selects the decision pipeline: "deterministic" (default) or
+	// "ai". See services.ScalpingBacktestConfig.Mode for semantics.
+	Mode *string `json:"mode"`
 }
 
 type RunScalpingBacktestResponse struct {
 	RunID       string                   `json:"run_id"`
 	Status      string                   `json:"status"`
+	Mode        string                   `json:"mode"`
 	Summary     ScalpingBacktestSummary  `json:"summary"`
 	Signals     []ScalpingBacktestSignal `json:"signals,omitempty"`
 	Trades      []ScalpingBacktestTrade  `json:"trades,omitempty"`
@@ -70,6 +74,7 @@ type ScalpingBacktestConfig struct {
 	MinConfidence      float64   `json:"min_confidence"`
 	SpreadMultiplier   float64   `json:"spread_multiplier"`
 	FeeRate            string    `json:"fee_rate"`
+	Mode               string    `json:"mode"`
 }
 
 type ScalpingBacktestSummary struct {
@@ -187,6 +192,7 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 	c.JSON(http.StatusOK, RunScalpingBacktestResponse{
 		RunID:       runID,
 		Status:      "completed",
+		Mode:        apiResult.Mode,
 		Summary:     apiResult.Summary,
 		Signals:     apiResult.Signals,
 		Trades:      apiResult.Trades,
@@ -477,6 +483,16 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("noise_pct must be between 0 and 1.0")
 	}
 
+	mode := "deterministic"
+	if req.Mode != nil {
+		candidate := strings.ToLower(strings.TrimSpace(*req.Mode))
+		if candidate == "" {
+			mode = "deterministic"
+		} else {
+			mode = candidate
+		}
+	}
+
 	return services.ScalpingBacktestConfig{
 		StartTime:          start.UTC(),
 		EndTime:            end.UTC(),
@@ -491,6 +507,7 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		NoisePct:           noisePct,
 		MaxCapitalPct:      services.DefaultScalpingBacktestMaxCapitalPct,
 		DefaultHoldPeriod:  services.DefaultScalpingBacktestHoldPeriod,
+		Mode:               mode,
 	}, nil
 }
 
@@ -505,10 +522,12 @@ func serviceConfigToAPI(cfg services.ScalpingBacktestConfig) ScalpingBacktestCon
 		MinConfidence:      cfg.MinConfidence,
 		SpreadMultiplier:   cfg.SpreadMultiplier,
 		FeeRate:            cfg.FeeRate.String(),
+		Mode:               cfg.Mode,
 	}
 }
 
 type apiBacktestResult struct {
+	Mode        string
 	Summary     ScalpingBacktestSummary
 	Signals     []ScalpingBacktestSignal
 	Trades      []ScalpingBacktestTrade
@@ -591,6 +610,7 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 	}
 
 	return apiBacktestResult{
+		Mode:        result.Mode,
 		Summary:     summary,
 		Signals:     signals,
 		Trades:      trades,

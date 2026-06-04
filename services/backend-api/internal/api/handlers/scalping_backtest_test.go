@@ -96,3 +96,61 @@ func TestParseToServiceConfig_ReqSymbolsOverrideEnvVar(t *testing.T) {
 func floatPtr(v float64) *float64 {
 	return &v
 }
+
+func stringPtr(v string) *string {
+	return &v
+}
+
+func TestParseToServiceConfig_ModeDefaultIsDeterministic(t *testing.T) {
+	// PR-3: when the Mode field is omitted, the engine should run in
+	// "deterministic" mode (the prior behavior). This guards against the
+	// default accidentally flipping to "ai" on a refactor, which would
+	// change the trade count post-hoc.
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, "deterministic", cfg.Mode)
+}
+
+func TestParseToServiceConfig_ModeExplicitAIPassesThrough(t *testing.T) {
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+		Mode:           stringPtr("ai"),
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, "ai", cfg.Mode)
+}
+
+func TestParseToServiceConfig_ModeExplicitDeterministicPassesThrough(t *testing.T) {
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+		Mode:           stringPtr("deterministic"),
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, "deterministic", cfg.Mode)
+}
+
+func TestParseToServiceConfig_ModeEmptyStringDefaultsToDeterministic(t *testing.T) {
+	// PR-3: an explicit empty-string mode is treated as "unset" and falls
+	// back to the default. Avoids the silent zero-value ambiguity where
+	// "mode: ''" would otherwise mean either "unset" or "invalid empty".
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+		Mode:           stringPtr(""),
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, "deterministic", cfg.Mode)
+}

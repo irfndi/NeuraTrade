@@ -124,6 +124,47 @@ func TestScalpingBacktestEngine_ValidateConfig(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid config with mode=ai",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "ai",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid config with mode=deterministic",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "deterministic",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid mode value",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "neural",
+			},
+			wantErr: true,
+			errMsg:  "invalid mode \"neural\"",
+		},
+		{
+			name: "empty mode is valid (defaults to deterministic downstream)",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "",
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +182,85 @@ func TestScalpingBacktestEngine_ValidateConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestScalpingBacktestEngine_ComputeSignalHints covers the AI-mode sidecar
+// metadata computation (PR-3). The function is called from evaluateSignal
+// when the engine's Mode is "ai"; it must return nil for non-actionable
+// decisions and produce non-negative SuggestedAction/ConfidenceHint/
+// CandidateScore fields for actionable ones.
+func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
+	engine := &ScalpingBacktestEngine{config: ScalpingBacktestConfig{
+		DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		MaxBidAskSpreadPct:    0.5,
+	}}
+
+	t.Run("nil decision returns nil hints", func(t *testing.T) {
+		hints := engine.computeSignalHints(MarketSignal{}, nil)
+		assert.Nil(t, hints)
+	})
+
+	t.Run("hold decision returns nil hints", func(t *testing.T) {
+		holdDecision := &AITradingDecision{Action: "hold", Confidence: 0.5}
+		hints := engine.computeSignalHints(MarketSignal{}, holdDecision)
+		assert.Nil(t, hints)
+	})
+
+	t.Run("buy decision with valid signal returns hints", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		buyDecision := &AITradingDecision{Action: "buy", Confidence: 0.75}
+		hints := engine.computeSignalHints(signal, buyDecision)
+		require.NotNil(t, hints, "buy decision should produce hints")
+		assert.Equal(t, "buy", hints.SuggestedAction)
+		assert.InDelta(t, 0.75, hints.ConfidenceHint, 1e-9)
+		assert.GreaterOrEqual(t, hints.CandidateScore, 0.0,
+			"score must be non-negative (imbalance+liquidity+volume components)")
+	})
+
+	t.Run("sell decision with valid signal returns hints", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "ETH/USDT",
+			Price:              3000,
+			High24h:            3100,
+			Low24h:             2900,
+			Volume24h:          500_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: -0.40,
+			RangePosition24h:   80,
+		}
+		sellDecision := &AITradingDecision{Action: "sell", Confidence: 0.72}
+		hints := engine.computeSignalHints(signal, sellDecision)
+		require.NotNil(t, hints, "sell decision should produce hints")
+		assert.Equal(t, "sell", hints.SuggestedAction)
+		assert.InDelta(t, 0.72, hints.ConfidenceHint, 1e-9)
+		assert.GreaterOrEqual(t, hints.CandidateScore, 0.0)
+	})
+
+	t.Run("whitespace action trimmed", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		decision := &AITradingDecision{Action: "  buy  ", Confidence: 0.7}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+		assert.Equal(t, "buy", hints.SuggestedAction, "action should be lowercased + trimmed")
+	})
 }
 
 func TestScalpingBacktestEngine_ClassifyRegime(t *testing.T) {

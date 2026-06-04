@@ -516,6 +516,26 @@ func main() {
 
 	// Add autonomous command separately to avoid struct literal error
 	app.Commands = append(app.Commands, &cli.Command{
+		Name:  "backtest",
+		Usage: "Run a scalping backtest against the backend",
+		Subcommands: []*cli.Command{
+			{
+				Name:   "run",
+				Usage:  "Run a scalping backtest with the given date range and mode",
+				Action: backtestRunAction,
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "start", Usage: "backtest start time (RFC3339)", Required: true},
+					&cli.StringFlag{Name: "end", Usage: "backtest end time (RFC3339)", Required: true},
+					&cli.StringFlag{Name: "mode", Usage: "decision pipeline: 'deterministic' (default) or 'ai'", Value: "deterministic"},
+					&cli.StringFlag{Name: "symbols", Usage: "comma-separated symbol list"},
+					&cli.StringFlag{Name: "exchange", Usage: "exchange name"},
+					&cli.StringFlag{Name: "initial-capital", Usage: "initial capital as a decimal string"},
+					&cli.DurationFlag{Name: "timeout", Usage: "HTTP request timeout (default: 30s)", Value: defaultTimeout},
+				},
+			},
+		},
+	})
+	app.Commands = append(app.Commands, &cli.Command{
 		Name:  "autonomous",
 		Usage: "Manage autonomous trading mode",
 		Subcommands: []*cli.Command{
