@@ -582,19 +582,25 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
     liquidateAll: (
       chatId: string,
     ) => Effect.Effect<LiquidationResponse, ApiClientError>;
-    getQuests: (chatId: string) => Effect.Effect<QuestsResponse, ApiClientError>;
+    getQuests: (
+      chatId: string,
+    ) => Effect.Effect<QuestsResponse, ApiClientError>;
     getQuestDiagnostics: (
       chatId: string,
     ) => Effect.Effect<QuestDiagnosticsResponse, ApiClientError>;
     getPortfolio: (
       chatId: string,
     ) => Effect.Effect<PortfolioResponse, ApiClientError>;
-    getWallets: (chatId: string) => Effect.Effect<WalletsResponse, ApiClientError>;
+    getWallets: (
+      chatId: string,
+    ) => Effect.Effect<WalletsResponse, ApiClientError>;
     getLogs: (
       chatId: string,
       limit?: number,
     ) => Effect.Effect<LogsResponse, ApiClientError>;
-    getDoctor: (chatId: string) => Effect.Effect<DoctorResponse, ApiClientError>;
+    getDoctor: (
+      chatId: string,
+    ) => Effect.Effect<DoctorResponse, ApiClientError>;
     getAIModels: () => Effect.Effect<AIModelsResponse, ApiClientError>;
     getAIProviders: () => Effect.Effect<AIProvidersResponse, ApiClientError>;
     selectAIModel: (
@@ -614,7 +620,10 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
       chatId: string,
       mode: "dry" | "live",
       changedBy?: string,
-    ) => Effect.Effect<import("./types").SetTradingModeResponse, ApiClientError>;
+    ) => Effect.Effect<
+      import("./types").SetTradingModeResponse,
+      ApiClientError
+    >;
     addTradingModeConfirmation: (
       chatId: string,
       confirmedBy?: string,

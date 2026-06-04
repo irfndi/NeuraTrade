@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Effect, Cause } from "effect";
-import { BackendApiClient, TelegramApi, TelegramApiLive, ApiClientError } from "./client";
+import {
+  BackendApiClient,
+  TelegramApi,
+  TelegramApiLive,
+  ApiClientError,
+} from "./client";
 
 describe("BackendApiClient fallback behavior", () => {
   const originalFetch = globalThis.fetch;
@@ -68,18 +73,22 @@ describe("TelegramApi Effect service", () => {
 
   test("TelegramApiLive composes with the underlying client", async () => {
     let capturedUrl = "";
-    globalThis.fetch = ((async (input: RequestInfo | URL) => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
       capturedUrl = String(input);
       return new Response(
         JSON.stringify({
-          user: { id: "u-1", subscription_tier: "free", created_at: "2026-01-01T00:00:00Z" },
+          user: {
+            id: "u-1",
+            subscription_tier: "free",
+            created_at: "2026-01-01T00:00:00Z",
+          },
         }),
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
         },
       );
-    }) as unknown) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -91,21 +100,23 @@ describe("TelegramApi Effect service", () => {
       const api = yield* TelegramApi;
       return yield* api.getUserByChatId("chat-1");
     });
-    const result = await Effect.runPromise(
-      Effect.provide(program, layer),
-    );
+    const result = await Effect.runPromise(Effect.provide(program, layer));
     expect(result).toEqual({
-      user: { id: "u-1", subscription_tier: "free", created_at: "2026-01-01T00:00:00Z" },
+      user: {
+        id: "u-1",
+        subscription_tier: "free",
+        created_at: "2026-01-01T00:00:00Z",
+      },
     });
     expect(capturedUrl).toContain("/internal/telegram/users/chat-1");
   });
 
   test("TelegramApi methods surface ApiClientError on HTTP failure", async () => {
-    globalThis.fetch = ((async () =>
+    globalThis.fetch = (async () =>
       new Response(JSON.stringify({ message: "boom" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
-      })) as unknown) as typeof fetch;
+      })) as unknown as typeof fetch;
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -121,9 +132,7 @@ describe("TelegramApi Effect service", () => {
     // boundary, so we use the typed exit channel via
     // Effect.runPromiseExit + Cause.failures to recover the typed
     // error.
-    const exit = await Effect.runPromiseExit(
-      Effect.provide(program, layer),
-    );
+    const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
       const failureOption = Cause.failureOption(exit.cause);
@@ -141,9 +150,9 @@ describe("TelegramApi Effect service", () => {
     // Defensive coverage: the wrapper catches non-ApiClientError throws
     // and re-wraps them so the typed error channel is preserved even
     // when the underlying client raises a generic Error.
-    globalThis.fetch = ((async () => {
+    globalThis.fetch = (async () => {
       throw new Error("network blew up");
-    }) as unknown) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -155,9 +164,7 @@ describe("TelegramApi Effect service", () => {
       const api = yield* TelegramApi;
       return yield* api.getUserByChatId("chat-1");
     });
-    const exit = await Effect.runPromiseExit(
-      Effect.provide(program, layer),
-    );
+    const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
       const failureOption = Cause.failureOption(exit.cause);

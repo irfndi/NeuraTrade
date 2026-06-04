@@ -63,7 +63,9 @@ const resolvePort = (raw: string | undefined, fallback: number): number => {
   if (!Number.isNaN(numericPort) && numericPort > 0 && numericPort < 65536) {
     return numericPort;
   }
-  console.warn(`Invalid port value provided (${raw}). Falling back to default (${fallback}).`);
+  console.warn(
+    `Invalid port value provided (${raw}). Falling back to default (${fallback}).`,
+  );
   return fallback;
 };
 
@@ -147,18 +149,14 @@ export const loadConfig: Effect.Effect<
     ? "http://localhost:8080"
     : rawApiBaseUrl.replace(/\/$/, "");
 
-  const webhookUrlRaw = (
-    yield* Config.string("TELEGRAM_WEBHOOK_URL").pipe(
-      Effect.catchAll(() => Effect.succeed("")),
-    )
-  ).trim();
+  const webhookUrlRaw = (yield* Config.string("TELEGRAM_WEBHOOK_URL").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  )).trim();
   const webhookUrl = webhookUrlRaw.length > 0 ? webhookUrlRaw : null;
 
-  const webhookPath = (
-    yield* Config.string("TELEGRAM_WEBHOOK_PATH").pipe(
-      Effect.catchAll(() => Effect.succeed("")),
-    )
-  ).trim();
+  const webhookPath = (yield* Config.string("TELEGRAM_WEBHOOK_PATH").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  )).trim();
   const resolvedWebhookPath = webhookPath
     ? webhookPath
     : webhookUrl
@@ -166,17 +164,13 @@ export const loadConfig: Effect.Effect<
       : "/telegram/webhook";
 
   const webhookSecret =
-    (
-      yield* Config.string("TELEGRAM_WEBHOOK_SECRET").pipe(
-        Effect.catchAll(() => Effect.succeed("")),
-      )
-    ).trim() || null;
-
-  const usePollingEnv = (
-    yield* fromConfigWithFallback("TELEGRAM_USE_POLLING").pipe(
+    (yield* Config.string("TELEGRAM_WEBHOOK_SECRET").pipe(
       Effect.catchAll(() => Effect.succeed("")),
-    )
-  ).toLowerCase();
+    )).trim() || null;
+
+  const usePollingEnv = (yield* fromConfigWithFallback(
+    "TELEGRAM_USE_POLLING",
+  ).pipe(Effect.catchAll(() => Effect.succeed("")))).toLowerCase();
   const usePolling =
     usePollingEnv === "true" || usePollingEnv === "1" || webhookUrl === null;
 
@@ -190,11 +184,9 @@ export const loadConfig: Effect.Effect<
   }
 
   const port = resolvePort(
-    (
-      yield* fromConfigWithFallback("TELEGRAM_PORT").pipe(
-        Effect.catchAll(() => Effect.succeed("")),
-      )
-    ) || undefined,
+    (yield* fromConfigWithFallback("TELEGRAM_PORT").pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )) || undefined,
     3002,
   );
 
@@ -204,11 +196,9 @@ export const loadConfig: Effect.Effect<
   const grpcPort = resolvePort(grpcPortStr || undefined, 50052);
 
   const grpcBindAddr =
-    (
-      yield* Config.string("GRPC_BIND_ADDR").pipe(
-        Effect.catchAll(() => Effect.succeed("127.0.0.1")),
-      )
-    ).trim() || "127.0.0.1";
+    (yield* Config.string("GRPC_BIND_ADDR").pipe(
+      Effect.catchAll(() => Effect.succeed("127.0.0.1")),
+    )).trim() || "127.0.0.1";
 
   const configData: TelegramConfig = {
     botToken,
@@ -237,9 +227,8 @@ export const loadConfig: Effect.Effect<
   );
 });
 
-export const TelegramConfigTag = Context.GenericTag<TelegramConfig>(
-  "TelegramConfigTag",
-);
+export const TelegramConfigTag =
+  Context.GenericTag<TelegramConfig>("TelegramConfigTag");
 
 export const TelegramConfigLive: Layer.Layer<
   TelegramConfig,
