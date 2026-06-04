@@ -36,6 +36,10 @@ const (
 )
 
 func defaultScalpingBacktestUniverse() []string {
+	// Allow env var to override the default universe.
+	if symbols := paperSymbolsFromEnv(); len(symbols) > 0 {
+		return symbols
+	}
 	return []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
 }
 
