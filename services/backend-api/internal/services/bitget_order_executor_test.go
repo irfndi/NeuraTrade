@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -1173,8 +1175,8 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_SendsModifyRequestsForStalePlans
 				"msg": "ok",
 				"data": {
 					"entrustedList": [
-						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000"},
-						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49500"}
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000", "size": "0.001"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49500", "size": "0.001"}
 					]
 				}
 			}`))
@@ -1208,7 +1210,8 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_SendsModifyRequestsForStalePlans
 	require.Len(t, modifyRequests, 2, "should issue one modify per stale plan")
 
 	// Verify both request bodies carry the expected shape (orderId,
-	// triggerPrice, planType, mark_price triggerType).
+	// triggerPrice, planType, mark_price triggerType, size from the
+	// existing plan — Bitget modify-tpsl-order requires size).
 	orderIDs := make([]string, 0, 2)
 	for _, req := range modifyRequests {
 		orderIDs = append(orderIDs, req["orderId"].(string))
@@ -1216,6 +1219,7 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_SendsModifyRequestsForStalePlans
 		assert.Equal(t, "USDT-FUTURES", req["productType"])
 		assert.NotEmpty(t, req["triggerPrice"])
 		assert.NotEmpty(t, req["planType"])
+		assert.Equal(t, "0.001", req["size"], "modify-tpsl-order body must carry the plan's size")
 	}
 	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, orderIDs)
 }
@@ -1425,8 +1429,8 @@ func TestBitgetOrderExecutor_SyncPositionProtection_ModifyInPlaceHappyPath(t *te
 			// Existing plans with stale triggers → modify path applies.
 			_, _ = w.Write([]byte(`{
 				"code":"00000","msg":"ok","data":{"entrustedList":[
-					{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000.00"},
-					{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49500.00"}
+					{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000.00","size":"0.001"},
+					{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49500.00","size":"0.001"}
 				]}}`))
 		case "/api/v2/mix/order/modify-tpsl-order":
 			modifyCalls++
@@ -1574,6 +1578,80 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_RequiresBothTPAndSL(t *test
 			covered := hasTP && hasSL
 			assert.Equal(t, tt.shouldCover, covered,
 				"hasTP=%t hasSL=%t shouldCover=%t", hasTP, hasSL, tt.shouldCover)
+		})
+	}
+}
+
+func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing.T) {
+	tests := []struct {
+		name        string
+		plans       string
+		expectTP    bool
+		expectSL    bool
+		expectEmoji string
+	}{
+		{
+			name: "caller expected both, only TP present — partial",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    true,
+			expectEmoji: "⚠️",
+		},
+		{
+			name: "caller expected only TP, only TP present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    false,
+			expectEmoji: "✅",
+		},
+		{
+			name: "caller expected only SL, only SL present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			expectTP:    false,
+			expectSL:    true,
+			expectEmoji: "✅",
+		},
+		{
+			name: "caller expected both, both present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    true,
+			expectEmoji: "✅",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.plans))
+			}))
+			defer server.Close()
+
+			executor := NewBitgetOrderExecutor("k", "s", "p")
+			executor.baseURL = server.URL
+
+			// Capture stdout to verify the log message reflects expectations.
+			oldStdout := os.Stdout
+			rPipe, wPipe, _ := os.Pipe()
+			os.Stdout = wPipe
+			executor.verifyFuturesTPSLActive(context.Background(), "BTCUSDT", "long", tt.expectTP, tt.expectSL)
+			_ = wPipe.Close()
+			os.Stdout = oldStdout
+			var buf bytes.Buffer
+			_, _ = io.Copy(&buf, rPipe)
+			output := buf.String()
+
+			assert.Contains(t, output, tt.expectEmoji,
+				"expected %q in stdout for expectTP=%t expectSL=%t", tt.expectEmoji, tt.expectTP, tt.expectSL)
 		})
 	}
 }

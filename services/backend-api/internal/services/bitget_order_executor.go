@@ -397,7 +397,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if !isRiskReduction && (details.TakeProfit != nil || details.StopLoss != nil) {
 		verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		e.verifyFuturesTPSLActive(verifyCtx, symbol, holdSide)
+		e.verifyFuturesTPSLActive(verifyCtx, symbol, holdSide, details.TakeProfit != nil, details.StopLoss != nil)
 	}
 
 	return result.OrderID, nil
@@ -405,8 +405,11 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 
 // verifyFuturesTPSLActive checks whether the exchange has active TP/SL plan orders
 // for a position and logs the result. This verifies that exchange-side protection
-// is in place after order placement.
-func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbol, holdSide string) {
+// is in place after order placement. expectTP and expectSL tell the verifier which
+// legs the caller placed — only the expected legs are required for a "verified"
+// result, so a caller that placed only a TP doesn't get a spurious "partial
+// coverage" warning when the exchange correctly has no SL plan.
+func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbol, holdSide string, expectTP, expectSL bool) {
 	// Per docs/bitget-tp-investigation.md (Section 1, tertiary root cause):
 	// the legacy implementation only checked `len(orders) > 0` and did NOT
 	// verify that BOTH TP and SL were present. A position with only an SL
@@ -441,12 +444,14 @@ func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbo
 			hasSL = true
 		}
 	}
-	if !hasTP || !hasSL {
-		fmt.Printf("[BITGET-ORDER] ⚠️ Partial TP/SL coverage for holdSide=%s: hasTP=%t hasSL=%t (%d plan(s)) — exchange-side protection is incomplete\n",
-			holdSide, hasTP, hasSL, len(orders))
+	missingTP := expectTP && !hasTP
+	missingSL := expectSL && !hasSL
+	if missingTP || missingSL {
+		fmt.Printf("[BITGET-ORDER] ⚠️ Partial TP/SL coverage for holdSide=%s: expectTP=%t expectSL=%t hasTP=%t hasSL=%t (%d plan(s)) — exchange-side protection is incomplete\n",
+			holdSide, expectTP, expectSL, hasTP, hasSL, len(orders))
 		return
 	}
-	fmt.Printf("[BITGET-ORDER] ✅ Exchange-side TP/SL verified: %d active plan(s) for holdSide=%s (TP and SL both present)\n", len(orders), holdSide)
+	fmt.Printf("[BITGET-ORDER] ✅ Exchange-side TP/SL verified: %d active plan(s) for holdSide=%s (expectTP=%t expectSL=%t)\n", len(orders), holdSide, expectTP, expectSL)
 }
 
 // getTicker fetches current ticker price from Bitget
@@ -1599,11 +1604,16 @@ func (e *BitgetOrderExecutor) modifyPositionTPSL(
 			continue
 		}
 
+		planSize := strings.TrimSpace(mapStringAny(plan, "size", "Size"))
+		if planSize == "" {
+			continue
+		}
 		body := map[string]interface{}{
 			"symbol":       symbol,
 			"productType":  "USDT-FUTURES",
 			"marginCoin":   "USDT",
 			"orderId":      orderID,
+			"size":         planSize,
 			"triggerPrice": targetPrice,
 			"triggerType":  "mark_price",
 			"executePrice": targetPrice,
