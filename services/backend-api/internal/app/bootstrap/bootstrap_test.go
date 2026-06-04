@@ -48,6 +48,30 @@ func TestLoadScalpingWeightsFromEnv_RejectsInvalidNumber(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDefaultRiskConfig_DefaultsWhenEnvUnset(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.1")))
+	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.05")))
+}
+
+func TestDefaultRiskConfig_AppliesEnvOverrides(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "0.08")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "0.03")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.08")))
+	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.03")))
+}
+
+func TestDefaultRiskConfig_RejectsInvalidValues(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "not-a-number")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "2.0")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.1")))
+	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.05")))
+}
+
 type noopActor struct{}
 
 func (noopActor) Receive(ctx context.Context, env actor.Envelope) error { return nil }
