@@ -101,6 +101,7 @@ type ScalpingBacktestSignal struct {
 	RejectionReason  string                 `json:"rejection_reason,omitempty"`
 	Signal           map[string]interface{} `json:"signal,omitempty"`
 	GateResults      map[string]interface{} `json:"gate_results,omitempty"`
+	Hints            *services.SignalHints  `json:"hints,omitempty"`
 }
 
 type ScalpingBacktestTrade struct {
@@ -560,6 +561,7 @@ func serviceResultToAPI(result *services.ScalpingBacktestResult) apiBacktestResu
 			FunnelStage:      s.FunnelStage,
 			RejectionReason:  s.RejectionReason,
 			GateResults:      boolMapToInterfaceMap(s.GateResults),
+			Hints:            s.Hints,
 			Signal: map[string]interface{}{
 				"symbol":    s.Symbol,
 				"timestamp": s.Timestamp.Format(time.RFC3339),

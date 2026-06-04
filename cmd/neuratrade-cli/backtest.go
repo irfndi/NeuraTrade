@@ -9,7 +9,7 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-// backtestRequest mirrors the API request shape for /api/v1/scalping/backtest.
+// backtestRequest mirrors the API request shape for /api/v1/backtest/scalping/run.
 // Only the fields the CLI exposes are included here; the API treats omitted
 // fields as "use default".
 type backtestRequest struct {
@@ -33,10 +33,10 @@ type backtestResponse struct {
 }
 
 // RunScalpingBacktest posts the backtest request and returns the parsed
-// response. The endpoint is /api/v1/scalping/backtest; on success the API
+// response. The endpoint is /api/v1/backtest/scalping/run; on success the API
 // returns 200 with a JSON body matching backtestResponse.
 func (c *APIClient) RunScalpingBacktest(req backtestRequest) (*backtestResponse, error) {
-	respBody, err := c.makeRequest("POST", "/api/v1/scalping/backtest", req)
+	respBody, err := c.makeRequest("POST", "/api/v1/backtest/scalping/run", req)
 	if err != nil {
 		return nil, err
 	}

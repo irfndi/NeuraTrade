@@ -1026,11 +1026,16 @@ func (e *ScalpingBacktestEngine) computeSignalHints(signal MarketSignal, decisio
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
 	volumeBasis := math.Max(signal.Volume24h, 0)
 	volumeScore := clampFloat(math.Log10(volumeBasis+1)/fallback.VolumeLogScale, 0, 1)
-	// Range alignment is a coarse approximation here; buildDecisionFromSignal
-	// computes an exact per-branch value but it lives in the deterministic
-	// helper. 0.0 is the safe lower bound that keeps the score non-negative
-	// and doesn't bias operators toward misleading high-confidence reads.
-	rangeAlignment := 0.0
+	// Mirrors the buy/sell branches of buildDecisionFromSignal so the AI-mode
+	// score in the backtest reflects the same range-alignment logic the live
+	// deterministic path would have applied for this action.
+	var rangeAlignment float64
+	switch action {
+	case "buy":
+		rangeAlignment = clampFloat((fallback.BuyRangeMax-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax, 1), 0, 1)
+	case "sell":
+		rangeAlignment = clampFloat((signal.RangePosition24h-fallback.SellRangeMin)/math.Max(100-fallback.SellRangeMin, 1), 0, 1)
+	}
 	score := math.Abs(signal.OrderBookImbalance)*fallback.ImbalanceWeight +
 		liquidityScore*fallback.LiquidityWeight +
 		rangeAlignment*fallback.RangeWeight +
