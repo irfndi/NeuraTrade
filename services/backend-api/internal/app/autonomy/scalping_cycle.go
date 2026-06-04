@@ -343,6 +343,8 @@ func EvaluateScalpingPolicy(input ScalpingCycleInput, cfg ScalpingPolicyConfig) 
 				"critical_recent_win_rate",
 				"loss_streak_confidence_tightening",
 				"drawdown_tightening",
+				"drawdown_tightening_moderate",
+				"drawdown_tightening_early",
 			) {
 			policy.EffectiveMinConfidence = cfg.MicroConfidenceCap
 			policy.PolicyAdjustments = append(policy.PolicyAdjustments, "micro_confidence_cap")

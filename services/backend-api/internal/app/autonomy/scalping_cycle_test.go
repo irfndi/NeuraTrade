@@ -307,6 +307,30 @@ func TestEvaluateScalpingPolicy_GraduatedDrawdownTightening(t *testing.T) {
 	require.Less(t, heavy.EffectiveMaxCapitalPct, moderate.EffectiveMaxCapitalPct)
 }
 
+func TestEvaluateScalpingPolicy_GraduatedDrawdownPreservesMicroConfidenceCap(t *testing.T) {
+	cfg := DefaultScalpingPolicyConfig()
+
+	withDrawdown := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(10),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+		RiskDrawdown:      0.06,
+	}, cfg)
+
+	require.Equal(t, AccountTierMicro, withDrawdown.AccountTier)
+	require.Contains(t, withDrawdown.PolicyAdjustments, "drawdown_tightening_early")
+	require.NotContains(t, withDrawdown.PolicyAdjustments, "micro_confidence_cap")
+
+	withoutDrawdown := EvaluateScalpingPolicy(ScalpingCycleInput{
+		TotalValue:        decimal.NewFromInt(10),
+		BaseMinConfidence: 0.70,
+		BaseMaxCapitalPct: 5.0,
+	}, cfg)
+
+	require.Contains(t, withoutDrawdown.PolicyAdjustments, "micro_confidence_cap")
+	require.Greater(t, withDrawdown.EffectiveMinConfidence, withoutDrawdown.EffectiveMinConfidence)
+}
+
 func TestEvaluateScalpingPolicy_UsesInclusiveTierThresholdsAndStandardConcurrentCap(t *testing.T) {
 	cfg := DefaultScalpingPolicyConfig()
 
