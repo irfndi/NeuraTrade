@@ -1334,7 +1334,7 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenSLExtra(t *testing.
 		context.Background(),
 		"BTCUSDT",
 		"long",
-		decimal.NewFromInt(0),    // SL = 0 (want to remove)
+		decimal.NewFromInt(0),     // SL = 0 (want to remove)
 		decimal.NewFromInt(52000), // TP requested
 		&ContractInfo{PricePlace: 2},
 	)
