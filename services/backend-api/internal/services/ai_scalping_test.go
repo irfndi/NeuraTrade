@@ -303,6 +303,35 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 0.33, cfg.DeterministicFallback.SizeFraction)
 }
 
+// TestResolveAIScalpingConfigFromEnv_RejectsInvalidChopConfidence is a
+// regression guard for the env-resolver contract: invalid chop-confidence
+// values (≤0, >1, NaN) must NOT override the canonical default. The runtime
+// guard in classifyScalpingRegime is defense-in-depth; the resolver should
+// already filter these so the startup log and the runtime behavior agree.
+func TestResolveAIScalpingConfigFromEnv_RejectsInvalidChopConfidence(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+	defaultConfidence := DefaultAIScalpingConfig().RegimeChopConfidence
+
+	tests := []struct {
+		name      string
+		envValue  string
+		wantValue float64
+	}{
+		{name: "zero rejected, default kept", envValue: "0", wantValue: defaultConfidence},
+		{name: "negative rejected, default kept", envValue: "-0.5", wantValue: defaultConfidence},
+		{name: "above one rejected, default kept", envValue: "1.5", wantValue: defaultConfidence},
+		{name: "NaN rejected, default kept", envValue: "NaN", wantValue: defaultConfidence},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE", tc.envValue)
+			cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+			assert.InDelta(t, tc.wantValue, cfg.RegimeChopConfidence, 1e-9)
+		})
+	}
+}
+
 func TestAIMarketSignal(t *testing.T) {
 	signal := aiMarketSignal{
 		Symbol:             "BTC/USDT",
@@ -931,6 +960,55 @@ func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T)
 			} else {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "spread")
+			}
+		})
+	}
+}
+
+func TestAIScalpingService_EvaluatePreTradeGate_RespectsRegimeChopConfidence(t *testing.T) {
+	// Coderabbit MAJOR on PR #462: RegimeChopConfidence must be applied
+	// end-to-end in evaluatePreTradeGate's chop-blocking branch, not just
+	// in classifyScalpingRegime. Lowering the knob should lower the
+	// confidence floor that blocks low-confidence trades in chop regimes.
+	// Without this, NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE would only
+	// affect the regime label, not the actual gating — making the env var
+	// a no-op for chop-heavy markets (the exact scenario it was introduced
+	// to address).
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05, // < 0.10 → chop regime
+		RangePosition24h:   50,
+	}
+	decision := &AITradingDecision{
+		Action:     "buy",
+		Symbol:     "BTC/USDT",
+		Confidence: 0.50, // below both 0.65 (default) and 0.40 (relaxed)
+	}
+
+	tests := []struct {
+		name     string
+		chopConf float64
+		allowed  bool
+	}{
+		{name: "default 0.65 blocks 0.50 confidence chop trade", chopConf: 0.65, allowed: false},
+		{name: "lowered 0.40 allows 0.50 confidence chop trade", chopConf: 0.40, allowed: true},
+		{name: "raised 0.80 still blocks 0.50 confidence chop trade", chopConf: 0.80, allowed: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &AIScalpingService{config: AIScalpingConfig{
+				RegimeChopConfidence: tt.chopConf,
+				MaxBidAskSpreadPct:   0.5,
+				PreTradeGate:         true,
+			}}
+			result := svc.evaluatePreTradeGate(context.Background(), decision, []aiMarketSignal{signal})
+			assert.Equal(t, "chop", result.Regime, "regime should be 'chop' for |imbalance|<0.10")
+			assert.Equal(t, tt.allowed, result.Allowed, "chop confidence %.2f should set allowed=%t for decision confidence 0.50", tt.chopConf, tt.allowed)
+			if !tt.allowed {
+				assert.Contains(t, result.Reason, "choppy")
 			}
 		})
 	}
@@ -2731,6 +2809,21 @@ func TestAIScalpingService_ClassifyScalpingRegime_ChopConfidenceFromConfig(t *te
 		{
 			name:     "out-of-range value clamped to default",
 			config:   AIScalpingConfig{RegimeChopConfidence: 1.5, MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+		{
+			// NaN must not propagate as a regime confidence. The guard
+			// !(x > 0 && x <= 1) catches NaN because NaN comparisons return
+			// false; the more obvious x <= 0 || x > 1 would silently let
+			// NaN through. Regression guard for the env-resolver path where
+			// strconv.ParseFloat accepts the literal "NaN".
+			name:     "NaN value falls back to default",
+			config:   AIScalpingConfig{RegimeChopConfidence: math.NaN(), MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+		{
+			name:     "negative value falls back to default",
+			config:   AIScalpingConfig{RegimeChopConfidence: -0.1, MaxBidAskSpreadPct: 0.5},
 			wantConf: 0.65,
 		},
 	}

@@ -407,8 +407,8 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_LOW_BAND"); ok {
 		cfg.RegimeLowBand = clampFloat(value, 1, 45)
 	}
-	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE"); ok {
-		cfg.RegimeChopConfidence = clampFloat(value, 0, 1)
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE"); ok && value > 0 && value <= 1 {
+		cfg.RegimeChopConfidence = value
 	}
 	if value := getEnvInt("NEURATRADE_SCALPING_SHADOW_TIMEOUT_SECONDS"); value > 0 {
 		cfg.ShadowMirrorTimeout = time.Duration(clampInt(value, 1, 60)) * time.Second
@@ -438,7 +438,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
 	zaplogrus.Infof(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s 		pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -698,8 +698,8 @@ func applyAIScalpingConfigFromFile(base AIScalpingConfig) AIScalpingConfig {
 	if fileConfig.AI.Scalping.RegimeLowBand != nil {
 		cfg.RegimeLowBand = clampFloat(*fileConfig.AI.Scalping.RegimeLowBand, 1, 45)
 	}
-	if fileConfig.AI.Scalping.RegimeChopConfidence != nil {
-		cfg.RegimeChopConfidence = clampFloat(*fileConfig.AI.Scalping.RegimeChopConfidence, 0, 1)
+	if v := fileConfig.AI.Scalping.RegimeChopConfidence; v != nil && *v > 0 && *v <= 1 {
+		cfg.RegimeChopConfidence = *v
 	}
 
 	return cfg
@@ -2468,7 +2468,7 @@ func (s *AIScalpingService) evaluatePreTradeGate(ctx context.Context, decision *
 	}
 
 	// In choppy/non-directional conditions require either strong confidence or proven edge.
-	if regime == "chop" && decision.Confidence < 0.65 && (!hasExpectancy || expectancy <= s.config.MinExpectancyEdge) {
+	if regime == "chop" && decision.Confidence < s.effectiveRegimeChopConfidence() && (!hasExpectancy || expectancy <= s.config.MinExpectancyEdge) {
 		result.Allowed = false
 		result.Reason = fmt.Sprintf(
 			"pre-trade regime gate blocked %s: choppy market with low confidence (%.2f)",
@@ -2477,6 +2477,20 @@ func (s *AIScalpingService) evaluatePreTradeGate(ctx context.Context, decision *
 		)
 	}
 	return result
+}
+
+// effectiveRegimeChopConfidence returns the chop-regime confidence actually
+// used at runtime. Mis-set values (≤0, >1, or NaN) and unset values fall back
+// to DefaultAIScalpingConfig().RegimeChopConfidence so the default can never
+// drift from the fallback. The guard uses !(x > 0 && x <= 1) which is NaN-safe
+// (NaN comparisons return false), unlike the more obvious x <= 0 || x > 1
+// which would let NaN propagate as a regime confidence.
+func (s *AIScalpingService) effectiveRegimeChopConfidence() float64 {
+	chopConfidence := s.config.RegimeChopConfidence
+	if !(chopConfidence > 0 && chopConfidence <= 1) {
+		chopConfidence = DefaultAIScalpingConfig().RegimeChopConfidence
+	}
+	return chopConfidence
 }
 
 func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action string) (string, float64, string) {
@@ -2491,12 +2505,10 @@ func (s *AIScalpingService) classifyScalpingRegime(signal aiMarketSignal, action
 	// Chop regime confidence is configurable (NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE
 	// or config.json regime_chop_confidence) so operators can adjust how much
 	// confidence is allocated to the "chop" label in imbalance-thin markets.
-	// Default 0.65 preserves the prior hardcoded behavior. Clamp into (0, 1]
-	// to avoid zero-confidence floors when the field is mis-set.
-	chopConfidence := s.config.RegimeChopConfidence
-	if chopConfidence <= 0 || chopConfidence > 1 {
-		chopConfidence = 0.65
-	}
+	// Default 0.65 preserves the prior hardcoded behavior. The guard uses
+	// !(x > 0 && x <= 1) so NaN (which is neither > 0 nor <= 1) falls back to
+	// the canonical default rather than propagating as a regime confidence.
+	chopConfidence := s.effectiveRegimeChopConfidence()
 
 	spreadThreshold := s.maxBidAskSpreadPct()
 	if signal.BidAskSpread > spreadThreshold {
