@@ -514,6 +514,12 @@ func main() {
 		},
 	}
 
+	// Add agent command separately (PR-6) — it's a skeleton with 2
+	// subcommands (run / status) that establish the CLI surface for the
+	// agent-control service. The full implementation will be added in
+	// follow-up PRs once the gateway learns to manage the agent process.
+	app.Commands = append(app.Commands, agentCommand())
+
 	// Add autonomous command separately to avoid struct literal error
 	app.Commands = append(app.Commands, &cli.Command{
 		Name:  "autonomous",

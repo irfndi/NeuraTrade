@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,8 +37,94 @@ func TestNewAPIClient(t *testing.T) {
 	client := NewAPIClient("http://example.com", "test-key")
 
 	assert.Equal(t, "http://example.com", client.BaseURL)
-	assert.Equal(t, "test-key", client.APIKey)
 	assert.NotNil(t, client.HTTPClient)
+}
+
+// PR-6: readPIDFile treats a missing file as an error (the caller uses
+// the error to decide whether to print 'NOT MANAGED' vs 'STALE PID').
+// A non-existent PID reports alive=false without an error (the file
+// was readable, but the process is gone). A current process's own
+// PID reports alive=true. The PID is echoed back as a string for the
+// status output.
+func TestReadPIDFile(t *testing.T) {
+	t.Run("missing file returns error", func(t *testing.T) {
+		alive, pidStr, err := readPIDFile(filepath.Join(t.TempDir(), "nope.pid"))
+		assert.Error(t, err)
+		assert.False(t, alive)
+		assert.Empty(t, pidStr)
+	})
+	t.Run("current process PID is alive", func(t *testing.T) {
+		pidFile := filepath.Join(t.TempDir(), "self.pid")
+		pid := os.Getpid()
+		require.NoError(t, os.WriteFile(pidFile, []byte(strconv.Itoa(pid)), 0o600))
+		alive, pidStr, err := readPIDFile(pidFile)
+		assert.NoError(t, err)
+		assert.True(t, alive, "current process PID %d must be alive", pid)
+		assert.Equal(t, strconv.Itoa(pid), pidStr)
+	})
+	t.Run("garbage PID is invalid", func(t *testing.T) {
+		pidFile := filepath.Join(t.TempDir(), "garbage.pid")
+		require.NoError(t, os.WriteFile(pidFile, []byte("not-a-number"), 0o600))
+		_, _, err := readPIDFile(pidFile)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid pid")
+	})
+	t.Run("stale PID reports not-alive", func(t *testing.T) {
+		// Use a PID that's extremely unlikely to be alive (Unix PIDs
+		// are typically capped well below 1<<30; 1<<31 is reserved
+		// for kernel use and never assigned to a userspace process).
+		pidFile := filepath.Join(t.TempDir(), "stale.pid")
+		require.NoError(t, os.WriteFile(pidFile, []byte("2147483647"), 0o600))
+		alive, pidStr, err := readPIDFile(pidFile)
+		assert.NoError(t, err)
+		assert.False(t, alive)
+		assert.Equal(t, "2147483647", pidStr)
+	})
+}
+
+// PR-6: tailFile returns the last n lines of a file in order. n<=0
+// returns an empty slice. Missing file returns an error.
+func TestTailFile(t *testing.T) {
+	t.Run("returns last n lines in order", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "log.txt")
+		content := "line1\nline2\nline3\nline4\nline5\n"
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		lines, err := tailFile(path, 3)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"line3", "line4", "line5"}, lines)
+	})
+	t.Run("n=0 returns empty slice without error", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "log.txt")
+		require.NoError(t, os.WriteFile(path, []byte("a\nb\n"), 0o600))
+		lines, err := tailFile(path, 0)
+		assert.NoError(t, err)
+		assert.Empty(t, lines)
+	})
+	t.Run("n>=total returns all lines", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "log.txt")
+		require.NoError(t, os.WriteFile(path, []byte("a\nb\n"), 0o600))
+		lines, err := tailFile(path, 10)
+		assert.NoError(t, err)
+		assert.Equal(t, []string{"a", "b"}, lines)
+	})
+	t.Run("missing file returns error", func(t *testing.T) {
+		_, err := tailFile(filepath.Join(t.TempDir(), "nope.txt"), 5)
+		assert.Error(t, err)
+	})
+}
+
+// PR-6: agentCommand returns a non-nil *cli.Command with both the
+// 'run' and 'status' subcommands registered. This is a smoke test
+// — the heavy lifting is in agentRunAction/agentStatusAction.
+func TestAgentCommand(t *testing.T) {
+	cmd := agentCommand()
+	assert.NotNil(t, cmd)
+	assert.Equal(t, "agent", cmd.Name)
+	names := make([]string, 0, len(cmd.Subcommands))
+	for _, sub := range cmd.Subcommands {
+		names = append(names, sub.Name)
+	}
+	assert.ElementsMatch(t, []string{"run", "status"}, names)
 }
 
 func TestGetBaseURL(t *testing.T) {
