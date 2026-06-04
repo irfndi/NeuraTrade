@@ -1321,6 +1321,14 @@ func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, sy
 		if orderID == "" {
 			continue
 		}
+		// Only cancel TP/SL plan types — skip unrelated plan types
+		// (entry limits, trailing stops) to avoid collateral damage.
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(order, "planType", "plan_type")))
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if !isTP && !isSL {
+			continue
+		}
 		orderIDList = append(orderIDList, map[string]string{"orderId": orderID})
 	}
 	if len(orderIDList) == 0 {

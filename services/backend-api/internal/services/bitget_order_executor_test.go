@@ -1655,3 +1655,40 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 		})
 	}
 }
+
+func TestBitgetOrderExecutor_CancelExistingPositionTPSL_SkipsNonTPSLPlans(t *testing.T) {
+	var cancelledOrderIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{
+				"code":"00000","msg":"ok","data":{"entrustedList":[
+					{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
+					{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"},
+					{"orderId":"entry-1","planType":"track_plan","holdSide":"long","triggerPrice":"48000"},
+					{"orderId":"trail-1","planType":"moving_plan","holdSide":"long","triggerPrice":"51000"}
+				]}}`))
+		case "/api/v2/mix/order/cancel-plan-order":
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				OrderIDList []map[string]string `json:"orderIdList"`
+			}
+			_ = json.Unmarshal(body, &payload)
+			for _, id := range payload.OrderIDList {
+				cancelledOrderIDs = append(cancelledOrderIDs, id["orderId"])
+			}
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	err := executor.cancelExistingPositionTPSL(context.Background(), "BTCUSDT", "long")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, cancelledOrderIDs,
+		"should only cancel TP/SL plans, not entry/trailing plans")
+}
