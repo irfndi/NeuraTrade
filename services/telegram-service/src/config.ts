@@ -1,45 +1,14 @@
-import { Effect } from "effect";
+import {
+  Effect,
+  Config,
+  ConfigError,
+  Schema,
+  ParseResult,
+  Context,
+  Layer,
+} from "effect";
 import { getEnvWithNeuratradeFallback } from "../config";
 
-/**
- * Resolves a port number from a string environment variable.
- * Falls back to a default value if the provided value is invalid.
- *
- * @param raw - The raw string value from environment variable
- * @param fallback - The default port to use if raw is invalid
- * @returns The resolved port number
- */
-export const resolvePort = (
-  raw: string | undefined,
-  fallback: number,
-): number => {
-  if (!raw) {
-    return fallback;
-  }
-  const numericPort = Number(raw);
-  if (!Number.isNaN(numericPort) && numericPort > 0 && numericPort < 65536) {
-    return numericPort;
-  }
-  console.warn(
-    `Invalid port value provided (${raw}). Falling back to default (${fallback}).`,
-  );
-  return fallback;
-};
-
-/**
- * Configuration for the Telegram bot service.
- *
- * @property botToken - Telegram bot authentication token (required)
- * @property webhookUrl - Full URL for Telegram webhook (null for polling mode)
- * @property webhookPath - Path component of webhook URL (e.g., "/telegram/webhook")
- * @property webhookSecret - Secret token for webhook verification (optional)
- * @property usePolling - Whether to use polling mode instead of webhooks
- * @property port - HTTP server port for health/admin endpoints
- * @property apiBaseUrl - Base URL for backend API requests
- * @property adminApiKey - API key for admin-protected endpoints
- * @property grpcPort - Port for gRPC server
- * @property grpcBindAddr - Host/interface for gRPC server binding
- */
 export interface TelegramConfig {
   botToken: string;
   botTokenMissing: boolean;
@@ -55,146 +24,6 @@ export interface TelegramConfig {
   grpcBindAddr: string;
 }
 
-/**
- * Effect-based configuration loader for the Telegram service.
- *
- * Reads configuration from environment variables and validates:
- * - TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN: Required
- * - ADMIN_API_KEY: Required in production, must be >= 32 chars
- * - TELEGRAM_API_BASE_URL: Backend API URL (default: http://localhost:8080)
- * - TELEGRAM_WEBHOOK_URL: Full webhook URL (enables webhook mode)
- * - TELEGRAM_WEBHOOK_PATH: Webhook path override
- * - TELEGRAM_WEBHOOK_SECRET: Secret for webhook verification
- * - TELEGRAM_USE_POLLING: Force polling mode ("true" or "1")
- * - TELEGRAM_PORT: HTTP server port (default: 3002)
- * - TELEGRAM_GRPC_PORT: gRPC server port (default: 50052)
- * - GRPC_BIND_ADDR: gRPC bind address (default: 127.0.0.1)
- * - NODE_ENV / SENTRY_ENVIRONMENT: Environment detection
- *
- * @returns Effect that yields a validated TelegramConfig
- * @throws Error if required configuration is missing or invalid
- *
- * @example
- * ```typescript
- * import { Effect } from "effect";
- * import { loadConfig } from "./config";
- *
- * const config = Effect.runSync(loadConfig);
- * console.log(config.botToken);
- * ```
- */
-export const loadConfig = Effect.try((): TelegramConfig => {
-  const botToken =
-    getEnvWithNeuratradeFallback("TELEGRAM_BOT_TOKEN") ||
-    getEnvWithNeuratradeFallback("TELEGRAM_TOKEN") ||
-    "";
-  if (!botToken) {
-    throw new Error(
-      "TELEGRAM_BOT_TOKEN or TELEGRAM_TOKEN environment variable must be set",
-    );
-  }
-
-  const adminApiKey = getEnvWithNeuratradeFallback("ADMIN_API_KEY") || "";
-  const isProduction =
-    process.env.NODE_ENV === "production" ||
-    process.env.SENTRY_ENVIRONMENT === "production";
-
-  if (isProduction) {
-    if (!adminApiKey) {
-      throw new Error(
-        "ADMIN_API_KEY environment variable must be set in production",
-      );
-    }
-
-    if (
-      adminApiKey === "admin-secret-key-change-me" ||
-      adminApiKey === "admin-dev-key-change-in-production"
-    ) {
-      throw new Error(
-        "ADMIN_API_KEY cannot use default/example values. Please set a secure API key.",
-      );
-    }
-
-    if (adminApiKey.length < 32) {
-      throw new Error(
-        "ADMIN_API_KEY must be at least 32 characters long for security",
-      );
-    }
-  } else if (!adminApiKey) {
-    console.warn(
-      "⚠️ WARNING: ADMIN_API_KEY is not set. Admin endpoints will be disabled.",
-    );
-  }
-
-  const rawApiBaseUrl =
-    getEnvWithNeuratradeFallback("TELEGRAM_API_BASE_URL") ||
-    process.env.TELEGRAM_API_BASE_URL ||
-    "http://localhost:8080";
-  const apiBaseUrl = rawApiBaseUrl.includes("api.telegram.org")
-    ? "http://localhost:8080"
-    : rawApiBaseUrl.replace(/\/$/, "");
-
-  const webhookUrlRaw = (process.env.TELEGRAM_WEBHOOK_URL || "").trim();
-  const webhookUrl = webhookUrlRaw.length > 0 ? webhookUrlRaw : null;
-  const webhookPath = (process.env.TELEGRAM_WEBHOOK_PATH || "").trim();
-  const resolvedWebhookPath = webhookPath
-    ? webhookPath
-    : webhookUrl
-      ? new URL(webhookUrl).pathname
-      : "/telegram/webhook";
-
-  const usePollingEnv = (process.env.TELEGRAM_USE_POLLING || "").toLowerCase();
-  const usePolling =
-    usePollingEnv === "true" || usePollingEnv === "1" || webhookUrl === null;
-
-  const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
-  if (!usePolling && !webhookSecret) {
-    throw new Error(
-      "TELEGRAM_WEBHOOK_SECRET must be set when webhook mode is enabled (TELEGRAM_USE_POLLING is not true)",
-    );
-  }
-
-  const grpcPort = process.env.TELEGRAM_GRPC_PORT
-    ? parseInt(process.env.TELEGRAM_GRPC_PORT, 10)
-    : 50052;
-  const grpcBindAddr = (process.env.GRPC_BIND_ADDR || "").trim();
-
-  return {
-    botToken,
-    botTokenMissing: false,
-    configError: null,
-    webhookUrl,
-    webhookPath: resolvedWebhookPath.startsWith("/")
-      ? resolvedWebhookPath
-      : `/${resolvedWebhookPath}`,
-    webhookSecret,
-    usePolling,
-    port: resolvePort(process.env.TELEGRAM_PORT, 3002),
-    apiBaseUrl,
-    adminApiKey,
-    grpcPort,
-    grpcBindAddr: grpcBindAddr || "127.0.0.1",
-  };
-});
-
-/**
- * Loaded and validated configuration singleton.
- *
- * This is executed at module load time and will throw if configuration is invalid.
- * Use this for synchronous access to configuration throughout the application.
- *
- * @example
- * ```typescript
- * import { config } from "./config";
- *
- * console.log(`Running on port ${config.port}`);
- * ```
- */
-export const config = Effect.runSync(loadConfig);
-
-/**
- * Environment variable names used by the Telegram service.
- */
 export const ENV_VARS = {
   TELEGRAM_BOT_TOKEN: "TELEGRAM_BOT_TOKEN",
   TELEGRAM_TOKEN: "TELEGRAM_TOKEN",
@@ -212,3 +41,209 @@ export const ENV_VARS = {
 } as const;
 
 export type EnvVarName = (typeof ENV_VARS)[keyof typeof ENV_VARS];
+
+const TelegramConfigSchema = Schema.Struct({
+  botToken: Schema.String,
+  botTokenMissing: Schema.Boolean,
+  configError: Schema.Union(Schema.Null, Schema.String),
+  webhookUrl: Schema.Union(Schema.Null, Schema.String),
+  webhookPath: Schema.String,
+  webhookSecret: Schema.Union(Schema.Null, Schema.String),
+  usePolling: Schema.Boolean,
+  port: Schema.Number,
+  apiBaseUrl: Schema.String,
+  adminApiKey: Schema.String,
+  grpcPort: Schema.Number,
+  grpcBindAddr: Schema.String,
+});
+
+const resolvePort = (raw: string | undefined, fallback: number): number => {
+  if (!raw) return fallback;
+  const numericPort = Number(raw);
+  if (!Number.isNaN(numericPort) && numericPort > 0 && numericPort < 65536) {
+    return numericPort;
+  }
+  console.warn(`Invalid port value provided (${raw}). Falling back to default (${fallback}).`);
+  return fallback;
+};
+
+const fromConfigWithFallback = (
+  key: string,
+): Effect.Effect<string, ConfigError.ConfigError> =>
+  Config.string(key).pipe(
+    Effect.catchAll((err) =>
+      Effect.sync(() => getEnvWithNeuratradeFallback(key)).pipe(
+        Effect.flatMap(
+          (val): Effect.Effect<string, ConfigError.ConfigError> =>
+            val ? Effect.succeed(val) : Effect.fail(err),
+        ),
+      ),
+    ),
+  );
+
+export const loadConfig: Effect.Effect<
+  TelegramConfig,
+  ConfigError.ConfigError
+> = Effect.gen(function* () {
+  const botToken = yield* fromConfigWithFallback("TELEGRAM_BOT_TOKEN").pipe(
+    Effect.catchAll(() =>
+      Config.string("TELEGRAM_TOKEN").pipe(
+        Effect.catchAll(() => Effect.succeed("")),
+      ),
+    ),
+  );
+  const botTokenMissing = !botToken;
+
+  const adminApiKey = yield* fromConfigWithFallback("ADMIN_API_KEY").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  );
+
+  const nodeEnv = yield* Config.string("NODE_ENV").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  );
+  const sentryEnv = yield* Config.string("SENTRY_ENVIRONMENT").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  );
+  const isProduction = nodeEnv === "production" || sentryEnv === "production";
+
+  if (isProduction) {
+    if (!adminApiKey) {
+      return yield* Effect.fail(
+        ConfigError.MissingData(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY environment variable must be set in production",
+        ),
+      );
+    }
+    if (
+      adminApiKey === "admin-secret-key-change-me" ||
+      adminApiKey === "admin-dev-key-change-in-production"
+    ) {
+      return yield* Effect.fail(
+        ConfigError.InvalidData(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY cannot use default/example values. Please set a secure API key.",
+        ),
+      );
+    }
+    if (adminApiKey.length < 32) {
+      return yield* Effect.fail(
+        ConfigError.InvalidData(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY must be at least 32 characters long for security",
+        ),
+      );
+    }
+  } else if (!adminApiKey) {
+    console.warn(
+      "WARNING: ADMIN_API_KEY is not set. Admin endpoints will be disabled.",
+    );
+  }
+
+  const rawApiBaseUrl = yield* fromConfigWithFallback(
+    "TELEGRAM_API_BASE_URL",
+  ).pipe(Effect.catchAll(() => Effect.succeed("http://localhost:8080")));
+  const apiBaseUrl = rawApiBaseUrl.includes("api.telegram.org")
+    ? "http://localhost:8080"
+    : rawApiBaseUrl.replace(/\/$/, "");
+
+  const webhookUrlRaw = (
+    yield* Config.string("TELEGRAM_WEBHOOK_URL").pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
+  ).trim();
+  const webhookUrl = webhookUrlRaw.length > 0 ? webhookUrlRaw : null;
+
+  const webhookPath = (
+    yield* Config.string("TELEGRAM_WEBHOOK_PATH").pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
+  ).trim();
+  const resolvedWebhookPath = webhookPath
+    ? webhookPath
+    : webhookUrl
+      ? new URL(webhookUrl).pathname
+      : "/telegram/webhook";
+
+  const webhookSecret =
+    (
+      yield* Config.string("TELEGRAM_WEBHOOK_SECRET").pipe(
+        Effect.catchAll(() => Effect.succeed("")),
+      )
+    ).trim() || null;
+
+  const usePollingEnv = (
+    yield* fromConfigWithFallback("TELEGRAM_USE_POLLING").pipe(
+      Effect.catchAll(() => Effect.succeed("")),
+    )
+  ).toLowerCase();
+  const usePolling =
+    usePollingEnv === "true" || usePollingEnv === "1" || webhookUrl === null;
+
+  if (!usePolling && !webhookSecret) {
+    return yield* Effect.fail(
+      ConfigError.InvalidData(
+        ["TELEGRAM_WEBHOOK_SECRET"],
+        "TELEGRAM_WEBHOOK_SECRET must be set when webhook mode is enabled (TELEGRAM_USE_POLLING is not true)",
+      ),
+    );
+  }
+
+  const port = resolvePort(
+    (
+      yield* fromConfigWithFallback("TELEGRAM_PORT").pipe(
+        Effect.catchAll(() => Effect.succeed("")),
+      )
+    ) || undefined,
+    3002,
+  );
+
+  const grpcPortStr = yield* Config.string("TELEGRAM_GRPC_PORT").pipe(
+    Effect.catchAll(() => Effect.succeed("")),
+  );
+  const grpcPort = resolvePort(grpcPortStr || undefined, 50052);
+
+  const grpcBindAddr =
+    (
+      yield* Config.string("GRPC_BIND_ADDR").pipe(
+        Effect.catchAll(() => Effect.succeed("127.0.0.1")),
+      )
+    ).trim() || "127.0.0.1";
+
+  const configData: TelegramConfig = {
+    botToken,
+    botTokenMissing,
+    configError: null,
+    webhookUrl,
+    webhookPath: resolvedWebhookPath.startsWith("/")
+      ? resolvedWebhookPath
+      : `/${resolvedWebhookPath}`,
+    webhookSecret,
+    usePolling,
+    port,
+    apiBaseUrl,
+    adminApiKey,
+    grpcPort,
+    grpcBindAddr,
+  };
+
+  return yield* Schema.decodeUnknown(TelegramConfigSchema)(configData).pipe(
+    Effect.mapError((parseErrors) =>
+      ConfigError.InvalidData(
+        ["TelegramConfig"],
+        `Schema validation failed: ${ParseResult.TreeFormatter.formatErrorSync(parseErrors)}`,
+      ),
+    ),
+  );
+});
+
+export const TelegramConfigTag = Context.GenericTag<TelegramConfig>(
+  "TelegramConfigTag",
+);
+
+export const TelegramConfigLive: Layer.Layer<
+  TelegramConfig,
+  ConfigError.ConfigError
+> = Layer.effect(TelegramConfigTag, loadConfig);
+
+export const config: TelegramConfig = Effect.runSync(loadConfig);
