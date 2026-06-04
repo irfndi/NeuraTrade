@@ -1512,6 +1512,58 @@ func (e *BitgetOrderExecutor) modifyPositionTPSL(
 		return false, nil
 	}
 
+	wantTP := takeProfit.GreaterThan(decimal.Zero)
+	wantSL := stopLoss.GreaterThan(decimal.Zero)
+
+	// Pre-flight: classify existing plans by leg, and fall back to
+	// cancel+recreate whenever the existing plan set can't be modified
+	// to match the requested state. Without this check the function
+	// used to return (true, nil) as soon as ONE matching plan was
+	// updated, silently leaving the position with a partial protection
+	// set (e.g. only TP modified, no SL created) — a correctness bug.
+	var hasTP, hasSL bool
+	for _, plan := range plans {
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(plan, "planType", "plan_type")))
+		// Combined TP+SL plans can't be modified in-place with the
+		// single-triggerPrice body the modify-tpsl-order endpoint
+		// accepts; cancel+recreate produces a clean result.
+		if strings.Contains(planType, "profit_loss") {
+			return false, nil
+		}
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if isTP {
+			hasTP = true
+		}
+		if isSL {
+			hasSL = true
+		}
+	}
+	if wantTP && !hasTP {
+		// Caller wants TP but no TP plan exists → fall back.
+		return false, nil
+	}
+	if wantSL && !hasSL {
+		// Caller wants SL but no SL plan exists → fall back.
+		return false, nil
+	}
+	if !wantTP && hasTP {
+		// Caller wants to remove the TP, but modify-tpsl-order can only
+		// adjust prices — it can't delete a plan → fall back.
+		return false, nil
+	}
+	if !wantSL && hasSL {
+		// Same for the SL leg.
+		return false, nil
+	}
+
+	// All requested legs exist. Modify them in place. Plans already
+	// at the target price are skipped (no-op) to avoid the
+	// corresponding API rate-limit cost. We return true even if every
+	// plan was a no-op skip — this is the "already-synced" signal
+	// that lets SyncPositionProtection avoid the wasteful cancel+recreate
+	// fallback (Bug 2: previously returned false, defeating the
+	// optimization).
 	for _, plan := range plans {
 		orderID := strings.TrimSpace(mapStringAny(plan, "orderId", "orderID", "id"))
 		if orderID == "" {
@@ -1577,7 +1629,11 @@ func (e *BitgetOrderExecutor) modifyPositionTPSL(
 		}
 		modifyApplied = true
 	}
-	return modifyApplied, nil
+	// Return true even when modifyApplied stayed false: every existing
+	// plan was a no-op skip (already at the target price), which
+	// means the position is already in the desired state. This is
+	// the "already-synced" signal.
+	return true, nil
 }
 
 // IsPaperTrading returns false for Bitget executor (real trading mode)

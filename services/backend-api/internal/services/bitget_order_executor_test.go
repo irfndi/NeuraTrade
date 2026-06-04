@@ -1220,8 +1220,10 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_SendsModifyRequestsForStalePlans
 	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, orderIDs)
 }
 
-// PR-4: when both plans are already at the target price, the
-// modify path should be a no-op (no modify-tpsl-order requests).
+// PR-4: when both plans are already at the target price, the modify
+// path is a no-op (no modify-tpsl-order requests) BUT still returns
+// true. The true signal means "already-synced" — SyncPositionProtection
+// uses it to avoid the wasteful cancel+recreate fallback (Bug 2).
 func TestBitgetOrderExecutor_ModifyPositionTPSL_SkipsPlansAlreadyAtTarget(t *testing.T) {
 	var modifyCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1257,8 +1259,124 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_SkipsPlansAlreadyAtTarget(t *tes
 		&ContractInfo{PricePlace: 2},
 	)
 	require.NoError(t, err)
-	assert.False(t, modified, "modified should be false when no plans changed")
+	assert.True(t, modified, "modified should be true (already-synced signal) when all plans are at target")
 	assert.Equal(t, 0, modifyCalls, "no modify requests should be sent when triggers already match")
+}
+
+// PR-4 Bug 1: if the caller wants both TP and SL but only a TP plan
+// exists, modifyPositionTPSL must NOT return true (it must fall
+// back to cancel+recreate). Returning true here would leave the
+// position with only the old TP and no SL — a correctness bug that
+// could cause real financial loss.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenSLMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Only a TP plan exists; no SL.
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called when SL plan is missing")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000), // SL requested
+		decimal.NewFromInt(52000), // TP requested
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "missing-leg must fall back to cancel+recreate (Bug 1)")
+}
+
+// PR-4 Bug 1 (symmetric): if the caller wants only TP but both TP
+// and SL plans exist, modifyPositionTPSL must fall back because the
+// SL plan can't be removed via the modify-tpsl-order endpoint.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenSLExtra(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Both plans exist; caller wants only TP (SL=0).
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called when caller wants to remove the SL")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(0),    // SL = 0 (want to remove)
+		decimal.NewFromInt(52000), // TP requested
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "extra-leg must fall back to cancel+recreate (Bug 1)")
+}
+
+// PR-4 (gemini HIGH): combined TP+SL plans (planType contains
+// "profit_loss") cannot be modified in-place with the single-trigger
+// body the endpoint accepts. Must fall back to cancel+recreate.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackOnCombinedPlan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tpsl-1", "planType": "profit_loss", "holdSide": "long", "triggerPrice": "50000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called for combined TP+SL plans")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "combined plans must fall back to cancel+recreate")
 }
 
 // PR-4: modifyPositionTPSL on a position with no existing plans must
