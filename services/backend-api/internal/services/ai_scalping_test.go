@@ -803,9 +803,21 @@ func TestAIScalpingService_GatherMarketSignals_TickerFallbackWhenOrderbookUnavai
 	signals, err := svc.gatherMarketSignals(context.Background())
 	require.NoError(t, err)
 	require.Len(t, signals, 4)
+	// Expected spreads derived from the ticker mock above; mirrors the formula
+	// in tickerBidAskFallback: (ask - bid) / price * 100. Asserting exact values
+	// (not just > 0) catches silent regressions in the fallback math.
+	expectedSpreads := map[string]float64{
+		"BTC/USDT":  (50010.0 - 49990.0) / 50000.0 * 100, // 0.04
+		"ETH/USDT":  (3002.0 - 2998.0) / 3000.0 * 100,    // ≈0.13333
+		"SOL/USDT":  (150.1 - 149.9) / 150.0 * 100,       // ≈0.13333
+		"DOGE/USDT": (0.0801 - 0.0799) / 0.08 * 100,      // 0.25
+	}
 	for _, signal := range signals {
-		// Spread should be derived from ticker bid/ask since orderbook is nil.
-		assert.Greater(t, signal.BidAskSpread, 0.0,
+		expected, ok := expectedSpreads[signal.Symbol]
+		require.Truef(t, ok, "unexpected symbol %s in signals", signal.Symbol)
+		assert.InDeltaf(t, expected, signal.BidAskSpread, 1e-9,
+			"ticker-derived spread mismatch for %s", signal.Symbol)
+		assert.Greaterf(t, signal.BidAskSpread, 0.0,
 			"BidAskSpread should be > 0 via ticker fallback for %s", signal.Symbol)
 		// OrderBookImbalance must be zero — no orderbook data was available.
 		assert.Equal(t, 0.0, signal.OrderBookImbalance,

@@ -446,19 +446,27 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be non-negative")
 	}
 
+	// resolveSymbols picks the effective backtest universe using precedence:
+	//   1. Request-provided symbols (normalized, de-duped, upper-cased).
+	//   2. NEURATRADE_BACKTEST_SYMBOLS env var (comma-separated).
+	//   3. Service default (when both are absent or empty after normalization).
+	//
+	// Normalization runs first on each candidate so a whitespace-only request
+	// (e.g. []string{"", "  "}) correctly falls through to the env var instead
+	// of silently short-circuiting the lookup.
+	resolveSymbols := func(candidates []string) []string {
+		return normalizeSymbols(candidates)
+	}
+
 	var symbols []string
-	if len(req.Symbols) > 0 {
-		symbols = normalizeSymbols(req.Symbols)
-	} else if envSymbols := os.Getenv("NEURATRADE_BACKTEST_SYMBOLS"); envSymbols != "" {
-		rawSymbols := strings.Split(envSymbols, ",")
-		cleaned := make([]string, 0, len(rawSymbols))
-		for _, s := range rawSymbols {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				cleaned = append(cleaned, s)
-			}
+	switch {
+	case len(resolveSymbols(req.Symbols)) > 0:
+		symbols = resolveSymbols(req.Symbols)
+	default:
+		if envSymbols := os.Getenv("NEURATRADE_BACKTEST_SYMBOLS"); envSymbols != "" {
+			rawSymbols := strings.Split(envSymbols, ",")
+			symbols = resolveSymbols(rawSymbols)
 		}
-		symbols = normalizeSymbols(cleaned)
 	}
 
 	noisePct := services.DefaultScalpingBacktestNoise
@@ -873,6 +881,9 @@ func nullString(v string) any {
 	return v
 }
 
+// normalizeSymbols trims, upper-cases, and de-duplicates a symbol list,
+// discarding empty entries. The returned slice is in first-seen order so
+// downstream logs and backtest runs are deterministic.
 func normalizeSymbols(symbols []string) []string {
 	if len(symbols) == 0 {
 		return nil

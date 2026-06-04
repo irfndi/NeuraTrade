@@ -1884,11 +1884,21 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			}
 		}
 
-		// Ticker bid/ask fallback when orderbook is unavailable.
+		// tickerBidAskFallback derives a coarse spread from the ticker top-of-book
+		// when the orderbook snapshot is unavailable. This is a degraded signal —
+		// depth is unknown and the prices may be stale — but it is strictly better
+		// than dropping the pair entirely (see NeuraTrade-ixev). Imbalance stays
+		// zero in this path; only the spread is approximated.
 		if obResp == nil && signal.BidAskSpread <= 0 {
+			if tickerData == nil {
+				continue
+			}
 			tickerBid := tickerData.GetBid()
 			tickerAsk := tickerData.GetAsk()
-			if tickerBid > 0 && tickerAsk > 0 && signal.Price > 0 {
+			// Defensive: skip when ticker reports a crossed or zero book. A valid
+			// ticker top-of-book always has ask > bid > 0; anything else is
+			// garbage that would produce a negative or misleading spread.
+			if tickerBid > 0 && tickerAsk > tickerBid && signal.Price > 0 {
 				signal.BidAskSpread = (tickerAsk - tickerBid) / signal.Price * 100
 				zaplogrus.Debugf("[AI-SCALPING] Ticker-derived spread for %s (no orderbook): bid=%.8f ask=%.8f spread=%.4f%%",
 					signal.Symbol, tickerBid, tickerAsk, signal.BidAskSpread)
