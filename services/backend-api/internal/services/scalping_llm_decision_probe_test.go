@@ -580,11 +580,18 @@ func newScalpingLLMDecisionProbeTestService(client llm.Client) *AIScalpingServic
 				exchange:  "bitget",
 			},
 		},
+		// Orderbook with equal bid/ask amounts produces |OrderBookImbalance|=0,
+		// keeping the signal below the deterministic-fallback MinImbalance floor
+		// so signalsWithDecisionHints does not pre-populate a ConfidenceHint.
+		// This preserves the test scenario where the LLM's reasoning references
+		// an absent confidence_hint (PR-2 relaxed the default imbalance floor
+		// from 0.35 to 0.10; the prior 5-vs-4 split produced 0.111 which
+		// short-circuited the diagnostic chain under the new default).
 		orderBooks: map[string]*ccxt.OrderBookResponse{
 			"BTC/USDT": {
 				OrderBook: ccxt.OrderBook{
-					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(99.99), Amount: decimal.NewFromInt(5)}},
-					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(100.01), Amount: decimal.NewFromInt(4)}},
+					Bids: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(99.99), Amount: decimal.NewFromInt(1)}},
+					Asks: []ccxt.OrderBookEntry{{Price: decimal.NewFromFloat(100.01), Amount: decimal.NewFromInt(1)}},
 				},
 			},
 		},
