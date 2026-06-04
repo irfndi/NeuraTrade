@@ -1884,6 +1884,17 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			}
 		}
 
+		// Ticker bid/ask fallback when orderbook is unavailable.
+		if obResp == nil && signal.BidAskSpread <= 0 {
+			tickerBid := tickerData.GetBid()
+			tickerAsk := tickerData.GetAsk()
+			if tickerBid > 0 && tickerAsk > 0 && signal.Price > 0 {
+				signal.BidAskSpread = (tickerAsk - tickerBid) / signal.Price * 100
+				zaplogrus.Debugf("[AI-SCALPING] Ticker-derived spread for %s (no orderbook): bid=%.8f ask=%.8f spread=%.4f%%",
+					signal.Symbol, tickerBid, tickerAsk, signal.BidAskSpread)
+			}
+		}
+
 		s.annotateRecentSignalMomentum(time.Now().UTC(), &signal)
 		signals = append(signals, signal)
 	}

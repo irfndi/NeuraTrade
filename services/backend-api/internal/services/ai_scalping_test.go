@@ -769,6 +769,52 @@ func TestAIScalpingService_GatherMarketSignals_FetchesOrderbookForFullSmallUnive
 	}
 }
 
+func TestAIScalpingService_GatherMarketSignals_TickerFallbackWhenOrderbookUnavailable(t *testing.T) {
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT"},
+			Count:    4,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{symbol: "BTC/USDT", price: 50000, volume: 1000, high24h: 51000, low24h: 49000, bid: 49990, ask: 50010, exchange: "bitget"},
+			mockMarketPrice{symbol: "ETH/USDT", price: 3000, volume: 5000, high24h: 3100, low24h: 2900, bid: 2998, ask: 3002, exchange: "bitget"},
+			mockMarketPrice{symbol: "SOL/USDT", price: 150, volume: 10000, high24h: 160, low24h: 140, bid: 149.9, ask: 150.1, exchange: "bitget"},
+			mockMarketPrice{symbol: "DOGE/USDT", price: 0.08, volume: 1000000, high24h: 0.09, low24h: 0.07, bid: 0.0799, ask: 0.0801, exchange: "bitget"},
+		},
+		// Intentionally nil orderBooks to force ticker bid/ask fallback for all pairs.
+		orderBooks: nil,
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:             "bitget",
+			MaxPairsToAnalyze:    4,
+			MaxCandidatePairs:    8,
+			MaxBidAskSpreadPct:   appautonomy.DefaultScalpingMaxBidAskSpreadPct,
+			OrderBookPairs:       4,
+			AutoExpandOrderBooks: true,
+			AutoExpandThreshold:  12,
+			EnforceFutures:       false,
+		},
+		ccxtService: mockCCXT,
+	}
+
+	signals, err := svc.gatherMarketSignals(context.Background())
+	require.NoError(t, err)
+	require.Len(t, signals, 4)
+	for _, signal := range signals {
+		// Spread should be derived from ticker bid/ask since orderbook is nil.
+		assert.Greater(t, signal.BidAskSpread, 0.0,
+			"BidAskSpread should be > 0 via ticker fallback for %s", signal.Symbol)
+		// OrderBookImbalance must be zero — no orderbook data was available.
+		assert.Equal(t, 0.0, signal.OrderBookImbalance,
+			"OrderBookImbalance should be 0 when no orderbook for %s", signal.Symbol)
+	}
+	// Verify that FetchOrderBook was indeed called (all 4 pairs attempted).
+	assert.Len(t, mockCCXT.orderBookOps, 4)
+}
+
 func TestAIScalpingService_DiscoverTradingPairs_PrefersTradableSpreadCandidates(t *testing.T) {
 	mockCCXT := &mockAIScalpingCCXT{
 		markets: &ccxt.MarketsResponse{
