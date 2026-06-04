@@ -122,9 +122,11 @@ func readPIDFile(path string) (alive bool, pidStr string, err error) {
 	return true, pidStr, nil
 }
 
-// tailFile returns the last n lines of the file. Uses a streaming
-// reader to avoid loading the entire log into memory. If n <= 0,
-// returns an empty slice.
+// tailFile returns the last n lines of the file in order. Streams
+// the file line-by-line so memory usage stays O(n) — agent log files
+// can grow to hundreds of MB over a long-running session and
+// reading the whole file would blow up the CLI process. If n <= 0,
+// returns an empty slice. If n >= total-line-count, returns all lines.
 func tailFile(path string, n int) ([]string, error) {
 	if n <= 0 {
 		return nil, nil
@@ -135,32 +137,28 @@ func tailFile(path string, n int) ([]string, error) {
 	}
 	defer f.Close()
 
-	// Two-pass tail: first count lines, then read tail. For very large
-	// logs a reverse-seek would be faster, but PR-6 only needs the
-	// last ~50 lines so the simple two-pass is fine.
-	all, err := readAllLines(f)
-	if err != nil {
-		return nil, err
-	}
-	if len(all) <= n {
-		return all, nil
-	}
-	return all[len(all)-n:], nil
-}
-
-func readAllLines(f *os.File) ([]string, error) {
 	scanner := bufio.NewScanner(f)
 	// Allow long log lines (default bufio buffer is 64KB; agent log
 	// lines can be larger when a full event payload is dumped).
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	var lines []string
+
+	// Keep the most recent n lines in a slice that grows up to capacity
+	// n; once full, shift the slice left on each new line to keep only
+	// the trailing window. This is O(n) per line for the typical n=20
+	// case, which is negligible compared to the I/O cost of the
+	// scanner.
+	ring := make([]string, 0, n)
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		if len(ring) < n {
+			ring = append(ring, scanner.Text())
+		} else {
+			ring = append(ring[1:], scanner.Text())
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return lines, nil
+	return ring, nil
 }
 
 // agentCommand builds the urfave/cli/v2 Command tree for the
