@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -388,8 +389,8 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 	if !start.Before(end) {
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("start_time must be before end_time")
 	}
-	if end.Sub(start) > 90*24*time.Hour {
-		return services.ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 90 days")
+	if start.AddDate(5, 0, 0).Before(end) {
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 5 years")
 	}
 
 	initialCapitalRaw := strings.TrimSpace(req.InitialCapital)
@@ -445,7 +446,20 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be non-negative")
 	}
 
-	symbols := normalizeSymbols(req.Symbols)
+	var symbols []string
+	if len(req.Symbols) > 0 {
+		symbols = normalizeSymbols(req.Symbols)
+	} else if envSymbols := os.Getenv("NEURATRADE_BACKTEST_SYMBOLS"); envSymbols != "" {
+		rawSymbols := strings.Split(envSymbols, ",")
+		cleaned := make([]string, 0, len(rawSymbols))
+		for _, s := range rawSymbols {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cleaned = append(cleaned, s)
+			}
+		}
+		symbols = normalizeSymbols(cleaned)
+	}
 
 	noisePct := services.DefaultScalpingBacktestNoise
 	if req.NoisePct != nil {
