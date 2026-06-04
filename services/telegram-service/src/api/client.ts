@@ -351,6 +351,14 @@ export class BackendApiClient {
       headers["X-API-Key"] = this.adminKey;
     }
 
+    if (options.requireAdmin && !this.adminKey) {
+      throw new ApiClientError(
+        `ADMIN_API_KEY is not configured — admin endpoint ${path} cannot be called`,
+        0,
+        path,
+      );
+    }
+
     const requestInit: RequestInit = {
       method: options.method || "GET",
       headers,

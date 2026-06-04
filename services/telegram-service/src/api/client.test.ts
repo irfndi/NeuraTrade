@@ -42,7 +42,7 @@ describe("BackendApiClient fallback behavior", () => {
 
     const client = new BackendApiClient({
       baseUrl: "http://127.0.0.1:58080",
-      adminKey: "",
+      adminKey: "test-admin-key",
       rateLimit: 1000,
     });
 
@@ -174,6 +174,65 @@ describe("TelegramApi Effect service", () => {
         expect(failure).toBeInstanceOf(ApiClientError);
         expect(failure.status).toBe(0);
         expect(failure.message).toBe("network blew up");
+      }
+    }
+  });
+});
+
+describe("BackendApiClient admin guard", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("fail-fast when requireAdmin is true but adminKey is empty", async () => {
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const client = new BackendApiClient({
+      baseUrl: "http://example.test",
+      adminKey: "",
+      rateLimit: 1000,
+    });
+
+    await expect(client.getDoctor("chat-1")).rejects.toThrow(
+      "ADMIN_API_KEY is not configured",
+    );
+    expect(fetchCalled).toBe(false);
+  });
+
+  test("TelegramApiLive propagates admin guard error as ApiClientError", async () => {
+    const backend = new BackendApiClient({
+      baseUrl: "http://example.test",
+      adminKey: "",
+      rateLimit: 1000,
+    });
+    const layer = TelegramApiLive(backend);
+    const program = Effect.gen(function* () {
+      const api = yield* TelegramApi;
+      return yield* api.getDoctor("chat-1");
+    });
+    const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      const failureOption = Cause.failureOption(exit.cause);
+      expect(failureOption._tag).toBe("Some");
+      if (failureOption._tag === "Some") {
+        const failure = failureOption.value as ApiClientError;
+        expect(failure).toBeInstanceOf(ApiClientError);
+        expect(failure.status).toBe(0);
+        expect(failure.message).toContain("ADMIN_API_KEY is not configured");
       }
     }
   });
