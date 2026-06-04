@@ -1,3 +1,4 @@
+import { Effect, Context, Layer } from "effect";
 import type {
   GetUserByChatIdResponse,
   NotificationPreferenceResponse,
@@ -509,3 +510,430 @@ export function createApiClient(
 ): BackendApiClient {
   return new BackendApiClient({ baseUrl, adminKey, rateLimit });
 }
+
+// ---------------------------------------------------------------------------
+// PR-5: Effect-ify the backend client as a Context.Tag service.
+//
+// The existing `BackendApiClient` class remains intact — every method
+// still returns a Promise. The new `TelegramApi` service exposes the SAME
+// surface but each method returns `Effect<A, ApiClientError, never>`,
+// allowing handlers in src/commands/* to be rewritten as `Effect.gen`
+// programs that compose with the rest of the runtime.
+//
+// This is a wrapper-layer migration: the underlying class is unchanged,
+// so the existing 30+ methods and their tests keep working. New
+// handlers can opt into the Effect path by depending on `TelegramApi`
+// via `yield*` in `Effect.gen`. Future PRs can convert the underlying
+// methods to native Effect chains once callers have migrated.
+//
+// The non-invasive wrapper means PR-5 establishes the pattern without
+// a 500-line change in a single commit. Migration risk is bounded —
+// a bug in the Effect wrapper cannot regress the Promise-based path.
+// ---------------------------------------------------------------------------
+
+/**
+ * The TelegramApi Effect service. Each method returns
+ * `Effect<A, ApiClientError, never>` so handlers can compose with
+ * other Effects without losing the typed error channel. The error
+ * type is the same `ApiClientError` already thrown by the
+ * `BackendApiClient.fetch` method, so callers can recover the
+ * status code and endpoint from the typed error.
+ *
+ * The implementation delegates to the underlying `BackendApiClient`
+ * via `Effect.tryPromise`, so a bug in the Effect wrapper cannot
+ * regress the Promise-based path.
+ */
+export class TelegramApi extends Context.Tag("TelegramApi")<
+  TelegramApi,
+  {
+    getUserByChatId: (
+      chatId: string,
+    ) => Effect.Effect<GetUserByChatIdResponse | null, ApiClientError>;
+    getNotificationPreference: (
+      userId: string,
+    ) => Effect.Effect<NotificationPreferenceResponse, ApiClientError>;
+    setNotificationPreference: (
+      userId: string,
+      enabled: boolean,
+    ) => Effect.Effect<void, ApiClientError>;
+    registerTelegramUser: (
+      request: RegisterTelegramUserRequest,
+    ) => Effect.Effect<void, ApiClientError>;
+    getArbitrageOpportunities: () => Effect.Effect<
+      GetArbitrageOpportunitiesResponse,
+      ApiClientError
+    >;
+    beginAutonomous: (
+      chatId: string,
+    ) => Effect.Effect<BeginAutonomousResponse, ApiClientError>;
+    pauseAutonomous: (
+      chatId: string,
+    ) => Effect.Effect<PauseAutonomousResponse, ApiClientError>;
+    getPerformanceSummary: (
+      chatId: string,
+    ) => Effect.Effect<PerformanceSummaryResponse, ApiClientError>;
+    getPerformanceBreakdown: (
+      chatId: string,
+    ) => Effect.Effect<PerformanceBreakdownResponse, ApiClientError>;
+    liquidate: (
+      chatId: string,
+      symbol: string,
+    ) => Effect.Effect<LiquidationResponse, ApiClientError>;
+    liquidateAll: (
+      chatId: string,
+    ) => Effect.Effect<LiquidationResponse, ApiClientError>;
+    getQuests: (chatId: string) => Effect.Effect<QuestsResponse, ApiClientError>;
+    getQuestDiagnostics: (
+      chatId: string,
+    ) => Effect.Effect<QuestDiagnosticsResponse, ApiClientError>;
+    getPortfolio: (
+      chatId: string,
+    ) => Effect.Effect<PortfolioResponse, ApiClientError>;
+    getWallets: (chatId: string) => Effect.Effect<WalletsResponse, ApiClientError>;
+    getLogs: (
+      chatId: string,
+      limit?: number,
+    ) => Effect.Effect<LogsResponse, ApiClientError>;
+    getDoctor: (chatId: string) => Effect.Effect<DoctorResponse, ApiClientError>;
+    getAIModels: () => Effect.Effect<AIModelsResponse, ApiClientError>;
+    getAIProviders: () => Effect.Effect<AIProvidersResponse, ApiClientError>;
+    selectAIModel: (
+      userId: string,
+      modelId: string,
+    ) => Effect.Effect<AIModelSelectResponse, ApiClientError>;
+    getAIStatus: (
+      chatId: string,
+    ) => Effect.Effect<AIStatusResponse, ApiClientError>;
+    routeAIModel: (
+      request: AIRouteRequest,
+    ) => Effect.Effect<AIRouteResponse, ApiClientError>;
+    getTradingMode: (
+      chatId: string,
+    ) => Effect.Effect<import("./types").TradingModeResponse, ApiClientError>;
+    setTradingMode: (
+      chatId: string,
+      mode: "dry" | "live",
+      changedBy?: string,
+    ) => Effect.Effect<import("./types").SetTradingModeResponse, ApiClientError>;
+    addTradingModeConfirmation: (
+      chatId: string,
+      confirmedBy?: string,
+    ) => Effect.Effect<
+      import("./types").TradingModeConfirmationResponse,
+      ApiClientError
+    >;
+  }
+>() {}
+
+/**
+ * Build the TelegramApi Layer from a BackendApiClient. The Layer
+ * composes via `Layer.succeed` and the underlying client is captured
+ * in the closure so handlers can `yield* TelegramApi` and get the
+ * same instance the rest of the app uses.
+ */
+export const TelegramApiLive = (
+  client: BackendApiClient,
+): Layer.Layer<TelegramApi> =>
+  Layer.succeed(TelegramApi, {
+    getUserByChatId: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getUserByChatId(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getUserByChatId",
+              ),
+      }),
+    getNotificationPreference: (userId) =>
+      Effect.tryPromise({
+        try: () => client.getNotificationPreference(userId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getNotificationPreference",
+              ),
+      }),
+    setNotificationPreference: (userId, enabled) =>
+      Effect.tryPromise({
+        try: () => client.setNotificationPreference(userId, enabled),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "setNotificationPreference",
+              ),
+      }),
+    registerTelegramUser: (request) =>
+      Effect.tryPromise({
+        try: () => client.registerTelegramUser(request),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "registerTelegramUser",
+              ),
+      }),
+    getArbitrageOpportunities: () =>
+      Effect.tryPromise({
+        try: () => client.getArbitrageOpportunities(),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getArbitrageOpportunities",
+              ),
+      }),
+    beginAutonomous: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.beginAutonomous(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "beginAutonomous",
+              ),
+      }),
+    pauseAutonomous: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.pauseAutonomous(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "pauseAutonomous",
+              ),
+      }),
+    getPerformanceSummary: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getPerformanceSummary(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getPerformanceSummary",
+              ),
+      }),
+    getPerformanceBreakdown: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getPerformanceBreakdown(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getPerformanceBreakdown",
+              ),
+      }),
+    liquidate: (chatId, symbol) =>
+      Effect.tryPromise({
+        try: () => client.liquidate(chatId, symbol),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "liquidate",
+              ),
+      }),
+    liquidateAll: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.liquidateAll(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "liquidateAll",
+              ),
+      }),
+    getQuests: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getQuests(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getQuests",
+              ),
+      }),
+    getQuestDiagnostics: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getQuestDiagnostics(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getQuestDiagnostics",
+              ),
+      }),
+    getPortfolio: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getPortfolio(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getPortfolio",
+              ),
+      }),
+    getWallets: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getWallets(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getWallets",
+              ),
+      }),
+    getLogs: (chatId, limit) =>
+      Effect.tryPromise({
+        try: () => client.getLogs(chatId, limit),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getLogs",
+              ),
+      }),
+    getDoctor: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getDoctor(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getDoctor",
+              ),
+      }),
+    getAIModels: () =>
+      Effect.tryPromise({
+        try: () => client.getAIModels(),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getAIModels",
+              ),
+      }),
+    getAIProviders: () =>
+      Effect.tryPromise({
+        try: () => client.getAIProviders(),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getAIProviders",
+              ),
+      }),
+    selectAIModel: (userId, modelId) =>
+      Effect.tryPromise({
+        try: () => client.selectAIModel(userId, modelId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "selectAIModel",
+              ),
+      }),
+    getAIStatus: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getAIStatus(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getAIStatus",
+              ),
+      }),
+    routeAIModel: (request) =>
+      Effect.tryPromise({
+        try: () => client.routeAIModel(request),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "routeAIModel",
+              ),
+      }),
+    getTradingMode: (chatId) =>
+      Effect.tryPromise({
+        try: () => client.getTradingMode(chatId),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "getTradingMode",
+              ),
+      }),
+    setTradingMode: (chatId, mode, changedBy) =>
+      Effect.tryPromise({
+        try: () => client.setTradingMode(chatId, mode, changedBy ?? "telegram"),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "setTradingMode",
+              ),
+      }),
+    addTradingModeConfirmation: (chatId, confirmedBy) =>
+      Effect.tryPromise({
+        try: () =>
+          client.addTradingModeConfirmation(chatId, confirmedBy ?? "telegram"),
+        catch: (e) =>
+          e instanceof ApiClientError
+            ? e
+            : new ApiClientError(
+                e instanceof Error ? e.message : String(e),
+                0,
+                "addTradingModeConfirmation",
+              ),
+      }),
+  });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { BackendApiClient } from "./client";
+import { Effect, Cause } from "effect";
+import { BackendApiClient, TelegramApi, TelegramApiLive, ApiClientError } from "./client";
 
 describe("BackendApiClient fallback behavior", () => {
   const originalFetch = globalThis.fetch;
@@ -47,5 +48,126 @@ describe("BackendApiClient fallback behavior", () => {
     expect(urls[1]).toContain("http://127.0.0.1:8080");
     // After one successful fallback, subsequent requests should stick to fallback URL.
     expect(urls[2]).toContain("http://127.0.0.1:8080");
+  });
+});
+
+// PR-5: TelegramApi is the Effect Context.Tag wrapper around
+// BackendApiClient. Each method returns Effect<A, ApiClientError> so
+// handlers in src/commands/* can be rewritten as Effect.gen programs.
+// These tests verify the Layer composition + happy/error paths.
+describe("TelegramApi Effect service", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("TelegramApiLive composes with the underlying client", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = ((async (input: RequestInfo | URL) => {
+      capturedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          user: { id: "u-1", subscription_tier: "free", created_at: "2026-01-01T00:00:00Z" },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }) as unknown) as typeof fetch;
+
+    const backend = new BackendApiClient({
+      baseUrl: "http://example.test",
+      adminKey: "k",
+      rateLimit: 1000,
+    });
+    const layer = TelegramApiLive(backend);
+    const program = Effect.gen(function* () {
+      const api = yield* TelegramApi;
+      return yield* api.getUserByChatId("chat-1");
+    });
+    const result = await Effect.runPromise(
+      Effect.provide(program, layer),
+    );
+    expect(result).toEqual({
+      user: { id: "u-1", subscription_tier: "free", created_at: "2026-01-01T00:00:00Z" },
+    });
+    expect(capturedUrl).toContain("/internal/telegram/users/chat-1");
+  });
+
+  test("TelegramApi methods surface ApiClientError on HTTP failure", async () => {
+    globalThis.fetch = ((async () =>
+      new Response(JSON.stringify({ message: "boom" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown) as typeof fetch;
+
+    const backend = new BackendApiClient({
+      baseUrl: "http://example.test",
+      adminKey: "k",
+      rateLimit: 1000,
+    });
+    const layer = TelegramApiLive(backend);
+    const program = Effect.gen(function* () {
+      const api = yield* TelegramApi;
+      return yield* api.getUserByChatId("chat-1");
+    });
+    // Effect wraps thrown errors in a FiberFailure at the runPromise
+    // boundary, so we use the typed exit channel via
+    // Effect.runPromiseExit + Cause.failures to recover the typed
+    // error.
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(program, layer),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      const failureOption = Cause.failureOption(exit.cause);
+      expect(failureOption._tag).toBe("Some");
+      if (failureOption._tag === "Some") {
+        const failure = failureOption.value as ApiClientError;
+        expect(failure).toBeInstanceOf(ApiClientError);
+        expect(failure.status).toBe(500);
+        expect(failure.message).toBe("boom");
+      }
+    }
+  });
+
+  test("TelegramApi methods wrap non-ApiClientError throws as ApiClientError(status=0)", async () => {
+    // Defensive coverage: the wrapper catches non-ApiClientError throws
+    // and re-wraps them so the typed error channel is preserved even
+    // when the underlying client raises a generic Error.
+    globalThis.fetch = ((async () => {
+      throw new Error("network blew up");
+    }) as unknown) as typeof fetch;
+
+    const backend = new BackendApiClient({
+      baseUrl: "http://example.test",
+      adminKey: "k",
+      rateLimit: 1000,
+    });
+    const layer = TelegramApiLive(backend);
+    const program = Effect.gen(function* () {
+      const api = yield* TelegramApi;
+      return yield* api.getUserByChatId("chat-1");
+    });
+    const exit = await Effect.runPromiseExit(
+      Effect.provide(program, layer),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      const failureOption = Cause.failureOption(exit.cause);
+      expect(failureOption._tag).toBe("Some");
+      if (failureOption._tag === "Some") {
+        const failure = failureOption.value as ApiClientError;
+        expect(failure).toBeInstanceOf(ApiClientError);
+        expect(failure.status).toBe(0);
+        expect(failure.message).toBe("network blew up");
+      }
+    }
   });
 });
