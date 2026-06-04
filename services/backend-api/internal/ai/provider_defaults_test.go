@@ -39,6 +39,15 @@ func TestProviderDefaults(t *testing.T) {
 			modelKnown: true,
 		},
 		{
+			name:       "deepseek v4 flash model",
+			provider:   "deepseek-v4-flash",
+			baseURL:    "https://api.deepseek.com/v1",
+			model:      "deepseek-v4-flash",
+			format:     ProviderTransportOpenAI,
+			apiKey:     true,
+			modelKnown: true,
+		},
+		{
 			name:       "zhipu openai compatible transport",
 			provider:   "zhipu",
 			baseURL:    "https://api.z.ai/api/paas/v4",
@@ -81,6 +90,7 @@ func TestProviderDefaultLookupNormalizesProviderID(t *testing.T) {
 	assert.Equal(t, []string{
 		"anthropic",
 		"deepseek",
+		"deepseek-v4-flash",
 		"google",
 		"kimi",
 		"kimi-for-coding",
