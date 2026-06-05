@@ -1383,6 +1383,57 @@ func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackOnCombinedPlan(t *testi
 	assert.False(t, modified, "combined plans must fall back to cancel+recreate")
 }
 
+// PR-4 (Oracle iteration 7 Blocker 2): if any existing plan lacks a
+// size field, modifyPositionTPSL must NOT return true. The pre-flight
+// checks leg coverage but not per-plan data integrity, so a plan can
+// pass pre-flight yet still be unmodifiable in place. Returning true
+// here would leave the caller believing the position is synced when
+// one leg was never updated — a silent partial-sync bug that could
+// cause real financial loss. The function must fall back to
+// cancel+recreate so the caller can establish a clean state.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenPlanLacksSize(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Both plans exist (pre-flight passes), but the SL
+			// plan has no size field. The TP plan has a valid
+			// size and a trigger price that differs from the
+			// requested target, so it would normally be modified
+			// in place under the old behavior.
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000", "size": "0.001"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			// If modify-tpsl-order IS called (for the TP), return
+			// success. The function should still return false
+			// because the SL plan lacks a size.
+			_, _ = w.Write([]byte(`{"code": "00000", "msg": "ok", "data": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(48000), // SL requested (differs from existing 49000)
+		decimal.NewFromInt(52000), // TP requested (differs from existing 50000)
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "size-missing plan must fall back to cancel+recreate (partial sync bug)")
+}
+
 // PR-4: modifyPositionTPSL on a position with no existing plans must
 // return (false, nil) so the caller can fall through to
 // placePositionTPSL. This is the first-ever-sync case.

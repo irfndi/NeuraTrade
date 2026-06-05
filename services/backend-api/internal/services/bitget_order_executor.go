@@ -1614,7 +1614,15 @@ func (e *BitgetOrderExecutor) modifyPositionTPSL(
 
 		planSize := strings.TrimSpace(mapStringAny(plan, "size", "Size"))
 		if planSize == "" {
-			continue
+			// Defensive: a plan that lacks a size field can't be
+			// modified in place. Don't silently treat this as
+			// success — that would leave the caller believing the
+			// position is synced when one leg was never updated.
+			// Signal fallback to cancel+recreate so the caller can
+			// establish a clean state. This is distinct from the
+			// no-op skip above (trigger already at target), which is
+			// the legitimate "already-synced" case.
+			return false, nil
 		}
 		body := map[string]interface{}{
 			"symbol":       symbol,
