@@ -1413,7 +1413,10 @@ func (e *BitgetOrderExecutor) listPositionTPSLPlans(ctx context.Context, symbol,
 	filtered := make([]map[string]interface{}, 0, len(orders))
 	for _, order := range orders {
 		recordHoldSide := strings.ToLower(strings.TrimSpace(mapStringAny(order, "holdSide", "posSide")))
-		if recordHoldSide == "" || recordHoldSide == targetHoldSide {
+		if recordHoldSide == "" {
+			continue
+		}
+		if recordHoldSide == targetHoldSide {
 			filtered = append(filtered, order)
 		}
 	}
@@ -1632,8 +1635,17 @@ func (e *BitgetOrderExecutor) modifyPositionTPSL(
 			"size":         planSize,
 			"triggerPrice": targetPrice,
 			"triggerType":  "mark_price",
-			"executePrice": targetPrice,
 			"planType":     planType,
+		}
+		if isSL {
+			// Bitget's modify-tpsl-order treats executePrice=0 (or omitted)
+			// as market execution. For SL/pos_loss legs, sending the stop
+			// trigger as the limit price would convert the protection into
+			// a limit order and could fail to close the position if price
+			// gaps through the trigger.
+			body["executePrice"] = "0"
+		} else {
+			body["executePrice"] = targetPrice
 		}
 		jsonBody, err := json.Marshal(body)
 		if err != nil {

@@ -99,7 +99,7 @@ The test at **`bitget_order_executor_test.go:1052-1060`** confirms:
 
 **Solution:** Replace `cancelExistingPositionTPSL` + `placePositionTPSL` with a single `modify-tpsl-order` call:
 
-```
+```http
 POST /api/v2/mix/order/modify-tpsl-order
 ```
 
@@ -168,7 +168,7 @@ The `computeTargets` function runs every `UpdateCooldown` (default: 45s) and:
 
 ### Recommended Policy
 
-```
+```text
 SL Rules (priority order):
 1. If profit < ActivationPct → keep original SL (no change)
 2. If profit > ActivationPct → move SL to break-even + BreakevenBuffer
