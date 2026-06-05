@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -59,10 +60,52 @@ type PaperTradingStrategy struct {
 	HoldCandles    int             `json:"hold_candles"` // candles to hold position
 }
 
+// DefaultPaperTradingUniverse defines the canonical set of symbols for paper
+// trading strategies. These are the symbols used when NEURATRADE_PAPER_SYMBOLS
+// is not set.
+var DefaultPaperTradingUniverse = []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
+
+// NEURATRADE_PAPER_SYMBOLS env var name for overriding the paper trading
+// universe at runtime.
+const envPaperSymbols = "NEURATRADE_PAPER_SYMBOLS"
+
+// paperSymbolsFromEnv returns the parsed symbol list from
+// NEURATRADE_PAPER_SYMBOLS, or nil if unset / empty. Each token is
+// trimmed, upper-cased, and de-duplicated while preserving order, so the
+// downstream universe is normalized regardless of operator input casing
+// (e.g. "btc/usdt, eth/usdt" → ["BTC/USDT", "ETH/USDT"]).
+func paperSymbolsFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv(envPaperSymbols))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	symbols := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.ToUpper(strings.TrimSpace(p))
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		symbols = append(symbols, s)
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+	return symbols
+}
+
 // DefaultPaperTradingStrategies returns the default set of strategies used for
-// backfill validation.
+// backfill validation. When the NEURATRADE_PAPER_SYMBOLS env var is set, all
+// strategy symbol lists are replaced with the user-supplied symbols.
 func DefaultPaperTradingStrategies() []PaperTradingStrategy {
-	return []PaperTradingStrategy{
+	envSymbols := paperSymbolsFromEnv()
+
+	strategies := []PaperTradingStrategy{
 		{
 			ID:             "scalping",
 			Name:           "Scalping",
@@ -84,7 +127,7 @@ func DefaultPaperTradingStrategies() []PaperTradingStrategy {
 		{
 			ID:             "swing_trading",
 			Name:           "Swing Trading",
-			Symbols:        []string{"BTC/USDT", "ETH/USDT", "BNB/USDT"},
+			Symbols:        []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"},
 			Timeframe:      "4h",
 			MaxPositionPct: decimal.NewFromFloat(0.15), // 15%
 			MinConfidence:  0.55,
@@ -100,6 +143,17 @@ func DefaultPaperTradingStrategies() []PaperTradingStrategy {
 			HoldCandles:    1, // 1h on 1h
 		},
 	}
+
+	// When the env var is set, apply its symbols to every strategy so the
+	// full universe participates regardless of strategy-level defaults.
+	if len(envSymbols) > 0 {
+		for i := range strategies {
+			strategies[i].Symbols = make([]string, len(envSymbols))
+			copy(strategies[i].Symbols, envSymbols)
+		}
+	}
+
+	return strategies
 }
 
 // ---------------------------------------------------------------------------

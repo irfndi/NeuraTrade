@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -11,6 +12,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDefaultScalpingBacktestUniverse_EnvVarOverride(t *testing.T) {
+	t.Run("unset_returns_canonical_defaults", func(t *testing.T) {
+		t.Setenv(envBacktestSymbols, "")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}, defaultScalpingBacktestUniverse())
+	})
+
+	t.Run("env_var_overrides_with_normalization", func(t *testing.T) {
+		t.Setenv(envBacktestSymbols, "doge/usdt, PEPE/USDT , doge/usdt")
+		assert.Equal(t, []string{"DOGE/USDT", "PEPE/USDT"}, defaultScalpingBacktestUniverse())
+	})
+}
 
 func TestNewScalpingBacktestEngine(t *testing.T) {
 	tests := []struct {
@@ -124,6 +137,47 @@ func TestScalpingBacktestEngine_ValidateConfig(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid config with mode=ai",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "ai",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid config with mode=deterministic",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "deterministic",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid mode value",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "neural",
+			},
+			wantErr: true,
+			errMsg:  "invalid mode \"neural\"",
+		},
+		{
+			name: "empty mode is valid (defaults to deterministic downstream)",
+			config: ScalpingBacktestConfig{
+				StartTime:      time.Now().Add(-24 * time.Hour),
+				EndTime:        time.Now(),
+				InitialCapital: decimal.NewFromInt(10000),
+				Mode:           "",
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +195,178 @@ func TestScalpingBacktestEngine_ValidateConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestScalpingBacktestEngine_ComputeSignalHints covers the AI-mode sidecar
+// metadata computation (PR-3). The function is called from evaluateSignal
+// when the engine's Mode is "ai"; it must return nil for non-actionable
+// decisions and produce non-negative SuggestedAction/ConfidenceHint/
+// CandidateScore fields for actionable ones.
+func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
+	engine := &ScalpingBacktestEngine{config: ScalpingBacktestConfig{
+		DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		MaxBidAskSpreadPct:    0.5,
+	}}
+
+	t.Run("nil decision returns nil hints", func(t *testing.T) {
+		hints := engine.computeSignalHints(MarketSignal{}, nil)
+		assert.Nil(t, hints)
+	})
+
+	t.Run("hold decision returns nil hints", func(t *testing.T) {
+		holdDecision := &AITradingDecision{Action: "hold", Confidence: 0.5}
+		hints := engine.computeSignalHints(MarketSignal{}, holdDecision)
+		assert.Nil(t, hints)
+	})
+
+	t.Run("buy decision with valid signal returns hints", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		buyDecision := &AITradingDecision{Action: "buy", Confidence: 0.75}
+		hints := engine.computeSignalHints(signal, buyDecision)
+		require.NotNil(t, hints, "buy decision should produce hints")
+		assert.Equal(t, "buy", hints.SuggestedAction)
+		assert.InDelta(t, 0.75, hints.ConfidenceHint, 1e-9)
+		assert.GreaterOrEqual(t, hints.CandidateScore, 0.0,
+			"score must be non-negative (imbalance+liquidity+volume components)")
+	})
+
+	t.Run("sell decision with valid signal returns hints", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "ETH/USDT",
+			Price:              3000,
+			High24h:            3100,
+			Low24h:             2900,
+			Volume24h:          500_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: -0.40,
+			RangePosition24h:   80,
+		}
+		sellDecision := &AITradingDecision{Action: "sell", Confidence: 0.72}
+		hints := engine.computeSignalHints(signal, sellDecision)
+		require.NotNil(t, hints, "sell decision should produce hints")
+		assert.Equal(t, "sell", hints.SuggestedAction)
+		assert.InDelta(t, 0.72, hints.ConfidenceHint, 1e-9)
+		assert.GreaterOrEqual(t, hints.CandidateScore, 0.0)
+	})
+
+	t.Run("buy with fee-fragile spread returns nil hints", func(t *testing.T) {
+		// Mirrors the live AI hint path's scalpingBuySignalRejectionReason gate:
+		// a buy the deterministic path picks but the AI pipeline would suppress
+		// (fee-fragile spread) must not produce a hint.
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.10, // > scalpingRecentBuyMaxSpreadPct (0.04)
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+			PriceChange24h:     0.05,
+			RecentChangeKnown:  true,
+			RecentPriceChange:  0.05,
+		}
+		buyDecision := &AITradingDecision{Action: "buy", Confidence: 0.75, RangeAlignment: 0.6}
+		hints := engine.computeSignalHints(signal, buyDecision)
+		assert.Nil(t, hints, "buy with fee-fragile spread should be rejected at hint layer")
+	})
+
+	t.Run("whitespace action trimmed", func(t *testing.T) {
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		decision := &AITradingDecision{Action: "  buy  ", Confidence: 0.7}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+		assert.Equal(t, "buy", hints.SuggestedAction, "action should be lowercased + trimmed")
+	})
+
+	t.Run("uses decision.RangeAlignment from secondary branch", func(t *testing.T) {
+		// Secondary branches (blowoff sell, proximity-adjusted, reversal buy,
+		// sell-window, dual-proximity) compute rangeAlignment with a different
+		// formula than the primary buy/sell branches. The hints must reuse
+		// decision.RangeAlignment verbatim, not re-derive via the primary
+		// formula (which was the prior bug that produced wrong scores for
+		// signals entering through these branches).
+		// RangePosition24h=96 lands inside the blowoff band [95,98], yielding
+		// a non-zero alignment (1/3). Any prior value (e.g. 80) clamped to 0
+		// and made the test unable to distinguish "uses decision.RangeAlignment"
+		// from "ignores it and hardcodes 0".
+		fallback := engine.config.DeterministicFallback.Normalized()
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: -0.40,
+			RangePosition24h:   96,
+		}
+		customAlignment := clampFloat(
+			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/
+				math.Max(scalpingBlowoffSellRangeMax-scalpingBlowoffSellRangeMin, 1),
+			0, 1,
+		)
+		decision := &AITradingDecision{
+			Action:         "sell",
+			Confidence:     0.70,
+			RangeAlignment: customAlignment,
+		}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+
+		effectiveMaxSpread := math.Max(fallback.MaxBidAskSpread, engine.config.MaxBidAskSpreadPct)
+		liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
+		volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/fallback.VolumeLogScale, 0, 1)
+		expectedScore := math.Abs(signal.OrderBookImbalance)*fallback.ImbalanceWeight +
+			liquidityScore*fallback.LiquidityWeight +
+			customAlignment*fallback.RangeWeight +
+			volumeScore*fallback.VolumeWeight
+		assert.InDelta(t, expectedScore, hints.CandidateScore, 1e-9,
+			"CandidateScore must use decision.RangeAlignment, not a re-derived primary formula")
+	})
+
+	t.Run("zero RangeAlignment yields same score as primary buy branch with RangePosition=BuyRangeMax", func(t *testing.T) {
+		// Regression guard: when the decision carries RangeAlignment=0, the
+		// hints score drops the range component entirely. This pins the
+		// contract that decision.RangeAlignment is the single source of truth.
+		fallback := engine.config.DeterministicFallback.Normalized()
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		decision := &AITradingDecision{Action: "buy", Confidence: 0.7, RangeAlignment: 0}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+
+		effectiveMaxSpread := math.Max(fallback.MaxBidAskSpread, engine.config.MaxBidAskSpreadPct)
+		liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
+		volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/fallback.VolumeLogScale, 0, 1)
+		expectedScore := math.Abs(signal.OrderBookImbalance)*fallback.ImbalanceWeight +
+			liquidityScore*fallback.LiquidityWeight +
+			0.0*fallback.RangeWeight +
+			volumeScore*fallback.VolumeWeight
+		assert.InDelta(t, expectedScore, hints.CandidateScore, 1e-9)
+	})
 }
 
 func TestScalpingBacktestEngine_ClassifyRegime(t *testing.T) {

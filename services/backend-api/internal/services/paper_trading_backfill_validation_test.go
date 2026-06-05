@@ -534,8 +534,10 @@ func TestDefaultPaperTradingStrategies(t *testing.T) {
 	assert.Len(t, strategies, 4)
 
 	strategyIDs := make(map[string]bool)
+	symbolSets := make(map[string][]string)
 	for _, s := range strategies {
 		strategyIDs[s.ID] = true
+		symbolSets[s.ID] = s.Symbols
 		assert.NotEmpty(t, s.Name)
 		assert.NotEmpty(t, s.Symbols)
 		assert.NotEmpty(t, s.Timeframe)
@@ -547,6 +549,68 @@ func TestDefaultPaperTradingStrategies(t *testing.T) {
 	assert.True(t, strategyIDs["daily_trading"])
 	assert.True(t, strategyIDs["swing_trading"])
 	assert.True(t, strategyIDs["arbitrage"])
+
+	// swing_trading must cover all 5 paper trading symbols (BTC, ETH, SOL, BNB, XRP).
+	swingSymbols := symbolSets["swing_trading"]
+	assert.Contains(t, swingSymbols, "BTC/USDT")
+	assert.Contains(t, swingSymbols, "ETH/USDT")
+	assert.Contains(t, swingSymbols, "SOL/USDT")
+	assert.Contains(t, swingSymbols, "BNB/USDT")
+	assert.Contains(t, swingSymbols, "XRP/USDT")
+	assert.Len(t, swingSymbols, 5)
+}
+
+func TestDefaultPaperTradingStrategies_EnvOverride(t *testing.T) {
+	t.Setenv(envPaperSymbols, "BTC/USDT,SOL/USDT")
+	t.Cleanup(func() { t.Setenv(envPaperSymbols, "") })
+
+	strategies := DefaultPaperTradingStrategies()
+	assert.Len(t, strategies, 4)
+
+	for _, s := range strategies {
+		assert.Equal(t, []string{"BTC/USDT", "SOL/USDT"}, s.Symbols,
+			"strategy %q should use env var symbols", s.ID)
+	}
+}
+
+func TestPaperSymbolsFromEnv(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "")
+		assert.Nil(t, paperSymbolsFromEnv())
+	})
+
+	t.Run("single", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "BTC/USDT")
+		assert.Equal(t, []string{"BTC/USDT"}, paperSymbolsFromEnv())
+	})
+
+	t.Run("multiple", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "BTC/USDT,ETH/USDT,SOL/USDT")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}, paperSymbolsFromEnv())
+	})
+
+	t.Run("dedup", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "BTC/USDT,BTC/USDT,ETH/USDT")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT"}, paperSymbolsFromEnv())
+	})
+
+	t.Run("whitespace", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, " BTC/USDT , ETH/USDT ")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT"}, paperSymbolsFromEnv())
+	})
+
+	t.Run("order_preserved", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "XRP/USDT,BTC/USDT,ETH/USDT")
+		result := paperSymbolsFromEnv()
+		assert.Equal(t, "XRP/USDT", result[0])
+		assert.Equal(t, "BTC/USDT", result[1])
+		assert.Equal(t, "ETH/USDT", result[2])
+	})
+
+	t.Run("mixed_case_normalized", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "btc/usdt, Eth/USDT, sol/usdt")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}, paperSymbolsFromEnv())
+	})
 }
 
 func TestDefaultPaperTradingBackfillConfig(t *testing.T) {
