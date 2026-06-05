@@ -3148,6 +3148,32 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 	assert.Zero(t, confidence)
 }
 
+func TestAIScalpingService_DeterministicFallbackCandidate_BypassesImbalanceGateForTickerOnly(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct:   0.22,
+			DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		},
+	}
+
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              50000,
+		High24h:            51000,
+		Low24h:             49000,
+		Volume24h:          1000,
+		BidAskSpread:       0.04, // ticker-derived spread is small and within tolerance
+		OrderBookImbalance: 0,    // no orderbook data: ticker-only signal
+		RangePosition24h:   18,
+	}
+
+	decision, confidence, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, true)
+	require.True(t, ok, "ticker-only signal with valid spread should bypass imbalance gate")
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Greater(t, confidence, 0.0)
+}
+
 func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpreadAndImbalanceFloor(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{

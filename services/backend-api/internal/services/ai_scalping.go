@@ -3432,7 +3432,12 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
 	blowoffReversal := scalpingBlowoffSellTrendConfirmed(signal)
-	if imbalance < effectiveMinImbalance && !blowoffReversal && !reversalBuy && !sellWindow {
+	// Ticker-only signals have OrderBookImbalance=0 (no orderbook fetched) but
+	// carry a ticker-derived BidAskSpread > 0. The imbalance gate is meant to
+	// filter empty orderbook data, not to reject valid ticker-only candidates;
+	// bypass it when we have a non-zero spread but no imbalance reading.
+	tickerOnlySignal := signal.OrderBookImbalance == 0 && signal.BidAskSpread > 0
+	if imbalance < effectiveMinImbalance && !blowoffReversal && !reversalBuy && !sellWindow && !tickerOnlySignal {
 		return nil, 0, false
 	}
 
@@ -3461,6 +3466,22 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		momentumAligned = true
 		rangeAlignment = clampFloat(
 			(signal.RangePosition24h-scalpingSellWindowMinRangePct)/math.Max(100-scalpingSellWindowMinRangePct, 1),
+			0,
+			1,
+		)
+	case tickerOnlySignal && signal.RangePosition24h <= buyRangeMax:
+		action = "buy"
+		momentumAligned = momentumPct >= buyMomentumMin
+		rangeAlignment = clampFloat(
+			(buyRangeMax-signal.RangePosition24h)/math.Max(buyRangeMax, 1),
+			0,
+			1,
+		)
+	case tickerOnlySignal && signal.RangePosition24h >= sellRangeMin:
+		action = "sell"
+		momentumAligned = momentumPct <= sellMomentumMax
+		rangeAlignment = clampFloat(
+			(signal.RangePosition24h-sellRangeMin)/math.Max(100-sellRangeMin, 1),
 			0,
 			1,
 		)
