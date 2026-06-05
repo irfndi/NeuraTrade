@@ -3151,7 +3151,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 func TestAIScalpingService_DeterministicFallbackCandidate_BypassesImbalanceGateForTickerOnly(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
-			MaxBidAskSpreadPct:   0.22,
+			MaxBidAskSpreadPct:    0.22,
 			DeterministicFallback: DefaultDeterministicFallbackConfig(),
 		},
 	}
