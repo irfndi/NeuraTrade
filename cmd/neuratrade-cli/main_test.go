@@ -37,6 +37,7 @@ func TestNewAPIClient(t *testing.T) {
 	client := NewAPIClient("http://example.com", "test-key")
 
 	assert.Equal(t, "http://example.com", client.BaseURL)
+	assert.Equal(t, "test-key", client.APIKey)
 	assert.NotNil(t, client.HTTPClient)
 }
 

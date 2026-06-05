@@ -24,14 +24,20 @@ import (
 // prints the exact command line they need to invoke, including the
 // relevant NEURATRADE_* env vars to set.
 func agentRunAction(cCtx *cli.Context) error {
-	fmt.Println("The agent service is managed by the gateway.")
-	fmt.Println("To start it as part of the full stack:")
+	fmt.Println("The agent service is NOT yet managed by `neuratrade gateway`.")
+	fmt.Println("`gateway start` only launches backend, ccxt, and telegram;")
+	fmt.Println("the agent-control process must be started separately.")
 	fmt.Println()
-	fmt.Println("    neuratrade gateway start")
+	fmt.Println("For a standalone agent run, invoke the agent-control binary directly")
+	fmt.Println("from its own module (the repo root has no go.mod for the gateway):")
 	fmt.Println()
-	fmt.Println("For a standalone agent run, invoke the binary directly:")
+	fmt.Println("    cd services/agent-control")
+	fmt.Println("    go run ./cmd/agent")
 	fmt.Println()
-	fmt.Println("    go run ./services/agent-control/cmd/agent")
+	fmt.Println("Or build and run the agent binary directly:")
+	fmt.Println()
+	fmt.Println("    go -C services/agent-control build -o bin/neuratrade-agent ./cmd/agent")
+	fmt.Println("    ./services/agent-control/bin/neuratrade-agent")
 	fmt.Println()
 	fmt.Println("Required environment variables (read from .env or config.json):")
 	fmt.Println("    BACKEND_API_URL          (default: http://localhost:8080)")
@@ -199,5 +205,6 @@ func agentCommand() *cli.Command {
 }
 
 // Compile-time assertion that agentCommand returns a non-nil *cli.Command.
-// This catches refactors that accidentally break the command tree.
-var _ = agentCommand
+// This catches refactors that accidentally break the command tree by
+// failing compilation if the function is removed or its return type changes.
+var _ *cli.Command = agentCommand()
