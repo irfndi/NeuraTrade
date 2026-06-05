@@ -397,7 +397,7 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 	if !isRiskReduction && (details.TakeProfit != nil || details.StopLoss != nil) {
 		verifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		e.verifyFuturesTPSLActive(verifyCtx, symbol, holdSide)
+		e.verifyFuturesTPSLActive(verifyCtx, symbol, holdSide, details.TakeProfit != nil, details.StopLoss != nil)
 	}
 
 	return result.OrderID, nil
@@ -405,43 +405,53 @@ func (e *BitgetOrderExecutor) placeFuturesOrderWithTPSL(ctx context.Context, sym
 
 // verifyFuturesTPSLActive checks whether the exchange has active TP/SL plan orders
 // for a position and logs the result. This verifies that exchange-side protection
-// is in place after order placement.
-func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbol, holdSide string) {
-	endpoint := fmt.Sprintf(
-		"/api/v2/mix/order/orders-plan-pending?productType=USDT-FUTURES&planType=profit_loss&symbol=%s",
-		symbol,
-	)
-	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+// is in place after order placement. expectTP and expectSL tell the verifier which
+// legs the caller placed — only the expected legs are required for a "verified"
+// result, so a caller that placed only a TP doesn't get a spurious "partial
+// coverage" warning when the exchange correctly has no SL plan.
+func (e *BitgetOrderExecutor) verifyFuturesTPSLActive(ctx context.Context, symbol, holdSide string, expectTP, expectSL bool) {
+	// Per docs/bitget-tp-investigation.md (Section 1, tertiary root cause):
+	// the legacy implementation only checked `len(orders) > 0` and did NOT
+	// verify that BOTH TP and SL were present. A position with only an SL
+	// plan (or only a TP plan) would pass verification but leave the
+	// opposite leg unprotected. Switched to the unified
+	// listPositionTPSLPlans helper (no planType filter) and now require
+	// at least one surplus/TP plan AND at least one loss/SL plan before
+	// reporting "verified".
+	orders, err := e.listPositionTPSLPlans(ctx, symbol, holdSide)
 	if err != nil {
 		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to verify TP/SL status: %v\n", err)
-		return
-	}
-
-	var result struct {
-		Code string          `json:"code"`
-		Msg  string          `json:"msg"`
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to parse TP/SL verification response: %v\n", err)
-	}
-
-	if result.Code != "00000" {
-		fmt.Printf("[BITGET-ORDER] ⚠️ TP/SL verification API error: %s (code: %s)\n", result.Msg, result.Code)
-		return
-	}
-
-	orders, err := parseBitgetOrderList(result.Data)
-	if err != nil {
-		fmt.Printf("[BITGET-ORDER] ⚠️ Failed to parse TP/SL plan orders: %v\n", err)
 		return
 	}
 	if len(orders) == 0 {
 		fmt.Printf("[BITGET-ORDER] ⚠️ No active TP/SL plans found for holdSide=%s — exchange-side protection may not be set\n", holdSide)
 		return
 	}
-
-	fmt.Printf("[BITGET-ORDER] ✅ Exchange-side TP/SL verified: %d active plan(s) for holdSide=%s\n", len(orders), holdSide)
+	hasTP, hasSL := false, false
+	for _, order := range orders {
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(order, "planType", "plan_type")))
+		// Bitget planType values: profit_plan, loss_plan, profit_loss,
+		// pos_profit, pos_loss. A "profit_loss" plan covers BOTH legs
+		// (combined TP+SL placed via place-pos-tpsl), so it must set
+		// hasTP and hasSL both. The "profit"/"loss" branches set just
+		// the matching leg.
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if isTP {
+			hasTP = true
+		}
+		if isSL {
+			hasSL = true
+		}
+	}
+	missingTP := expectTP && !hasTP
+	missingSL := expectSL && !hasSL
+	if missingTP || missingSL {
+		fmt.Printf("[BITGET-ORDER] ⚠️ Partial TP/SL coverage for holdSide=%s: expectTP=%t expectSL=%t hasTP=%t hasSL=%t (%d plan(s)) — exchange-side protection is incomplete\n",
+			holdSide, expectTP, expectSL, hasTP, hasSL, len(orders))
+		return
+	}
+	fmt.Printf("[BITGET-ORDER] ✅ Exchange-side TP/SL verified: %d active plan(s) for holdSide=%s (expectTP=%t expectSL=%t)\n", len(orders), holdSide, expectTP, expectSL)
 }
 
 // getTicker fetches current ticker price from Bitget
@@ -1259,11 +1269,32 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 	if err != nil {
 		return fmt.Errorf("fetch contract info for protection sync: %w", err)
 	}
+	if stopLoss.LessThanOrEqual(decimal.Zero) && takeProfit.LessThanOrEqual(decimal.Zero) {
+		// Caller wants no protection — cancel any existing plans but
+		// don't try to place new ones. cancelExistingPositionTPSL
+		// uses the broadened listPositionTPSLPlans helper (no
+		// planType filter) so it catches position-level plans too.
+		if err := e.cancelExistingPositionTPSL(ctx, apiSymbol, holdSide); err != nil {
+			return fmt.Errorf("cancel existing TP/SL plan orders failed: %w", err)
+		}
+		return nil
+	}
+
+	// Try the modify-in-place path first (PR-4, see
+	// docs/bitget-tp-investigation.md primary root cause). If existing
+	// plans were found and at least one was updated, we're done — the
+	// cancel+recreate path that caused orphaned plans is bypassed
+	// entirely. If no plans exist (first-ever sync) or the modify
+	// path errors, fall through to the legacy cancel+place flow.
+	modified, modifyErr := e.modifyPositionTPSL(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo)
+	if modifyErr != nil {
+		zaplogrus.Warnf("[BITGET-ORDER] Modify-in-place TP/SL sync failed for %s, falling back to cancel+recreate: %v", apiSymbol, modifyErr)
+	} else if modified {
+		return nil
+	}
+
 	if err := e.cancelExistingPositionTPSL(ctx, apiSymbol, holdSide); err != nil {
 		return fmt.Errorf("cancel existing TP/SL plan orders failed: %w", err)
-	}
-	if stopLoss.LessThanOrEqual(decimal.Zero) && takeProfit.LessThanOrEqual(decimal.Zero) {
-		return nil
 	}
 	if err := e.placePositionTPSL(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo); err != nil {
 		splitErr := e.placePositionTPSLSplit(ctx, apiSymbol, holdSide, stopLoss, takeProfit, contractInfo)
@@ -1276,30 +1307,9 @@ func (e *BitgetOrderExecutor) SyncPositionProtection(
 }
 
 func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, symbol, holdSide string) error {
-	endpoint := fmt.Sprintf(
-		"/api/v2/mix/order/orders-plan-pending?productType=USDT-FUTURES&planType=profit_loss&symbol=%s",
-		symbol,
-	)
-	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+	orders, err := e.listPositionTPSLPlans(ctx, symbol, holdSide)
 	if err != nil {
-		return fmt.Errorf("list pending TP/SL plans: %w", err)
-	}
-
-	var result struct {
-		Code string          `json:"code"`
-		Msg  string          `json:"msg"`
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return fmt.Errorf("failed to parse pending TP/SL orders response: %w", err)
-	}
-	if result.Code != "00000" {
-		return fmt.Errorf("bitget API error while listing TP/SL plans: %s (code: %s)", result.Msg, result.Code)
-	}
-
-	orders, err := parseBitgetOrderList(result.Data)
-	if err != nil {
-		return fmt.Errorf("failed to parse pending TP/SL orders payload: %w", err)
+		return err
 	}
 	if len(orders) == 0 {
 		return nil
@@ -1311,8 +1321,12 @@ func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, sy
 		if orderID == "" {
 			continue
 		}
-		recordHoldSide := strings.ToLower(strings.TrimSpace(mapStringAny(order, "holdSide", "posSide")))
-		if recordHoldSide != "" && recordHoldSide != strings.ToLower(strings.TrimSpace(holdSide)) {
+		// Only cancel TP/SL plan types — skip unrelated plan types
+		// (entry limits, trailing stops) to avoid collateral damage.
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(order, "planType", "plan_type")))
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if !isTP && !isSL {
 			continue
 		}
 		orderIDList = append(orderIDList, map[string]string{"orderId": orderID})
@@ -1347,6 +1361,66 @@ func (e *BitgetOrderExecutor) cancelExistingPositionTPSL(ctx context.Context, sy
 		return fmt.Errorf("bitget cancel TP/SL error: %s (code: %s)", cancelResult.Msg, cancelResult.Code)
 	}
 	return nil
+}
+
+// listPositionTPSLPlans returns the set of pending TP/SL plan orders on a
+// futures position, including BOTH order-level plans (profit_plan/loss_plan)
+// and position-level plans (pos_profit/pos_loss). Per docs/bitget-tp-investigation.md:
+//
+//   - The legacy code queried planType=profit_loss only, which silently
+//     skipped position-level plans and left orphaned orders across
+//     reconciliation cycles.
+//   - The orders-plan-pending endpoint accepts ONE planType per call, so
+//     we omit the filter and filter by holdSide client-side. This catches
+//     all plan types Bitget might return (profit_plan, loss_plan,
+//     profit_loss, pos_profit, pos_loss) in a single round-trip and avoids
+//     the "missing plan" class of bugs that compounded the original issue.
+//
+// Returns an empty slice (not nil) when no plans exist for the given
+// holdSide; the caller is expected to handle empty results as a no-op.
+func (e *BitgetOrderExecutor) listPositionTPSLPlans(ctx context.Context, symbol, holdSide string) ([]map[string]interface{}, error) {
+	endpoint := fmt.Sprintf(
+		"/api/v2/mix/order/orders-plan-pending?productType=USDT-FUTURES&symbol=%s",
+		symbol,
+	)
+	resp, err := e.doRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("list pending TP/SL plans: %w", err)
+	}
+
+	var result struct {
+		Code string          `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse pending TP/SL orders response: %w", err)
+	}
+	if result.Code != "00000" {
+		return nil, fmt.Errorf("bitget API error while listing TP/SL plans: %s (code: %s)", result.Msg, result.Code)
+	}
+
+	orders, err := parseBitgetOrderList(result.Data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse pending TP/SL orders payload: %w", err)
+	}
+
+	// Filter by holdSide client-side. The Bitget API uses holdSide for
+	// position-level plans and posSide for some legacy schemas; we accept
+	// either spelling. Records with no side are skipped (conservative —
+	// better to leave a stale plan than to cancel a fresh one).
+	targetHoldSide := strings.ToLower(strings.TrimSpace(holdSide))
+	filtered := make([]map[string]interface{}, 0, len(orders))
+	for _, order := range orders {
+		recordHoldSide := strings.ToLower(strings.TrimSpace(mapStringAny(order, "holdSide", "posSide")))
+		if recordHoldSide == "" {
+			continue
+		}
+		if recordHoldSide == targetHoldSide {
+			filtered = append(filtered, order)
+		}
+	}
+	return filtered, nil
 }
 
 func (e *BitgetOrderExecutor) placePositionTPSL(
@@ -1416,6 +1490,188 @@ func (e *BitgetOrderExecutor) placePositionTPSLSplit(
 		}
 	}
 	return nil
+}
+
+// modifyPositionTPSL updates the trigger/execute prices of existing
+// position-level TP/SL plan orders in place, replacing the legacy
+// cancel+recreate pattern that caused orphaned plans and Bitget UI
+// showing only the SL leg (see docs/bitget-tp-investigation.md, primary
+// root cause). The function:
+//
+//  1. Lists current position-level plans via listPositionTPSLPlans
+//     (which catches pos_profit/pos_loss/profit_plan/loss_plan, the
+//     full set the legacy planType=profit_loss filter silently skipped).
+//  2. For each plan whose trigger price is stale, POSTs a modify
+//     request to /api/v2/mix/order/modify-tpsl-order with the new
+//     trigger + execute prices. Plans already at the target price are
+//     skipped (no-op).
+//  3. If no plans exist yet, returns nil with modifyApplied=false so
+//     the caller can fall back to placePositionTPSL. This is the
+//     expected case for the first-ever protection sync on a position.
+//
+// The function is conservative: any per-plan failure aborts the whole
+// modify (returns the error) so the caller can decide to fall back to
+// the cancel+create path instead of leaving the position in a
+// half-modified state.
+func (e *BitgetOrderExecutor) modifyPositionTPSL(
+	ctx context.Context,
+	symbol, holdSide string,
+	stopLoss decimal.Decimal,
+	takeProfit decimal.Decimal,
+	contractInfo *ContractInfo,
+) (modifyApplied bool, err error) {
+	plans, err := e.listPositionTPSLPlans(ctx, symbol, holdSide)
+	if err != nil {
+		return false, fmt.Errorf("list existing plans for modify: %w", err)
+	}
+	if len(plans) == 0 {
+		return false, nil
+	}
+
+	wantTP := takeProfit.GreaterThan(decimal.Zero)
+	wantSL := stopLoss.GreaterThan(decimal.Zero)
+
+	// Pre-flight: classify existing plans by leg, and fall back to
+	// cancel+recreate whenever the existing plan set can't be modified
+	// to match the requested state. Without this check the function
+	// used to return (true, nil) as soon as ONE matching plan was
+	// updated, silently leaving the position with a partial protection
+	// set (e.g. only TP modified, no SL created) — a correctness bug.
+	var hasTP, hasSL bool
+	for _, plan := range plans {
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(plan, "planType", "plan_type")))
+		// Combined TP+SL plans can't be modified in-place with the
+		// single-triggerPrice body the modify-tpsl-order endpoint
+		// accepts; cancel+recreate produces a clean result.
+		if strings.Contains(planType, "profit_loss") {
+			return false, nil
+		}
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if isTP {
+			hasTP = true
+		}
+		if isSL {
+			hasSL = true
+		}
+	}
+	if wantTP && !hasTP {
+		// Caller wants TP but no TP plan exists → fall back.
+		return false, nil
+	}
+	if wantSL && !hasSL {
+		// Caller wants SL but no SL plan exists → fall back.
+		return false, nil
+	}
+	if !wantTP && hasTP {
+		// Caller wants to remove the TP, but modify-tpsl-order can only
+		// adjust prices — it can't delete a plan → fall back.
+		return false, nil
+	}
+	if !wantSL && hasSL {
+		// Same for the SL leg.
+		return false, nil
+	}
+
+	// All requested legs exist. Modify them in place. Plans already
+	// at the target price are skipped (no-op) to avoid the
+	// corresponding API rate-limit cost. We return true even if every
+	// plan was a no-op skip — this is the "already-synced" signal
+	// that lets SyncPositionProtection avoid the wasteful cancel+recreate
+	// fallback (Bug 2: previously returned false, defeating the
+	// optimization).
+	for _, plan := range plans {
+		orderID := strings.TrimSpace(mapStringAny(plan, "orderId", "orderID", "id"))
+		if orderID == "" {
+			continue
+		}
+		planType := strings.ToLower(strings.TrimSpace(mapStringAny(plan, "planType", "plan_type")))
+		isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+		isSL := strings.Contains(planType, "loss")
+		if !isTP && !isSL {
+			// Unknown plan type — leave it alone rather than risk
+			// disturbing an unrelated order. The next reconcile
+			// cycle will re-evaluate.
+			continue
+		}
+
+		var targetPrice string
+		if isTP {
+			if !takeProfit.GreaterThan(decimal.Zero) {
+				continue
+			}
+			targetPrice = formatFuturesTriggerPrice(takeProfit, contractInfo)
+		} else {
+			if !stopLoss.GreaterThan(decimal.Zero) {
+				continue
+			}
+			targetPrice = formatFuturesTriggerPrice(stopLoss, contractInfo)
+		}
+
+		// Skip if the trigger price is already at target (avoids a
+		// no-op modify call and the corresponding API rate-limit cost).
+		existingTrigger := strings.TrimSpace(mapStringAny(plan, "triggerPrice", "stopSurplusTriggerPrice", "stopLossTriggerPrice", "price"))
+		if existingTrigger != "" && existingTrigger == targetPrice {
+			continue
+		}
+
+		planSize := strings.TrimSpace(mapStringAny(plan, "size", "Size"))
+		if planSize == "" {
+			// Defensive: a plan that lacks a size field can't be
+			// modified in place. Don't silently treat this as
+			// success — that would leave the caller believing the
+			// position is synced when one leg was never updated.
+			// Signal fallback to cancel+recreate so the caller can
+			// establish a clean state. This is distinct from the
+			// no-op skip above (trigger already at target), which is
+			// the legitimate "already-synced" case.
+			return false, nil
+		}
+		body := map[string]interface{}{
+			"symbol":       symbol,
+			"productType":  "USDT-FUTURES",
+			"marginCoin":   "USDT",
+			"orderId":      orderID,
+			"size":         planSize,
+			"triggerPrice": targetPrice,
+			"triggerType":  "mark_price",
+			"planType":     planType,
+		}
+		if isSL {
+			// Bitget's modify-tpsl-order treats executePrice=0 (or omitted)
+			// as market execution. For SL/pos_loss legs, sending the stop
+			// trigger as the limit price would convert the protection into
+			// a limit order and could fail to close the position if price
+			// gaps through the trigger.
+			body["executePrice"] = "0"
+		} else {
+			body["executePrice"] = targetPrice
+		}
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return modifyApplied, fmt.Errorf("marshal modify TP/SL payload for order %s: %w", orderID, err)
+		}
+		resp, err := e.doRequest(ctx, "POST", "/api/v2/mix/order/modify-tpsl-order", jsonBody)
+		if err != nil {
+			return modifyApplied, fmt.Errorf("modify TP/SL request for order %s: %w", orderID, err)
+		}
+		var result struct {
+			Code string `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := json.Unmarshal(resp, &result); err != nil {
+			return modifyApplied, fmt.Errorf("parse modify TP/SL response for order %s: %w", orderID, err)
+		}
+		if result.Code != "00000" {
+			return modifyApplied, fmt.Errorf("bitget modify TP/SL error for order %s: %s (code: %s)", orderID, result.Msg, result.Code)
+		}
+		modifyApplied = true
+	}
+	// Return true even when modifyApplied stayed false: every existing
+	// plan was a no-op skip (already at the target price), which
+	// means the position is already in the desired state. This is
+	// the "already-synced" signal.
+	return true, nil
 }
 
 // IsPaperTrading returns false for Bitget executor (real trading mode)

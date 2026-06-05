@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -1118,4 +1120,626 @@ func TestFormatPrice(t *testing.T) {
 		result := formatPrice(tt.price)
 		assert.Equal(t, tt.expected, result, "Price: %s", tt.price.String())
 	}
+}
+
+// PR-4: listPositionTPSLPlans now omits the planType query param to
+// catch all plan types (profit_plan/loss_plan/profit_loss/pos_profit/
+// pos_loss) and filters by holdSide client-side. This test guards
+// against regression of the W0-F secondary root cause.
+func TestBitgetOrderExecutor_ListPositionTPSLPlans_NoPlanTypeFilter(t *testing.T) {
+	var requestedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path + "?" + r.URL.RawQuery
+		_, _ = w.Write([]byte(`{
+			"code": "00000",
+			"msg": "ok",
+			"data": {
+				"entrustedList": [
+					{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "51000"},
+					{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000"},
+					{"orderId": "other-1", "planType": "pos_profit", "holdSide": "short", "triggerPrice": "1100"}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	plans, err := executor.listPositionTPSLPlans(context.Background(), "BTCUSDT", "long")
+	require.NoError(t, err)
+	require.Len(t, plans, 2, "should filter to long holdSide only")
+	// Verify the request did NOT specify planType (regression guard).
+	assert.NotContains(t, requestedPath, "planType=",
+		"listPositionTPSLPlans must omit the planType filter to catch all plan types")
+	// Verify the returned IDs are the long-side ones.
+	ids := make([]string, 0, len(plans))
+	for _, p := range plans {
+		ids = append(ids, mapStringAny(p, "orderId", "orderID", "id"))
+	}
+	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, ids)
+}
+
+// PR-4: modifyPositionTPSL updates existing plan orders via the
+// /api/v2/mix/order/modify-tpsl-order endpoint. This test verifies
+// the per-plan modify request body format and the no-op skip when
+// the trigger price already matches.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_SendsModifyRequestsForStalePlans(t *testing.T) {
+	var modifyRequests []map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000", "size": "0.001"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49500", "size": "0.001"}
+					]
+				}
+			}`))
+		case r.URL.Path == "/api/v2/mix/order/modify-tpsl-order":
+			body, _ := io.ReadAll(r.Body)
+			var payload map[string]interface{}
+			require.NoError(t, json.Unmarshal(body, &payload))
+			modifyRequests = append(modifyRequests, payload)
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	// Force the trigger price to differ from the mocked 50000/49500 so
+	// both plans are considered stale and trigger a modify call.
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000), // new SL trigger (was 49500)
+		decimal.NewFromInt(52000), // new TP trigger (was 50000)
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.True(t, modified, "modified should be true when at least one plan was updated")
+	require.Len(t, modifyRequests, 2, "should issue one modify per stale plan")
+
+	// Verify both request bodies carry the expected shape (orderId,
+	// triggerPrice, planType, mark_price triggerType, size from the
+	// existing plan — Bitget modify-tpsl-order requires size).
+	orderIDs := make([]string, 0, 2)
+	for _, req := range modifyRequests {
+		orderIDs = append(orderIDs, req["orderId"].(string))
+		assert.Equal(t, "mark_price", req["triggerType"])
+		assert.Equal(t, "USDT-FUTURES", req["productType"])
+		assert.NotEmpty(t, req["triggerPrice"])
+		assert.NotEmpty(t, req["planType"])
+		assert.Equal(t, "0.001", req["size"], "modify-tpsl-order body must carry the plan's size")
+	}
+	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, orderIDs)
+}
+
+// PR-4: when both plans are already at the target price, the modify
+// path is a no-op (no modify-tpsl-order requests) BUT still returns
+// true. The true signal means "already-synced" — SyncPositionProtection
+// uses it to avoid the wasteful cancel+recreate fallback (Bug 2).
+func TestBitgetOrderExecutor_ModifyPositionTPSL_SkipsPlansAlreadyAtTarget(t *testing.T) {
+	var modifyCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Trigger prices already match the targets we'll pass below.
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "52000.00"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000.00"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			modifyCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.True(t, modified, "modified should be true (already-synced signal) when all plans are at target")
+	assert.Equal(t, 0, modifyCalls, "no modify requests should be sent when triggers already match")
+}
+
+// PR-4 Bug 1: if the caller wants both TP and SL but only a TP plan
+// exists, modifyPositionTPSL must NOT return true (it must fall
+// back to cancel+recreate). Returning true here would leave the
+// position with only the old TP and no SL — a correctness bug that
+// could cause real financial loss.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenSLMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Only a TP plan exists; no SL.
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called when SL plan is missing")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000), // SL requested
+		decimal.NewFromInt(52000), // TP requested
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "missing-leg must fall back to cancel+recreate (Bug 1)")
+}
+
+// PR-4 Bug 1 (symmetric): if the caller wants only TP but both TP
+// and SL plans exist, modifyPositionTPSL must fall back because the
+// SL plan can't be removed via the modify-tpsl-order endpoint.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenSLExtra(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Both plans exist; caller wants only TP (SL=0).
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called when caller wants to remove the SL")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(0),     // SL = 0 (want to remove)
+		decimal.NewFromInt(52000), // TP requested
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "extra-leg must fall back to cancel+recreate (Bug 1)")
+}
+
+// PR-4 (gemini HIGH): combined TP+SL plans (planType contains
+// "profit_loss") cannot be modified in-place with the single-trigger
+// body the endpoint accepts. Must fall back to cancel+recreate.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackOnCombinedPlan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tpsl-1", "planType": "profit_loss", "holdSide": "long", "triggerPrice": "50000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must NOT be called for combined TP+SL plans")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "combined plans must fall back to cancel+recreate")
+}
+
+// PR-4 (Oracle iteration 7 Blocker 2): if any existing plan lacks a
+// size field, modifyPositionTPSL must NOT return true. The pre-flight
+// checks leg coverage but not per-plan data integrity, so a plan can
+// pass pre-flight yet still be unmodifiable in place. Returning true
+// here would leave the caller believing the position is synced when
+// one leg was never updated — a silent partial-sync bug that could
+// cause real financial loss. The function must fall back to
+// cancel+recreate so the caller can establish a clean state.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_FallsBackWhenPlanLacksSize(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Both plans exist (pre-flight passes), but the SL
+			// plan has no size field. The TP plan has a valid
+			// size and a trigger price that differs from the
+			// requested target, so it would normally be modified
+			// in place under the old behavior.
+			_, _ = w.Write([]byte(`{
+				"code": "00000",
+				"msg": "ok",
+				"data": {
+					"entrustedList": [
+						{"orderId": "tp-1", "planType": "pos_profit", "holdSide": "long", "triggerPrice": "50000", "size": "0.001"},
+						{"orderId": "sl-1", "planType": "pos_loss", "holdSide": "long", "triggerPrice": "49000"}
+					]
+				}
+			}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			// If modify-tpsl-order IS called (for the TP), return
+			// success. The function should still return false
+			// because the SL plan lacks a size.
+			_, _ = w.Write([]byte(`{"code": "00000", "msg": "ok", "data": {}}`))
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(48000), // SL requested (differs from existing 49000)
+		decimal.NewFromInt(52000), // TP requested (differs from existing 50000)
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified, "size-missing plan must fall back to cancel+recreate (partial sync bug)")
+}
+
+// PR-4: modifyPositionTPSL on a position with no existing plans must
+// return (false, nil) so the caller can fall through to
+// placePositionTPSL. This is the first-ever-sync case.
+func TestBitgetOrderExecutor_ModifyPositionTPSL_NoExistingPlans(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			t.Fatalf("modify-tpsl-order must not be called when no plans exist")
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	modified, err := executor.modifyPositionTPSL(
+		context.Background(),
+		"BTCUSDT",
+		"long",
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+		&ContractInfo{PricePlace: 2},
+	)
+	require.NoError(t, err)
+	assert.False(t, modified)
+}
+
+// PR-4: SyncPositionProtection now tries modify-in-place first, and
+// only falls back to cancel+place when the modify path either errors
+// or returns modified=false (no plans existed). This test exercises
+// the happy modify path: no cancel and no place-pos-tpsl calls
+// should be made.
+func TestBitgetOrderExecutor_SyncPositionProtection_ModifyInPlaceHappyPath(t *testing.T) {
+	var modifyCalls, cancelCalls, placeCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"1","minTradeNum":"1","volumePlace":"0","pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/orders-plan-pending":
+			// Existing plans with stale triggers → modify path applies.
+			_, _ = w.Write([]byte(`{
+				"code":"00000","msg":"ok","data":{"entrustedList":[
+					{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000.00","size":"0.001"},
+					{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49500.00","size":"0.001"}
+				]}}`))
+		case "/api/v2/mix/order/modify-tpsl-order":
+			modifyCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		case "/api/v2/mix/order/cancel-plan-order":
+			cancelCalls++
+		case "/api/v2/mix/order/place-pos-tpsl":
+			placeCalls++
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	err := executor.SyncPositionProtection(
+		context.Background(),
+		"bitget",
+		ManagedOpenPosition{Symbol: "BTC/USDT", Side: "long", MarketType: "futures"},
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, modifyCalls, "should modify both stale plans")
+	assert.Equal(t, 0, cancelCalls, "should NOT cancel when modify succeeds")
+	assert.Equal(t, 0, placeCalls, "should NOT place new plans when modify succeeds")
+}
+
+// PR-4: when no existing plans exist, SyncPositionProtection falls
+// through to place new plans. The cancel-plan-order call is a no-op
+// (no plans to cancel) so cancelCalls=0 is correct. The place path
+// runs to create the initial protection.
+func TestBitgetOrderExecutor_SyncPositionProtection_FallsBackToPlaceWhenNoPlans(t *testing.T) {
+	var cancelCalls, placeCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/market/contracts":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":[{
+				"sizeMultiplier":"1","minTradeNum":"1","volumePlace":"0","pricePlace":"2"
+			}]}`))
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		case "/api/v2/mix/order/cancel-plan-order":
+			cancelCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		case "/api/v2/mix/order/place-pos-tpsl":
+			placeCalls++
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{}}`))
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	err := executor.SyncPositionProtection(
+		context.Background(),
+		"bitget",
+		ManagedOpenPosition{Symbol: "BTC/USDT", Side: "long", MarketType: "futures"},
+		decimal.NewFromInt(49000),
+		decimal.NewFromInt(52000),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cancelCalls, "cancel is a no-op when no plans exist")
+	assert.Equal(t, 1, placeCalls, "should place new plans when no existing ones")
+}
+
+// PR-4 (tertiary root cause): verifyFuturesTPSLActive now requires
+// BOTH a TP plan AND an SL plan to report "verified". A position
+// with only an SL plan must produce the "Partial TP/SL coverage" log
+// instead of the success log.
+func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_RequiresBothTPAndSL(t *testing.T) {
+	tests := []struct {
+		name        string
+		plans       string
+		shouldCover bool
+	}{
+		{
+			name: "TP only — partial coverage",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			shouldCover: false,
+		},
+		{
+			name: "SL only — partial coverage",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			shouldCover: false,
+		},
+		{
+			name: "Both TP and SL — full coverage",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			shouldCover: true,
+		},
+		{
+			name: "profit_loss plan covers both",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tpsl-1","planType":"profit_loss","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			shouldCover: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// No planType filter — the helper now omits it.
+				assert.NotContains(t, r.URL.RawQuery, "planType=")
+				_, _ = w.Write([]byte(tt.plans))
+			}))
+			defer server.Close()
+
+			executor := NewBitgetOrderExecutor("k", "s", "p")
+			executor.baseURL = server.URL
+
+			// We don't assert on stdout (captured by other tests);
+			// the function returns void. The contract is: the
+			// helper now requires BOTH TP and SL plans before
+			// logging the "✅ verified" success line. This
+			// test guards the underlying listPositionTPSLPlans
+			// call and the hasTP/hasSL decomposition, not the
+			// log line itself.
+			plans, err := executor.listPositionTPSLPlans(context.Background(), "BTCUSDT", "long")
+			require.NoError(t, err)
+			hasTP, hasSL := false, false
+			for _, p := range plans {
+				planType := strings.ToLower(strings.TrimSpace(mapStringAny(p, "planType", "plan_type")))
+				// Same decomposition as production: a "profit_loss" plan
+				// covers BOTH legs (combined TP+SL placed via
+				// place-pos-tpsl), so it sets hasTP AND hasSL.
+				isTP := strings.Contains(planType, "profit") || strings.Contains(planType, "surplus")
+				isSL := strings.Contains(planType, "loss")
+				if isTP {
+					hasTP = true
+				}
+				if isSL {
+					hasSL = true
+				}
+			}
+			covered := hasTP && hasSL
+			assert.Equal(t, tt.shouldCover, covered,
+				"hasTP=%t hasSL=%t shouldCover=%t", hasTP, hasSL, tt.shouldCover)
+		})
+	}
+}
+
+func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing.T) {
+	tests := []struct {
+		name        string
+		plans       string
+		expectTP    bool
+		expectSL    bool
+		expectEmoji string
+	}{
+		{
+			name: "caller expected both, only TP present — partial",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    true,
+			expectEmoji: "⚠️",
+		},
+		{
+			name: "caller expected only TP, only TP present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    false,
+			expectEmoji: "✅",
+		},
+		{
+			name: "caller expected only SL, only SL present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			expectTP:    false,
+			expectSL:    true,
+			expectEmoji: "✅",
+		},
+		{
+			name: "caller expected both, both present — verified",
+			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
+				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
+				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
+			]}}`,
+			expectTP:    true,
+			expectSL:    true,
+			expectEmoji: "✅",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.plans))
+			}))
+			defer server.Close()
+
+			executor := NewBitgetOrderExecutor("k", "s", "p")
+			executor.baseURL = server.URL
+
+			// Capture stdout to verify the log message reflects expectations.
+			oldStdout := os.Stdout
+			rPipe, wPipe, _ := os.Pipe()
+			os.Stdout = wPipe
+			executor.verifyFuturesTPSLActive(context.Background(), "BTCUSDT", "long", tt.expectTP, tt.expectSL)
+			_ = wPipe.Close()
+			os.Stdout = oldStdout
+			var buf bytes.Buffer
+			_, _ = io.Copy(&buf, rPipe)
+			output := buf.String()
+
+			assert.Contains(t, output, tt.expectEmoji,
+				"expected %q in stdout for expectTP=%t expectSL=%t", tt.expectEmoji, tt.expectTP, tt.expectSL)
+		})
+	}
+}
+
+func TestBitgetOrderExecutor_CancelExistingPositionTPSL_SkipsNonTPSLPlans(t *testing.T) {
+	var cancelledOrderIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/mix/order/orders-plan-pending":
+			_, _ = w.Write([]byte(`{
+				"code":"00000","msg":"ok","data":{"entrustedList":[
+					{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
+					{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"},
+					{"orderId":"entry-1","planType":"track_plan","holdSide":"long","triggerPrice":"48000"},
+					{"orderId":"trail-1","planType":"moving_plan","holdSide":"long","triggerPrice":"51000"}
+				]}}`))
+		case "/api/v2/mix/order/cancel-plan-order":
+			body, _ := io.ReadAll(r.Body)
+			var payload struct {
+				OrderIDList []map[string]string `json:"orderIdList"`
+			}
+			_ = json.Unmarshal(body, &payload)
+			for _, id := range payload.OrderIDList {
+				cancelledOrderIDs = append(cancelledOrderIDs, id["orderId"])
+			}
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok"}`))
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	executor := NewBitgetOrderExecutor("k", "s", "p")
+	executor.baseURL = server.URL
+
+	err := executor.cancelExistingPositionTPSL(context.Background(), "BTCUSDT", "long")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"tp-1", "sl-1"}, cancelledOrderIDs,
+		"should only cancel TP/SL plans, not entry/trailing plans")
 }
