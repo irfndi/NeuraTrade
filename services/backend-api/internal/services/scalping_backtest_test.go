@@ -270,6 +270,10 @@ func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
 		// decision.RangeAlignment verbatim, not re-derive via the primary
 		// formula (which was the prior bug that produced wrong scores for
 		// signals entering through these branches).
+		// RangePosition24h=96 lands inside the blowoff band [95,98], yielding
+		// a non-zero alignment (1/3). Any prior value (e.g. 80) clamped to 0
+		// and made the test unable to distinguish "uses decision.RangeAlignment"
+		// from "ignores it and hardcodes 0".
 		fallback := engine.config.DeterministicFallback.Normalized()
 		signal := MarketSignal{
 			Symbol:             "BTC/USDT",
@@ -277,7 +281,7 @@ func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
 			Volume24h:          1_000_000,
 			BidAskSpread:       0.05,
 			OrderBookImbalance: -0.40,
-			RangePosition24h:   80,
+			RangePosition24h:   96,
 		}
 		customAlignment := clampFloat(
 			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/
