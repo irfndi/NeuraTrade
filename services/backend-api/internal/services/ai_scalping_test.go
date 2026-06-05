@@ -181,8 +181,9 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 8, config.MinExpectancyN)
 	assert.Equal(t, 85.0, config.RegimeHighBand)
 	assert.Equal(t, 15.0, config.RegimeLowBand)
-	assert.Equal(t, 0.08, config.DeterministicFallback.MaxBidAskSpread)
-	assert.Equal(t, 0.35, config.DeterministicFallback.MinImbalance)
+	assert.Equal(t, 0.15, config.DeterministicFallback.MaxBidAskSpread)
+	assert.Equal(t, 0.10, config.DeterministicFallback.MinImbalance)
+	assert.Equal(t, 0.65, config.RegimeChopConfidence)
 	assert.Equal(t, 0.72, config.DeterministicFallback.ConfidenceFloor)
 	assert.Equal(t, 0.50, config.DeterministicFallback.SizeFraction)
 }
@@ -260,6 +261,7 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_MIN_EXPECTANCY_SAMPLES", "12")
 	t.Setenv("NEURATRADE_SCALPING_REGIME_HIGH_BAND", "88")
 	t.Setenv("NEURATRADE_SCALPING_REGIME_LOW_BAND", "12")
+	t.Setenv("NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE", "0.42")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MAX_BID_ASK_SPREAD", "0.04")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_MIN_IMBALANCE", "0.42")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_CONFIDENCE_FLOOR", "0.79")
@@ -293,11 +295,41 @@ func TestResolveAIScalpingConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 12, cfg.MinExpectancyN)
 	assert.Equal(t, 88.0, cfg.RegimeHighBand)
 	assert.Equal(t, 12.0, cfg.RegimeLowBand)
+	assert.Equal(t, 0.42, cfg.RegimeChopConfidence)
 	assert.Equal(t, 0.04, cfg.DeterministicFallback.MaxBidAskSpread)
 	assert.Equal(t, 0.42, cfg.DeterministicFallback.MinImbalance)
 	assert.Equal(t, 0.79, cfg.DeterministicFallback.ConfidenceFloor)
 	assert.Equal(t, 0.0, cfg.DeterministicFallback.RangeOffset)
 	assert.Equal(t, 0.33, cfg.DeterministicFallback.SizeFraction)
+}
+
+// TestResolveAIScalpingConfigFromEnv_RejectsInvalidChopConfidence is a
+// regression guard for the env-resolver contract: invalid chop-confidence
+// values (≤0, >1, NaN) must NOT override the canonical default. The runtime
+// guard in classifyScalpingRegime is defense-in-depth; the resolver should
+// already filter these so the startup log and the runtime behavior agree.
+func TestResolveAIScalpingConfigFromEnv_RejectsInvalidChopConfidence(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+	defaultConfidence := DefaultAIScalpingConfig().RegimeChopConfidence
+
+	tests := []struct {
+		name      string
+		envValue  string
+		wantValue float64
+	}{
+		{name: "zero rejected, default kept", envValue: "0", wantValue: defaultConfidence},
+		{name: "negative rejected, default kept", envValue: "-0.5", wantValue: defaultConfidence},
+		{name: "above one rejected, default kept", envValue: "1.5", wantValue: defaultConfidence},
+		{name: "NaN rejected, default kept", envValue: "NaN", wantValue: defaultConfidence},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE", tc.envValue)
+			cfg := ResolveAIScalpingConfigFromEnv(DefaultAIScalpingConfig())
+			assert.InDelta(t, tc.wantValue, cfg.RegimeChopConfidence, 1e-9)
+		})
+	}
 }
 
 func TestAIMarketSignal(t *testing.T) {
@@ -928,6 +960,55 @@ func TestAIScalpingService_PreTradeGate_UsesVisibleSpreadThreshold(t *testing.T)
 			} else {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "spread")
+			}
+		})
+	}
+}
+
+func TestAIScalpingService_EvaluatePreTradeGate_RespectsRegimeChopConfidence(t *testing.T) {
+	// Coderabbit MAJOR on PR #462: RegimeChopConfidence must be applied
+	// end-to-end in evaluatePreTradeGate's chop-blocking branch, not just
+	// in classifyScalpingRegime. Lowering the knob should lower the
+	// confidence floor that blocks low-confidence trades in chop regimes.
+	// Without this, NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE would only
+	// affect the regime label, not the actual gating — making the env var
+	// a no-op for chop-heavy markets (the exact scenario it was introduced
+	// to address).
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05, // < 0.10 → chop regime
+		RangePosition24h:   50,
+	}
+	decision := &AITradingDecision{
+		Action:     "buy",
+		Symbol:     "BTC/USDT",
+		Confidence: 0.50, // below both 0.65 (default) and 0.40 (relaxed)
+	}
+
+	tests := []struct {
+		name     string
+		chopConf float64
+		allowed  bool
+	}{
+		{name: "default 0.65 blocks 0.50 confidence chop trade", chopConf: 0.65, allowed: false},
+		{name: "lowered 0.40 allows 0.50 confidence chop trade", chopConf: 0.40, allowed: true},
+		{name: "raised 0.80 still blocks 0.50 confidence chop trade", chopConf: 0.80, allowed: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &AIScalpingService{config: AIScalpingConfig{
+				RegimeChopConfidence: tt.chopConf,
+				MaxBidAskSpreadPct:   0.5,
+				PreTradeGate:         true,
+			}}
+			result := svc.evaluatePreTradeGate(context.Background(), decision, []aiMarketSignal{signal})
+			assert.Equal(t, "chop", result.Regime, "regime should be 'chop' for |imbalance|<0.10")
+			assert.Equal(t, tt.allowed, result.Allowed, "chop confidence %.2f should set allowed=%t for decision confidence 0.50", tt.chopConf, tt.allowed)
+			if !tt.allowed {
+				assert.Contains(t, result.Reason, "choppy")
 			}
 		})
 	}
@@ -2649,28 +2730,37 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsIneligibleSigna
 		},
 	}
 
+	// Each signal is engineered to hit one specific rejection path given the
+	// DefaultDeterministicFallbackConfig() knobs (MaxBidAskSpread=0.15,
+	// MinImbalance=0.10, BuyRangeMax=45, SellRangeMin=55). Loosening those
+	// defaults (PR-2) requires re-tuning these test vectors so the underlying
+	// rejection logic is still exercised rather than short-circuited.
 	tests := []aiMarketSignal{
 		{
+			// Path: spread gate — BidAskSpread=0.20 > effectiveMaxSpread=0.15.
 			Symbol:             "BTC/USDT",
 			Price:              100,
 			High24h:            104,
 			Low24h:             96,
 			Volume24h:          2500000,
-			BidAskSpread:       0.09,
+			BidAskSpread:       0.20,
 			OrderBookImbalance: 0.60,
 			RangePosition24h:   20,
 		},
 		{
+			// Path: imbalance gate — |OrderBookImbalance|=0.05 < effectiveMinImbalance=0.10.
 			Symbol:             "BTC/USDT",
 			Price:              100,
 			High24h:            104,
 			Low24h:             96,
 			Volume24h:          2500000,
 			BidAskSpread:       0.03,
-			OrderBookImbalance: 0.20,
+			OrderBookImbalance: 0.05,
 			RangePosition24h:   20,
 		},
 		{
+			// Path: range/direction mismatch — positive imbalance with
+			// RangePosition24h=90 (deep sell zone) matches no action branch.
 			Symbol:             "BTC/USDT",
 			Price:              100,
 			High24h:            104,
@@ -2685,6 +2775,67 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsIneligibleSigna
 	for _, signal := range tests {
 		_, _, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, false)
 		assert.False(t, ok)
+	}
+}
+
+func TestAIScalpingService_ClassifyScalpingRegime_ChopConfidenceFromConfig(t *testing.T) {
+	// Imbalance < 0.10 should land in the chop branch, and the returned
+	// confidence must match s.config.RegimeChopConfidence. Verifies the new
+	// NEURATRADE_SCALPING_REGIME_CHOP_CONFIDENCE wiring (PR-2) and the
+	// default fallback when the config is mis-set.
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              100,
+		BidAskSpread:       0.05,
+		OrderBookImbalance: 0.05, // < 0.10 → chop branch
+		RangePosition24h:   50,
+	}
+
+	tests := []struct {
+		name     string
+		config   AIScalpingConfig
+		wantConf float64
+	}{
+		{
+			name:     "explicit 0.42 propagated through",
+			config:   AIScalpingConfig{RegimeChopConfidence: 0.42, MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.42,
+		},
+		{
+			name:     "default 0.65 used when unset",
+			config:   AIScalpingConfig{RegimeChopConfidence: 0, MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+		{
+			name:     "out-of-range value clamped to default",
+			config:   AIScalpingConfig{RegimeChopConfidence: 1.5, MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+		{
+			// NaN must not propagate as a regime confidence. The guard
+			// !(x > 0 && x <= 1) catches NaN because NaN comparisons return
+			// false; the more obvious x <= 0 || x > 1 would silently let
+			// NaN through. Regression guard for the env-resolver path where
+			// strconv.ParseFloat accepts the literal "NaN".
+			name:     "NaN value falls back to default",
+			config:   AIScalpingConfig{RegimeChopConfidence: math.NaN(), MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+		{
+			name:     "negative value falls back to default",
+			config:   AIScalpingConfig{RegimeChopConfidence: -0.1, MaxBidAskSpreadPct: 0.5},
+			wantConf: 0.65,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := &AIScalpingService{config: tt.config}
+			regime, conf, blockReason := svc.classifyScalpingRegime(signal, "buy")
+			assert.Equal(t, "chop", regime)
+			assert.InDelta(t, tt.wantConf, conf, 1e-9)
+			assert.Empty(t, blockReason)
+		})
 	}
 }
 
@@ -2995,6 +3146,32 @@ func TestAIScalpingService_DeterministicFallbackCandidate_UsesConfigOverrides(t 
 	assert.False(t, ok)
 	assert.Nil(t, decision)
 	assert.Zero(t, confidence)
+}
+
+func TestAIScalpingService_DeterministicFallbackCandidate_BypassesImbalanceGateForTickerOnly(t *testing.T) {
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			MaxBidAskSpreadPct:    0.22,
+			DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		},
+	}
+
+	signal := aiMarketSignal{
+		Symbol:             "BTC/USDT",
+		Price:              50000,
+		High24h:            51000,
+		Low24h:             49000,
+		Volume24h:          1000,
+		BidAskSpread:       0.04, // ticker-derived spread is small and within tolerance
+		OrderBookImbalance: 0,    // no orderbook data: ticker-only signal
+		RangePosition24h:   18,
+	}
+
+	decision, confidence, ok := svc.deterministicFallbackCandidate(context.Background(), signal, TradingPortfolio{}, true)
+	require.True(t, ok, "ticker-only signal with valid spread should bypass imbalance gate")
+	require.NotNil(t, decision)
+	assert.Equal(t, "buy", decision.Action)
+	assert.Greater(t, confidence, 0.0)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_AlignsWithPolicySpreadAndImbalanceFloor(t *testing.T) {
