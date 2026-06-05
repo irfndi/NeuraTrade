@@ -712,6 +712,7 @@ type AITradingDecision struct {
 	ExecutionGate                   *appautonomy.ExecutionGateSnapshot  `json:"-"`
 	PreTradeRegime                  string                              `json:"-"`
 	PreTradeExpectancy              float64                             `json:"-"`
+	RangeAlignment                  float64                             `json:"-"`
 	PreTradeExpectancySampleSize    int                                 `json:"-"`
 	SignalQualityKnown              bool                                `json:"-"`
 	SignalPrice                     float64                             `json:"-"`

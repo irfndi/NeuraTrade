@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -260,6 +261,73 @@ func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
 		hints := engine.computeSignalHints(signal, decision)
 		require.NotNil(t, hints)
 		assert.Equal(t, "buy", hints.SuggestedAction, "action should be lowercased + trimmed")
+	})
+
+	t.Run("uses decision.RangeAlignment from secondary branch", func(t *testing.T) {
+		// Secondary branches (blowoff sell, proximity-adjusted, reversal buy,
+		// sell-window, dual-proximity) compute rangeAlignment with a different
+		// formula than the primary buy/sell branches. The hints must reuse
+		// decision.RangeAlignment verbatim, not re-derive via the primary
+		// formula (which was the prior bug that produced wrong scores for
+		// signals entering through these branches).
+		fallback := engine.config.DeterministicFallback.Normalized()
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: -0.40,
+			RangePosition24h:   80,
+		}
+		customAlignment := clampFloat(
+			(signal.RangePosition24h-scalpingBlowoffSellRangeMin)/
+				math.Max(scalpingBlowoffSellRangeMax-scalpingBlowoffSellRangeMin, 1),
+			0, 1,
+		)
+		decision := &AITradingDecision{
+			Action:         "sell",
+			Confidence:     0.70,
+			RangeAlignment: customAlignment,
+		}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+
+		effectiveMaxSpread := math.Max(fallback.MaxBidAskSpread, engine.config.MaxBidAskSpreadPct)
+		liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
+		volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/fallback.VolumeLogScale, 0, 1)
+		expectedScore := math.Abs(signal.OrderBookImbalance)*fallback.ImbalanceWeight +
+			liquidityScore*fallback.LiquidityWeight +
+			customAlignment*fallback.RangeWeight +
+			volumeScore*fallback.VolumeWeight
+		assert.InDelta(t, expectedScore, hints.CandidateScore, 1e-9,
+			"CandidateScore must use decision.RangeAlignment, not a re-derived primary formula")
+	})
+
+	t.Run("zero RangeAlignment yields same score as primary buy branch with RangePosition=BuyRangeMax", func(t *testing.T) {
+		// Regression guard: when the decision carries RangeAlignment=0, the
+		// hints score drops the range component entirely. This pins the
+		// contract that decision.RangeAlignment is the single source of truth.
+		fallback := engine.config.DeterministicFallback.Normalized()
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.05,
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+		}
+		decision := &AITradingDecision{Action: "buy", Confidence: 0.7, RangeAlignment: 0}
+		hints := engine.computeSignalHints(signal, decision)
+		require.NotNil(t, hints)
+
+		effectiveMaxSpread := math.Max(fallback.MaxBidAskSpread, engine.config.MaxBidAskSpreadPct)
+		liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
+		volumeScore := clampFloat(math.Log10(signal.Volume24h+1)/fallback.VolumeLogScale, 0, 1)
+		expectedScore := math.Abs(signal.OrderBookImbalance)*fallback.ImbalanceWeight +
+			liquidityScore*fallback.LiquidityWeight +
+			0.0*fallback.RangeWeight +
+			volumeScore*fallback.VolumeWeight
+		assert.InDelta(t, expectedScore, hints.CandidateScore, 1e-9)
 	})
 }
 
