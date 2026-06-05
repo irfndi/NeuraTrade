@@ -56,6 +56,43 @@ func TestParseToServiceConfig_RejectsNonPositiveSpreadMultiplier(t *testing.T) {
 	assert.Contains(t, err.Error(), "spread_multiplier must be greater than zero")
 }
 
+func TestParseToServiceConfig_Accepts5YearRange(t *testing.T) {
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC), cfg.StartTime)
+	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), cfg.EndTime)
+}
+
+func TestParseToServiceConfig_EnvVarOverrideEmptyReq(t *testing.T) {
+	t.Setenv("NEURATRADE_BACKTEST_SYMBOLS", "BTC/USDT,ETH/USDT")
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"BTC/USDT", "ETH/USDT"}, cfg.Symbols)
+}
+
+func TestParseToServiceConfig_ReqSymbolsOverrideEnvVar(t *testing.T) {
+	t.Setenv("NEURATRADE_BACKTEST_SYMBOLS", "BTC/USDT")
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		Symbols:        []string{"ETH/USDT"},
+		InitialCapital: "10000",
+	}
+	cfg, err := parseToServiceConfig(req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ETH/USDT"}, cfg.Symbols)
+}
+
 func floatPtr(v float64) *float64 {
 	return &v
 }

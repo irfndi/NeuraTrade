@@ -33,6 +33,12 @@ var providerTransportDefaults = map[string]ProviderTransportDefaults{
 		TransportFormat: ProviderTransportOpenAI,
 		RequiresAPIKey:  true,
 	},
+	"deepseek-v4-flash": {
+		BaseURL:         "https://api.deepseek.com/v1",
+		DefaultModel:    "deepseek-v4-flash",
+		TransportFormat: ProviderTransportOpenAI,
+		RequiresAPIKey:  true,
+	},
 	"google": {
 		BaseURL:         "https://generativelanguage.googleapis.com/v1beta/openai",
 		DefaultModel:    "gemini-2.5-flash",

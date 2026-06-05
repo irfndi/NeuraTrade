@@ -162,6 +162,7 @@ var supportedAIProviders = map[string]struct{}{
 	string(llm.ProviderAnthropic): {},
 	string(llm.ProviderMLX):       {},
 	"deepseek":                    {},
+	"deepseek-v4-flash":           {},
 	"google":                      {},
 	"kimi":                        {},
 	"kimi-for-coding":             {},

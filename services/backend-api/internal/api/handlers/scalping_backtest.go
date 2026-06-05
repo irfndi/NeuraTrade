@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -388,8 +389,8 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 	if !start.Before(end) {
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("start_time must be before end_time")
 	}
-	if end.Sub(start) > 90*24*time.Hour {
-		return services.ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 90 days")
+	if start.AddDate(5, 0, 0).Before(end) {
+		return services.ScalpingBacktestConfig{}, fmt.Errorf("date range must not exceed 5 years")
 	}
 
 	initialCapitalRaw := strings.TrimSpace(req.InitialCapital)
@@ -445,7 +446,24 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		return services.ScalpingBacktestConfig{}, fmt.Errorf("fee_rate must be non-negative")
 	}
 
-	symbols := normalizeSymbols(req.Symbols)
+	// resolveSymbols picks the effective backtest universe using precedence:
+	//   1. Request-provided symbols (normalized, de-duped, upper-cased).
+	//   2. NEURATRADE_BACKTEST_SYMBOLS env var (comma-separated).
+	//   3. Service default (when both are absent or empty after normalization).
+	//
+	// Normalization runs first on each candidate so a whitespace-only request
+	// (e.g. []string{"", "  "}) correctly falls through to the env var instead
+	// of silently short-circuiting the lookup.
+	normalizedReq := normalizeSymbols(req.Symbols)
+	var symbols []string
+	switch {
+	case len(normalizedReq) > 0:
+		symbols = normalizedReq
+	default:
+		if envSymbols := os.Getenv("NEURATRADE_BACKTEST_SYMBOLS"); envSymbols != "" {
+			symbols = normalizeSymbols(strings.Split(envSymbols, ","))
+		}
+	}
 
 	noisePct := services.DefaultScalpingBacktestNoise
 	if req.NoisePct != nil {
@@ -859,6 +877,9 @@ func nullString(v string) any {
 	return v
 }
 
+// normalizeSymbols trims, upper-cases, and de-duplicates a symbol list,
+// discarding empty entries. The returned slice is in first-seen order so
+// downstream logs and backtest runs are deterministic.
 func normalizeSymbols(symbols []string) []string {
 	if len(symbols) == 0 {
 		return nil

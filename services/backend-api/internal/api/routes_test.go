@@ -883,6 +883,18 @@ func TestParseAIProviderChain(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported ai provider")
 	})
+
+	t.Run("accepts deepseek-v4-flash as primary", func(t *testing.T) {
+		// Regression guard: PR-1 added the deepseek-v4-flash model variant to
+		// providerTransportDefaults but the server allowlist
+		// (supportedAIProviders in routes.go) initially omitted the ID, which
+		// caused parseAIProviderChain to reject the provider at startup and
+		// disable AI scalping despite the transport layer advertising the
+		// model. Confirm both the allowlist and chain parsing accept it.
+		result, err := parseAIProviderChain("deepseek-v4-flash")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"deepseek-v4-flash"}, result)
+	})
 }
 
 func TestProviderBaseURL(t *testing.T) {
