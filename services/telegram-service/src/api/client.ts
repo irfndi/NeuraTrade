@@ -570,10 +570,7 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
     getArbitrageOpportunities: (
       limit?: number,
       minProfit?: number,
-    ) => Effect.Effect<
-      GetArbitrageOpportunitiesResponse,
-      ApiClientError
-    >;
+    ) => Effect.Effect<GetArbitrageOpportunitiesResponse, ApiClientError>;
     beginAutonomous: (
       chatId: string,
     ) => Effect.Effect<BeginAutonomousResponse, ApiClientError>;

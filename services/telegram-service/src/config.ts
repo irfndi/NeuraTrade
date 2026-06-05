@@ -82,10 +82,7 @@ const fromConfigWithFallback = (
     Effect.flatMap((val) =>
       val.trim() === ""
         ? Effect.fail(
-            ConfigError.MissingData(
-              [key],
-              `${key} is set to an empty string`,
-            ),
+            ConfigError.MissingData([key], `${key} is set to an empty string`),
           )
         : Effect.succeed(val),
     ),
@@ -93,9 +90,7 @@ const fromConfigWithFallback = (
       Effect.sync(() => getEnvWithNeuratradeFallback(key)).pipe(
         Effect.flatMap(
           (val): Effect.Effect<string, ConfigError.ConfigError> =>
-            val && val.trim() !== ""
-              ? Effect.succeed(val)
-              : Effect.fail(err),
+            val && val.trim() !== "" ? Effect.succeed(val) : Effect.fail(err),
         ),
       ),
     ),
