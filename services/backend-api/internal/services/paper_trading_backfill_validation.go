@@ -70,8 +70,10 @@ var DefaultPaperTradingUniverse = []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "
 const envPaperSymbols = "NEURATRADE_PAPER_SYMBOLS"
 
 // paperSymbolsFromEnv returns the parsed symbol list from
-// NEURATRADE_PAPER_SYMBOLS, or nil if unset / empty. Each symbol is
-// trimmed and de-duplicated while preserving order.
+// NEURATRADE_PAPER_SYMBOLS, or nil if unset / empty. Each token is
+// trimmed, upper-cased, and de-duplicated while preserving order, so the
+// downstream universe is normalized regardless of operator input casing
+// (e.g. "btc/usdt, eth/usdt" → ["BTC/USDT", "ETH/USDT"]).
 func paperSymbolsFromEnv() []string {
 	raw := strings.TrimSpace(os.Getenv(envPaperSymbols))
 	if raw == "" {
@@ -81,7 +83,7 @@ func paperSymbolsFromEnv() []string {
 	seen := make(map[string]struct{}, len(parts))
 	symbols := make([]string, 0, len(parts))
 	for _, p := range parts {
-		s := strings.TrimSpace(p)
+		s := strings.ToUpper(strings.TrimSpace(p))
 		if s == "" {
 			continue
 		}

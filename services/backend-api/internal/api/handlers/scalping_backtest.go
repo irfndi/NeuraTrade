@@ -489,6 +489,8 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 		candidate := strings.ToLower(strings.TrimSpace(*req.Mode))
 		if candidate == "" {
 			mode = "deterministic"
+		} else if candidate != "deterministic" && candidate != "ai" {
+			return services.ScalpingBacktestConfig{}, fmt.Errorf("invalid mode %q (expected 'deterministic' or 'ai')", *req.Mode)
 		} else {
 			mode = candidate
 		}

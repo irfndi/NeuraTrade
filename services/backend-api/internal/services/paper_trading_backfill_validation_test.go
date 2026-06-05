@@ -606,6 +606,11 @@ func TestPaperSymbolsFromEnv(t *testing.T) {
 		assert.Equal(t, "BTC/USDT", result[1])
 		assert.Equal(t, "ETH/USDT", result[2])
 	})
+
+	t.Run("mixed_case_normalized", func(t *testing.T) {
+		t.Setenv(envPaperSymbols, "btc/usdt, Eth/USDT, sol/usdt")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}, paperSymbolsFromEnv())
+	})
 }
 
 func TestDefaultPaperTradingBackfillConfig(t *testing.T) {

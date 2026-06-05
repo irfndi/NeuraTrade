@@ -13,6 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultScalpingBacktestUniverse_EnvVarOverride(t *testing.T) {
+	t.Run("unset_returns_canonical_defaults", func(t *testing.T) {
+		t.Setenv(envBacktestSymbols, "")
+		assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}, defaultScalpingBacktestUniverse())
+	})
+
+	t.Run("env_var_overrides_with_normalization", func(t *testing.T) {
+		t.Setenv(envBacktestSymbols, "doge/usdt, PEPE/USDT , doge/usdt")
+		assert.Equal(t, []string{"DOGE/USDT", "PEPE/USDT"}, defaultScalpingBacktestUniverse())
+	})
+}
+
 func TestNewScalpingBacktestEngine(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -244,6 +256,28 @@ func TestScalpingBacktestEngine_ComputeSignalHints(t *testing.T) {
 		assert.Equal(t, "sell", hints.SuggestedAction)
 		assert.InDelta(t, 0.72, hints.ConfidenceHint, 1e-9)
 		assert.GreaterOrEqual(t, hints.CandidateScore, 0.0)
+	})
+
+	t.Run("buy with fee-fragile spread returns nil hints", func(t *testing.T) {
+		// Mirrors the live AI hint path's scalpingBuySignalRejectionReason gate:
+		// a buy the deterministic path picks but the AI pipeline would suppress
+		// (fee-fragile spread) must not produce a hint.
+		signal := MarketSignal{
+			Symbol:             "BTC/USDT",
+			Price:              50000,
+			High24h:            51000,
+			Low24h:             49000,
+			Volume24h:          1_000_000,
+			BidAskSpread:       0.10, // > scalpingRecentBuyMaxSpreadPct (0.04)
+			OrderBookImbalance: 0.40,
+			RangePosition24h:   20,
+			PriceChange24h:     0.05,
+			RecentChangeKnown:  true,
+			RecentPriceChange:  0.05,
+		}
+		buyDecision := &AITradingDecision{Action: "buy", Confidence: 0.75, RangeAlignment: 0.6}
+		hints := engine.computeSignalHints(signal, buyDecision)
+		assert.Nil(t, hints, "buy with fee-fragile spread should be rejected at hint layer")
 	})
 
 	t.Run("whitespace action trimmed", func(t *testing.T) {

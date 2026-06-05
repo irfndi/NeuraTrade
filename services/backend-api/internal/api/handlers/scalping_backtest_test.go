@@ -154,3 +154,15 @@ func TestParseToServiceConfig_ModeEmptyStringDefaultsToDeterministic(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, "deterministic", cfg.Mode)
 }
+
+func TestParseToServiceConfig_ModeInvalidRejected(t *testing.T) {
+	req := RunScalpingBacktestRequest{
+		StartTime:      time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		EndTime:        time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		InitialCapital: "10000",
+		Mode:           stringPtr("invalid-mode"),
+	}
+	_, err := parseToServiceConfig(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mode")
+}

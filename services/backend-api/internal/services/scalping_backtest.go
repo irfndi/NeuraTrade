@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	randv2 "math/rand/v2"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -35,10 +36,31 @@ const (
 	backtestSpreadMultiplier = DefaultScalpingBacktestSpreadMultiplier
 )
 
+// envBacktestSymbols is the operator override for the scalping backtest
+// default universe. Set this (comma-separated) to run a backtest over a
+// custom symbol set without touching NEURATRADE_PAPER_SYMBOLS, which is
+// for paper-trading strategies and intentionally separate.
+const envBacktestSymbols = "NEURATRADE_BACKTEST_SYMBOLS"
+
 func defaultScalpingBacktestUniverse() []string {
-	// Allow env var to override the default universe.
-	if symbols := paperSymbolsFromEnv(); len(symbols) > 0 {
-		return symbols
+	if raw := os.Getenv(envBacktestSymbols); raw != "" {
+		parts := strings.Split(raw, ",")
+		seen := make(map[string]struct{}, len(parts))
+		symbols := make([]string, 0, len(parts))
+		for _, p := range parts {
+			s := strings.ToUpper(strings.TrimSpace(p))
+			if s == "" {
+				continue
+			}
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			seen[s] = struct{}{}
+			symbols = append(symbols, s)
+		}
+		if len(symbols) > 0 {
+			return symbols
+		}
 	}
 	return []string{"BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"}
 }
@@ -528,11 +550,10 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	// Mode="ai" records the hints the AI scalping path would have consumed
 	// for this signal. No live LLM is invoked (backtests are offline
 	// replays); hints are computed deterministically from the same
-	// DeterministicFallback config the AI service uses.
-	if e.config.Mode == "ai" {
-		eval.Hints = e.computeSignalHints(signal.Signal, decision)
-	}
-
+	// DeterministicFallback config the AI service uses. Hints are only
+	// persisted when the candidate survives the live gate cascade — the
+	// AI hint path's signalsWithDecisionHints also skips rejected
+	// candidates, so a rejected backtest candidate must not carry a hint.
 	eval.Decision = decision
 	eval.GateResults = e.evaluateGates(signal.Signal, decision)
 	sortedGates := make([]string, 0, len(eval.GateResults))
@@ -550,6 +571,9 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	}
 
 	eval.Allowed = eval.RejectionReason == ""
+	if eval.Allowed && e.config.Mode == "ai" {
+		eval.Hints = e.computeSignalHints(signal.Signal, decision)
+	}
 	if eval.Allowed {
 		eval.FunnelStage = "eligible"
 	}
@@ -1005,10 +1029,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 // field set produced by AIScalpingService.signalsWithDecisionHints so a
 // backtest result recorded with Mode="ai" can be diffed against what the
 // live AI scalping path would have consumed. Returns nil for non-actionable
-// decisions (hold / nil). Note: AIScalpingService also runs
-// scalpingBuySignalRejectionReason for buy decisions, but that check lives
-// on the AI service and is not replicated here — by the time buildDecisionFromSignal
-// returns a "buy" the spread/momentum/range gates are already applied.
+// decisions (hold / nil) and for buy decisions that the live AI path would
+// reject via scalpingBuySignalRejectionReason (momentum below buy floor,
+// fee-fragile spread, or range position above the buy ceiling).
 func (e *ScalpingBacktestEngine) computeSignalHints(signal MarketSignal, decision *AITradingDecision) *SignalHints {
 	if decision == nil {
 		return nil
@@ -1017,12 +1040,16 @@ func (e *ScalpingBacktestEngine) computeSignalHints(signal MarketSignal, decisio
 	if action != "buy" && action != "sell" {
 		return nil
 	}
+	if action == "buy" && scalpingBacktestBuyRejectionReason(signal) != "" {
+		return nil
+	}
 	fallback := e.config.DeterministicFallback.Normalized()
 
 	effectiveMaxSpread := fallback.MaxBidAskSpread
 	if e.config.MaxBidAskSpreadPct > 0 {
 		effectiveMaxSpread = math.Max(effectiveMaxSpread, e.config.MaxBidAskSpreadPct)
 	}
+	effectiveMaxSpread = math.Max(effectiveMaxSpread, 0.0001)
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/effectiveMaxSpread), 0, 1)
 	volumeBasis := math.Max(signal.Volume24h, 0)
 	volumeScore := clampFloat(math.Log10(volumeBasis+1)/fallback.VolumeLogScale, 0, 1)
@@ -1040,6 +1067,37 @@ func (e *ScalpingBacktestEngine) computeSignalHints(signal MarketSignal, decisio
 		SuggestedAction: action,
 		ConfidenceHint:  decision.Confidence,
 		CandidateScore:  score,
+	}
+}
+
+// scalpingBacktestBuyRejectionReason mirrors AIScalpingService.scalpingBuySignalRejectionReason
+// for the backtest engine: returns a non-empty reason when a buy decision
+// would be suppressed by the live AI hint path's momentum/spread/range gates
+// that buildDecisionFromSignal does not enforce when RequireRecentMomentum=false.
+// When RequireRecentMomentum=true, buildDecisionFromSignal already applies
+// these gates itself and returns nil before reaching computeSignalHints.
+func scalpingBacktestBuyRejectionReason(signal MarketSignal) string {
+	if scalpingReversalBuyCandidate(signal) {
+		return ""
+	}
+	buyMomentumMin := scalpingRecentBuyMinTrendPct
+	if !signal.RecentChangeKnown {
+		if signal.RangePosition24h > scalpingNoRecentBuyMaxRangePct {
+			return fmt.Sprintf("buy hint rejected without recent momentum confirmation above deep-low range ceiling on %s (range_pos_24h=%.1f%%, required<=%.1f%%)", signal.Symbol, signal.RangePosition24h, scalpingNoRecentBuyMaxRangePct)
+		}
+		return ""
+	}
+	switch {
+	case signal.RecentPriceChange < buyMomentumMin:
+		return fmt.Sprintf("buy hint rejected without recent momentum confirmation on %s (recent_price_change=%.4f%%, required>=%.4f%%)", signal.Symbol, signal.RecentPriceChange, buyMomentumMin)
+	case signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct:
+		return fmt.Sprintf("buy hint rejected with fee-fragile spread on %s (spread=%.4f%%, required<=%.4f%%)", signal.Symbol, signal.BidAskSpread, scalpingRecentBuyMaxSpreadPct)
+	case signal.PriceChange24h < scalpingRecentBuyMinTrendPct:
+		return fmt.Sprintf("buy hint rejected without positive 24h trend on %s (price_change_24h=%.4f%%, required>=%.4f%%)", signal.Symbol, signal.PriceChange24h, scalpingRecentBuyMinTrendPct)
+	case signal.RangePosition24h > scalpingRecentBuyMaxRangePct:
+		return fmt.Sprintf("buy hint rejected above recent-buy range ceiling on %s (range_pos_24h=%.1f%%, required<=%.1f%%)", signal.Symbol, signal.RangePosition24h, scalpingRecentBuyMaxRangePct)
+	default:
+		return ""
 	}
 }
 
