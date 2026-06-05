@@ -454,18 +454,14 @@ func parseToServiceConfig(req RunScalpingBacktestRequest) (services.ScalpingBack
 	// Normalization runs first on each candidate so a whitespace-only request
 	// (e.g. []string{"", "  "}) correctly falls through to the env var instead
 	// of silently short-circuiting the lookup.
-	resolveSymbols := func(candidates []string) []string {
-		return normalizeSymbols(candidates)
-	}
-
+	normalizedReq := normalizeSymbols(req.Symbols)
 	var symbols []string
 	switch {
-	case len(resolveSymbols(req.Symbols)) > 0:
-		symbols = resolveSymbols(req.Symbols)
+	case len(normalizedReq) > 0:
+		symbols = normalizedReq
 	default:
 		if envSymbols := os.Getenv("NEURATRADE_BACKTEST_SYMBOLS"); envSymbols != "" {
-			rawSymbols := strings.Split(envSymbols, ",")
-			symbols = resolveSymbols(rawSymbols)
+			symbols = normalizeSymbols(strings.Split(envSymbols, ","))
 		}
 	}
 
