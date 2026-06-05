@@ -7,6 +7,9 @@ import {
   ApiClientError,
 } from "./client";
 
+const makeTestAdminKey = (): string =>
+  `test-admin-key-${Math.random().toString(36).slice(2, 12)}`;
+
 describe("BackendApiClient fallback behavior", () => {
   const originalFetch = globalThis.fetch;
 
@@ -42,7 +45,7 @@ describe("BackendApiClient fallback behavior", () => {
 
     const client = new BackendApiClient({
       baseUrl: "http://127.0.0.1:58080",
-      adminKey: "test-admin-key",
+      adminKey: makeTestAdminKey(),
       rateLimit: 1000,
     });
 
@@ -92,7 +95,7 @@ describe("TelegramApi Effect service", () => {
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
-      adminKey: "k",
+      adminKey: makeTestAdminKey(),
       rateLimit: 1000,
     });
     const layer = TelegramApiLive(backend);
@@ -120,7 +123,7 @@ describe("TelegramApi Effect service", () => {
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
-      adminKey: "k",
+      adminKey: makeTestAdminKey(),
       rateLimit: 1000,
     });
     const layer = TelegramApiLive(backend);
@@ -156,7 +159,7 @@ describe("TelegramApi Effect service", () => {
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
-      adminKey: "k",
+      adminKey: makeTestAdminKey(),
       rateLimit: 1000,
     });
     const layer = TelegramApiLive(backend);

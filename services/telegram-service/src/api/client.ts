@@ -567,7 +567,10 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
     registerTelegramUser: (
       request: RegisterTelegramUserRequest,
     ) => Effect.Effect<void, ApiClientError>;
-    getArbitrageOpportunities: () => Effect.Effect<
+    getArbitrageOpportunities: (
+      limit?: number,
+      minProfit?: number,
+    ) => Effect.Effect<
       GetArbitrageOpportunitiesResponse,
       ApiClientError
     >;
@@ -579,9 +582,11 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
     ) => Effect.Effect<PauseAutonomousResponse, ApiClientError>;
     getPerformanceSummary: (
       chatId: string,
+      timeframe?: string,
     ) => Effect.Effect<PerformanceSummaryResponse, ApiClientError>;
     getPerformanceBreakdown: (
       chatId: string,
+      timeframe?: string,
     ) => Effect.Effect<PerformanceBreakdownResponse, ApiClientError>;
     liquidate: (
       chatId: string,
@@ -700,9 +705,9 @@ export const TelegramApiLive = (
                 "registerTelegramUser",
               ),
       }),
-    getArbitrageOpportunities: () =>
+    getArbitrageOpportunities: (limit, minProfit) =>
       Effect.tryPromise({
-        try: () => client.getArbitrageOpportunities(),
+        try: () => client.getArbitrageOpportunities(limit, minProfit),
         catch: (e) =>
           e instanceof ApiClientError
             ? e
@@ -736,9 +741,9 @@ export const TelegramApiLive = (
                 "pauseAutonomous",
               ),
       }),
-    getPerformanceSummary: (chatId) =>
+    getPerformanceSummary: (chatId, timeframe) =>
       Effect.tryPromise({
-        try: () => client.getPerformanceSummary(chatId),
+        try: () => client.getPerformanceSummary(chatId, timeframe),
         catch: (e) =>
           e instanceof ApiClientError
             ? e
@@ -748,9 +753,9 @@ export const TelegramApiLive = (
                 "getPerformanceSummary",
               ),
       }),
-    getPerformanceBreakdown: (chatId) =>
+    getPerformanceBreakdown: (chatId, timeframe) =>
       Effect.tryPromise({
-        try: () => client.getPerformanceBreakdown(chatId),
+        try: () => client.getPerformanceBreakdown(chatId, timeframe),
         catch: (e) =>
           e instanceof ApiClientError
             ? e

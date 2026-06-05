@@ -59,8 +59,14 @@ const TelegramConfigSchema = Schema.Struct({
 
 const resolvePort = (raw: string | undefined, fallback: number): number => {
   if (!raw) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    console.warn(
+      `Invalid port value provided (${raw}). Falling back to default (${fallback}).`,
+    );
+    return fallback;
+  }
   const numericPort = Number(raw);
-  if (!Number.isNaN(numericPort) && numericPort > 0 && numericPort < 65536) {
+  if (Number.isInteger(numericPort) && numericPort > 0 && numericPort < 65536) {
     return numericPort;
   }
   console.warn(
@@ -73,11 +79,23 @@ const fromConfigWithFallback = (
   key: string,
 ): Effect.Effect<string, ConfigError.ConfigError> =>
   Config.string(key).pipe(
+    Effect.flatMap((val) =>
+      val.trim() === ""
+        ? Effect.fail(
+            ConfigError.MissingData(
+              [key],
+              `${key} is set to an empty string`,
+            ),
+          )
+        : Effect.succeed(val),
+    ),
     Effect.catchAll((err) =>
       Effect.sync(() => getEnvWithNeuratradeFallback(key)).pipe(
         Effect.flatMap(
           (val): Effect.Effect<string, ConfigError.ConfigError> =>
-            val ? Effect.succeed(val) : Effect.fail(err),
+            val && val.trim() !== ""
+              ? Effect.succeed(val)
+              : Effect.fail(err),
         ),
       ),
     ),
@@ -160,7 +178,14 @@ export const loadConfig: Effect.Effect<
   const resolvedWebhookPath = webhookPath
     ? webhookPath
     : webhookUrl
-      ? new URL(webhookUrl).pathname
+      ? yield* Effect.try({
+          try: () => new URL(webhookUrl).pathname,
+          catch: (err) =>
+            ConfigError.InvalidData(
+              ["TELEGRAM_WEBHOOK_URL"],
+              `Invalid TELEGRAM_WEBHOOK_URL: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+        })
       : "/telegram/webhook";
 
   const webhookSecret =
