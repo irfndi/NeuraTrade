@@ -169,6 +169,12 @@ func TestTradeAuditLogger_LogTrade_NilDB(t *testing.T) {
 	assert.NoError(t, err, "nil DB should not error")
 }
 
+func TestTradeAuditLogger_LogTrade_NilEntryWithNilDB(t *testing.T) {
+	logger := NewTradeAuditLogger(nil)
+	err := logger.LogTrade(context.Background(), nil)
+	assert.NoError(t, err, "nil entry with nil DB should not panic")
+}
+
 func TestTradeAuditLogger_LogTrade_NilEntry(t *testing.T) {
 	dbPool, mockDB := setupAuditTestDB(t)
 	defer mockDB.Close()

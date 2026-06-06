@@ -13,11 +13,31 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// deleteExpiredBlacklistScript atomically deletes a blacklist key only when
+// its application-level ExpiresAt has passed. It MUST preserve permanent
+// entries (no ExpiresAt in the JSON payload).
+//
+// Fix for NeuraTrade-pscu: the previous implementation checked Redis TTL,
+// which is -1 for permanent keys (no Redis-level expiration). That made the
+// script delete permanent entries on every cleanup pass.
+//
+// The script reads the stored JSON, extracts the "expires_at" RFC3339Nano
+// timestamp, and compares it lexicographically against the caller-supplied
+// current time (ARGV[1], also RFC3339Nano). RFC3339 timestamps are
+// lexicographically ordered, so a simple string compare is correct.
+// Permanent entries (no expires_at field) return 0 and are preserved.
+// The current time is passed from the Go side for deterministic testing
+// and because miniredis/embedded Redis variants may not expose os.time().
 var deleteExpiredBlacklistScript = redis.NewScript(`
-local ttl = redis.call("TTL", KEYS[1])
-if ttl > 0 then return 0 end
-redis.call("DEL", KEYS[1])
-return 1
+local val = redis.call("GET", KEYS[1])
+if not val then return 0 end
+local expires = string.match(val, '"expires_at":"([^"]+)"')
+if not expires then return 0 end
+if expires < ARGV[1] then
+    redis.call("DEL", KEYS[1])
+    return 1
+end
+return 0
 `)
 
 // BlacklistCacheEntry represents a blacklisted symbol with metadata.
@@ -126,7 +146,11 @@ func (rbc *RedisBlacklistCache) deleteExpiredEntry(key string) bool {
 	if !ok {
 		return false
 	}
-	deleted, err := deleteExpiredBlacklistScript.Run(rbc.ctx, scripter, []string{key}).Int()
+	// Use local time RFC3339Nano to match the format that json.Marshal produces
+	// for time.Time values. Both timestamps must use the same timezone offset
+	// suffix for the lexicographic comparison in the Lua script to be correct.
+	now := time.Now().Format(time.RFC3339Nano)
+	deleted, err := deleteExpiredBlacklistScript.Run(rbc.ctx, scripter, []string{key}, now).Int()
 	if err != nil {
 		zaplogrus.Warnf("Failed to delete expired blacklist entry %s: %v", key, err)
 		return false

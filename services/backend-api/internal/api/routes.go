@@ -1430,6 +1430,17 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 			users.GET("/profile", authMiddleware.RequireAuth(), userHandler.GetUserProfile)
 		}
 
+		// Telegram operator profile binding (auth required: each user can only
+		// bind their own profile). Fix for NeuraTrade-2puz.
+		binding := v1.Group("/telegram")
+		binding.Use(authMiddleware.RequireAuth())
+		{
+			otpService := services.NewOTPService(db)
+			telegramBindingHandler := handlers.NewTelegramBindingHandler(db, userHandler, otpService)
+			binding.POST("/bind-operator", telegramBindingHandler.CompleteBinding)
+			binding.POST("/generate-binding-code", telegramBindingHandler.InitiateBinding)
+		}
+
 		// Alerts management
 		alerts := v1.Group("/alerts")
 		alerts.Use(authMiddleware.RequireAuth())

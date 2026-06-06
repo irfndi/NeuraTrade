@@ -209,9 +209,12 @@ func TestGuard_RecordPlacedAdvancesCount(t *testing.T) {
 		g.RecordPlaced(intent)
 	}
 	st := g.Status()
-	expectedPlaced := 7 - approveCount
-	if st.PlacedLive != expectedPlaced {
-		t.Fatalf("PlacedLive: want %d, got %d (approved %d pending orders)", expectedPlaced, st.PlacedLive, approveCount)
+	// Fix for NeuraTrade-sjm7: approved orders also advance placedLive so the
+	// FirstNHold gate releases after N approvals (not just N placements).
+	// Every order in the loop either was approved (advances placedLive) or
+	// auto-allowed and then recorded as placed (also advances placedLive).
+	if st.PlacedLive != 7 {
+		t.Fatalf("PlacedLive: want 7 (all orders advance the counter), got %d (approved %d pending orders)", st.PlacedLive, approveCount)
 	}
 	if st.Capped != 7 {
 		t.Fatalf("Capped: want 7 (all small orders get 10%% cap), got %d", st.Capped)
@@ -346,5 +349,43 @@ func TestGuard_TimeFieldsAreUTC(t *testing.T) {
 	st := g.Status()
 	if st.ArmedAt.Location() != time.UTC {
 		t.Fatalf("ArmedAt not UTC: %s", st.ArmedAt.Location())
+	}
+}
+
+// TestGuard_ApproveOrderAdvancesFirstNHold verifies the fix for NeuraTrade-sjm7:
+// ApproveOrder must advance the FirstNHold gate, otherwise the same order
+// remains pending forever (dead-loop: every order hits the FirstNHold gate and
+// requires manual approval, even after the operator approved the previous N).
+func TestGuard_ApproveOrderAdvancesFirstNHold(t *testing.T) {
+	g := newTestGuard() // FirstNHold = 5
+	if err := g.Arm("op", "test-phrase-1234", "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Approve 5 orders; the first 5 must each be pending, and after each
+	// approval the FirstNHold gate must advance so the NEXT order is allowed.
+	for i := 1; i <= 5; i++ {
+		intentID := "intent-" + string(rune('a'+i-1))
+		res, err := g.CheckOrder(intentID, "chat-1", "strat", "BTC/USDT", "buy", "market", decimal.RequireFromString("100"), true)
+		if err != ErrOrderPending {
+			t.Fatalf("order #%d: expected ErrOrderPending, got %v", i, err)
+		}
+		if res.Allowed {
+			t.Fatalf("order #%d: expected not allowed", i)
+		}
+		if _, err := g.ApproveOrder(intentID, "operator"); err != nil {
+			t.Fatalf("approve order #%d: %v", i, err)
+		}
+	}
+
+	// The 6th order must be auto-allowed because the FirstNHold gate is
+	// satisfied after 5 approved orders. Without the fix, this returns
+	// ErrOrderPending forever (dead-loop regression of NeuraTrade-sjm7).
+	res, err := g.CheckOrder("intent-6", "chat-1", "strat", "BTC/USDT", "buy", "market", decimal.RequireFromString("100"), true)
+	if err != nil {
+		t.Fatalf("order #6: expected no error after FirstNHold satisfied, got %v", err)
+	}
+	if !res.Allowed {
+		t.Fatalf("order #6: expected allowed (dead-loop regression of NeuraTrade-sjm7), got %+v", res)
 	}
 }

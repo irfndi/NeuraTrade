@@ -289,6 +289,13 @@ func (g *Guard) RecordApproved(intentID string) (PendingOrder, error) {
 
 // ApproveOrder marks a pending order as approved for placement. Returns the
 // order so the caller can re-submit it through the actor pipeline.
+//
+// Fix for NeuraTrade-sjm7: an approved order also advances the FirstNHold gate.
+// Without this, every order in the first N window requires manual approval
+// forever — the gate only releases when RecordPlaced is called, but
+// RecordPlaced is only invoked after the exchange gateway accepts the order,
+// and the approval flow does not guarantee the placement call will follow.
+// Advancing placedLive on approval breaks the dead-loop deterministically.
 func (g *Guard) ApproveOrder(intentID, operator string) (PendingOrder, error) {
 	if g == nil {
 		return PendingOrder{}, errors.New("guard is nil")
@@ -301,6 +308,7 @@ func (g *Guard) ApproveOrder(intentID, operator string) (PendingOrder, error) {
 	}
 	delete(g.pendingByID, intentID)
 	g.approved++
+	g.placedLive++
 	po.QueuedBy = operator + " (approved)"
 	return po, nil
 }

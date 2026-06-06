@@ -90,11 +90,11 @@ func NewTradeAuditLogger(db DBPool) *TradeAuditLogger {
 // fails (callers should treat this as best-effort: log the error but do not
 // fail the trade).
 func (l *TradeAuditLogger) LogTrade(ctx context.Context, entry *TradeAuditEntry) error {
-	if l.db == nil {
-		zaplogrus.Warnf("[AUDIT] DBPool is nil; skipping audit write for %s", entry.AuditID)
+	if entry == nil {
 		return nil
 	}
-	if entry == nil {
+	if l.db == nil {
+		zaplogrus.Warnf("[AUDIT] DBPool is nil; skipping audit write for %s", entry.AuditID)
 		return nil
 	}
 

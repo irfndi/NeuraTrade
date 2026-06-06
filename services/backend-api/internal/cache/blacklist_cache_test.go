@@ -727,11 +727,27 @@ func TestRedisBlacklistCache_CleanupExpired(t *testing.T) {
 	// Add symbols with different TTLs
 	cache.Add("active1", "reason1", time.Hour)
 	cache.Add("active2", "reason2", time.Hour)
-	cache.Add("expired1", "expired1", 10*time.Millisecond)
-	cache.Add("expired2", "expired2", 10*time.Millisecond)
+	cache.Add("expired1", "expired1", -1*time.Hour)
+	cache.Add("expired2", "expired2", -1*time.Hour)
 
-	// Wait for expiration
-	time.Sleep(20 * time.Millisecond)
+	// Negative TTL: Redis SET ignores it (no expiration), so the JSON
+	// ExpiresAt must be set directly to simulate an already-expired entry.
+	expiredEntry := BlacklistCacheEntry{
+		Symbol:    "expired1",
+		Reason:    "expired1",
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		ExpiresAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
+	}
+	data, _ := json.Marshal(expiredEntry)
+	require.NoError(t, client.Set(context.Background(), "blacklist:expired1", data, 0).Err())
+	expiredEntry2 := BlacklistCacheEntry{
+		Symbol:    "expired2",
+		Reason:    "expired2",
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		ExpiresAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
+	}
+	data2, _ := json.Marshal(expiredEntry2)
+	require.NoError(t, client.Set(context.Background(), "blacklist:expired2", data2, 0).Err())
 
 	// Cleanup expired entries
 	expiredCount := cache.CleanupExpired()
@@ -959,6 +975,46 @@ func TestRedisBlacklistCache_LoadFromDatabase_WithExpired(t *testing.T) {
 	repo.AssertExpectations(t)
 }
 
+// TestRedisBlacklistCache_CleanupExpired_PreservesPermanent verifies the fix for
+// NeuraTrade-pscu: the deleteExpiredBlacklistScript must NOT delete entries that
+// have no TTL (permanent blacklists). Redis TTL returns -1 for keys with no
+// expiration, which the original script treated as "delete me".
+func TestRedisBlacklistCache_CleanupExpired_PreservesPermanent(t *testing.T) {
+	client := setupBlacklistTestRedis(t)
+	defer cleanupBlacklistTestRedis(t, client)
+
+	repo := &MockBlacklistRepository{}
+	cache := NewRedisBlacklistCache(client, repo)
+
+	// Mock the repository call for the permanent entry
+	repo.On("AddExchange", mock.Anything, "permanent-symbol", "permanent reason", mock.Anything).Return(&database.ExchangeBlacklistEntry{
+		ID:           1,
+		ExchangeName: "permanent-symbol",
+		Reason:       "permanent reason",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+		IsActive:     true,
+	}, nil)
+
+	// Add symbol without TTL (permanent)
+	cache.Add("permanent-symbol", "permanent reason", 0)
+
+	// Verify it's blacklisted
+	isBlacklisted, _ := cache.IsBlacklisted("permanent-symbol")
+	require.True(t, isBlacklisted, "permanent entry should be present after add")
+
+	// Run cleanup — must not delete the permanent entry
+	expiredCount := cache.CleanupExpired()
+	assert.Equal(t, 0, expiredCount, "CleanupExpired should report zero expired when only permanent entries exist")
+
+	// The permanent entry MUST still be present
+	isBlacklisted, reason := cache.IsBlacklisted("permanent-symbol")
+	assert.True(t, isBlacklisted, "permanent entry MUST survive CleanupExpired (regression of NeuraTrade-pscu)")
+	assert.Equal(t, "permanent reason", reason)
+
+	repo.AssertExpectations(t)
+}
+
 func TestRedisBlacklistCache_CleanupExpired_AtomicReadDelete(t *testing.T) {
 	client := setupBlacklistTestRedis(t)
 	defer cleanupBlacklistTestRedis(t, client)
@@ -978,13 +1034,12 @@ func TestRedisBlacklistCache_CleanupExpired_AtomicReadDelete(t *testing.T) {
 	entry := BlacklistCacheEntry{
 		Symbol:    "expiring-key",
 		Reason:    "about to expire",
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		ExpiresAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
 	}
 	data, _ := json.Marshal(entry)
-	err := client.Set(context.Background(), "blacklist:expiring-key", data, 10*time.Millisecond).Err()
+	err := client.Set(context.Background(), "blacklist:expiring-key", data, 0).Err()
 	require.NoError(t, err)
-
-	time.Sleep(25 * time.Millisecond)
 
 	count := cache.CleanupExpired()
 	assert.Equal(t, 1, count)
