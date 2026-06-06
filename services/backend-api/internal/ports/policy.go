@@ -49,9 +49,9 @@ type OrderIntent struct {
 	StrategyID      string
 	SignalID        string
 	Confidence      float64
-	StopLoss        float64
-	TakeProfit      float64
-	CurrentPosition float64
+	StopLoss        decimal.Decimal
+	TakeProfit      decimal.Decimal
+	CurrentPosition decimal.Decimal
 	PortfolioValue  decimal.Decimal
 }
 

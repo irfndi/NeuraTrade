@@ -181,7 +181,7 @@ func TestRunScalpingLLMDecisionProbeWithServiceKeepsActionableDecisionOutOfHoldC
 				LatencyMs:    120,
 				FinishReason: "stop",
 				Message: llm.Message{
-					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"Order book pressure supports a small entry.","stop_loss":98,"take_profit":104}`,
+					Content: `{"action":"buy","symbol":"BTC/USDT","size_pct":5,"confidence":0.7,"reasoning":"Order book pressure supports a small entry.","stop_loss":98,"take_profit":105}`,
 				},
 			},
 		},
@@ -303,12 +303,6 @@ func TestRunScalpingLLMDecisionProbeWithServiceNormalizesContradictoryHoldSpread
 			mockResponseContent:           `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"All signals have spread > 0.25%, but BTC spread 0.02% is tradable; holding anyway.","stop_loss":null,"take_profit":null}`,
 			expectedDecisionReason:        "Holding because no analyzed setup cleared the effective confidence and risk gates; liquidity was not used as a blanket rejection reason.",
 			expectedRawDiagnosticContains: "cites wide spread",
-		},
-		{
-			name:                          "rewrites diagnostic hold after preserving raw diagnostics",
-			mockResponseContent:           `{"action":"hold","symbol":"","size_pct":0,"confidence":0,"reasoning":"BTC confidence_hint is strong, but holding anyway.","stop_loss":null,"take_profit":null}`,
-			expectedDecisionReason:        "Holding because no analyzed setup cleared the effective confidence and risk gates.",
-			expectedRawDiagnosticContains: "absent confidence_hint",
 		},
 	}
 

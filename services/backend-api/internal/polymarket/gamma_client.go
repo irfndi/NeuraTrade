@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -303,7 +304,11 @@ func (c *Client) FindSumToOneArbitrage(ctx context.Context, minVolume, minLiquid
 		}
 
 		totalPrice := yesPrice + noPrice
-		if totalPrice >= 1.0 || totalPrice <= 0 {
+		if math.IsNaN(totalPrice) || math.IsInf(totalPrice, 0) || totalPrice >= 1.0 || totalPrice <= 0 {
+			continue
+		}
+
+		if totalPrice < 0.001 {
 			continue
 		}
 

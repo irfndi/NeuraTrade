@@ -199,6 +199,22 @@ func TestComputeHash(t *testing.T) {
 	}
 }
 
+func TestDisclosureManager_GetAllVersions(t *testing.T) {
+	dm := NewDisclosureManager()
+
+	dm.RegisterSkill("skill1", "1.0.0", "content1", LevelBasic, nil)
+	dm.RegisterSkill("skill2", "1.0.0", "content2", LevelDetailed, nil)
+
+	versions := dm.GetAllVersions()
+	if len(versions) != 2 {
+		t.Errorf("expected 2 versions, got %d", len(versions))
+	}
+
+	if versions[0].SkillID != "skill2" {
+		t.Errorf("expected most recent skill first, got %s", versions[0].SkillID)
+	}
+}
+
 func TestSkillVersion(t *testing.T) {
 	v := SkillVersion{
 		SkillID:    "test",

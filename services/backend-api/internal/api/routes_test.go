@@ -1218,3 +1218,203 @@ func TestSetupRoutes_ChatIDToUserIDExchangeKeyLookup(t *testing.T) {
 	_, _, _, chatErr := apiKeySvc.GetExchangeKeysByExchange(ctx, chatID, "bitget")
 	assert.Error(t, chatErr)
 }
+
+func TestDiagnosticFloat(t *testing.T) {
+	tests := []struct {
+		name      string
+		metrics   map[string]interface{}
+		key       string
+		wantVal   float64
+		wantFound bool
+	}{
+		{
+			name:      "float64 value",
+			metrics:   map[string]interface{}{"price": 123.45},
+			key:       "price",
+			wantVal:   123.45,
+			wantFound: true,
+		},
+		{
+			name:      "float32 value",
+			metrics:   map[string]interface{}{"price": float32(42.0)},
+			key:       "price",
+			wantVal:   42.0,
+			wantFound: true,
+		},
+		{
+			name:      "int value",
+			metrics:   map[string]interface{}{"count": 42},
+			key:       "count",
+			wantVal:   42,
+			wantFound: true,
+		},
+		{
+			name:      "missing key",
+			metrics:   map[string]interface{}{"price": 123.45},
+			key:       "missing",
+			wantVal:   0,
+			wantFound: false,
+		},
+		{
+			name:      "unsupported type",
+			metrics:   map[string]interface{}{"label": "text"},
+			key:       "label",
+			wantVal:   0,
+			wantFound: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotVal, gotFound := diagnosticFloat(tt.metrics, tt.key)
+			assert.Equal(t, tt.wantVal, gotVal)
+			assert.Equal(t, tt.wantFound, gotFound)
+		})
+	}
+}
+
+func TestLiveReadinessGuardDisabled(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"empty string", "", false},
+		{"zero", "0", true},
+		{"false", "false", true},
+		{"no", "no", true},
+		{"off", "off", true},
+		{"disabled", "disabled", true},
+		{"true", "true", false},
+		{"yes", "yes", false},
+		{"1", "1", false},
+		{"whitespace false", "  false  ", true},
+		{"mixed case FALSE", "FALSE", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := liveReadinessGuardDisabled(tt.raw)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRouteEnvEnabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"zero", "0", false},
+		{"false", "false", false},
+		{"no", "no", false},
+		{"off", "off", false},
+		{"true", "true", true},
+		{"yes", "yes", true},
+		{"1", "1", true},
+		{"on", "on", true},
+		{"whitespace true", "  true  ", true},
+		{"mixed case TRUE", "TRUE", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := "TEST_ROUTE_ENV_ENABLED"
+			if tt.value != "" {
+				os.Setenv(key, tt.value)
+				defer os.Unsetenv(key)
+			}
+			got := routeEnvEnabled(key)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestRiskLockSourcePriority(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   int
+	}{
+		{"manual env", "manual_env", 3},
+		{"portfolio safety", "portfolio_safety", 2},
+		{"drawdown threshold", "drawdown_threshold", 1},
+		{"unknown", "unknown", 0},
+		{"empty", "", 0},
+		{"whitespace", "  manual_env  ", 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := riskLockSourcePriority(tt.source)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestValidateAIProviderName(t *testing.T) {
+	tests := []struct {
+		name    string
+		provider string
+		wantErr bool
+	}{
+		{"empty", "", false},
+		{"openai", "openai", false},
+		{"anthropic", "anthropic", false},
+		{"deepseek", "deepseek", false},
+		{"unsupported", "unsupported_provider", true},
+		{"whitespace", "  openai  ", false},
+		{"mixed case", "OpenAI", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAIProviderName(tt.provider)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestProviderRequiresAPIKey(t *testing.T) {
+	assert.True(t, providerRequiresAPIKey("openai"))
+	assert.False(t, providerRequiresAPIKey("mlx"))
+}
+
+func TestZapNopServiceLogger(t *testing.T) {
+	var log zapNopServiceLogger
+	log.Info("test")
+	log.Warn("test")
+	log.Error("test")
+	l2 := log.WithFields(map[string]interface{}{"key": "value"})
+	assert.NotNil(t, l2)
+}
+
+func TestBuildLLMProviderClient(t *testing.T) {
+	tests := []struct {
+		name string
+		node llmProviderNodeConfig
+	}{
+		{"anthropic", llmProviderNodeConfig{Provider: "anthropic", APIKey: "test-key"}},
+		{"mlx", llmProviderNodeConfig{Provider: "mlx"}},
+		{"minimax", llmProviderNodeConfig{Provider: "minimax", APIKey: "test-key"}},
+		{"zai", llmProviderNodeConfig{Provider: "zai", APIKey: "test-key"}},
+		{"zai-coding-plan", llmProviderNodeConfig{Provider: "zai-coding-plan", APIKey: "test-key"}},
+		{"zhipu", llmProviderNodeConfig{Provider: "zhipu", APIKey: "test-key"}},
+		{"openai", llmProviderNodeConfig{Provider: "openai", APIKey: "test-key"}},
+		{"unknown", llmProviderNodeConfig{Provider: "unknown", APIKey: "test-key"}},
+		{"deepseek", llmProviderNodeConfig{Provider: "deepseek", APIKey: "test-key"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := buildLLMProviderClient(tt.node, 30*time.Second, 3)
+			assert.NotNil(t, client)
+		})
+	}
+}

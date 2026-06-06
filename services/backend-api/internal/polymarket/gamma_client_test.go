@@ -292,6 +292,74 @@ func TestFindSumToOneArbitrage(t *testing.T) {
 	}
 }
 
+func TestFindSumToOneArbitrageDivisionByZero(t *testing.T) {
+	tests := []struct {
+		name          string
+		outcomePrices []string
+		description   string
+	}{
+		{
+			name:          "zero total price",
+			outcomePrices: []string{"0.00", "0.00"},
+			description:   "Both prices zero should not panic",
+		},
+		{
+			name:          "very small total price",
+			outcomePrices: []string{"0.0001", "0.0001"},
+			description:   "Total price below 0.001 threshold should be skipped",
+		},
+		{
+			name:          "NaN price",
+			outcomePrices: []string{"NaN", "0.5"},
+			description:   "NaN price should not panic",
+		},
+		{
+			name:          "Inf price",
+			outcomePrices: []string{"Inf", "0.5"},
+			description:   "Inf price should not panic",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockMarkets := []Market{
+				{
+					ID:            "edge",
+					ConditionID:   "0xedge",
+					Question:      "Edge case",
+					Outcomes:      []string{"Yes", "No"},
+					OutcomePrices: tt.outcomePrices,
+					Volume:        "100000",
+					VolumeNum:     100000,
+					Liquidity:     "50000",
+					LiquidityNum:  50000,
+					Active:        true,
+				},
+			}
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(mockMarkets); err != nil {
+					t.Errorf("failed to encode response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			client := NewClient(WithBaseURL(srv.URL))
+			defer client.Close()
+
+			opportunities, err := client.FindSumToOneArbitrage(context.Background(), 1000, 1000, 100)
+			if err != nil {
+				t.Fatalf("FindSumToOneArbitrage() error = %v", err)
+			}
+
+			if len(opportunities) != 0 {
+				t.Errorf("expected 0 opportunities for %s, got %d", tt.description, len(opportunities))
+			}
+		})
+	}
+}
+
 func TestHealthCheck(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

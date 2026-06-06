@@ -3,6 +3,9 @@ package crypto
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -389,6 +392,163 @@ func TestCloseClearsKey(t *testing.T) {
 	_, err := enc.DecryptString("YWJjZA==")
 	if err == nil {
 		t.Error("expected error after Close()")
+	}
+}
+
+func TestNewEncryptorFromHexKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		hexKey  string
+		wantErr bool
+	}{
+		{
+			name:    "valid hex key",
+			hexKey:  fmt.Sprintf("%x", make([]byte, KeyLength)),
+			wantErr: false,
+		},
+		{
+			name:    "valid hex key with 0x prefix stripped",
+			hexKey:  "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+			wantErr: false,
+		},
+		{
+			name:    "invalid hex - too short",
+			hexKey:  "abcd",
+			wantErr: true,
+		},
+		{
+			name:    "invalid hex - wrong length",
+			hexKey:  fmt.Sprintf("%x", make([]byte, 16)),
+			wantErr: true,
+		},
+		{
+			name:    "invalid hex characters",
+			hexKey:  "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+			wantErr: true,
+		},
+		{
+			name:    "empty string",
+			hexKey:  "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enc, err := NewEncryptorFromHexKey(tt.hexKey)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("NewEncryptorFromHexKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil {
+				defer enc.Close()
+			}
+		})
+	}
+}
+
+func TestGenerateKeyHex(t *testing.T) {
+	key1, err := GenerateKeyHex()
+	if err != nil {
+		t.Fatalf("GenerateKeyHex() error = %v", err)
+	}
+
+	key2, err := GenerateKeyHex()
+	if err != nil {
+		t.Fatalf("GenerateKeyHex() error = %v", err)
+	}
+
+	if len(key1) == 0 {
+		t.Error("GenerateKeyHex() returned empty string")
+	}
+
+	if key1 == key2 {
+		t.Error("GenerateKeyHex() produced identical keys")
+	}
+
+	decoded, err := hex.DecodeString(key1)
+	if err != nil {
+		t.Errorf("GenerateKeyHex() returned invalid hex: %v", err)
+	}
+
+	if len(decoded) != KeyLength {
+		t.Errorf("decoded key length = %d, want %d", len(decoded), KeyLength)
+	}
+}
+
+func TestDecodeKey(t *testing.T) {
+	validKey := make([]byte, KeyLength)
+	if _, err := rand.Read(validKey); err != nil {
+		t.Fatalf("rand.Read failed: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		encodedKey string
+		wantErr    bool
+	}{
+		{
+			name:       "valid hex encoding",
+			encodedKey: fmt.Sprintf("%x", validKey),
+			wantErr:    false,
+		},
+		{
+			name:       "valid base64 encoding",
+			encodedKey: base64.StdEncoding.EncodeToString(validKey),
+			wantErr:    false,
+		},
+		{
+			name:       "invalid hex - too short",
+			encodedKey: "abcd",
+			wantErr:    true,
+		},
+		{
+			name:       "invalid base64 - too short",
+			encodedKey: base64.StdEncoding.EncodeToString(make([]byte, 16)),
+			wantErr:    true,
+		},
+		{
+			name:       "empty string",
+			encodedKey: "",
+			wantErr:    true,
+		},
+		{
+			name:       "garbage string",
+			encodedKey: "not-a-valid-key-encoding",
+			wantErr:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := decodeKey(tt.encodedKey)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("decodeKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && len(key) != KeyLength {
+				t.Errorf("decodeKey() key length = %d, want %d", len(key), KeyLength)
+			}
+		})
+	}
+}
+
+func TestEncodeKey(t *testing.T) {
+	key := make([]byte, KeyLength)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatalf("rand.Read failed: %v", err)
+	}
+
+	encoded := encodeKey(key)
+	if len(encoded) == 0 {
+		t.Error("encodeKey() returned empty string")
+	}
+
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Errorf("encodeKey() returned invalid hex: %v", err)
+	}
+
+	if !bytes.Equal(decoded, key) {
+		t.Error("encodeKey() round-trip failed")
 	}
 }
 

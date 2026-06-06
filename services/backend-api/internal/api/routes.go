@@ -801,6 +801,23 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		zaplogrus.Warnf("Warning: Unknown database type, AI learning disabled")
 	}
 
+	// Guard against nil risk controls before they are wired into the autonomy runtime.
+	if sharedKillSwitch == nil {
+		sharedKillSwitch = apprisk.NewKillSwitch()
+		if db != nil {
+			store := apprisk.NewSQLKillSwitchStore(db)
+			sharedKillSwitch.SetStore(store)
+			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
+				zaplogrus.Warnf("kill switch reconcile: %v", err)
+			}
+			reconcileCancel()
+		}
+	}
+	if sharedSafeMode == nil {
+		sharedSafeMode = apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+	}
+
 	runtimeDeps := autonomyruntime.Dependencies{
 		TechnicalAnalysis:   technicalAnalysisService,
 		CCXTService:         ccxtService,
@@ -1292,22 +1309,6 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		zaplogrus.Infof("Operational mode handler initialized")
 	} else {
 		zaplogrus.Warnf("WARNING: OperationalModeService is nil, trading mode endpoints disabled")
-	}
-
-	if sharedKillSwitch == nil {
-		sharedKillSwitch = apprisk.NewKillSwitch()
-		if db != nil {
-			store := apprisk.NewSQLKillSwitchStore(db)
-			sharedKillSwitch.SetStore(store)
-			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
-				zaplogrus.Warnf("kill switch reconcile: %v", err)
-			}
-			reconcileCancel()
-		}
-	}
-	if sharedSafeMode == nil {
-		sharedSafeMode = apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 	}
 
 	agentControlHandler := handlers.NewAgentControlHandler(handlers.AgentControlDeps{

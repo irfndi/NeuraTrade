@@ -148,6 +148,23 @@ func TestEncryptDecryptString(t *testing.T) {
 	}
 }
 
+func TestDecryptStringEmpty(t *testing.T) {
+	key, err := GenerateKey()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	enc, err := NewEncryptor(key, true)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	_, err = enc.DecryptString("")
+	if err == nil {
+		t.Error("DecryptString(\"\") expected error, got nil")
+	}
+}
+
 func TestDecryptInvalidCiphertext(t *testing.T) {
 	key, err := GenerateKey()
 	if err != nil {

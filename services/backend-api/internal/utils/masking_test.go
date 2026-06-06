@@ -43,6 +43,12 @@ func TestMaskString(t *testing.T) {
 			config:   MaskingConfig{ShowFirst: 4, ShowLast: 4, MaskChar: '*', MinLength: 11},
 			expected: "exac***nlen",
 		},
+		{
+			name:     "show first plus show last exceeds length",
+			input:    "abcdefghij",
+			config:   MaskingConfig{ShowFirst: 6, ShowLast: 6, MaskChar: '*', MinLength: 5},
+			expected: "**********",
+		},
 	}
 
 	for _, tt := range tests {

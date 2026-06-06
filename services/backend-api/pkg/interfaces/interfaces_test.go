@@ -128,6 +128,28 @@ func TestBalance(t *testing.T) {
 	assert.True(t, bal.GetUSDValue().Equal(decimal.NewFromFloat(1500)))
 }
 
+func TestMarketPrice(t *testing.T) {
+	now := time.Now()
+	mp := MarketPrice{
+		ExchangeID:   1,
+		ExchangeName: "binance",
+		Symbol:       "BTC/USDT",
+		Price:        decimal.NewFromFloat(50000),
+		Bid:          decimal.NewFromFloat(49999),
+		Ask:          decimal.NewFromFloat(50001),
+		Volume:       decimal.NewFromFloat(1000),
+		Timestamp:    now,
+	}
+
+	assert.Equal(t, "binance", mp.GetExchangeName())
+	assert.Equal(t, "BTC/USDT", mp.GetSymbol())
+	assert.Equal(t, 50000.0, mp.GetPrice())
+	assert.Equal(t, 49999.0, mp.GetBid())
+	assert.Equal(t, 50001.0, mp.GetAsk())
+	assert.Equal(t, 1000.0, mp.GetVolume())
+	assert.Equal(t, now, mp.GetTimestamp())
+}
+
 func TestPortfolio(t *testing.T) {
 	now := time.Now()
 	positions := []Position{

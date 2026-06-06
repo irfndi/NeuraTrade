@@ -190,6 +190,7 @@ func runScalpingLLMDecisionProbeWithService(
 	normalizeProbeDecision(decision)
 	annotateDecisionSignalTelemetry(decision, decisionSignals)
 	rawReasoningDiagnostics := scalpingProbeReasoningDiagnostics(decision, decisionSignals, svc.config.MaxBidAskSpreadPct)
+	normalizeDiagnosticHoldReasoning(decision, decisionSignals)
 
 	result := &ScalpingLLMDecisionProbeResult{
 		Exchange:                svc.config.Exchange,

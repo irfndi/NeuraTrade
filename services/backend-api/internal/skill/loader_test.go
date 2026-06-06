@@ -409,3 +409,24 @@ Content.
 	found = registry.Find("TEST")
 	assert.Len(t, found, 1)
 }
+
+func TestLoader_GetLoadedSkills(t *testing.T) {
+	tmpDir := t.TempDir()
+	skillContent := `---
+id: test-skill
+name: Test Skill
+---
+
+Content.
+`
+	err := os.WriteFile(filepath.Join(tmpDir, "test-skill.md"), []byte(skillContent), 0644)
+	require.NoError(t, err)
+
+	loader := NewLoader(tmpDir)
+	_, err = loader.LoadByID("test-skill")
+	require.NoError(t, err)
+
+	loaded := loader.GetLoadedSkills()
+	assert.Len(t, loaded, 1)
+	assert.Equal(t, "test-skill", loaded["test-skill"].ID)
+}

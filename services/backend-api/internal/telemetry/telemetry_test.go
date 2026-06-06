@@ -51,6 +51,12 @@ func TestLogger(t *testing.T) {
 	assert.Equal(t, slog.Default(), logger)
 }
 
+func TestGetLogger(t *testing.T) {
+	logger := GetLogger()
+	assert.NotNil(t, logger)
+	assert.Equal(t, slog.Default(), logger)
+}
+
 func TestFlush(t *testing.T) {
 	Flush(100 * time.Millisecond)
 }
