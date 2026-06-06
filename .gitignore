@@ -196,3 +196,4 @@ dist/
 
 # clawpatch review state
 .clawpatch/
+.deepsec/
