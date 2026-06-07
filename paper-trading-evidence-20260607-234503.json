@@ -1,0 +1,22 @@
+{
+  "timestamp": "2026-06-07T23:45:03.325383+07:00",
+  "continuous_validation_hours": "168.00000000015027",
+  "strategy_count": 4,
+  "closed_trades": 76,
+  "open_positions": 0,
+  "capital": "100",
+  "net_pnl": "323.1192997440974",
+  "normalized_pnl": "3.231192997440974",
+  "avg_net_pnl": "4.251569733474966",
+  "win_rate": "0.4868421052631579",
+  "risk_limits_enforced": true,
+  "backtest_comparison_verified": true,
+  "diagnostic_only": false,
+  "strategies": [
+    "scalping",
+    "daily_trading",
+    "swing_trading",
+    "arbitrage"
+  ],
+  "evidence_file_path": ""
+}
