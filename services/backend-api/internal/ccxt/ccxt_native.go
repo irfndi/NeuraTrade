@@ -1170,6 +1170,127 @@ func (s *NativeCCXTService) FetchOHLCV(ctx context.Context, exchange, symbol, ti
 	return s.parseOHLCVResponse(exchange, symbol, timeframe, body)
 }
 
+// FetchOHLCVPaginated fetches OHLCV data across a time range by paginating
+// through the exchange API. Binance returns at most 1000 candles per request;
+// this method loops from startTime to endTime, advancing the cursor after
+// each batch until the full range is covered.
+func (s *NativeCCXTService) FetchOHLCVPaginated(
+	ctx context.Context,
+	exchange, symbol, timeframe string,
+	startTime, endTime time.Time,
+) (*OHLCVResponse, error) {
+	s.mu.RLock()
+	_, ok := s.exchanges[exchange]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("exchange %s not initialized", exchange)
+	}
+
+	const pageSize = 1000
+
+	apiSymbol := strings.ReplaceAll(symbol, "/", "")
+	allOHLCV := make([]OHLCV, 0, 1024)
+	cursor := startTime
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("paginated OHLCV fetch cancelled: %w", err)
+		}
+
+		url := s.buildOHLCVURLWithTime(exchange, apiSymbol, timeframe, pageSize, cursor, endTime)
+		if url == "" {
+			return nil, fmt.Errorf("OHLCV endpoint not supported for %s", exchange)
+		}
+
+		if err := s.rateLimiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limiter wait interrupted: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("User-Agent", "NeuraTrade/1.0")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetch OHLCV page: %w", err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		closeBody(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read OHLCV body: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		batch, err := s.parseOHLCVResponse(exchange, symbol, timeframe, body)
+		if err != nil {
+			return nil, fmt.Errorf("parse OHLCV page: %w", err)
+		}
+
+		if len(batch.OHLCV) == 0 {
+			break
+		}
+
+		allOHLCV = append(allOHLCV, batch.OHLCV...)
+
+		// Advance cursor: use the last candle timestamp + 1ms
+		lastTS := batch.OHLCV[len(batch.OHLCV)-1].Timestamp
+		nextStart := lastTS.Add(time.Millisecond)
+
+		// If we got fewer than a full page or we've passed endTime, we're done
+		if len(batch.OHLCV) < pageSize || !nextStart.Before(endTime) {
+			break
+		}
+		cursor = nextStart
+	}
+
+	return &OHLCVResponse{
+		Exchange:  exchange,
+		Symbol:    symbol,
+		Timeframe: timeframe,
+		OHLCV:     allOHLCV,
+		Timestamp: time.Now().Format(time.RFC3339),
+	}, nil
+}
+
+// buildOHLCVURLWithTime builds the OHLCV URL with optional startTime/endTime
+// for paginated historical data fetching. Times are converted to millisecond
+// timestamps as required by exchange APIs.
+func (s *NativeCCXTService) buildOHLCVURLWithTime(exchange, symbol, timeframe string, limit int, startTime, endTime time.Time) string {
+	startMs := startTime.UnixMilli()
+	endMs := endTime.UnixMilli()
+
+	switch exchange {
+	case "binance":
+		return fmt.Sprintf(
+			"https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d&startTime=%d&endTime=%d",
+			symbol, timeframe, limit, startMs, endMs,
+		)
+	case "bybit":
+		interval := s.convertTimeframeToBybit(timeframe)
+		return fmt.Sprintf(
+			"https://api.bybit.com/v5/market/kline?category=linear&symbol=%s&interval=%s&limit=%d&start=%d&end=%d",
+			symbol, interval, limit, startMs, endMs,
+		)
+	case "okx":
+		return fmt.Sprintf(
+			"https://www.okx.com/api/v5/market/candles?instId=%s&bar=%s&limit=%d&after=%d&before=%d",
+			okxSwapInstrumentID(symbol), timeframe, limit, endMs, startMs,
+		)
+	case "bitget":
+		return fmt.Sprintf(
+			"https://www.bitget.com/api/v2/spot/market/candles?symbol=%s&granularity=%s&limit=%d&startTime=%d&endTime=%d",
+			symbol, timeframe, limit, startMs, endMs,
+		)
+	default:
+		return ""
+	}
+}
+
 // buildOHLCVURL builds the OHLCV URL for an exchange
 func (s *NativeCCXTService) buildOHLCVURL(exchange, symbol, timeframe string, limit int) string {
 	switch exchange {
