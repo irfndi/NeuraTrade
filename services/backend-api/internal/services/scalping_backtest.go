@@ -990,7 +990,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.InitialCapital.LessThanOrEqual(decimal.Zero) {
 		config.InitialCapital = decimal.NewFromInt(10000)
 	}
-	if config.FeeRate.IsNegative() {
+	if config.FeeRate.LessThanOrEqual(decimal.Zero) {
 		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
