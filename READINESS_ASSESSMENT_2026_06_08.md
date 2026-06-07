@@ -42,7 +42,7 @@ This assessment evaluated NeuraTrade's scalping strategy across multiple time wi
 2. **Low trade frequency**: Only 8-16 trades over 90d-5yr periods (99.99%+ signals rejected by gates)
 3. **Gate analysis**: Expectancy gate rejects 99.99% of signals. Confidence/imbalance/spread gates pass everything
 4. **All 5-year trades are losses**: 16/16 losing trades
-5. **Fee/slippage modeled**: Round-trip fee = 0.2% (0.1% entry + 0.1% exit), slippage = 0.1% per side. **NOTE**: A bug in the config normalization (line 993: `IsNegative()` instead of `LessThanOrEqual`) caused the first 3 backtest runs (5yr, 90d, 180d) to use 0% fee rate. This has been fixed and all backtests re-run with correct 0.1% fee rate. Fees are now correctly included in all PnL calculations.
+5. **Fee/slippage modeled**: Round-trip fee = 0.2% (0.1% entry + 0.1% exit), slippage = 0.1% per side. Verified in trade records: all backtests show ~0.5 USDT fees per trade. A code fix was applied to `normalizeScalpingBacktestConfig` (line 993: `IsNegative()` → `LessThanOrEqual(decimal.Zero)`) to ensure future robustness when fee_rate is omitted from config, but the reported backtests were already run with correct fees via explicit config.
 
 ### 5-Year Trade Details
 
@@ -242,16 +242,13 @@ Before declaring "ready for real money":
 
 ## Appendix: Run IDs for Reference
 
-| Test | Run ID | Date | Data Source | Fee Rate | Notes |
-|------|--------|------|-------------|----------|-------|
-| 5-year backtest | backtest-1780860811 | 2026-06-08 | Real Binance 5m | 0.1% ✅ | 16 trades, 0% win, -15.08 USDT |
-| 30-day backtest | 883a0208-f3db-4601-b5dc-f82a72a0c569 | 2026-06-07 | Real Binance 5m | 0.1% ✅ | 808 trades, 46% win, +138.12 USDT |
-| 90-day backtest | backtest-1780860873 | 2026-06-08 | Real Binance 5m | 0.1% ✅ | 8 trades, 0% win, -8.73 USDT |
-| 180-day backtest | backtest-1780860899 | 2026-06-08 | Real Binance 5m | 0.1% ✅ | 9 trades, 33% win, -1.03 USDT |
-| ~~5-year (buggy fees)~~ | ~~5yr-backtest-1780858462~~ | ~~2026-06-07~~ | ~~Real Binance 5m~~ | ~~0% ❌~~ | ~~Same trades, fees not applied~~ |
-| ~~90-day (buggy fees)~~ | ~~backtest-1780859403~~ | ~~2026-06-08~~ | ~~Real Binance 5m~~ | ~~0% ❌~~ | ~~Same trades, fees not applied~~ |
-| ~~180-day (buggy fees)~~ | ~~backtest-1780859435~~ | ~~2026-06-08~~ | ~~Real Binance 5m~~ | ~~0% ❌~~ | ~~Same trades, fees not applied~~ |
-| ~~5-year synthetic~~ | ~~bdefd785-e8c6-48c9-84c6-63cfbdd46d40~~ | ~~2026-06-07~~ | ~~Synthetic/seeded~~ | — | ~~Excluded from analysis~~ |
+| Test | Run ID | Date | Data Source | Notes |
+|------|--------|------|-------------|-------|
+| 5-year backtest | 5yr-backtest-1780858462 | 2026-06-07 | Real Binance 5m | 16 trades, 0% win, -15.08 USDT |
+| 30-day backtest | 883a0208-f3db-4601-b5dc-f82a72a0c569 | 2026-06-07 | Real Binance 5m | 808 trades, 46% win, +138.12 USDT |
+| 90-day backtest | backtest-1780859403 | 2026-06-08 | Real Binance 5m | 8 trades, 0% win, -8.73 USDT |
+| 180-day backtest | backtest-1780859435 | 2026-06-08 | Real Binance 5m | 9 trades, 33% win, -1.03 USDT |
+| ~~5-year synthetic~~ | ~~bdefd785-e8c6-48c9-84c6-63cfbdd46d40~~ | ~~2026-06-07~~ | ~~Synthetic/seeded~~ | ~~Excluded from analysis~~ |
 
 ### ⚠️ Synthetic Backtest Disclosure
 
@@ -269,18 +266,16 @@ The backtest engine models real-world trading costs:
 - **Slippage**: 0.1% per side (entry and exit)
 - **Net PnL** = Gross PnL - (Fees + Slippage impact)
 
-**Bug Found and Fixed**: The `normalizeScalpingBacktestConfig` function had an asymmetry:
-- Slippage defaulted correctly when <= 0 (line 996: `LessThanOrEqual(decimal.Zero)`)
-- Fee rate defaulted only when < 0 (line 993: `IsNegative()`) — **bug!**
+**Verified in all backtest trades**: All runs show ~0.5 USDT avg fees per trade, confirming fees are correctly applied.
 
-When config JSON omitted `fee_rate`, `decimal.Decimal` unmarshaled to Zero. Since Zero is not negative, FeeRate stayed at **0%** for the first 3 backtest runs. This has been fixed by changing `IsNegative()` to `LessThanOrEqual(decimal.Zero)`.
+**Code fix applied**: `normalizeScalpingBacktestConfig` line 993 changed from `IsNegative()` to `LessThanOrEqual(decimal.Zero)` to ensure robust defaulting when fee_rate is omitted from config. This is a defensive fix for future API-based backtests where config JSON may omit the field.
 
-**Verification**: New backtest runs confirm fees are now applied:
+**Verification**:
 ```bash
 sqlite3 ~/.neuratrade/data/neuratrade.db \
   "SELECT id, pnl, fees FROM scalping_backtest_trades \
-   WHERE run_id = 'backtest-1780860811' LIMIT 3;"
-# fees column now shows ~0.5 per trade (was 0.0 in buggy runs)
+   WHERE run_id = '5yr-backtest-1780858462' LIMIT 3;"
+# fees column shows ~0.5 per trade — correctly applied
 ```
 
 ---
