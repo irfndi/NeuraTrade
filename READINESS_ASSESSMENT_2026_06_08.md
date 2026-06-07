@@ -137,7 +137,7 @@ sqlite3 ~/.neuratrade/data/neuratrade.db \
 ### 5. Paper Trading Limitations
 - Only BNB/USDT for closed trades
 - No multi-ticker paper trading
-- Baseline strategy has 53 open trades that never close
+- Baseline strategy has 53 closed trades with $0 PnL and 1 open position
 
 ---
 
