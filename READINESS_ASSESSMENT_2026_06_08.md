@@ -83,11 +83,18 @@ sqlite3 ~/.neuratrade/data/neuratrade.db \
 | daily_trading | 19 | +85.86 | +4.52 | ✅ Profitable |
 | swing_trading | 16 | +54.36 | +3.40 | ✅ Profitable |
 | scalping | 25 | +25.98 | +1.04 | ✅ Profitable |
-| baseline | 0 (53 open) | 0.00 | 0.00 | ⚠️ Shadow |
+| baseline | 53 | 0.00 | 0.00 | ⚠️ Shadow (closed) |
 
-**Combined**: 76 closed trades, +323.12 USDT total across 4 strategies.
+**Combined**: 129 total trades (all closed), +323.12 USDT across 4 active strategies.
 
-**Important**: Paper trading only covers BNB/USDT for closed trades. No multi-ticker paper trading exists.
+### ⚠️ CRITICAL LIMITATION: Single-Ticker Paper Trading
+
+**ALL paper trades are BNB/USDT only.** There is zero paper trading evidence for:
+- BTC/USDT (backtested but never paper-traded)
+- ETH/USDT (backtested but never paper-traded)
+- SOL/USDT (backtested but never paper-traded)
+
+**This means paper trading proves nothing about the symbols actually used in backtests.** The +323.12 USDT profit comes entirely from BNB/USDT, which had only ~1 month of historical data in the backtest. This is a material disconnect between backtest and paper trading universes.
 
 **Verification**:
 ```bash
