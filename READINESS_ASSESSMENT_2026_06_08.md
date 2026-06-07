@@ -31,7 +31,7 @@ This assessment evaluated NeuraTrade's scalping strategy across multiple time wi
 
 | Window | Signals | Trades | Win Rate | PnL (USDT) | Return | Sharpe | Max DD |
 |--------|---------|--------|----------|------------|--------|--------|--------|
-| 30d (Apr-May 2026) | ~50,000 | 808 | 46.29% | **+138.12** | +1.38% | Positive | Low |
+| 30d (Apr-May 2026) | ~50,000 | 808 | 46.29% | **+138.34** | +1.38% | Positive | Low |
 | 90d (Mar-Jun 2026) | 109,610 | 8 | 0% | **-8.73** | -0.09% | -6.19 | 0.09% |
 | 180d (Dec 2025-Jun 2026) | 213,290 | 9 | 33.33% | **-1.03** | -0.01% | -0.23 | 0.02% |
 | 5yr (Jun 2021-Jun 2026) | 2,412,943 | 16 | 0% | **-15.08** | -0.15% | -1.64 | 0.15% |
@@ -157,7 +157,7 @@ sqlite3 ~/.neuratrade/data/neuratrade.db \
   "SELECT COUNT(*), SUM(CAST(pnl AS REAL)) \
    FROM scalping_backtest_trades \
    WHERE run_id = '883a0208-f3db-4601-b5dc-f82a72a0c569';"
-# Expected: 808, +138.12
+# Expected: 808, +138.34
 ```
 
 ### Verify 90-day backtest
@@ -245,7 +245,7 @@ Before declaring "ready for real money":
 | Test | Run ID | Date | Data Source | Notes |
 |------|--------|------|-------------|-------|
 | 5-year backtest | 5yr-backtest-1780858462 | 2026-06-07 | Real Binance 5m | 16 trades, 0% win, -15.08 USDT |
-| 30-day backtest | 883a0208-f3db-4601-b5dc-f82a72a0c569 | 2026-06-07 | Real Binance 5m | 808 trades, 46% win, +138.12 USDT |
+| 30-day backtest | 883a0208-f3db-4601-b5dc-f82a72a0c569 | 2026-06-07 | Real Binance 5m | 808 trades, 46% win, +138.34 USDT |
 | 90-day backtest | backtest-1780859403 | 2026-06-08 | Real Binance 5m | 8 trades, 0% win, -8.73 USDT |
 | 180-day backtest | backtest-1780859435 | 2026-06-08 | Real Binance 5m | 9 trades, 33% win, -1.03 USDT |
 | ~~5-year synthetic~~ | ~~bdefd785-e8c6-48c9-84c6-63cfbdd46d40~~ | ~~2026-06-07~~ | ~~Synthetic/seeded~~ | ~~Excluded from analysis~~ |
