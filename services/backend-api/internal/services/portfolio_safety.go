@@ -847,6 +847,30 @@ func isLikelyFuturesInstrument(symbol string) bool {
 	return strings.Contains(normalized, ":") || strings.Contains(normalized, "PERP") || strings.Contains(normalized, "SWAP")
 }
 
+// RecordTradeResult feeds a completed trade outcome into the position-size
+// throttle so that subsequent CheckSafety calls reflect the updated multiplier.
+// On a loss the throttle reduces the allowed position size; on a win it
+// partially recovers. The caller should pass the current consecutive-loss
+// count as tracked by ScalpingPerformance (or equivalent).
+func (s *PortfolioSafetyService) RecordTradeResult(ctx context.Context, chatID string, profitable bool, consecutiveLosses int) {
+	if s.positionThrottle == nil {
+		return
+	}
+	if profitable {
+		if _, err := s.positionThrottle.RecordWin(ctx, chatID); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("Failed to record win in position throttle", "chat_id", chatID, "error", err)
+			}
+		}
+		return
+	}
+	if _, err := s.positionThrottle.RecordLoss(ctx, chatID, consecutiveLosses); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("Failed to record loss in position throttle", "chat_id", chatID, "error", err)
+		}
+	}
+}
+
 func (s *PortfolioSafetyService) GetSafetyDiagnostics(ctx context.Context, chatID string, exchanges []string) (map[string]interface{}, error) {
 	diagnostics := make(map[string]interface{})
 

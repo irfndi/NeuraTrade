@@ -66,6 +66,7 @@ type IntegratedQuestHandlers struct {
 	tradeJournalReadyFor  *sql.DB
 	killSwitch            interface{ IsEngaged() bool }
 	safeMode              interface{ IsEnabled() bool }
+	portfolioSafety       *PortfolioSafetyService
 }
 
 const (
@@ -301,6 +302,14 @@ func (h *IntegratedQuestHandlers) SetQuestEngine(engine *QuestEngine) {
 
 func (h *IntegratedQuestHandlers) SetDrawdownHalt(halt *MaxDrawdownHalt) {
 	h.drawdownHalt = halt
+}
+
+func (h *IntegratedQuestHandlers) SetPortfolioSafetyService(svc *PortfolioSafetyService) {
+	h.portfolioSafety = svc
+}
+
+func (h *IntegratedQuestHandlers) PortfolioSafetyService() *PortfolioSafetyService {
+	return h.portfolioSafety
 }
 
 func (h *IntegratedQuestHandlers) AutonomyCoordinator() *ScalpingAutonomyCoordinator {
@@ -4797,6 +4806,15 @@ func (h *IntegratedQuestHandlers) ingestClosedOrderFeedback(ctx context.Context,
 			EntryPrice: entryPrice,
 			Notional:   notional,
 		})
+
+		if h.portfolioSafety != nil {
+			chatID := strings.TrimSpace(quest.Metadata["chat_id"])
+			if chatID != "" {
+				perfData := GetScalpingPerformance().GetPerformance()
+				consecutiveLosses := readIntMetric(perfData["consecutive_losses"])
+				h.portfolioSafety.RecordTradeResult(ctx, chatID, profitable, consecutiveLosses)
+			}
+		}
 
 		if h.tradeMemory != nil {
 			outcome := "breakeven"

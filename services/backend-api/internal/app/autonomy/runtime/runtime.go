@@ -21,6 +21,7 @@ type Dependencies struct {
 	SQLDB               *sql.DB
 	KillSwitch          interface{ IsEngaged() bool }
 	SafeMode            interface{ IsEnabled() bool }
+	PortfolioSafety     *services.PortfolioSafetyService
 }
 
 func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHandlers {
@@ -35,6 +36,9 @@ func BuildLocalIntegratedHandlers(deps Dependencies) *services.IntegratedQuestHa
 		deps.SafeMode,
 	)
 	handlers.SetDB(deps.SQLDB)
+	if deps.PortfolioSafety != nil {
+		handlers.SetPortfolioSafetyService(deps.PortfolioSafety)
+	}
 	return handlers
 }
 

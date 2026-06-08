@@ -125,6 +125,7 @@ type Application struct {
 	Notifier          ports.Notifier
 	Policy            ports.PolicyEngine
 	KillSwitch        ports.KillSwitch
+	KillSwitchMonitor *risk.KillSwitchMonitor
 	SafeMode          *risk.SafeModeImpl
 	RiskActor         *risk.RiskActor
 	RiskRef           *risk.RiskActorRef
@@ -386,7 +387,41 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 	a.RiskRef = risk.NewRiskActorRef(sa.ref)
 	a.superviseActor(riskActorIDValue, "risk actor", sa)
 
+	if a.Exchange != nil {
+		checker := a.buildExchangeHealthChecker()
+		monitorCfg := risk.DefaultKillSwitchMonitorConfig()
+		a.KillSwitchMonitor = risk.NewKillSwitchMonitor(ks, a.EventBus, checker, monitorCfg)
+	}
+
 	return nil
+}
+
+func (a *Application) buildExchangeHealthChecker() risk.ExchangeHealthChecker {
+	return func(ctx context.Context) bool {
+		if a.Exchange == nil {
+			return true
+		}
+		exchanges, err := a.Exchange.ListExchanges(ctx)
+		if err != nil {
+			return false
+		}
+		if len(exchanges) == 0 {
+			return true
+		}
+		for _, ex := range exchanges {
+			if !ex.Enabled {
+				continue
+			}
+			gw, err := a.Exchange.GetMarketDataGateway(ex.ID)
+			if err != nil || gw == nil {
+				return false
+			}
+			if !gw.IsHealthy(ctx) {
+				return false
+			}
+		}
+		return true
+	}
 }
 
 func (a *Application) buildStrategyComponents(b *Builder) error {

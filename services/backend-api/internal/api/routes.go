@@ -828,6 +828,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		SQLDB:               sqlDB,
 		KillSwitch:          sharedKillSwitch,
 		SafeMode:            sharedSafeMode,
+		PortfolioSafety:     portfolioSafety,
 	}
 
 	// Create integrated quest runtime handlers through app/autonomy module.
@@ -972,6 +973,7 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	integratedHandlers.SetDrawdownHalt(drawdownHalt)
 	integratedHandlers.SetOrderExecutor(orderExecutor)
 	integratedHandlers.SetOperationalModeService(opModeService)
+	integratedHandlers.SetPortfolioSafetyService(portfolioSafety)
 	questEngine.SetOperationalModeService(opModeService)
 
 	// Set database for user settings lookup

@@ -11,9 +11,9 @@ import (
 // MarketPriceInterface defines the interface for market price data.
 type MarketPriceInterface interface {
 	// GetPrice retrieves the asset price.
-	GetPrice() float64
+	GetPrice() decimal.Decimal
 	// GetVolume retrieves the asset volume.
-	GetVolume() float64
+	GetVolume() decimal.Decimal
 	// GetTimestamp retrieves the recording time.
 	GetTimestamp() time.Time
 	// GetExchangeName retrieves the exchange name.
@@ -21,13 +21,13 @@ type MarketPriceInterface interface {
 	// GetSymbol retrieves the trading pair symbol.
 	GetSymbol() string
 	// GetBid retrieves the best bid price.
-	GetBid() float64
+	GetBid() decimal.Decimal
 	// GetAsk retrieves the best ask price.
-	GetAsk() float64
+	GetAsk() decimal.Decimal
 	// GetHigh retrieves the 24h high price.
-	GetHigh() float64
+	GetHigh() decimal.Decimal
 	// GetLow retrieves the 24h low price.
-	GetLow() float64
+	GetLow() decimal.Decimal
 	// GetPriceChange24h retrieves the 24h percentage change.
 	GetPriceChange24h() float64
 }

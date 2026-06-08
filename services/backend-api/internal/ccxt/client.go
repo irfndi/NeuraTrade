@@ -1266,12 +1266,12 @@ type SlippageEstimate struct {
 }
 
 type BalanceResponse struct {
-	Exchange  string                 `json:"exchange"`
-	Timestamp time.Time              `json:"timestamp"`
-	Total     map[string]float64     `json:"total"`
-	Free      map[string]float64     `json:"free"`
-	Used      map[string]float64     `json:"used"`
-	Raw       map[string]interface{} `json:"raw,omitempty"`
+	Exchange  string                       `json:"exchange"`
+	Timestamp time.Time                    `json:"timestamp"`
+	Total     map[string]decimal.Decimal   `json:"total"`
+	Free      map[string]decimal.Decimal   `json:"free"`
+	Used      map[string]decimal.Decimal   `json:"used"`
+	Raw       map[string]interface{}       `json:"raw,omitempty"`
 }
 
 func (c *Client) FetchBalance(ctx context.Context, exchange string) (*BalanceResponse, error) {

@@ -745,13 +745,11 @@ type TickerMarketPriceAdapter struct {
 	data *TickerData
 }
 
-func (a *TickerMarketPriceAdapter) GetPrice() float64 {
-	v, _ := a.data.Ticker.Last.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetPrice() decimal.Decimal {
+	return a.data.Ticker.Last
 }
-func (a *TickerMarketPriceAdapter) GetVolume() float64 {
-	v, _ := a.data.Ticker.Volume.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetVolume() decimal.Decimal {
+	return a.data.Ticker.Volume
 }
 func (a *TickerMarketPriceAdapter) GetTimestamp() time.Time {
 	return time.Time(a.data.Ticker.Timestamp)
@@ -762,21 +760,17 @@ func (a *TickerMarketPriceAdapter) GetExchangeName() string {
 func (a *TickerMarketPriceAdapter) GetSymbol() string {
 	return a.data.Ticker.Symbol
 }
-func (a *TickerMarketPriceAdapter) GetBid() float64 {
-	v, _ := a.data.Ticker.Bid.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetBid() decimal.Decimal {
+	return a.data.Ticker.Bid
 }
-func (a *TickerMarketPriceAdapter) GetAsk() float64 {
-	v, _ := a.data.Ticker.Ask.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetAsk() decimal.Decimal {
+	return a.data.Ticker.Ask
 }
-func (a *TickerMarketPriceAdapter) GetHigh() float64 {
-	v, _ := a.data.Ticker.High.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetHigh() decimal.Decimal {
+	return a.data.Ticker.High
 }
-func (a *TickerMarketPriceAdapter) GetLow() float64 {
-	v, _ := a.data.Ticker.Low.Float64()
-	return v
+func (a *TickerMarketPriceAdapter) GetLow() decimal.Decimal {
+	return a.data.Ticker.Low
 }
 func (a *TickerMarketPriceAdapter) GetPriceChange24h() float64 {
 	v, _ := a.data.Ticker.Percentage.Float64()
@@ -1929,9 +1923,9 @@ func (s *NativeCCXTService) FetchBalance(ctx context.Context, exchange string) (
 		zaplogrus.Infof("[CCXT Native] No API credentials for %s, returning empty balance", exchange)
 		return &BalanceResponse{
 			Exchange: exchange,
-			Total:    make(map[string]float64),
-			Free:     make(map[string]float64),
-			Used:     make(map[string]float64),
+			Total:    make(map[string]decimal.Decimal),
+			Free:     make(map[string]decimal.Decimal),
+			Used:     make(map[string]decimal.Decimal),
 		}, nil
 	}
 
@@ -2017,79 +2011,79 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	result := &BalanceResponse{
 		Exchange:  "bitget",
 		Timestamp: time.Now(),
-		Total:     make(map[string]float64),
-		Free:      make(map[string]float64),
-		Used:      make(map[string]float64),
+		Total:     make(map[string]decimal.Decimal),
+		Free:      make(map[string]decimal.Decimal),
+		Used:      make(map[string]decimal.Decimal),
 		Raw:       make(map[string]interface{}),
 	}
 
-	totalUSDTFromSummary := 0.0
-	freeUSDTFromSummary := 0.0
-	usedUSDTFromSummary := 0.0
-	totalUSDTFromCoinList := 0.0
-	freeUSDTFromCoinList := 0.0
-	usedUSDTFromCoinList := 0.0
+	totalUSDTFromSummary := decimal.Zero
+	freeUSDTFromSummary := decimal.Zero
+	usedUSDTFromSummary := decimal.Zero
+	totalUSDTFromCoinList := decimal.Zero
+	freeUSDTFromCoinList := decimal.Zero
+	usedUSDTFromCoinList := decimal.Zero
 	for _, balanceData := range raw.Data {
 		accountPrefix := strings.ToUpper(strings.TrimSpace(balanceData.AccountType))
 		accountHasCoinListUSDT := false
-		accountSummaryUSDT := 0.0
+		accountSummaryUSDT := decimal.Zero
 		if strings.TrimSpace(balanceData.USDTBalance) != "" {
-			accountSummaryUSDT, _ = strconv.ParseFloat(strings.TrimSpace(balanceData.USDTBalance), 64)
+			accountSummaryUSDT = decimalFromString(strings.TrimSpace(balanceData.USDTBalance))
 		}
 
 		for _, coin := range balanceData.Coin {
 			if coin.Balance == "" || coin.Balance == "0" {
 				continue
 			}
-			total, _ := strconv.ParseFloat(coin.Balance, 64)
-			free, _ := strconv.ParseFloat(coin.Available, 64)
-			frozen, _ := strconv.ParseFloat(coin.Frozen, 64)
-			locked, _ := strconv.ParseFloat(coin.Lock, 64)
+			total := decimalFromString(coin.Balance)
+			free := decimalFromString(coin.Available)
+			frozen := decimalFromString(coin.Frozen)
+			locked := decimalFromString(coin.Lock)
 			coinKey := strings.ToUpper(strings.TrimSpace(coin.Coin))
 			scopedKey := accountPrefix + "_" + coinKey
 
 			if coinKey != "USDT" {
-				result.Total[coinKey] += total
-				result.Free[coinKey] += free
-				result.Used[coinKey] += frozen + locked
+				result.Total[coinKey] = result.Total[coinKey].Add(total)
+				result.Free[coinKey] = result.Free[coinKey].Add(free)
+				result.Used[coinKey] = result.Used[coinKey].Add(frozen.Add(locked))
 			}
 
 			if strings.TrimSpace(scopedKey) != "_" {
-				result.Total[scopedKey] += total
-				result.Free[scopedKey] += free
-				result.Used[scopedKey] += frozen + locked
+				result.Total[scopedKey] = result.Total[scopedKey].Add(total)
+				result.Free[scopedKey] = result.Free[scopedKey].Add(free)
+				result.Used[scopedKey] = result.Used[scopedKey].Add(frozen.Add(locked))
 			}
 
 			if coinKey == "USDT" {
 				accountHasCoinListUSDT = true
-				totalUSDTFromCoinList += total
-				freeUSDTFromCoinList += free
-				usedUSDTFromCoinList += frozen + locked
+				totalUSDTFromCoinList = totalUSDTFromCoinList.Add(total)
+				freeUSDTFromCoinList = freeUSDTFromCoinList.Add(free)
+				usedUSDTFromCoinList = usedUSDTFromCoinList.Add(frozen.Add(locked))
 			}
 		}
 
-		if accountSummaryUSDT > 0 && !accountHasCoinListUSDT {
-			totalUSDTFromSummary += accountSummaryUSDT
+		if accountSummaryUSDT.GreaterThan(decimal.Zero) && !accountHasCoinListUSDT {
+			totalUSDTFromSummary = totalUSDTFromSummary.Add(accountSummaryUSDT)
 			key := accountPrefix + "_USDT"
-			result.Total[key] += accountSummaryUSDT
+			result.Total[key] = result.Total[key].Add(accountSummaryUSDT)
 			if accountPrefix == "USDT_FUTURES" {
 				markSummaryOnlyBalanceKey(result, key)
 			} else {
-				freeUSDTFromSummary += accountSummaryUSDT
-				result.Free[key] += accountSummaryUSDT
+				freeUSDTFromSummary = freeUSDTFromSummary.Add(accountSummaryUSDT)
+				result.Free[key] = result.Free[key].Add(accountSummaryUSDT)
 			}
-			zaplogrus.Infof("[CCXT Native] Bitget balance account=%s usdt=%.8f", balanceData.AccountType, accountSummaryUSDT)
+			zaplogrus.Infof("[CCXT Native] Bitget balance account=%s usdt=%s", balanceData.AccountType, accountSummaryUSDT.StringFixed(8))
 		}
 	}
-	totalUSDT := totalUSDTFromCoinList + totalUSDTFromSummary
-	freeUSDT := freeUSDTFromCoinList + freeUSDTFromSummary
-	usedUSDT := usedUSDTFromCoinList + usedUSDTFromSummary
-	if totalUSDT > 0 {
+	totalUSDT := totalUSDTFromCoinList.Add(totalUSDTFromSummary)
+	freeUSDT := freeUSDTFromCoinList.Add(freeUSDTFromSummary)
+	usedUSDT := usedUSDTFromCoinList.Add(usedUSDTFromSummary)
+	if totalUSDT.GreaterThan(decimal.Zero) {
 		result.Total["USDT"] = totalUSDT
 		result.Free["USDT"] = freeUSDT
 		result.Used["USDT"] = usedUSDT
 	}
-	if freeUSDTFromCoinList > 0 {
+	if freeUSDTFromCoinList.GreaterThan(decimal.Zero) {
 		clearSummaryOnlyBalanceKey(result, "USDT")
 	}
 
@@ -2180,21 +2174,21 @@ func (s *NativeCCXTService) fetchBinanceBalance(ctx context.Context, conn *Excha
 	result := &BalanceResponse{
 		Exchange:  "binance",
 		Timestamp: time.Now(),
-		Total:     make(map[string]float64),
-		Free:      make(map[string]float64),
-		Used:      make(map[string]float64),
+		Total:     make(map[string]decimal.Decimal),
+		Free:      make(map[string]decimal.Decimal),
+		Used:      make(map[string]decimal.Decimal),
 	}
 
 	for _, balance := range raw.Balances {
-		free, _ := strconv.ParseFloat(balance.Free, 64)
-		locked, _ := strconv.ParseFloat(balance.Locked, 64)
-		total := free + locked
+		free := decimalFromString(balance.Free)
+		locked := decimalFromString(balance.Locked)
+		total := free.Add(locked)
 
-		if total > 0 {
+		if total.GreaterThan(decimal.Zero) {
 			result.Total[balance.Asset] = total
 			result.Free[balance.Asset] = free
 			result.Used[balance.Asset] = locked
-			zaplogrus.Infof("[CCXT Native] Binance balance: %s = %.8f", balance.Asset, total)
+			zaplogrus.Infof("[CCXT Native] Binance balance: %s = %s", balance.Asset, total.StringFixed(8))
 		}
 	}
 
@@ -2267,21 +2261,21 @@ func (s *NativeCCXTService) fetchBybitBalance(ctx context.Context, conn *Exchang
 	result := &BalanceResponse{
 		Exchange:  "bybit",
 		Timestamp: time.Now(),
-		Total:     make(map[string]float64),
-		Free:      make(map[string]float64),
-		Used:      make(map[string]float64),
+		Total:     make(map[string]decimal.Decimal),
+		Free:      make(map[string]decimal.Decimal),
+		Used:      make(map[string]decimal.Decimal),
 	}
 
 	for _, account := range raw.Result.List {
 		for _, coin := range account.Coin {
-			balance, _ := strconv.ParseFloat(coin.WalletBalance, 64)
-			available, _ := strconv.ParseFloat(coin.AvailableToWithdraw, 64)
+			balance := decimalFromString(coin.WalletBalance)
+			available := decimalFromString(coin.AvailableToWithdraw)
 
-			if balance > 0 {
+			if balance.GreaterThan(decimal.Zero) {
 				result.Total[coin.Coin] = balance
 				result.Free[coin.Coin] = available
-				result.Used[coin.Coin] = balance - available
-				zaplogrus.Infof("[CCXT Native] Bybit balance: %s = %.8f", coin.Coin, balance)
+				result.Used[coin.Coin] = balance.Sub(available)
+				zaplogrus.Infof("[CCXT Native] Bybit balance: %s = %s", coin.Coin, balance.StringFixed(8))
 			}
 		}
 	}
@@ -2355,21 +2349,21 @@ func (s *NativeCCXTService) fetchOKXBalance(ctx context.Context, conn *ExchangeC
 	result := &BalanceResponse{
 		Exchange:  "okx",
 		Timestamp: time.Now(),
-		Total:     make(map[string]float64),
-		Free:      make(map[string]float64),
-		Used:      make(map[string]float64),
+		Total:     make(map[string]decimal.Decimal),
+		Free:      make(map[string]decimal.Decimal),
+		Used:      make(map[string]decimal.Decimal),
 	}
 
 	for _, balanceData := range raw.Data {
 		for _, detail := range balanceData.Details {
-			balance, _ := strconv.ParseFloat(detail.Bal, 64)
-			available, _ := strconv.ParseFloat(detail.AvailBal, 64)
+			balance := decimalFromString(detail.Bal)
+			available := decimalFromString(detail.AvailBal)
 
-			if balance > 0 {
+			if balance.GreaterThan(decimal.Zero) {
 				result.Total[detail.Ccy] = balance
 				result.Free[detail.Ccy] = available
-				result.Used[detail.Ccy] = balance - available
-				zaplogrus.Infof("[CCXT Native] OKX balance: %s = %.8f", detail.Ccy, balance)
+				result.Used[detail.Ccy] = balance.Sub(available)
+				zaplogrus.Infof("[CCXT Native] OKX balance: %s = %s", detail.Ccy, balance.StringFixed(8))
 			}
 		}
 	}

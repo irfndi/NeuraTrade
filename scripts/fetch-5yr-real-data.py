@@ -166,7 +166,7 @@ def main():
     start = datetime(2021, 6, 1, tzinfo=timezone.utc)
     end = datetime(2026, 6, 1, tzinfo=timezone.utc)
     
-    symbols = ["BTCUSDT", "ETHUSDT"]
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     
     print("=" * 60)
     print("BINANCE 5-YEAR HISTORICAL DATA FETCHER")

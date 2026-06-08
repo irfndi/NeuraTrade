@@ -78,24 +78,23 @@ func run() error {
 
 	strategies := services.DefaultPaperTradingStrategies()
 	for i := range strategies {
-		// All strategies use 4h timeframe and BNB/USDT only.
-		// BNB showed the only positive edge in recent backtests (uptrend continuation).
-		// ETH shorts/long suffered from mean-reversion bounces that destroyed PnL.
-		strategies[i].Timeframe = "4h"
-		strategies[i].Symbols = []string{"BNB/USDT"}
+		// Use per-strategy defaults from DefaultPaperTradingStrategies()
+		// (BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT across
+		// multiple timeframes).  Only tune confidence thresholds and hold
+		// durations for backfill-specific tuning.
 		switch strategies[i].ID {
 		case "scalping":
 			strategies[i].MinConfidence = 0.10
-			strategies[i].HoldCandles = 3 // 12h hold
+			strategies[i].HoldCandles = 3 // 15 min on 5m
 		case "daily_trading":
 			strategies[i].MinConfidence = 0.15
-			strategies[i].HoldCandles = 5 // 20h hold
+			strategies[i].HoldCandles = 5 // 5h on 1h
 		case "swing_trading":
 			strategies[i].MinConfidence = 0.15
-			strategies[i].HoldCandles = 6 // 24h hold
+			strategies[i].HoldCandles = 6 // 24h on 4h
 		case "arbitrage":
 			strategies[i].MinConfidence = 0.15
-			strategies[i].HoldCandles = 7 // 28h hold
+			strategies[i].HoldCandles = 7 // 7h on 1h
 		}
 	}
 
