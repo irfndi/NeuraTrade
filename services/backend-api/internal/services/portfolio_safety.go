@@ -230,29 +230,29 @@ func (s *PortfolioSafetyService) calculateSnapshot(ctx context.Context, chatID s
 		exchangeUsed := decimal.Zero
 
 		for currency, amount := range balance.Total {
-			if amount <= 0 {
+			if !amount.IsPositive() {
 				continue
 			}
 			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
-				exchangeTotal = exchangeTotal.Add(decimal.NewFromFloat(amount))
+				exchangeTotal = exchangeTotal.Add(amount)
 			}
 		}
 
 		for currency, amount := range balance.Free {
-			if amount <= 0 {
+			if !amount.IsPositive() {
 				continue
 			}
 			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
-				exchangeAvailable = exchangeAvailable.Add(decimal.NewFromFloat(amount))
+				exchangeAvailable = exchangeAvailable.Add(amount)
 			}
 		}
 
 		for currency, amount := range balance.Used {
-			if amount <= 0 {
+			if !amount.IsPositive() {
 				continue
 			}
 			if isQuoteCurrency(currency, s.config.DefaultQuoteCurrency) {
-				exchangeUsed = exchangeUsed.Add(decimal.NewFromFloat(amount))
+				exchangeUsed = exchangeUsed.Add(amount)
 			}
 		}
 
@@ -693,15 +693,15 @@ func (s *PortfolioSafetyService) resolveScopedMarketFunds(snapshot *SafetyPortfo
 	return decimal.Zero, decimal.Zero, false
 }
 
-func decimalFromFloatMap(values map[string]float64, key string) decimal.Decimal {
+func decimalFromFloatMap(values map[string]decimal.Decimal, key string) decimal.Decimal {
 	if values == nil {
 		return decimal.Zero
 	}
 	v, ok := values[key]
-	if !ok || v <= 0 {
+	if !ok || !v.IsPositive() {
 		return decimal.Zero
 	}
-	return decimal.NewFromFloat(v)
+	return v
 }
 
 func cloneSafetyPortfolioSnapshot(snapshot *SafetyPortfolioSnapshot) SafetyPortfolioSnapshot {
@@ -729,18 +729,18 @@ func cloneBalanceResponse(balance *ccxt.BalanceResponse) *ccxt.BalanceResponse {
 		return nil
 	}
 	clone := *balance
-	clone.Total = cloneFloatMap(balance.Total)
-	clone.Free = cloneFloatMap(balance.Free)
-	clone.Used = cloneFloatMap(balance.Used)
+	clone.Total = cloneDecimalMap(balance.Total)
+	clone.Free = cloneDecimalMap(balance.Free)
+	clone.Used = cloneDecimalMap(balance.Used)
 	clone.Raw = cloneRawMap(balance.Raw)
 	return &clone
 }
 
-func cloneFloatMap(values map[string]float64) map[string]float64 {
+func cloneDecimalMap(values map[string]decimal.Decimal) map[string]decimal.Decimal {
 	if values == nil {
 		return nil
 	}
-	clone := make(map[string]float64, len(values))
+	clone := make(map[string]decimal.Decimal, len(values))
 	for key, value := range values {
 		clone[key] = value
 	}

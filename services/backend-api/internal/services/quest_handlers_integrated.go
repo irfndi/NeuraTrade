@@ -1753,8 +1753,8 @@ func (h *IntegratedQuestHandlers) persistScalpingExecutionLifecycle(
 			if tickerSource, ok := h.ccxtService.(interface {
 				FetchSingleTicker(ctx context.Context, exchange, symbol string) (ccxt.MarketPriceInterface, error)
 			}); ok {
-				if ticker, err := tickerSource.FetchSingleTicker(ctx, userExchange, decision.Symbol); err == nil && ticker != nil && ticker.GetPrice() > 0 {
-					entryPrice = decimal.NewFromFloat(ticker.GetPrice())
+				if ticker, err := tickerSource.FetchSingleTicker(ctx, userExchange, decision.Symbol); err == nil && ticker != nil && ticker.GetPrice().IsPositive() {
+					entryPrice = ticker.GetPrice()
 					zaplogrus.Warnf("[SCALPING] Fetched fallback entry price for %s: %s", decision.Symbol, entryPrice.String())
 				}
 			}
@@ -2080,18 +2080,18 @@ func (h *IntegratedQuestHandlers) autoDeriskSpotInventory(
 		if _, skip := stableAssets[asset]; skip {
 			continue
 		}
-		if amount <= 0 {
+		if !amount.IsPositive() {
 			continue
 		}
 
 		symbol := asset + "/USDT"
 		ticker, err := tickerSource.FetchSingleTicker(ctx, exchange, symbol)
-		if err != nil || ticker == nil || ticker.GetPrice() <= 0 {
+		if err != nil || ticker == nil || !ticker.GetPrice().IsPositive() {
 			continue
 		}
 
-		amountDec := decimal.NewFromFloat(amount)
-		notional := amountDec.Mul(decimal.NewFromFloat(ticker.GetPrice()))
+		amountDec := amount
+		notional := amountDec.Mul(ticker.GetPrice())
 		if notional.LessThan(decimal.NewFromFloat(minNotional)) {
 			continue
 		}
@@ -4541,35 +4541,35 @@ func resolveScalpingFuturesWalletUSDT(balance *ccxt.BalanceResponse) float64 {
 		return 0
 	}
 	if balance.Free != nil {
-		if v := balance.Free["USDT_FUTURES_USDT"]; v > 0 {
-			return v
+		if v := balance.Free["USDT_FUTURES_USDT"]; v.IsPositive() {
+			return v.InexactFloat64()
 		}
 	}
 	futuresSummaryOnly := isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT")
 	if futuresSummaryOnly {
 		if balance.Free != nil {
-			if v := balance.Free["USDT"]; v > 0 {
-				return v
+			if v := balance.Free["USDT"]; v.IsPositive() {
+				return v.InexactFloat64()
 			}
 		}
 		return 0
 	}
 	if balance.Total != nil {
-		if v := balance.Total["USDT_FUTURES_USDT"]; v > 0 {
-			return v
+		if v := balance.Total["USDT_FUTURES_USDT"]; v.IsPositive() {
+			return v.InexactFloat64()
 		}
 	}
 	if balance.Free != nil {
-		if v := balance.Free["USDT"]; v > 0 {
-			return v
+		if v := balance.Free["USDT"]; v.IsPositive() {
+			return v.InexactFloat64()
 		}
 	}
 	if isSummaryOnlyBalanceKey(balance, "USDT") {
 		return 0
 	}
 	if balance.Total != nil {
-		if v := balance.Total["USDT"]; v > 0 {
-			return v
+		if v := balance.Total["USDT"]; v.IsPositive() {
+			return v.InexactFloat64()
 		}
 	}
 	return 0
@@ -4582,7 +4582,7 @@ func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
 	futuresSummaryOnly := isSummaryOnlyBalanceKey(balance, "USDT_FUTURES_USDT")
 	lookup := []struct {
 		bookName string
-		book     map[string]float64
+		book     map[string]decimal.Decimal
 		key      string
 	}{
 		{bookName: "free", book: balance.Free, key: "USDT_FUTURES_USDT"},
@@ -4597,7 +4597,7 @@ func resolveScalpingWalletBasisSource(balance *ccxt.BalanceResponse) string {
 		if futuresSummaryOnly && candidate.key == "USDT" && candidate.bookName == "total" {
 			continue
 		}
-		if v := candidate.book[candidate.key]; v > 0 {
+		if v := candidate.book[candidate.key]; v.IsPositive() {
 			if candidate.bookName == "total" && isSummaryOnlyBalanceKey(balance, candidate.key) {
 				continue
 			}

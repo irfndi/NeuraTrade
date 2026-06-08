@@ -57,8 +57,22 @@ type Config struct {
 	Features FeaturesConfig `mapstructure:"features"`
 	// LiveReadiness holds configuration for the live-readiness reconciler.
 	LiveReadiness LiveReadinessConfig `mapstructure:"live_readiness"`
+	// Testnet holds configuration for testnet exchange mode.
+	Testnet TestnetConfig `mapstructure:"testnet"`
 	// GRPC holds gRPC client transport settings shared across services.
 	GRPC GRPCClientConfig `mapstructure:"grpc"`
+}
+
+// TestnetConfig defines settings for testnet exchange mode.
+type TestnetConfig struct {
+	// Enabled controls whether testnet mode is active.
+	Enabled bool `mapstructure:"enabled"`
+	// Exchange is the exchange to use in testnet mode (e.g., "binance").
+	Exchange string `mapstructure:"exchange"`
+	// APIKey is the testnet API key.
+	APIKey string `mapstructure:"api_key"`
+	// APISecret is the testnet API secret.
+	APISecret string `mapstructure:"api_secret"`
 }
 
 type GRPCClientConfig struct {
@@ -473,6 +487,12 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("features.enable_ai_arbitrage", "ENABLE_AI_ARBITRAGE")
 	_ = viper.BindEnv("features.enable_ai_signals", "ENABLE_AI_SIGNALS")
 
+	// Bind testnet environment variables
+	_ = viper.BindEnv("testnet.enabled", "TESTNET_ENABLED")
+	_ = viper.BindEnv("testnet.exchange", "TESTNET_EXCHANGE")
+	_ = viper.BindEnv("testnet.api_key", "TESTNET_API_KEY")
+	_ = viper.BindEnv("testnet.api_secret", "TESTNET_API_SECRET")
+
 	// Read config file
 	if err := viper.ReadInConfig(); err != nil {
 		// Config file not found, use defaults and environment variables
@@ -685,6 +705,12 @@ func setDefaults() {
 	viper.SetDefault("features.enable_ai_scalping", true)
 	viper.SetDefault("features.enable_ai_signals", false)
 	viper.SetDefault("features.enable_ai_arbitrage", false)
+
+	// Testnet defaults
+	viper.SetDefault("testnet.enabled", false)
+	viper.SetDefault("testnet.exchange", "binance")
+	viper.SetDefault("testnet.api_key", "")
+	viper.SetDefault("testnet.api_secret", "")
 
 	// Live readiness reconciler defaults
 	viper.SetDefault("live_readiness.enabled", true)

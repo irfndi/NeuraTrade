@@ -294,11 +294,11 @@ func (wv *WalletValidator) getWalletBalances(ctx context.Context, chatID string)
 
 			// Merge balances from this exchange
 			for asset, amount := range balanceResp.Total {
-				if amount > 0 {
+				if amount.IsPositive() {
 					if existing, ok := balances[asset]; ok {
-						balances[asset] = existing.Add(decimal.NewFromFloat(amount))
+						balances[asset] = existing.Add(amount)
 					} else {
-						balances[asset] = decimal.NewFromFloat(amount)
+						balances[asset] = amount
 					}
 				}
 			}

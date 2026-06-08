@@ -444,7 +444,7 @@ func riskLockSourcePriority(source string) int {
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService, sharedKillSwitch *apprisk.KillSwitchImpl, sharedSafeMode *apprisk.SafeModeImpl) (func(), error) {
+func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService, sharedKillSwitch *apprisk.KillSwitchImpl, sharedSafeMode *apprisk.SafeModeImpl, testnetConfig *config.TestnetConfig) (func(), error) {
 	configureLiveReadinessGuard(opModeService, db)
 
 	allowedOrigins := []string{"http://localhost:3000"}
@@ -1325,6 +1325,12 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	v1 := router.Group("/api/v1")
 	v1.Use(middleware.TelemetryMiddleware())
 	{
+		testnetHandler := handlers.NewTestnetHandler(testnetConfig)
+		testnet := v1.Group("/testnet")
+		{
+			testnet.GET("/health", gin.WrapF(testnetHandler.Health))
+		}
+
 		// Market data routes
 		market := v1.Group("/market")
 		{

@@ -131,8 +131,8 @@ func (h *IntegratedQuestHandlers) resolvePaperScalpingMarkPrice(
 		})
 		if ok {
 			ticker, err := tickerSource.FetchSingleTicker(ctx, position.Exchange, position.Symbol)
-			if err == nil && ticker != nil && ticker.GetPrice() > 0 {
-				rawPrice = decimal.NewFromFloat(ticker.GetPrice())
+			if err == nil && ticker != nil && ticker.GetPrice().IsPositive() {
+				rawPrice = ticker.GetPrice()
 			}
 		}
 	}

@@ -191,7 +191,7 @@ func (pt *PositionTracker) SyncWithExchange(ctx context.Context) error {
 			continue
 		}
 
-		currentPrice := decimal.NewFromFloat(ticker.GetPrice())
+		currentPrice := ticker.GetPrice()
 
 		// Update position with current price
 		pt.positionsMu.Lock()

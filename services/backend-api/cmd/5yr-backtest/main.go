@@ -24,10 +24,12 @@ func main() {
 
 func run() error {
 	var (
-		startStr = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
-		endStr   = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
-		symbols  = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
-		persist  = flag.Bool("persist", true, "Persist results to database")
+		startStr          = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
+		endStr            = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
+		symbols           = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
+		persist           = flag.Bool("persist", true, "Persist results to database")
+		minExpectancyN    = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
+		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
 	)
 	flag.Parse()
 
@@ -74,6 +76,8 @@ func run() error {
 		FeeRate:            decimal.NewFromFloat(0.001),
 		MaxBidAskSpreadPct: 0.08,
 		MinConfidence:      0.60,
+		MinExpectancyN:     *minExpectancyN,
+		MinExpectancyEdge:  *minExpectancyEdge,
 		SpreadMultiplier:   8,
 		MaxCapitalPct:      5.0,
 		DefaultHoldPeriod:  5 * time.Minute,
@@ -86,6 +90,8 @@ func run() error {
 	fmt.Printf("  Exchange: %s\n", svcConfig.Exchange)
 	fmt.Printf("  Initial Capital: %s USDT\n", initialCapital.String())
 	fmt.Printf("  Mode: %s\n", svcConfig.Mode)
+	fmt.Printf("  MinExpectancyN: %d\n", svcConfig.MinExpectancyN)
+	fmt.Printf("  MinExpectancyEdge: %f\n", svcConfig.MinExpectancyEdge)
 	fmt.Println()
 
 	engine := services.NewScalpingBacktestEngine(dbPool, svcConfig)

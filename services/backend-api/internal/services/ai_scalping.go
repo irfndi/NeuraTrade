@@ -305,7 +305,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		LossWindow:            90 * time.Minute,
 		PreTradeGate:          true,
 		MinExpectancyEdge:     0.001,
-		MinExpectancyN:        8,
+		MinExpectancyN:        50,
 		RegimeHighBand:        85,
 		RegimeLowBand:         15,
 		RegimeChopConfidence:  0.65,
@@ -1654,18 +1654,18 @@ func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string,
 	maxSpreadPct := s.maxBidAskSpreadPct()
 	for _, t := range scored {
 		symbol := t.GetSymbol()
-		price := t.GetPrice()
+		price := t.GetPrice().InexactFloat64()
 		if symbol == "" || price <= 0 {
 			continue
 		}
-		vol := math.Max(t.GetVolume(), 0)
+		vol := math.Max(t.GetVolume().InexactFloat64(), 0)
 		spreadPct := 0.0
-		if t.GetBid() > 0 && t.GetAsk() > 0 {
-			spreadPct = ((t.GetAsk() - t.GetBid()) / price) * 100
+		if t.GetBid().IsPositive() && t.GetAsk().IsPositive() {
+			spreadPct = (t.GetAsk().Sub(t.GetBid()).InexactFloat64() / price) * 100
 		}
 		rangePct := 0.0
-		if t.GetHigh() > 0 && t.GetLow() > 0 {
-			rangePct = ((t.GetHigh() - t.GetLow()) / price) * 100
+		if t.GetHigh().IsPositive() && t.GetLow().IsPositive() {
+			rangePct = (t.GetHigh().Sub(t.GetLow()).InexactFloat64() / price) * 100
 		}
 		liqScore := math.Log1p(vol)
 		spreadPenalty := 1.0 / (1.0 + math.Max(spreadPct, 0))
@@ -1869,10 +1869,10 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 
 		signal := aiMarketSignal{
 			Symbol:         normalizeSymbolForComparison(tickerData.GetSymbol()),
-			Price:          tickerData.GetPrice(),
-			High24h:        tickerData.GetHigh(),
-			Low24h:         tickerData.GetLow(),
-			Volume24h:      tickerData.GetVolume(),
+			Price:          tickerData.GetPrice().InexactFloat64(),
+			High24h:        tickerData.GetHigh().InexactFloat64(),
+			Low24h:         tickerData.GetLow().InexactFloat64(),
+			Volume24h:      tickerData.GetVolume().InexactFloat64(),
 			PriceChange24h: tickerData.GetPriceChange24h(),
 		}
 		if signal.Symbol == "" {
@@ -1910,8 +1910,8 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 			if tickerData == nil {
 				continue
 			}
-			tickerBid := tickerData.GetBid()
-			tickerAsk := tickerData.GetAsk()
+			tickerBid := tickerData.GetBid().InexactFloat64()
+			tickerAsk := tickerData.GetAsk().InexactFloat64()
 			// Defensive: skip when ticker reports a crossed or zero book. A valid
 			// ticker top-of-book always has ask > bid > 0; anything else is
 			// garbage that would produce a negative or misleading spread.

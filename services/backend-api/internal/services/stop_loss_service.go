@@ -414,7 +414,7 @@ func (s *StopLossService) Evaluate(ctx context.Context) ([]*StopLossExecutionRes
 			continue
 		}
 
-		currentPrice := decimal.NewFromFloat(ticker.GetPrice())
+		currentPrice := ticker.GetPrice()
 
 		// Update trailing stops
 		if order.IsTrailing {

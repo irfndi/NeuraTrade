@@ -129,7 +129,7 @@ func (m *DynamicProtectionManager) ReconcileOpenPositions(ctx context.Context, c
 			m.logger.Printf("[PROTECTION] Ticker unavailable for %s %s: %v", pos.Exchange, pos.Symbol, fetchErr)
 			continue
 		}
-		currentPrice := decimal.NewFromFloat(ticker.GetPrice())
+		currentPrice := ticker.GetPrice()
 		if currentPrice.LessThanOrEqual(decimal.Zero) {
 			summary.Errors++
 			continue

@@ -206,7 +206,7 @@ func (t *AIFundTracker) takeSnapshot(ctx context.Context) (*FundSnapshot, error)
 
 	usdtBalance := 0.0
 	if balance.Total != nil {
-		usdtBalance = balance.Total["USDT"]
+		usdtBalance = balance.Total["USDT"].InexactFloat64()
 	}
 
 	snapshot := &FundSnapshot{
