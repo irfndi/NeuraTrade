@@ -1917,11 +1917,12 @@ func (s *AIScalpingService) gatherMarketSignals(ctx context.Context) ([]aiMarket
 		}
 
 		// tickerBidAskFallback derives a coarse spread from the ticker top-of-book
-		// when the orderbook snapshot is unavailable. This is a degraded signal —
-		// depth is unknown and the prices may be stale — but it is strictly better
-		// than dropping the pair entirely (see NeuraTrade-ixev). Imbalance stays
-		// zero in this path; only the spread is approximated.
-		if obResp == nil && signal.BidAskSpread <= 0 {
+		// when the orderbook snapshot is unavailable or empty. This is a degraded
+		// signal — depth is unknown and the prices may be stale — but it is
+		// strictly better than dropping the pair entirely (see NeuraTrade-ixev).
+		// Imbalance stays zero in this path; only the spread is approximated.
+		obEmpty := obResp != nil && (len(obResp.OrderBook.Bids) == 0 || len(obResp.OrderBook.Asks) == 0)
+		if (obResp == nil || obEmpty) && signal.BidAskSpread <= 0 {
 			if tickerData == nil {
 				continue
 			}
