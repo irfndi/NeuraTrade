@@ -16,10 +16,10 @@ import (
 // across the windows the readiness assessment used so we can compare
 // against the pre-fix numbers in READINESS_ASSESSMENT_2026_06_08.md:
 //
-//   30d:   808 trades, 46.29% win, +138.34 USDT
-//   90d:     8 trades,  0%     win,   -8.73 USDT
-//   180d:    9 trades, 33.33%  win,   -1.03 USDT
-//   5yr:   16 trades,  0%     win,  -15.08 USDT
+//	30d:   808 trades, 46.29% win, +138.34 USDT
+//	90d:     8 trades,  0%     win,   -8.73 USDT
+//	180d:    9 trades, 33.33%  win,   -1.03 USDT
+//	5yr:   16 trades,  0%     win,  -15.08 USDT
 //
 // Run with: go test -v -count=1 -run TestRealMoney_ReadinessBacktests ./internal/services/
 func TestRealMoney_ReadinessBacktests(t *testing.T) {

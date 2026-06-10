@@ -744,11 +744,13 @@ func (c *ShadowEvaluationCoordinator) Start(ctx context.Context, cfg Reconciliat
 		return
 	}
 	cfg.applyDefaults()
-	c.reconcilerStop = make(chan struct{})
-	c.reconcilerDone = make(chan struct{})
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	c.reconcilerStop = stop
+	c.reconcilerDone = done
 	c.mu.Unlock()
 
-	go c.reconcileLoop(ctx, cfg)
+	go c.reconcileLoop(ctx, cfg, stop, done)
 }
 
 // Stop signals the periodic reconciler to exit and waits for it. Safe
@@ -772,8 +774,8 @@ func (c *ShadowEvaluationCoordinator) Stop() {
 	}
 }
 
-func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg ReconciliationConfig) {
-	defer close(c.reconcilerDone)
+func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg ReconciliationConfig, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	c.runReconcileOnce(ctx, cfg) // run once immediately
@@ -781,7 +783,7 @@ func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg Rec
 		select {
 		case <-ctx.Done():
 			return
-		case <-c.reconcilerStop:
+		case <-stop:
 			return
 		case <-ticker.C:
 			c.runReconcileOnce(ctx, cfg)

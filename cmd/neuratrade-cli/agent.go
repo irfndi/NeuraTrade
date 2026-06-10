@@ -172,8 +172,9 @@ func tailFile(path string, n int) ([]string, error) {
 // main.go's Commands slice alongside `gateway`, `prompt`, `backtest`.
 //
 // PR-6 skeleton surface:
-//   agent run    — print setup instructions (no process spawn)
-//   agent status — show PID file + last N log lines
+//
+//	agent run    — print setup instructions (no process spawn)
+//	agent status — show PID file + last N log lines
 //
 // Future PRs can add `agent stop`, `agent inspect` (dump policy +
 // playbook config), and `agent run --once <playbook>` (one-shot
