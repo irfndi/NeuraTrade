@@ -14,7 +14,6 @@ import (
 	"log/slog"
 
 	"github.com/irfndi/neuratrade/internal/adapters/ccxt"
-	"github.com/irfndi/neuratrade/internal/app/execution"
 	"github.com/irfndi/neuratrade/internal/app/marketdata"
 	"github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/app/strategy"
@@ -127,7 +126,6 @@ type Application struct {
 	Policy            ports.PolicyEngine
 	KillSwitch        ports.KillSwitch
 	KillSwitchMonitor *risk.KillSwitchMonitor
-	MaxLossMonitor    *risk.MaxLossMonitor
 	SafeMode          *risk.SafeModeImpl
 	RiskActor         *risk.RiskActor
 	RiskRef           *risk.RiskActorRef
@@ -395,10 +393,6 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 		a.KillSwitchMonitor = risk.NewKillSwitchMonitor(ks, a.EventBus, checker, monitorCfg)
 	}
 
-	if a.Exchange != nil {
-		a.wireMaxLossMonitor(ctx)
-	}
-
 	return nil
 }
 
@@ -427,50 +421,6 @@ func (a *Application) buildExchangeHealthChecker() risk.ExchangeHealthChecker {
 			}
 		}
 		return true
-	}
-}
-
-func (a *Application) wireMaxLossMonitor(_ context.Context) {
-	priceProvider := risk.NewExchangePriceProvider(a.Exchange)
-	positionCloser := risk.NewGatewayPositionCloser(a.Exchange)
-	a.MaxLossMonitor = risk.NewMaxLossMonitor(risk.MaxLossMonitorConfig{
-		MaxLossPct:    risk.MaxLossPctDefault,
-		PollInterval:   1 * time.Second,
-		MaxStalePrice: 10 * time.Second,
-	}, priceProvider.GetPrice, positionCloser.ClosePosition)
-
-	a.Supervisor.AddFunc("max-loss-monitor", func(ctx context.Context) error {
-		if err := a.MaxLossMonitor.Run(ctx); err != nil {
-			return fmt.Errorf("max loss monitor: %w", err)
-		}
-		return nil
-	})
-
-	if a.EventBus != nil {
-		_, _ = a.EventBus.Subscribe(context.Background(), ports.EventTypeOrderFilled, func(_ context.Context, event eventbus.Event) error {
-			orderEvent, ok := event.Payload.(execution.OrderEvent)
-			if !ok {
-				return nil
-			}
-			if orderEvent.Status != string(ports.OrderStatusFilled) {
-				return nil
-			}
-			a.MaxLossMonitor.TrackPosition(risk.PositionSnapshot{
-				Symbol:     orderEvent.Symbol,
-				Exchange:   orderEvent.Exchange,
-				Side:       orderEvent.Side,
-				EntryPrice: orderEvent.FilledAmount,
-				Quantity:   orderEvent.Amount,
-				OpenedAt:   time.Now().UTC(),
-			})
-			return nil
-		})
-		_, _ = a.EventBus.Subscribe(context.Background(), ports.EventTypePositionClosed, func(_ context.Context, event eventbus.Event) error {
-			if orderEvent, ok := event.Payload.(execution.OrderEvent); ok {
-				a.MaxLossMonitor.UntrackPosition(orderEvent.Exchange, orderEvent.Symbol)
-			}
-			return nil
-		})
 	}
 }
 

@@ -379,6 +379,19 @@ func run() error {
 	stopLossAutoExec.Start()
 	defer stopLossAutoExec.Stop()
 
+	maxLossMonitorConfig := services.DefaultMaxLossMonitorConfig()
+	maxLossMonitor := services.NewMaxLossMonitorService(
+		maxLossMonitorConfig,
+		ccxtService,
+		logrusLogger,
+		func(_ context.Context, exchange, symbol, side string, quantity decimal.Decimal) (*services.MaxLossExecutionResult, error) {
+			logrusLogger.Warnf("max-loss-monitor: CLOSE %s %s %s qty=%s (placeholder; ExecutionActor integration not yet wired)", exchange, side, symbol, quantity.String())
+			return &services.MaxLossExecutionResult{Success: true, ExecutedAt: time.Now().UTC()}, nil
+		},
+	)
+	maxLossMonitor.Start(ctx)
+	defer maxLossMonitor.Stop()
+
 	// Initialize heartbeat for continuous monitoring
 	heartbeatConfig := services.DefaultHeartbeatConfig()
 	heartbeatConfig.Enabled = true
