@@ -116,7 +116,11 @@ func NewMaxLossMonitorService(
 
 // Start begins the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Start(ctx context.Context) {
-	go s.monitor.Run(ctx)
+	go func() {
+		if err := s.monitor.Run(ctx); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: monitor loop exited")
+		}
+	}()
 	go s.run(ctx)
 }
 

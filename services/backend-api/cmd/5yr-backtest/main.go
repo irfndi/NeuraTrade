@@ -58,7 +58,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connect db: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		_ = db.Close()
+	}()
 
 	dbPool, ok := db.(services.DBPool)
 	if !ok {

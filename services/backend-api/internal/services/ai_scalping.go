@@ -3791,16 +3791,6 @@ func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Deci
 	return risk, reward
 }
 
-func clampDecimal(value, minValue, maxValue decimal.Decimal) decimal.Decimal {
-	if value.LessThan(minValue) {
-		return minValue
-	}
-	if value.GreaterThan(maxValue) {
-		return maxValue
-	}
-	return value
-}
-
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {
 	return rewardPct.Mul(decimal.NewFromInt(100)).
 		Sub(decimal.NewFromFloat(spreadPct)).
