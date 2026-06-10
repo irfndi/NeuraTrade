@@ -554,3 +554,77 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 		})
 	}
 }
+
+// TestIntegration_AbsoluteDailyLossLimit exercises the absolute (monetary)
+// branch of MaxDailyLossRule. Fractional is set high (10000) so only
+// the absolute check can trigger; absolute is set to 100. After two
+// UpdateDailyLoss calls totaling 150 (exceeds absolute, well under
+// fractional), the order must be rejected with RuleName=max_daily_loss.
+// After a single 50-unit loss, the order must still be approved.
+func TestIntegration_AbsoluteDailyLossLimit(t *testing.T) {
+	policy := NewEngine()
+	// fractional=10000 (won't trigger), absolute=100 (triggers at 150 total)
+	if err := policy.AddRule(NewMaxDailyLossRule(
+		decimal.NewFromInt(10000),
+		decimal.NewFromInt(100),
+	)); err != nil {
+		t.Fatalf("add max daily loss rule: %v", err)
+	}
+
+	ra, err := NewRiskActor(RiskActorConfig{
+		ID:           "test-absolute-limit",
+		PolicyEngine: policy,
+		KillSwitch:   NewKillSwitch(),
+		SafeMode:     NewSafeMode(DefaultSafeModeConfig()),
+		EventBus:     eventbus.New(eventbus.DefaultConfig()),
+	})
+	if err != nil {
+		t.Fatalf("new risk actor: %v", err)
+	}
+
+	ref := actor.NewRef(ra, actor.DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ref.Run(ctx)
+	waitForActorRunning(t, ref, time.Second)
+
+	client := NewRiskActorRef(ref)
+
+	validIntent := ports.OrderIntent{
+		IntentID:   "under-limit-1",
+		Exchange:   "binance",
+		Symbol:     "BTC/USDT",
+		Side:       ports.OrderSideBuy,
+		Type:       ports.OrderTypeLimit,
+		Amount:     decimal.NewFromFloat(1.0),
+		Price:      decimal.NewFromFloat(50000.0),
+		Confidence: 0.8,
+	}
+
+	// 1) Single 50-unit loss: under absolute limit (100), order approved.
+	if err := client.UpdateDailyLoss(ctx, decimal.NewFromInt(50)); err != nil {
+		t.Fatalf("update daily loss: %v", err)
+	}
+	decision, err := client.EvaluateIntent(ctx, validIntent)
+	if err != nil {
+		t.Fatalf("evaluate intent: %v", err)
+	}
+	if !decision.Approved {
+		t.Errorf("expected approval at daily loss=50 (under absolute 100), got rejection: %s", decision.Reason)
+	}
+
+	// 2) Second 100-unit loss: cumulative 150, exceeds absolute 100.
+	if err := client.UpdateDailyLoss(ctx, decimal.NewFromInt(100)); err != nil {
+		t.Fatalf("update daily loss: %v", err)
+	}
+	decision, err = client.EvaluateIntent(ctx, validIntent)
+	if err != nil {
+		t.Fatalf("evaluate intent: %v", err)
+	}
+	if decision.Approved {
+		t.Errorf("expected rejection at daily loss=150 (over absolute 100), got approval")
+	}
+	if decision.RuleName != "max_daily_loss" {
+		t.Errorf("expected rejection by max_daily_loss, got %s", decision.RuleName)
+	}
+}

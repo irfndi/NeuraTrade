@@ -369,6 +369,13 @@ func (a *RiskActor) handleUpdateDailyLoss(msg UpdateDailyLossMsg) {
 	if a.dailyLossRule != nil {
 		a.dailyLossRule.UpdateDailyLoss(msg.Loss)
 	}
+	if a.policy != nil {
+		for _, rule := range a.policy.GetHardRules() {
+			if mdRule, ok := rule.(*MaxDailyLossRule); ok {
+				mdRule.UpdateDailyLoss(msg.Loss)
+			}
+		}
+	}
 	a.mu.Lock()
 	a.dailyLoss = a.dailyLoss.Add(msg.Loss)
 	a.mu.Unlock()
