@@ -582,7 +582,7 @@ func run() error {
 	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
 
 	// Setup routes and get cleanup function
-	cleanupRoutes, err := api.SetupRoutes(router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService, sharedKillSwitch, sharedSafeMode, &cfg.Testnet)
+	cleanupRoutes, err := api.SetupRoutes(ctx, router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService, sharedKillSwitch, sharedSafeMode, &cfg.Testnet)
 	if err != nil {
 		return fmt.Errorf("failed to setup routes: %w", err)
 	}

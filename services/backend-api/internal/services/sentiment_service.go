@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -187,7 +188,7 @@ func (s *SentimentService) getRedditAccessToken(ctx context.Context) (string, er
 
 // fetchSubredditPosts fetches hot posts from a subreddit
 func (s *SentimentService) fetchSubredditPosts(ctx context.Context, accessToken, subreddit string) ([]RedditSentiment, error) {
-	url := fmt.Sprintf("https://oauth.reddit.com/r/%s/hot.json?limit=25", subreddit)
+	url := fmt.Sprintf("https://oauth.reddit.com/r/%s/hot.json?limit=25", url.PathEscape(subreddit))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -319,7 +320,7 @@ func (s *SentimentService) FetchNewsSentiment(ctx context.Context, kind string) 
 		return nil, fmt.Errorf("cryptopanic token not configured")
 	}
 
-	url := fmt.Sprintf("https://cryptopanic.com/api/v1/posts/?auth_token=%s&kind=%s", s.config.CryptoPanicToken, kind)
+	url := fmt.Sprintf("https://cryptopanic.com/api/v1/posts/?auth_token=%s&kind=%s", s.config.CryptoPanicToken, url.QueryEscape(kind))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

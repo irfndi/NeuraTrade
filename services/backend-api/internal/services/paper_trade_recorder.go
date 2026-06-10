@@ -379,6 +379,53 @@ type PaperTradeSummary struct {
 	TotalFees     decimal.Decimal `json:"total_fees"`
 }
 
+// ListStaleOpenTrades returns all paper_trades rows in 'open' status that
+// were opened before maxAge. Used by the shadow coordinator's periodic
+// reconciliation to clean up rows that the live paper-trading path opened
+// but never closed (a real-money blocker: orphaned rows accumulate
+// unbounded cost basis and break PnL accounting).
+//
+// Rows are returned in opened_at ASC order so the caller can close the
+// oldest first.
+func (r *PaperTradeRecorder) ListStaleOpenTrades(ctx context.Context, maxAge time.Time) ([]*PaperTrade, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("paper trade recorder is not initialized")
+	}
+	query := `
+		SELECT id, user_id, quest_id, strategy_id, exchange, symbol, side,
+		       entry_price, exit_price, size, fees, pnl, cost_basis, status,
+		       opened_at, closed_at, created_at, updated_at
+		FROM paper_trades
+		WHERE status = 'open' AND opened_at < $1
+		ORDER BY opened_at ASC
+		LIMIT 1000
+	`
+	rows, err := r.db.Query(ctx, query, maxAge)
+	if err != nil {
+		return nil, fmt.Errorf("list stale open trades: %w", err)
+	}
+	defer rows.Close()
+	var out []*PaperTrade
+	for rows.Next() {
+		var trade PaperTrade
+		if scanErr := rows.Scan(
+			&trade.ID, &trade.UserID, &trade.QuestID, &trade.StrategyID,
+			&trade.Exchange, &trade.Symbol, &trade.Side,
+			&trade.EntryPrice, &trade.ExitPrice, &trade.Size,
+			&trade.Fees, &trade.PnL, &trade.CostBasis, &trade.Status,
+			&trade.OpenedAt, &trade.ClosedAt,
+			&trade.CreatedAt, &trade.UpdatedAt,
+		); scanErr != nil {
+			return nil, fmt.Errorf("scan stale trade: %w", scanErr)
+		}
+		out = append(out, &trade)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale trades: %w", err)
+	}
+	return out, nil
+}
+
 // CancelTrade cancels an open paper trade.
 func (r *PaperTradeRecorder) CancelTrade(ctx context.Context, tradeID int64) (*PaperTrade, error) {
 	query := `

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -116,7 +117,7 @@ func (tss *TwitterSentimentService) fetchTweets(ctx context.Context, symbol stri
 		return tss.getMockTweets(symbol), nil
 	}
 
-	url := fmt.Sprintf("https://api.twitter.com/2/tweets/search/recent?query=%s&max_results=100", symbol)
+	url := fmt.Sprintf("https://api.twitter.com/2/tweets/search/recent?query=%s&max_results=100", url.QueryEscape(symbol))
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err

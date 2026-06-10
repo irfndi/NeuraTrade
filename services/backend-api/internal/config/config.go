@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/irfndi/neuratrade/internal/netutil"
 	"github.com/spf13/viper"
 )
 
@@ -814,6 +815,35 @@ func validateConfig(config *Config) error {
 		}
 		if config.LiveReadiness.LookbackHours <= 0 {
 			return fmt.Errorf("live_readiness.lookback_hours must be > 0 when live_readiness.enabled=true")
+		}
+	}
+
+	// Validate outbound service URLs to prevent SSRF from env-var injection.
+	if config.CCXT.ServiceURL != "" {
+		if err := netutil.ValidateURL(config.CCXT.ServiceURL, nil); err != nil {
+			return fmt.Errorf("invalid ccxt.service_url: %w", err)
+		}
+	}
+	if config.Telegram.ServiceURL != "" {
+		if err := netutil.ValidateURL(config.Telegram.ServiceURL, nil); err != nil {
+			return fmt.Errorf("invalid telegram.service_url: %w", err)
+		}
+	}
+	if config.Telegram.WebhookURL != "" {
+		if err := netutil.ValidateURL(config.Telegram.WebhookURL, nil); err != nil {
+			return fmt.Errorf("invalid telegram.webhook_url: %w", err)
+		}
+	}
+	if config.AI.BaseURL != "" {
+		if err := netutil.ValidateURL(config.AI.BaseURL, nil); err != nil {
+			return fmt.Errorf("invalid ai.base_url: %w", err)
+		}
+	}
+	for i, m := range config.AI.AdditionalModels {
+		if m.BaseURL != "" {
+			if err := netutil.ValidateURL(m.BaseURL, nil); err != nil {
+				return fmt.Errorf("invalid ai.additional_models[%d].base_url: %w", i, err)
+			}
 		}
 	}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/shopspring/decimal"
@@ -200,7 +201,7 @@ func (c *CLOBClient) CreateOrderBatch(ctx context.Context, orders []PostOrderReq
 }
 
 func (c *CLOBClient) GetOrderBook(ctx context.Context, tokenID string) (*OrderBook, error) {
-	url := c.baseURL + "/orderbook/" + tokenID
+	url := c.baseURL + "/orderbook/" + url.PathEscape(tokenID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -319,7 +320,7 @@ func (c *CLOBClient) GetOpenOrders(ctx context.Context) ([]OrderResponse, error)
 }
 
 func (c *CLOBClient) GetOrder(ctx context.Context, orderID string) (*OrderResponse, error) {
-	url := c.baseURL + "/order/" + orderID
+	url := c.baseURL + "/order/" + url.PathEscape(orderID)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

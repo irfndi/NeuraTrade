@@ -159,7 +159,7 @@ func (c *Client) GetMarkets(ctx context.Context, filter *MarketsFilter) ([]Marke
 }
 
 func (c *Client) GetMarket(ctx context.Context, conditionID string) (*Market, error) {
-	path := fmt.Sprintf("/markets/%s", conditionID)
+	path := fmt.Sprintf("/markets/%s", url.PathEscape(conditionID))
 
 	var market Market
 	if err := c.doRequest(ctx, "GET", path, nil, &market); err != nil {

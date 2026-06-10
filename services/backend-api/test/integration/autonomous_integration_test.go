@@ -85,7 +85,7 @@ func TestAutonomousIntegration(t *testing.T) {
 		Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(5000.0), "BTC": decimal.NewFromFloat(0.0)},
 	}, nil)
 
-	_, err = api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil, nil, nil, nil, nil)
+	_, err = api.SetupRoutes(context.Background(), router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	testTelegramChatID := fmt.Sprintf("tg_auto_%s", uuid.New().String())

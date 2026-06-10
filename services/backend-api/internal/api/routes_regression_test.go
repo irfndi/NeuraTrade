@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -60,7 +61,7 @@ func TestSetupRoutes_HealthEndpointContractRegression(t *testing.T) {
 	cacheAnalyticsService := services.NewCacheAnalyticsService(nil)
 	mockAuthMiddleware := middleware.MustNewAuthMiddleware("test-secret-key-must-be-32-chars-min!")
 
-	teardown, err := SetupRoutes(router, mockDB, mockRedis, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil, nil)
+	teardown, err := SetupRoutes(context.Background(), router, mockDB, mockRedis, mockCCXT, nil, nil, cacheAnalyticsService, nil, nil, mockTelegramConfig, nil, nil, mockAuthMiddleware, nil, nil, nil, nil, nil, nil, nil, nil)
 	require.NoError(t, err)
 	defer teardown()
 

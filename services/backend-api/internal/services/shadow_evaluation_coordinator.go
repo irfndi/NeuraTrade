@@ -42,6 +42,14 @@ type ShadowEvaluationCoordinator struct {
 
 	mu       sync.RWMutex
 	runtimes map[string]*shadowVariantRuntime
+
+	// Periodic reconciliation for orphan paper_trades rows. The live
+	// paper-trading path opens rows in recordPaperTradeOpen but never
+	// closes them (the close path runs only in backfills), so positions
+	// accumulate unboundedly. Without this loop, paper PnL diverges from
+	// reality and a real-money rollout would silently leak.
+	reconcilerStop chan struct{}
+	reconcilerDone chan struct{}
 }
 
 func NewShadowEvaluationCoordinator(
@@ -691,4 +699,143 @@ func metricDecimal(raw interface{}) decimal.Decimal {
 		return decimal.Zero
 	}
 	return value
+}
+
+// ReconciliationConfig controls the periodic orphan-paper-trade closer
+// run by Start(). Defaults are conservative: scan every 10 minutes,
+// force-close any paper_trade row that's been open for more than 4 hours.
+// The 4h window matches defaultShadowMaxPositionAge for shadow decisions.
+type ReconciliationConfig struct {
+	// Interval between sweeps. Must be > 0; default 10m.
+	Interval time.Duration
+	// MaxAge is the cutoff for "stale" rows. Must be > 0; default 4h.
+	MaxAge time.Duration
+	// ExitPriceFunc returns the exit price to use when closing a stale
+	// row. If nil, the row's entry price is reused (which produces
+	// zero realized PnL). A nil function is the safe default for
+	// paper-only systems; live-trading callers should pass a price feed.
+	ExitPriceFunc func(trade *PaperTrade) decimal.Decimal
+}
+
+func (c *ReconciliationConfig) applyDefaults() {
+	if c.Interval <= 0 {
+		c.Interval = 10 * time.Minute
+	}
+	if c.MaxAge <= 0 {
+		c.MaxAge = defaultShadowMaxPositionAge
+	}
+}
+
+// Start launches the periodic orphan-paper-trade reconciler. Idempotent:
+// calling Start twice is a no-op. The reconciler closes paper_trades
+// rows that have been 'open' for longer than cfg.MaxAge. The legacy
+// CloseStaleShadowPositions loop (which only manages the in-memory
+// shadow decision state) is run on the same tick.
+//
+// This is required for real-money readiness: without it, paper-trade
+// rows accumulate forever and inflate cost-basis calculations.
+func (c *ShadowEvaluationCoordinator) Start(ctx context.Context, cfg ReconciliationConfig) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.reconcilerStop != nil {
+		c.mu.Unlock()
+		return
+	}
+	cfg.applyDefaults()
+	c.reconcilerStop = make(chan struct{})
+	c.reconcilerDone = make(chan struct{})
+	c.mu.Unlock()
+
+	go c.reconcileLoop(ctx, cfg)
+}
+
+// Stop signals the periodic reconciler to exit and waits for it. Safe
+// to call multiple times. Safe to call before Start (no-op).
+func (c *ShadowEvaluationCoordinator) Stop() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	stop := c.reconcilerStop
+	done := c.reconcilerDone
+	c.reconcilerStop = nil
+	c.reconcilerDone = nil
+	c.mu.Unlock()
+	if stop == nil {
+		return
+	}
+	close(stop)
+	if done != nil {
+		<-done
+	}
+}
+
+func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg ReconciliationConfig) {
+	defer close(c.reconcilerDone)
+	ticker := time.NewTicker(cfg.Interval)
+	defer ticker.Stop()
+	c.runReconcileOnce(ctx, cfg) // run once immediately
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.reconcilerStop:
+			return
+		case <-ticker.C:
+			c.runReconcileOnce(ctx, cfg)
+		}
+	}
+}
+
+func (c *ShadowEvaluationCoordinator) runReconcileOnce(ctx context.Context, cfg ReconciliationConfig) {
+	cutoff := time.Now().UTC().Add(-cfg.MaxAge)
+	c.CloseStaleShadowPositions(ctx, nil, cutoff)
+
+	if c.recorder == nil {
+		return
+	}
+	stale, err := c.recorder.ListStaleOpenTrades(ctx, cutoff)
+	if err != nil {
+		c.logger.Warn("paper trade reconciler: list stale failed",
+			zap.Error(err),
+		)
+		return
+	}
+	if len(stale) == 0 {
+		return
+	}
+	closed := 0
+	for _, t := range stale {
+		exitPrice := t.EntryPrice
+		if cfg.ExitPriceFunc != nil {
+			if p := cfg.ExitPriceFunc(t); p.GreaterThan(decimal.Zero) {
+				exitPrice = p
+			}
+		}
+		// Calculate PnL against the chosen exit price.
+		var pnl decimal.Decimal
+		if t.Side == "buy" {
+			pnl = exitPrice.Sub(t.EntryPrice).Mul(t.Size)
+		} else {
+			pnl = t.EntryPrice.Sub(exitPrice).Mul(t.Size)
+		}
+		if _, err := c.recorder.RecordCloseTrade(ctx, t.ID, exitPrice, decimal.Zero, time.Now().UTC()); err != nil {
+			c.logger.Warn("paper trade reconciler: close failed",
+				zap.Int64("trade_id", t.ID),
+				zap.String("symbol", t.Symbol),
+				zap.String("strategy", t.StrategyID),
+				zap.Error(err),
+			)
+			continue
+		}
+		closed++
+		_ = pnl // PnL is recomputed inside RecordCloseTrade; logged there
+	}
+	c.logger.Info("paper trade reconciler: closed stale rows",
+		zap.Int("stale", len(stale)),
+		zap.Int("closed", closed),
+		zap.Duration("max_age", cfg.MaxAge),
+	)
 }

@@ -444,7 +444,7 @@ func riskLockSourcePriority(source string) int {
 // It returns a cleanup function that should be called on shutdown to stop background resources (for example, the WebSocket handler).
 //
 //nolint:staticcheck // SA1019: SignalAggregator and TechnicalAnalysisService are deprecated but required for backward compatibility until scalping composer migration completes.
-func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService, sharedKillSwitch *apprisk.KillSwitchImpl, sharedSafeMode *apprisk.SafeModeImpl, testnetConfig *config.TestnetConfig) (func(), error) {
+func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *database.RedisClient, ccxtService ccxt.CCXTService, collectorService *services.CollectorService, cleanupService *services.CleanupService, cacheAnalyticsService *services.CacheAnalyticsService, signalAggregator *services.SignalAggregator, analyticsService *services.AnalyticsService, telegramConfig *config.TelegramConfig, aiConfig *config.AIConfig, featuresConfig *config.FeaturesConfig, authMiddleware *middleware.AuthMiddleware, walletValidator *services.WalletValidator, opModeService *services.OperationalModeService, technicalAnalysisService *services.TechnicalAnalysisService, securityConfig *config.SecurityConfig, apiKeyService *services.APIKeyService, sharedKillSwitch *apprisk.KillSwitchImpl, sharedSafeMode *apprisk.SafeModeImpl, testnetConfig *config.TestnetConfig) (func(), error) {
 	configureLiveReadinessGuard(opModeService, db)
 
 	allowedOrigins := []string{"http://localhost:3000"}
@@ -1004,6 +1004,15 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		nil,
 	)
 	integratedHandlers.SetShadowEvaluationCoordinator(shadowCoordinator)
+
+	// Start the orphan paper_trades reconciler. Required for real-money
+	// readiness: without it, paper_trades rows opened by the live path
+	// never close (only backfills close them), so cost-basis accounting
+	// diverges from reality. The reconciler closes any 'open' row older
+	// than the configured max age (default 4h) on a periodic tick.
+	if shadowCoordinator != nil && shadowRecorder != nil {
+		shadowCoordinator.Start(ctx, services.ReconciliationConfig{})
+	}
 
 	if sqlDB != nil {
 		tradeMemory, err := services.NewTradeMemoryWithConfig(
@@ -1647,6 +1656,9 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 	return func() {
 		if webSocketHandler != nil {
 			webSocketHandler.Stop()
+		}
+		if shadowCoordinator != nil {
+			shadowCoordinator.Stop()
 		}
 	}, nil
 }
