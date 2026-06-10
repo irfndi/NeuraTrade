@@ -25,6 +25,11 @@ func TestBacktestRunActionRejectsInvertedOrEqualDateRange(t *testing.T) {
 			start: "2026-01-02T00:00:00Z",
 			end:   "2026-01-01T00:00:00Z",
 		},
+		{
+			name:  "fractional equal range",
+			start: "2026-01-01T00:00:00.123456789Z",
+			end:   "2026-01-01T00:00:00.123456789Z",
+		},
 	}
 
 	for _, tt := range tests {
@@ -42,8 +47,29 @@ func TestBacktestRunActionRejectsInvertedOrEqualDateRange(t *testing.T) {
 			err := backtestRunAction(cli.NewContext(cli.NewApp(), flags, nil))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "--start must be before --end")
+			assert.Contains(t, err.Error(), tt.start)
+			assert.Contains(t, err.Error(), tt.end)
 		})
 	}
+}
+
+func TestBacktestRunActionQuotesInvalidTimestampValues(t *testing.T) {
+	flags := flag.NewFlagSet("backtest", flag.ContinueOnError)
+	flags.String("start", "", "")
+	flags.String("end", "", "")
+	flags.String("mode", "deterministic", "")
+	flags.String("symbols", "", "")
+	flags.String("exchange", "", "")
+	flags.String("initial-capital", "", "")
+	flags.Duration("timeout", defaultTimeout, "")
+	require.NoError(t, flags.Parse([]string{
+		"--start", "not-a-time",
+		"--end", "2026-01-01T00:00:00Z",
+	}))
+
+	err := backtestRunAction(cli.NewContext(cli.NewApp(), flags, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid --start "not-a-time"`)
 }
 
 func TestBacktestCommandUsesActualTimeoutDefaultInHelp(t *testing.T) {

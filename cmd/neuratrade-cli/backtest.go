@@ -57,16 +57,16 @@ func backtestRunAction(cCtx *cli.Context) error {
 	if start == "" || end == "" {
 		return fmt.Errorf("--start and --end are required (RFC3339, e.g. 2025-01-01T00:00:00Z)")
 	}
-	startTime, err := time.Parse(time.RFC3339, start)
+	startTime, err := time.Parse(time.RFC3339Nano, start)
 	if err != nil {
-		return fmt.Errorf("invalid --start: %w", err)
+		return fmt.Errorf("invalid --start %q: %w", start, err)
 	}
-	endTime, err := time.Parse(time.RFC3339, end)
+	endTime, err := time.Parse(time.RFC3339Nano, end)
 	if err != nil {
-		return fmt.Errorf("invalid --end: %w", err)
+		return fmt.Errorf("invalid --end %q: %w", end, err)
 	}
 	if !startTime.Before(endTime) {
-		return fmt.Errorf("invalid date range: --start must be before --end")
+		return fmt.Errorf("invalid date range (%q to %q): --start must be before --end", start, end)
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cCtx.String("mode")))
