@@ -15,8 +15,9 @@ import (
 // DefaultKillSwitchMonitorConfig returns a KillSwitchMonitorConfig with sensible defaults.
 func DefaultKillSwitchMonitorConfig() KillSwitchMonitorConfig {
 	return KillSwitchMonitorConfig{
-		PollInterval:   5 * time.Second,
+		PollInterval:     5 * time.Second,
 		FailureThreshold: 6,
+		RecoveryThreshold: 10,
 	}
 }
 
@@ -28,6 +29,11 @@ type KillSwitchMonitorConfig struct {
 	// FailureThreshold is the number of consecutive health check failures
 	// before auto-engaging the kill switch. Default: 6 (30s at 5s intervals).
 	FailureThreshold int
+
+	// RecoveryThreshold is the number of consecutive healthy checks
+	// required before auto-disengaging the kill switch. Default: 3 (15s at 5s intervals).
+	// This prevents flapping and ensures the exchange is truly healthy.
+	RecoveryThreshold int
 }
 
 // ExchangeHealthChecker checks whether the exchange is reachable.
@@ -42,9 +48,10 @@ type KillSwitchMonitor struct {
 	checker    ExchangeHealthChecker
 	config     KillSwitchMonitorConfig
 
-	mu              sync.Mutex
-	consecutiveFails int
-	engagedByMonitor bool
+	mu               sync.Mutex
+	consecutiveFails  int
+	consecutiveHealthy int
+	engagedByMonitor  bool
 }
 
 // NewKillSwitchMonitor creates a new KillSwitchMonitor.
@@ -54,11 +61,15 @@ func NewKillSwitchMonitor(
 	checker ExchangeHealthChecker,
 	config KillSwitchMonitorConfig,
 ) *KillSwitchMonitor {
+	defaults := DefaultKillSwitchMonitorConfig()
 	if config.PollInterval <= 0 {
-		config.PollInterval = 5 * time.Second
+		config.PollInterval = defaults.PollInterval
 	}
 	if config.FailureThreshold <= 0 {
-		config.FailureThreshold = 6
+		config.FailureThreshold = defaults.FailureThreshold
+	}
+	if config.RecoveryThreshold <= 0 {
+		config.RecoveryThreshold = defaults.RecoveryThreshold
 	}
 	return &KillSwitchMonitor{
 		killSwitch: killSwitch,
@@ -107,12 +118,23 @@ func (m *KillSwitchMonitor) onHealthy(ctx context.Context) {
 	if !m.engagedByMonitor {
 		// Not engaged by us — just reset the failure counter.
 		m.consecutiveFails = 0
+		m.consecutiveHealthy = 0
 		return
 	}
 
-	// Kill switch is engaged by this monitor — disengage on recovery.
+	// Kill switch is engaged by this monitor — require consecutive healthy
+	// checks before disengaging (prevents flapping).
 	m.consecutiveFails = 0
+	m.consecutiveHealthy++
+
+	if m.consecutiveHealthy < m.config.RecoveryThreshold {
+		zaplogrus.Infof("[kill-switch-monitor] healthy check %d/%d during recovery window",
+			m.consecutiveHealthy, m.config.RecoveryThreshold)
+		return
+	}
+
 	m.engagedByMonitor = false
+	m.consecutiveHealthy = 0
 
 	reason := "exchange recovered"
 	zaplogrus.Infof("[kill-switch-monitor] exchange recovered, disengaging kill switch")

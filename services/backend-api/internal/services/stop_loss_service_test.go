@@ -17,7 +17,7 @@ import (
 )
 
 type slTestCCXT struct {
-	tickerPrice float64
+	tickerPrice decimal.Decimal
 }
 
 func (m *slTestCCXT) Initialize(_ context.Context) error { return nil }
@@ -100,7 +100,7 @@ var _ ccxt.CCXTService = (*slTestCCXT)(nil)
 
 func newTestStopLossService(redisClient *redis.Client) *StopLossService {
 	config := DefaultStopLossConfig()
-	return NewStopLossService(config, &slTestCCXT{tickerPrice: 50000.0}, zaplogrus.New(), nil, redisClient)
+	return NewStopLossService(config, &slTestCCXT{tickerPrice: decimal.NewFromFloat(50000.0)}, zaplogrus.New(), nil, redisClient)
 }
 
 func newTestStopLossParams() StopLossParams {

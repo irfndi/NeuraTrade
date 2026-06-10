@@ -20,6 +20,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/testutil"
 	"github.com/irfndi/neuratrade/test/testmocks"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -79,9 +80,9 @@ func TestAutonomousIntegration(t *testing.T) {
 	mockCCXT.On("FetchBalance", mock.Anything, "binance").Return(&ccxt.BalanceResponse{
 		Exchange:  "binance",
 		Timestamp: time.Now(),
-		Total:     map[string]float64{"USDT": 10000.0, "BTC": 0.5},
-		Free:      map[string]float64{"USDT": 5000.0, "BTC": 0.5},
-		Used:      map[string]float64{"USDT": 5000.0, "BTC": 0.0},
+		Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0), "BTC": decimal.NewFromFloat(0.5)},
+		Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(5000.0), "BTC": decimal.NewFromFloat(0.5)},
+		Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(5000.0), "BTC": decimal.NewFromFloat(0.0)},
 	}, nil)
 
 	_, err = api.SetupRoutes(router, db, redisClient, mockCCXT, nil, nil, nil, nil, nil, cfg, nil, nil, authMiddleware, nil, nil, nil, nil, nil, nil, nil, nil)

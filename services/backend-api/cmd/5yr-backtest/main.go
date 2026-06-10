@@ -73,14 +73,14 @@ func run() error {
 		Symbols:            symbolList,
 		Exchange:           "binance",
 		InitialCapital:     initialCapital,
-		FeeRate:            decimal.NewFromFloat(0.001),
+		FeeRate:            decimal.NewFromFloat(0.0002),
 		MaxBidAskSpreadPct: 0.08,
 		MinConfidence:      0.60,
 		MinExpectancyN:     *minExpectancyN,
 		MinExpectancyEdge:  *minExpectancyEdge,
 		SpreadMultiplier:   8,
-		MaxCapitalPct:      5.0,
-		DefaultHoldPeriod:  5 * time.Minute,
+		MaxCapitalPct:      25.0,
+		DefaultHoldPeriod:  4 * time.Hour,
 		Mode:               "deterministic",
 	}
 

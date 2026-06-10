@@ -37,10 +37,10 @@ func (a *Adapter) FetchTick(ctx context.Context, exchange, symbol string) (ports
 	return ports.Tick{
 		Exchange:  ticker.GetExchangeName(),
 		Symbol:    ticker.GetSymbol(),
-		Bid:       decimal.NewFromFloat(ticker.GetBid()),
-		Ask:       decimal.NewFromFloat(ticker.GetAsk()),
-		Last:      decimal.NewFromFloat(ticker.GetPrice()),
-		Volume:    decimal.NewFromFloat(ticker.GetVolume()),
+		Bid:       ticker.GetBid(),
+		Ask:       ticker.GetAsk(),
+		Last:      ticker.GetPrice(),
+		Volume:    ticker.GetVolume(),
 		Timestamp: ticker.GetTimestamp(),
 	}, nil
 }
@@ -280,9 +280,9 @@ func (a *Adapter) FetchBalances(ctx context.Context, exchange string) ([]ports.B
 		balances = append(balances, ports.Balance{
 			Exchange: exchange,
 			Currency: currency,
-			Total:    decimal.NewFromFloat(total),
-			Free:     decimal.NewFromFloat(free),
-			Used:     decimal.NewFromFloat(used),
+			Total:    total,
+			Free:     free,
+			Used:     used,
 		})
 	}
 

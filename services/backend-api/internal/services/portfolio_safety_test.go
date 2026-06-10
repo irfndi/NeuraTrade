@@ -184,9 +184,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_WithBalance(t *testing.T) {
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "binance",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 10000.0},
-			Free:      map[string]float64{"USDT": 8000.0},
-			Used:      map[string]float64{"USDT": 2000.0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(8000.0)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(2000.0)},
 		},
 	}
 
@@ -221,9 +221,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_WithLowercaseQuoteCurrency(
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"usdt": 1000.0},
-			Free:      map[string]float64{"UsDt": 700.0},
-			Used:      map[string]float64{"USDT": 300.0},
+			Total:     map[string]decimal.Decimal{"usdt": decimal.NewFromFloat(1000.0)},
+			Free:      map[string]decimal.Decimal{"UsDt": decimal.NewFromFloat(700.0)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(300.0)},
 		},
 	}
 
@@ -275,9 +275,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_UsesRecentStaleCacheOnRefre
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 46.93},
-			Free:      map[string]float64{"USDT": 46.93},
-			Used:      map[string]float64{"USDT": 0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
 		},
 	}
 
@@ -317,9 +317,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_ReturnsDeepCloneFromCache(t
 			"bitget": {
 				Exchange:  "bitget",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 1000},
-				Free:      map[string]float64{"USDT": 900},
-				Used:      map[string]float64{"USDT": 100},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(1000)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(900)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(100)},
 			},
 		},
 		positionsByExch: map[string]*ccxt.PositionsResponse{
@@ -469,9 +469,9 @@ func TestPortfolioSafetyService_CanExecuteTrade(t *testing.T) {
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "binance",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 10000.0},
-			Free:      map[string]float64{"USDT": 8000.0},
-			Used:      map[string]float64{"USDT": 2000.0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(8000.0)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(2000.0)},
 		},
 	}
 
@@ -507,9 +507,9 @@ func TestPortfolioSafetyService_InvalidateCache(t *testing.T) {
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "binance",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 10000.0},
-			Free:      map[string]float64{"USDT": 8000.0},
-			Used:      map[string]float64{"USDT": 2000.0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(8000.0)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(2000.0)},
 		},
 	}
 
@@ -533,7 +533,7 @@ func TestPortfolioSafetyService_InvalidateCache(t *testing.T) {
 
 	service.InvalidateCache()
 
-	mockCCXT.balanceResponse.Total["USDT"] = 20000.0
+	mockCCXT.balanceResponse.Total["USDT"] = decimal.NewFromFloat(20000.0)
 	snapshot2, err := service.GetPortfolioSnapshot(ctx, "test-chat", []string{"binance"})
 	require.NoError(t, err)
 	assert.NotNil(t, snapshot2)
@@ -579,16 +579,16 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_CacheKeyIncludesChatAndExch
 			"binance": {
 				Exchange:  "binance",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 10000.0},
-				Free:      map[string]float64{"USDT": 8000.0},
-				Used:      map[string]float64{"USDT": 2000.0},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(8000.0)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(2000.0)},
 			},
 			"bybit": {
 				Exchange:  "bybit",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 5000.0},
-				Free:      map[string]float64{"USDT": 4000.0},
-				Used:      map[string]float64{"USDT": 1000.0},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(5000.0)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(4000.0)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(1000.0)},
 			},
 		},
 	}
@@ -629,16 +629,16 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_CacheKeyNormalizesExchangeO
 			"binance": {
 				Exchange:  "binance",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 10000.0},
-				Free:      map[string]float64{"USDT": 9000.0},
-				Used:      map[string]float64{"USDT": 1000.0},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(10000.0)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(9000.0)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(1000.0)},
 			},
 			"bybit": {
 				Exchange:  "bybit",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 3000.0},
-				Free:      map[string]float64{"USDT": 2000.0},
-				Used:      map[string]float64{"USDT": 1000.0},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(3000.0)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(2000.0)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(1000.0)},
 			},
 		},
 	}
@@ -675,9 +675,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_FallsBackToExchangePosition
 			"bitget": {
 				Exchange:  "bitget",
 				Timestamp: time.Now(),
-				Total:     map[string]float64{"USDT": 1000.0},
-				Free:      map[string]float64{"USDT": 900.0},
-				Used:      map[string]float64{"USDT": 100.0},
+				Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(1000.0)},
+				Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(900.0)},
+				Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(100.0)},
 			},
 		},
 		positionsByExch: map[string]*ccxt.PositionsResponse{
@@ -819,9 +819,9 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesMinNotionalScenario
 				balanceResponse: &ccxt.BalanceResponse{
 					Exchange:  "bitget",
 					Timestamp: time.Now(),
-					Total:     map[string]float64{"USDT": tt.balanceTotal},
-					Free:      map[string]float64{"USDT": tt.balanceTotal},
-					Used:      map[string]float64{"USDT": 0},
+					Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(tt.balanceTotal)},
+					Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(tt.balanceTotal)},
+					Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
 				},
 			}
 
@@ -848,9 +848,9 @@ func TestPortfolioSafetyService_CanExecuteTradeWithLeverage_BitgetFuturesAllowsM
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 46.93},
-			Free:      map[string]float64{"USDT": 0.61},
-			Used:      map[string]float64{"USDT": 46.32},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0.61)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.32)},
 		},
 	}
 
@@ -879,9 +879,9 @@ func TestPortfolioSafetyService_CanExecuteTrade_UsesScopedLeverageForBitgetFutur
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 46.93},
-			Free:      map[string]float64{"USDT": 0.61},
-			Used:      map[string]float64{"USDT": 46.32},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0.61)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.32)},
 		},
 	}
 
@@ -925,9 +925,9 @@ func TestPortfolioSafetyService_CanExecuteTrade_BitgetFuturesAllowsMinNotionalWh
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 0},
-			Free:      map[string]float64{"USDT": 0},
-			Used:      map[string]float64{"USDT": 0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
 		},
 	}
 
@@ -968,13 +968,13 @@ func TestPortfolioSafetyService_ResolveScopedMarketFunds_UsesCachedSnapshotBalan
 		balancesByExchange: map[string]*ccxt.BalanceResponse{
 			"bitget": {
 				Exchange: "bitget",
-				Total: map[string]float64{
-					"USDT":              100,
-					"USDT_FUTURES_USDT": 3,
+				Total: map[string]decimal.Decimal{
+					"USDT": decimal.NewFromFloat(100),
+					"USDT_FUTURES_USDT": decimal.NewFromFloat(3),
 				},
-				Free: map[string]float64{
-					"USDT":              80,
-					"USDT_FUTURES_USDT": 2,
+				Free: map[string]decimal.Decimal{
+					"USDT": decimal.NewFromFloat(80),
+					"USDT_FUTURES_USDT": decimal.NewFromFloat(2),
 				},
 			},
 		},
@@ -993,8 +993,8 @@ func TestPortfolioSafetyService_ResolveScopedMarketFunds_DoesNotPromoteSummaryOn
 		balancesByExchange: map[string]*ccxt.BalanceResponse{
 			"bitget": {
 				Exchange: "bitget",
-				Total: map[string]float64{
-					"USDT_FUTURES_USDT": 3,
+				Total: map[string]decimal.Decimal{
+					"USDT_FUTURES_USDT": decimal.NewFromFloat(3),
 				},
 				Raw: map[string]interface{}{
 					"summary_only_balance_keys": map[string]interface{}{"USDT_FUTURES_USDT": true},
@@ -1048,9 +1048,9 @@ func TestPortfolioSafetyService_GetPortfolioSnapshot_RejectsExpiredStaleCacheOnR
 		balanceResponse: &ccxt.BalanceResponse{
 			Exchange:  "bitget",
 			Timestamp: time.Now(),
-			Total:     map[string]float64{"USDT": 46.93},
-			Free:      map[string]float64{"USDT": 46.93},
-			Used:      map[string]float64{"USDT": 0},
+			Total:     map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Free:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(46.93)},
+			Used:      map[string]decimal.Decimal{"USDT": decimal.NewFromFloat(0)},
 		},
 	}
 

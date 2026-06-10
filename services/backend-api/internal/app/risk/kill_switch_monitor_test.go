@@ -152,6 +152,7 @@ func TestKillSwitchMonitor_FailureCounterResetsOnHealthy(t *testing.T) {
 	monitor := NewKillSwitchMonitor(ks, nil, checker.check, KillSwitchMonitorConfig{
 		PollInterval:     10 * time.Millisecond,
 		FailureThreshold: 5,
+		RecoveryThreshold: 1,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -243,6 +244,7 @@ func TestKillSwitchMonitor_EmitsEventsOnStateChange(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	bus.Stop()
 
 	// We expect at least: CollectorDegraded (on first failure) + ExchangeDisconnected (on engage) + CollectorRecovered (on recover)
 	if eventCount.Load() < 3 {

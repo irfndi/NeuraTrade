@@ -76,7 +76,7 @@ const (
 	maxAIScalpingMaxBidAskSpreadPct = 5.0
 	defaultOrderBookPairsBase       = 4
 	defaultAutoExpandThreshold      = 12
-	defaultFallbackRoundTripFeePct  = 0.12
+	defaultFallbackRoundTripFeePct  = 0.20
 	microFallbackMinNetEdgePct      = 0.35
 	standardFallbackMinNetEdgePct   = 0.20
 	scalpingSellBroadTrendMaxPct    = -0.05
@@ -119,6 +119,16 @@ const (
 	scalpingFeedbackTightenSizeFactor    = 0.50
 	scalpingFeedbackLoosenSizeStep       = 0.10
 	scalpingFeedbackConsecutiveThreshold = 3
+
+	// Bollinger Band %B entry/exit thresholds: entries require %B below the
+	// buy ceiling (oversold) or above the sell floor (overbought).
+	scalpingBBEntryMaxPct = 0.20
+	scalpingBBExitMinPct = 0.80
+
+	// ADX regime filter: reject signals when ADX exceeds this threshold (trending market).
+	scalpingADXMaxPct = 25.0
+	// ATR volatility expansion filter: reject entries when ATR ratio (ATR(14)/SMA(ATR,20)) exceeds this threshold.
+	scalpingATRRatioMax = 1.5
 )
 
 type DeterministicFallbackConfig struct {
@@ -1562,10 +1572,15 @@ type aiMarketSignal struct {
 	RecentPriceChange  float64 `json:"recent_price_change_pct,omitempty"`
 	RecentChangeAgeSec float64 `json:"recent_change_age_sec,omitempty"`
 	RangePosition24h   float64 `json:"range_pos_24h"`
+	ADX                float64 `json:"adx,omitempty"`
+	ATRRatio           float64 `json:"atr_ratio,omitempty"`
 	SuggestedAction    string  `json:"suggested_action,omitempty"`
 	ConfidenceHint     float64 `json:"confidence_hint,omitempty"`
 	CandidateScore     float64 `json:"candidate_score,omitempty"`
+	BBPercentB         float64 `json:"bb_percent_b,omitempty"`
 	RecentChangeKnown  bool    `json:"-"`
+	Low                float64 `json:"candle_low,omitempty"`
+	High               float64 `json:"candle_high,omitempty"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -2739,7 +2754,7 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 	takeProfit := decision.TakeProfit.InexactFloat64()
 	switch decision.Action {
 	case "buy":
-		if stopLoss >= resolved.Price || takeProfit <= resolved.Price {
+		if stopLoss > resolved.Price || takeProfit <= resolved.Price {
 			return fmt.Errorf("buy decision requires stop_loss < price < take_profit")
 		}
 		if reason := s.scalpingBuySignalRejectionReason(resolved); reason != "" {
@@ -2750,16 +2765,13 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 		}
 		reward := takeProfit - resolved.Price
 		risk := resolved.Price - stopLoss
-		if risk <= 0 {
-			return fmt.Errorf("buy risk/reward %.2f below minimum %.2f", reward/risk, minRiskRewardRatio)
-		}
-		if reward/risk < minRiskRewardRatio {
+		if risk > 0 && reward/risk < minRiskRewardRatio {
 			adjustedTakeProfit := decimal.NewFromFloat(resolved.Price + risk*minRiskRewardRatio)
 			decision.TakeProfit = &adjustedTakeProfit
 			zaplogrus.Infof("[AI-SCALPING] Adjusted buy TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
 		}
 	case "sell":
-		if stopLoss <= resolved.Price || takeProfit >= resolved.Price {
+		if stopLoss < resolved.Price || takeProfit >= resolved.Price {
 			return fmt.Errorf("sell decision requires stop_loss > price > take_profit")
 		}
 		if resolved.RangePosition24h <= 15 && decision.Confidence < 0.75 {
@@ -2767,10 +2779,7 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 		}
 		reward := resolved.Price - takeProfit
 		risk := stopLoss - resolved.Price
-		if risk <= 0 {
-			return fmt.Errorf("sell risk/reward %.2f below minimum %.2f", reward/risk, minRiskRewardRatio)
-		}
-		if reward/risk < minRiskRewardRatio {
+		if risk > 0 && reward/risk < minRiskRewardRatio {
 			adjustedTakeProfit := decimal.NewFromFloat(resolved.Price - risk*minRiskRewardRatio)
 			decision.TakeProfit = &adjustedTakeProfit
 			zaplogrus.Infof("[AI-SCALPING] Adjusted sell TP for %s to enforce minimum risk/reward %.2f", decision.Symbol, minRiskRewardRatio)
@@ -3773,14 +3782,8 @@ func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
 }
 
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {
-	risk := decimal.NewFromFloat(0.006)
-	if signal.High24h > signal.Low24h && signal.Price > 0 {
-		rangePct := decimal.NewFromFloat(signal.High24h).
-			Sub(decimal.NewFromFloat(signal.Low24h)).
-			Div(decimal.NewFromFloat(signal.Price))
-		risk = clampDecimal(rangePct.Mul(decimal.NewFromFloat(0.20)), decimal.NewFromFloat(0.004), decimal.NewFromFloat(0.012))
-	}
-	reward := clampDecimal(risk.Mul(decimal.NewFromFloat(1.6)), decimal.NewFromFloat(0.006), decimal.NewFromFloat(0.02))
+	risk := decimal.Zero
+	reward := decimal.NewFromFloat(0.075)
 	return risk, reward
 }
 

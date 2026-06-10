@@ -428,11 +428,11 @@ func TestIntegratedQuestHandlers_RecordsTelemetryWhenRiskLockGatesScalping(t *te
 		mockCCXTForPortfolioSafety: mockCCXTForPortfolioSafety{
 			balanceResponse: &ccxt.BalanceResponse{
 				Exchange: "bitget",
-				Free: map[string]float64{
-					"USDT_FUTURES_USDT": 48,
+				Free: map[string]decimal.Decimal{
+					"USDT_FUTURES_USDT": decimal.NewFromFloat(48),
 				},
-				Total: map[string]float64{
-					"USDT_FUTURES_USDT": 48,
+				Total: map[string]decimal.Decimal{
+					"USDT_FUTURES_USDT": decimal.NewFromFloat(48),
 				},
 			},
 		},
@@ -501,11 +501,11 @@ func TestIntegratedQuestHandlers_RecordsTelemetryWhenStateDriftGatesScalping(t *
 	balanceOnlyCCXT := &scalpingGateBalanceOnlyCCXT{
 		balance: &ccxt.BalanceResponse{
 			Exchange: "bitget",
-			Free: map[string]float64{
-				"USDT_FUTURES_USDT": 48,
+			Free: map[string]decimal.Decimal{
+				"USDT_FUTURES_USDT": decimal.NewFromFloat(48),
 			},
-			Total: map[string]float64{
-				"USDT_FUTURES_USDT": 48,
+			Total: map[string]decimal.Decimal{
+				"USDT_FUTURES_USDT": decimal.NewFromFloat(48),
 			},
 		},
 	}
@@ -1297,9 +1297,9 @@ func TestShouldSkipClosedOrderFeedback(t *testing.T) {
 func TestResolveScalpingFuturesWalletUSDT_SummaryOnlyBalanceReturnsZero(t *testing.T) {
 	balance := &ccxt.BalanceResponse{
 		Exchange: "bitget",
-		Total: map[string]float64{
-			"USDT_FUTURES_USDT": 2.25,
-			"USDT":              12.75,
+		Total: map[string]decimal.Decimal{
+			"USDT_FUTURES_USDT": decimal.NewFromFloat(2.25),
+			"USDT":              decimal.NewFromFloat(12.75),
 		},
 		Raw: map[string]interface{}{
 			"summary_only_balance_keys": map[string]interface{}{

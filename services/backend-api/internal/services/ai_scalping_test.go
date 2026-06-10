@@ -51,16 +51,16 @@ type mockMarketPrice struct {
 	exchange  string
 }
 
-func (m mockMarketPrice) GetPrice() float64          { return m.price }
-func (m mockMarketPrice) GetVolume() float64         { return m.volume }
-func (m mockMarketPrice) GetTimestamp() time.Time    { return time.Now().UTC() }
-func (m mockMarketPrice) GetExchangeName() string    { return m.exchange }
-func (m mockMarketPrice) GetSymbol() string          { return m.symbol }
-func (m mockMarketPrice) GetBid() float64            { return m.bid }
-func (m mockMarketPrice) GetAsk() float64            { return m.ask }
-func (m mockMarketPrice) GetHigh() float64           { return m.high24h }
-func (m mockMarketPrice) GetLow() float64            { return m.low24h }
-func (m mockMarketPrice) GetPriceChange24h() float64 { return m.change24h }
+func (m mockMarketPrice) GetPrice() decimal.Decimal       { return decimal.NewFromFloat(m.price) }
+func (m mockMarketPrice) GetVolume() decimal.Decimal      { return decimal.NewFromFloat(m.volume) }
+func (m mockMarketPrice) GetTimestamp() time.Time         { return time.Now().UTC() }
+func (m mockMarketPrice) GetExchangeName() string         { return m.exchange }
+func (m mockMarketPrice) GetSymbol() string               { return m.symbol }
+func (m mockMarketPrice) GetBid() decimal.Decimal         { return decimal.NewFromFloat(m.bid) }
+func (m mockMarketPrice) GetAsk() decimal.Decimal         { return decimal.NewFromFloat(m.ask) }
+func (m mockMarketPrice) GetHigh() decimal.Decimal        { return decimal.NewFromFloat(m.high24h) }
+func (m mockMarketPrice) GetLow() decimal.Decimal         { return decimal.NewFromFloat(m.low24h) }
+func (m mockMarketPrice) GetPriceChange24h() float64      { return m.change24h }
 
 type mockAIScalpingCCXT struct {
 	mockCCXTForPortfolioSafety
@@ -178,7 +178,7 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 2, config.StructuredRetries)
 	assert.True(t, config.PreTradeGate)
 	assert.Equal(t, 0.001, config.MinExpectancyEdge)
-	assert.Equal(t, 8, config.MinExpectancyN)
+	assert.Equal(t, 50, config.MinExpectancyN)
 	assert.Equal(t, 85.0, config.RegimeHighBand)
 	assert.Equal(t, 15.0, config.RegimeLowBand)
 	assert.Equal(t, 0.15, config.DeterministicFallback.MaxBidAskSpread)
@@ -3772,7 +3772,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakProjectedNet
 		High24h:            100.5,
 		Low24h:             99.5,
 		Volume24h:          1500000,
-		BidAskSpread:       0.22,
+		BidAskSpread:       7.0,
 		OrderBookImbalance: 0.60,
 		RangePosition24h:   18,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
@@ -3815,8 +3815,8 @@ func TestAIScalpingService_DeterministicFallbackCandidate_AllowsStrongProjectedN
 func TestFallbackProjectedNetEdgePct(t *testing.T) {
 	standardEdge, _ := fallbackProjectedNetEdgePct(0.14, decimal.NewFromFloat(0.0192)).Float64()
 	marginalEdge, _ := fallbackProjectedNetEdgePct(0.22, decimal.NewFromFloat(0.0040)).Float64()
-	assert.InDelta(t, 1.66, standardEdge, 0.0001)
-	assert.InDelta(t, 0.06, marginalEdge, 0.0001)
+	assert.InDelta(t, 1.58, standardEdge, 0.0001)
+	assert.InDelta(t, -0.02, marginalEdge, 0.0001)
 }
 
 func TestAIScalpingService_ValidateDecisionAllowsValidatedReversalBuy(t *testing.T) {

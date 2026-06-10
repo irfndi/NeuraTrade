@@ -459,8 +459,8 @@ func (h *MarketHandler) GetTicker(c *gin.Context) {
 			response := TickerResponse{
 				Exchange:  exchange,
 				Symbol:    symbol,
-				Price:     decimal.NewFromFloat(ticker.GetPrice()),
-				Volume:    decimal.NewFromFloat(ticker.GetVolume()),
+				Price:     ticker.GetPrice(),
+				Volume:    ticker.GetVolume(),
 				Timestamp: ticker.GetTimestamp(),
 			}
 			// Cache the live ticker data
@@ -650,8 +650,8 @@ func (h *MarketHandler) GetBulkTickers(c *gin.Context) {
 		tickers = append(tickers, TickerResponse{
 			Exchange:  ticker.GetExchangeName(),
 			Symbol:    ticker.GetSymbol(),
-			Price:     decimal.NewFromFloat(ticker.GetPrice()),
-			Volume:    decimal.NewFromFloat(ticker.GetVolume()),
+			Price:     ticker.GetPrice(),
+			Volume:    ticker.GetVolume(),
 			Timestamp: ticker.GetTimestamp(),
 		})
 	}

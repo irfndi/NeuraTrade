@@ -109,14 +109,14 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 		t.Fatalf("unexpected Bitget endpoint path: got %q", gotPath)
 	}
 
-	if balance.Total["SPOT_USDT"] != 10.5 {
-		t.Fatalf("unexpected SPOT_USDT balance: got %.8f", balance.Total["SPOT_USDT"])
+	if !balance.Total["SPOT_USDT"].Equal(decimal.NewFromFloat(10.5)) {
+		t.Fatalf("unexpected SPOT_USDT balance: got %s", balance.Total["SPOT_USDT"])
 	}
-	if balance.Total["USDT_FUTURES_USDT"] != 2.25 {
-		t.Fatalf("unexpected USDT_FUTURES_USDT balance: got %.8f", balance.Total["USDT_FUTURES_USDT"])
+	if !balance.Total["USDT_FUTURES_USDT"].Equal(decimal.NewFromFloat(2.25)) {
+		t.Fatalf("unexpected USDT_FUTURES_USDT balance: got %s", balance.Total["USDT_FUTURES_USDT"])
 	}
-	if balance.Total["USDT"] != 12.75 {
-		t.Fatalf("unexpected aggregated USDT balance: got %.8f", balance.Total["USDT"])
+	if !balance.Total["USDT"].Equal(decimal.NewFromFloat(12.75)) {
+		t.Fatalf("unexpected aggregated USDT balance: got %s", balance.Total["USDT"])
 	}
 	assert.Zero(t, balance.Free["USDT_FUTURES_USDT"])
 	require.NotNil(t, balance.Raw)
@@ -164,10 +164,10 @@ func TestNativeCCXTService_FetchBalance_BitgetMergesCoinListAndSummaryUSDT(t *te
 
 	balance, err := service.FetchBalance(context.Background(), "bitget")
 	require.NoError(t, err)
-	assert.InDelta(t, 10.0, balance.Total["SPOT_USDT"], 0.00000001)
-	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
-	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
-	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
+	assert.True(t, balance.Total["SPOT_USDT"].Equal(decimal.NewFromFloat(10.0)))
+	assert.True(t, balance.Total["USDT"].Equal(decimal.NewFromFloat(12.25)))
+	assert.True(t, balance.Free["USDT"].Equal(decimal.NewFromFloat(9.5)))
+	assert.True(t, balance.Used["USDT"].Equal(decimal.NewFromFloat(0.5)))
 }
 
 func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_MergesCoinListAndSummaryAccounts(t *testing.T) {
@@ -211,14 +211,14 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_MergesCoinListAn
 
 	balance, err := service.FetchBalance(context.Background(), "bitget")
 	require.NoError(t, err)
-	assert.InDelta(t, 13.5, balance.Total["USDT"], 0.00000001)
-	assert.InDelta(t, 12.5, balance.Free["USDT"], 0.00000001)
-	assert.InDelta(t, 1.0, balance.Used["USDT"], 0.00000001)
-	assert.InDelta(t, 3.0, balance.Total["USDT_FUTURES_USDT"], 0.00000001)
-	assert.InDelta(t, 2.0, balance.Free["USDT_FUTURES_USDT"], 0.00000001)
-	assert.InDelta(t, 1.0, balance.Used["USDT_FUTURES_USDT"], 0.00000001)
-	assert.InDelta(t, 10.5, balance.Total["SPOT_USDT"], 0.00000001)
-	assert.InDelta(t, 10.5, balance.Free["SPOT_USDT"], 0.00000001)
+	assert.True(t, balance.Total["USDT"].Equal(decimal.NewFromFloat(13.5)))
+	assert.True(t, balance.Free["USDT"].Equal(decimal.NewFromFloat(12.5)))
+	assert.True(t, balance.Used["USDT"].Equal(decimal.NewFromFloat(1.0)))
+	assert.True(t, balance.Total["USDT_FUTURES_USDT"].Equal(decimal.NewFromFloat(3.0)))
+	assert.True(t, balance.Free["USDT_FUTURES_USDT"].Equal(decimal.NewFromFloat(2.0)))
+	assert.True(t, balance.Used["USDT_FUTURES_USDT"].Equal(decimal.NewFromFloat(1.0)))
+	assert.True(t, balance.Total["SPOT_USDT"].Equal(decimal.NewFromFloat(10.5)))
+	assert.True(t, balance.Free["SPOT_USDT"].Equal(decimal.NewFromFloat(10.5)))
 }
 
 func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_PrefersFinalUSDTAggregation(t *testing.T) {
@@ -263,11 +263,11 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance_PrefersFinalUSDT
 
 	balance, err := service.FetchBalance(context.Background(), "bitget")
 	require.NoError(t, err)
-	assert.InDelta(t, 12.25, balance.Total["USDT"], 0.00000001)
-	assert.InDelta(t, 9.5, balance.Free["USDT"], 0.00000001)
-	assert.InDelta(t, 0.5, balance.Used["USDT"], 0.00000001)
-	assert.InDelta(t, 0.10, balance.Total["BTC"], 0.00000001)
-	assert.InDelta(t, 0.10, balance.Free["BTC"], 0.00000001)
+	assert.True(t, balance.Total["USDT"].Equal(decimal.NewFromFloat(12.25)))
+	assert.True(t, balance.Free["USDT"].Equal(decimal.NewFromFloat(9.5)))
+	assert.True(t, balance.Used["USDT"].Equal(decimal.NewFromFloat(0.5)))
+	assert.True(t, balance.Total["BTC"].Equal(decimal.NewFromFloat(0.10)))
+	assert.True(t, balance.Free["BTC"].Equal(decimal.NewFromFloat(0.10)))
 }
 
 func TestNativeCCXTService_ParseBitgetTicker_PopulatesPercentage(t *testing.T) {

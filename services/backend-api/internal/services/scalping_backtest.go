@@ -21,7 +21,7 @@ import (
 const (
 	DefaultScalpingBacktestSlippage         = 0.001
 	DefaultScalpingBacktestNoise            = 0.0
-	DefaultScalpingBacktestHoldPeriod       = 5 * time.Minute
+	DefaultScalpingBacktestHoldPeriod       = 4 * time.Hour
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
 	// maxProfitFactorNoLosses represents an effectively unbounded profit
@@ -84,6 +84,7 @@ type ScalpingBacktestConfig struct {
 	MinExpectancyEdge     float64
 	MaxCapitalPct         float64
 	DefaultHoldPeriod     time.Duration
+	MaxHoldCandles        int
 	EntryCutoffTime       time.Time
 	RequireRecentMomentum bool
 	MinRecentMomentumPct  float64
@@ -256,6 +257,7 @@ type SimulatedPosition struct {
 	RegimeEntry string
 	Signal      MarketSignal
 	Decision    *AITradingDecision
+	HoldCandles int
 }
 
 type SimulatedTrade struct {
@@ -361,11 +363,35 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			return nil, fmt.Errorf("run scalping backtest signals: %w", err)
 		}
 		positionKey := simulatedPositionKey(signal.Exchange, signal.Symbol)
-		if position, ok := e.positions[positionKey]; ok && e.positionCanCloseAt(signal.Timestamp, position) {
-			trade := e.closeSimulatedPosition(signal, position)
-			e.tradeHistory = append(e.tradeHistory, trade)
-			e.capital = e.capital.Add(trade.PnL)
-			delete(e.positions, positionKey)
+		if position, ok := e.positions[positionKey]; ok {
+			if !signal.Timestamp.Equal(position.EntryTime) {
+				position.HoldCandles++
+			}
+			markPrice := decimal.NewFromFloat(signal.Signal.Price)
+			candleLow := decimal.NewFromFloat(signal.Signal.Low)
+			candleHigh := decimal.NewFromFloat(signal.Signal.High)
+
+			slTPExit := false
+			switch strings.ToLower(strings.TrimSpace(position.Side)) {
+			case "buy":
+				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.TakeProfit) {
+					slTPExit = true
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+					slTPExit = true
+				}
+			case "sell":
+				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.TakeProfit) {
+					slTPExit = true
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+					slTPExit = true
+				}
+			}
+			if slTPExit || e.positionCanCloseAt(signal.Timestamp, position) {
+				trade := e.closeSimulatedPosition(signal, position)
+				e.tradeHistory = append(e.tradeHistory, trade)
+				e.capital = e.capital.Add(trade.PnL)
+				delete(e.positions, positionKey)
+			}
 		}
 
 		evaluation, evalErr := e.evaluateSignal(ctx, signal)
@@ -646,13 +672,17 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 
 	var risk, reward decimal.Decimal
 	if decision.Action == "buy" {
-		risk = entryPrice.Sub(*stopLoss)
+		if stopLoss.GreaterThan(decimal.Zero) {
+			risk = entryPrice.Sub(*stopLoss)
+		}
 		reward = takeProfit.Sub(entryPrice)
 	} else {
-		risk = stopLoss.Sub(entryPrice)
+		if stopLoss.GreaterThan(decimal.Zero) {
+			risk = stopLoss.Sub(entryPrice)
+		}
 		reward = entryPrice.Sub(*takeProfit)
 	}
-	if risk.LessThanOrEqual(decimal.Zero) || reward.LessThanOrEqual(decimal.Zero) {
+	if risk.LessThan(decimal.Zero) || reward.LessThanOrEqual(decimal.Zero) {
 		return nil, fmt.Errorf("invalid stop loss / take profit shape")
 	}
 
@@ -662,12 +692,12 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 		Size:        quantity,
 		Notional:    notional,
 		EntryPrice:  entryPrice,
-		EntryTime:   signal.Timestamp,
-		StopLoss:    *stopLoss,
-		TakeProfit:  *takeProfit,
-		RegimeEntry: e.classifyRegime(signal.Signal),
-		Signal:      signal.Signal,
-		Decision:    decision,
+		EntryTime:    signal.Timestamp,
+		StopLoss:     *stopLoss,
+		TakeProfit:   *takeProfit,
+		RegimeEntry:  e.classifyRegime(signal.Signal),
+		Signal:       signal.Signal,
+		Decision:     decision,
 	}
 
 	return position, nil
@@ -675,25 +705,66 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 
 func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal, position *SimulatedPosition) ScalpingBacktestTrade {
 	markPrice := decimal.NewFromFloat(signal.Signal.Price)
+	candleLow := decimal.NewFromFloat(signal.Signal.Low)
+	candleHigh := decimal.NewFromFloat(signal.Signal.High)
 	exitPrice := markPrice
 	exitReason := "mark_to_market"
-	switch strings.ToLower(strings.TrimSpace(position.Side)) {
+
+	maxCandles := e.config.MaxHoldCandles
+	if maxCandles <= 0 {
+		maxCandles = 200
+	}
+
+	side := strings.ToLower(strings.TrimSpace(position.Side))
+
+	switch side {
 	case "buy":
 		if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.TakeProfit) {
 			exitPrice = position.TakeProfit
 			exitReason = "take_profit"
-		} else if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss) {
-			exitPrice = position.StopLoss
-			exitReason = "stop_loss"
 		}
 	case "sell":
 		if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.TakeProfit) {
 			exitPrice = position.TakeProfit
 			exitReason = "take_profit"
-		} else if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss) {
-			exitPrice = position.StopLoss
-			exitReason = "stop_loss"
 		}
+	}
+
+	if exitReason == "mark_to_market" {
+		maxLossPct := decimal.NewFromFloat(0.015)
+		switch side {
+		case "buy":
+			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Sub(maxLossPct))
+			if candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice) {
+				exitPrice = maxLossPrice
+				exitReason = "max_loss"
+			}
+		case "sell":
+			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Add(maxLossPct))
+			if candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice) {
+				exitPrice = maxLossPrice
+				exitReason = "max_loss"
+			}
+		}
+	}
+
+	if exitReason == "mark_to_market" {
+		switch side {
+		case "buy":
+			if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+				exitPrice = position.StopLoss
+				exitReason = "stop_loss"
+			}
+		case "sell":
+			if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+				exitPrice = position.StopLoss
+				exitReason = "stop_loss"
+			}
+		}
+	}
+
+	if exitReason == "mark_to_market" && position.HoldCandles >= maxCandles {
+		exitReason = "time_stop"
 	}
 
 	one := decimal.NewFromInt(1)
@@ -747,11 +818,11 @@ func (e *ScalpingBacktestEngine) positionCanCloseAt(timestamp time.Time, positio
 	if position == nil || !timestamp.After(position.EntryTime) {
 		return false
 	}
-	holdFor := e.config.DefaultHoldPeriod
-	if holdFor <= 0 {
-		holdFor = DefaultScalpingBacktestHoldPeriod
+	maxCandles := e.config.MaxHoldCandles
+	if maxCandles <= 0 {
+		maxCandles = 200
 	}
-	return !timestamp.Before(position.EntryTime.Add(holdFor))
+	return position.HoldCandles >= maxCandles
 }
 
 func simulatedPositionKey(exchange, symbol string) string {
@@ -791,7 +862,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			scalpingSellWindowCandidate(signal))
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
-	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.10
+	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.05
 	results["imbalance"] = GateResult{Allowed: imbalanceAllowed, Reason: gateReason(imbalanceAllowed, "imbalance_too_weak")}
 
 	confidenceAllowed := decision != nil && decision.Confidence >= e.config.MinConfidence
@@ -831,19 +902,28 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 		reward := decimal.Zero
 		switch strings.ToLower(strings.TrimSpace(decision.Action)) {
 		case "buy":
-			risk = entry.Sub(*stopLoss)
+			if stopLoss.GreaterThan(decimal.Zero) {
+				risk = entry.Sub(*stopLoss)
+			}
 			reward = takeProfit.Sub(entry)
 		case "sell":
-			risk = stopLoss.Sub(entry)
+			if stopLoss.GreaterThan(decimal.Zero) {
+				risk = stopLoss.Sub(entry)
+			}
 			reward = entry.Sub(*takeProfit)
 		}
-		if risk.GreaterThan(decimal.Zero) && reward.GreaterThan(decimal.Zero) {
-			ratio := reward.Div(risk)
-			riskRewardAllowed = ratio.GreaterThanOrEqual(decimal.NewFromFloat(minRiskRewardRatio))
-			if riskRewardAllowed {
+		if risk.GreaterThanOrEqual(decimal.Zero) && reward.GreaterThan(decimal.Zero) {
+			if risk.IsZero() {
+				riskRewardAllowed = true
 				riskRewardReason = ""
 			} else {
-				riskRewardReason = "insufficient_risk_reward_ratio"
+				ratio := reward.Div(risk)
+				riskRewardAllowed = ratio.GreaterThanOrEqual(decimal.NewFromFloat(minRiskRewardRatio))
+				if riskRewardAllowed {
+					riskRewardReason = ""
+				} else {
+					riskRewardReason = "insufficient_risk_reward_ratio"
+				}
 			}
 		}
 	}
@@ -1011,6 +1091,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.DefaultHoldPeriod <= 0 {
 		config.DefaultHoldPeriod = DefaultScalpingBacktestHoldPeriod
 	}
+	if config.MaxHoldCandles <= 0 {
+		config.MaxHoldCandles = 200
+	}
 	if config.SpreadMultiplier <= 0 {
 		config.SpreadMultiplier = backtestSpreadMultiplier
 	}
@@ -1114,6 +1197,12 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > e.config.MaxBidAskSpreadPct && !reversalBuy && !sellWindow) {
 		return nil
 	}
+	if signal.ADX > scalpingADXMaxPct {
+		return nil
+	}
+	if signal.ATRRatio > scalpingATRRatioMax {
+		return nil
+	}
 	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
 	if e.config.RequireRecentMomentum {
 		effectiveMinImbalance = fallback.MinImbalance
@@ -1149,19 +1238,19 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		action = "sell"
 		momentumAligned = true
 		rangeAlignment = clampFloat((signal.RangePosition24h-scalpingSellWindowMinRangePct)/math.Max(100-scalpingSellWindowMinRangePct, 1), 0, 1)
-	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax:
+	case signal.BBPercentB < scalpingBBEntryMaxPct && imbalance > 0.05 && signal.RangePosition24h <= fallback.BuyRangeMax:
 		action = "buy"
 		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat((fallback.BuyRangeMax-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax, 1), 0, 1)
-	case signal.OrderBookImbalance <= -effectiveMinImbalance && scalpingSellTrendConfirmed(signal) && signal.RangePosition24h >= fallback.SellRangeMin:
+	case signal.BBPercentB > scalpingBBExitMinPct && imbalance > 0.05 && signal.RangePosition24h >= fallback.SellRangeMin:
 		action = "sell"
 		momentumAligned = momentumPct <= sellMomentumMax
 		rangeAlignment = clampFloat((signal.RangePosition24h-fallback.SellRangeMin)/math.Max(100-fallback.SellRangeMin, 1), 0, 1)
-	case signal.OrderBookImbalance >= effectiveMinImbalance && signal.RangePosition24h <= fallback.BuyRangeMax+5:
+	case signal.BBPercentB < scalpingBBEntryMaxPct && imbalance > 0.05 && signal.RangePosition24h <= fallback.BuyRangeMax+5:
 		action = "buy"
 		momentumAligned = momentumPct >= buyMomentumMin
 		rangeAlignment = clampFloat((fallback.BuyRangeMax+5-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+5, 1), 0, 1)
-	case signal.OrderBookImbalance <= -effectiveMinImbalance && scalpingSellTrendConfirmed(signal) && signal.RangePosition24h >= fallback.SellRangeMin-5:
+	case signal.BBPercentB > scalpingBBExitMinPct && imbalance > 0.05 && signal.RangePosition24h >= fallback.SellRangeMin-5:
 		action = "sell"
 		momentumAligned = momentumPct <= sellMomentumMax
 		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.SellRangeMin-5))/math.Max(100-(fallback.SellRangeMin-5), 1), 0, 1)
@@ -1173,17 +1262,18 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 			0,
 			1,
 		)
-	case signal.OrderBookImbalance >= math.Max(effectiveMinImbalance, 0.20) && momentumPct > buyMomentumMin && signal.RangePosition24h <= fallback.SellRangeMin+5:
+	case signal.BBPercentB < scalpingBBEntryMaxPct && imbalance > math.Max(effectiveMinImbalance, 0.20) && momentumPct > buyMomentumMin && signal.RangePosition24h <= fallback.SellRangeMin+5:
 		action = "buy"
 		momentumAligned = true
 		rangeAlignment = clampFloat((fallback.SellRangeMin+5-signal.RangePosition24h)/math.Max(fallback.SellRangeMin+5-fallback.BuyRangeMax, 1), 0, 1)
-	case signal.OrderBookImbalance <= -math.Max(effectiveMinImbalance, 0.20) && scalpingSellTrendConfirmed(signal) && momentumPct < sellMomentumMax && signal.RangePosition24h >= fallback.BuyRangeMax-5:
+	case signal.BBPercentB > scalpingBBExitMinPct && imbalance > math.Max(effectiveMinImbalance, 0.20) && momentumPct < sellMomentumMax && signal.RangePosition24h >= fallback.BuyRangeMax-5:
 		action = "sell"
 		momentumAligned = true
 		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.BuyRangeMax-5))/math.Max(fallback.SellRangeMin-(fallback.BuyRangeMax-5), 1), 0, 1)
 	default:
 		return nil
 	}
+
 	if !momentumAligned {
 		return nil
 	}
@@ -1229,10 +1319,14 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	stopLoss := decimal.Zero
 	takeProfit := decimal.Zero
 	if action == "sell" {
-		stopLoss = price.Mul(one.Add(risk))
+		if risk.GreaterThan(decimal.Zero) {
+			stopLoss = price.Mul(one.Add(risk))
+		}
 		takeProfit = price.Mul(one.Sub(reward))
 	} else {
-		stopLoss = price.Mul(one.Sub(risk))
+		if risk.GreaterThan(decimal.Zero) {
+			stopLoss = price.Mul(one.Sub(risk))
+		}
 		takeProfit = price.Mul(one.Add(reward))
 	}
 	sizePct := clampFloat(e.config.MaxCapitalPct*fallback.SizeFraction, fallback.MinSizePct, e.config.MaxCapitalPct)
@@ -1541,14 +1635,31 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 			return series[i].timestamp.Before(series[j].timestamp)
 		})
 		windowMetrics := compute24hWindowMetrics(series)
+		adxValues := computeADX(series, 14)
+		atrValues := computeATR(series, 14)
+		atrSMA := computeSMA(atrValues, 20)
+		bbUpper, _, bbLower := computeBollingerBands(series, 20, 2.0)
 
+		var prevClose float64
 		for i, point := range series {
 			priceChange24h := 0.0
 			if windowMetrics[i].HasReferenceClose && windowMetrics[i].ReferenceClose24h > 0 {
 				priceChange24h = ((point.close - windowMetrics[i].ReferenceClose24h) / windowMetrics[i].ReferenceClose24h) * 100
 			}
 
-			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier))
+			atrRatio := 0.0
+			if atrSMA[i] > 0 {
+				atrRatio = atrValues[i] / atrSMA[i]
+			}
+
+			bbPctB := 0.5
+			bbRange := bbUpper[i] - bbLower[i]
+			if bbRange > 0 {
+				bbPctB = (point.close - bbLower[i]) / bbRange
+			}
+
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB))
+			prevClose = point.close
 		}
 	}
 
@@ -1630,7 +1741,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	return metrics
 }
 
-func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64) HistoricalSignal {
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64) HistoricalSignal {
 	imbalance := 0.0
 	if point.high > point.low {
 		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
@@ -1639,6 +1750,13 @@ func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWin
 	rangePos := 50.0
 	if metrics.High24h > metrics.Low24h {
 		rangePos = clampFloat(((point.close-metrics.Low24h)/(metrics.High24h-metrics.Low24h))*100, 0, 100)
+	}
+
+	recentChangeKnown := false
+	recentPriceChange := 0.0
+	if prevClose > 0 {
+		recentChangeKnown = true
+		recentPriceChange = ((point.close - prevClose) / prevClose) * 100
 	}
 
 	return HistoricalSignal{
@@ -1655,6 +1773,13 @@ func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWin
 			OrderBookImbalance: imbalance,
 			PriceChange24h:     priceChange24h,
 			RangePosition24h:   rangePos,
+			RecentPriceChange:  recentPriceChange,
+			RecentChangeKnown:  recentChangeKnown,
+			ADX:                adx,
+			ATRRatio:           atrRatio,
+			BBPercentB:         bbPctB,
+			Low:                point.low,
+			High:               point.high,
 		},
 	}
 }
@@ -1668,6 +1793,198 @@ func estimateEffectiveSpreadPct(high, low, price, spreadMultiplier float64) floa
 		multiplier = backtestSpreadMultiplier
 	}
 	return math.Max(((high-low)/price)*100/multiplier, 0)
+}
+
+func computeATR(series []scalpingOHLCVPoint, period int) []float64 {
+	n := len(series)
+	result := make([]float64, n)
+	if n < 2 || period <= 0 {
+		return result
+	}
+
+	trValues := make([]float64, n)
+	for i := 1; i < n; i++ {
+		hl := series[i].high - series[i].low
+		hpc := math.Abs(series[i].high-series[i-1].close)
+		lpc := math.Abs(series[i].low-series[i-1].close)
+		trValues[i] = math.Max(hl, math.Max(hpc, lpc))
+	}
+
+	if n-1 < period {
+		return result
+	}
+	sum := 0.0
+	for i := 1; i <= period; i++ {
+		sum += trValues[i]
+	}
+	result[period] = sum / float64(period)
+	for i := period + 1; i < n; i++ {
+		result[i] = (result[i-1]*float64(period-1) + trValues[i]) / float64(period)
+	}
+
+	return result
+}
+
+func computeSMA(values []float64, period int) []float64 {
+	n := len(values)
+	result := make([]float64, n)
+	if n < period || period <= 0 {
+		return result
+	}
+
+	sum := 0.0
+	for i := 0; i < period; i++ {
+		sum += values[i]
+	}
+	result[period-1] = sum / float64(period)
+	for i := period; i < n; i++ {
+		sum += values[i] - values[i-period]
+		result[i] = sum / float64(period)
+	}
+
+	return result
+}
+
+func computeStdDev(values []float64, period int) []float64 {
+	n := len(values)
+	result := make([]float64, n)
+	if n < period || period <= 0 {
+		return result
+	}
+
+	sum := 0.0
+	sumSq := 0.0
+	for i := 0; i < period; i++ {
+		sum += values[i]
+		sumSq += values[i] * values[i]
+	}
+	mean := sum / float64(period)
+	variance := sumSq/float64(period) - mean*mean
+	if variance < 0 {
+		variance = 0
+	}
+	result[period-1] = math.Sqrt(variance)
+
+	for i := period; i < n; i++ {
+		sum += values[i] - values[i-period]
+		sumSq += values[i]*values[i] - values[i-period]*values[i-period]
+		mean = sum / float64(period)
+		variance = sumSq/float64(period) - mean*mean
+		if variance < 0 {
+			variance = 0
+		}
+		result[i] = math.Sqrt(variance)
+	}
+
+	return result
+}
+
+func computeBollingerBands(series []scalpingOHLCVPoint, period int, stdDevMult float64) (upper []float64, middle []float64, lower []float64) {
+	n := len(series)
+	upper = make([]float64, n)
+	middle = make([]float64, n)
+	lower = make([]float64, n)
+	if n < period || period <= 0 {
+		return upper, middle, lower
+	}
+
+	closes := make([]float64, n)
+	for i, p := range series {
+		closes[i] = p.close
+	}
+
+	sma := computeSMA(closes, period)
+	stdDev := computeStdDev(closes, period)
+
+	for i := period - 1; i < n; i++ {
+		middle[i] = sma[i]
+		upper[i] = sma[i] + stdDevMult*stdDev[i]
+		lower[i] = sma[i] - stdDevMult*stdDev[i]
+	}
+
+	return upper, middle, lower
+}
+
+func computeADX(series []scalpingOHLCVPoint, period int) []float64 {
+	n := len(series)
+	result := make([]float64, n)
+	if n < 2*period+1 || period <= 0 {
+		return result
+	}
+
+	tr := make([]float64, n)
+	plusDM := make([]float64, n)
+	minusDM := make([]float64, n)
+
+	for i := 1; i < n; i++ {
+		hl := series[i].high - series[i].low
+		hpc := math.Abs(series[i].high - series[i-1].close)
+		lpc := math.Abs(series[i].low - series[i-1].close)
+		tr[i] = math.Max(hl, math.Max(hpc, lpc))
+
+		upMove := series[i].high - series[i-1].high
+		downMove := series[i-1].low - series[i].low
+		if upMove > downMove && upMove > 0 {
+			plusDM[i] = upMove
+		}
+		if downMove > upMove && downMove > 0 {
+			minusDM[i] = downMove
+		}
+	}
+
+	smoothTR := make([]float64, n)
+	smoothPlusDM := make([]float64, n)
+	smoothMinusDM := make([]float64, n)
+
+	sumTR := 0.0
+	sumPDM := 0.0
+	sumMDM := 0.0
+	for i := 1; i <= period; i++ {
+		sumTR += tr[i]
+		sumPDM += plusDM[i]
+		sumMDM += minusDM[i]
+	}
+	smoothTR[period] = sumTR
+	smoothPlusDM[period] = sumPDM
+	smoothMinusDM[period] = sumMDM
+
+	for i := period + 1; i < n; i++ {
+		smoothTR[i] = smoothTR[i-1] - smoothTR[i-1]/float64(period) + tr[i]
+		smoothPlusDM[i] = smoothPlusDM[i-1] - smoothPlusDM[i-1]/float64(period) + plusDM[i]
+		smoothMinusDM[i] = smoothMinusDM[i-1] - smoothMinusDM[i-1]/float64(period) + minusDM[i]
+	}
+
+	plusDI := make([]float64, n)
+	minusDI := make([]float64, n)
+	for i := period; i < n; i++ {
+		if smoothTR[i] > 0 {
+			plusDI[i] = 100 * smoothPlusDM[i] / smoothTR[i]
+			minusDI[i] = 100 * smoothMinusDM[i] / smoothTR[i]
+		}
+	}
+
+	dx := make([]float64, n)
+	for i := period; i < n; i++ {
+		denom := plusDI[i] + minusDI[i]
+		if denom > 0 {
+			dx[i] = 100 * math.Abs(plusDI[i]-minusDI[i]) / denom
+		}
+	}
+
+	adxStart := 2 * period
+	if adxStart >= n {
+		return result
+	}
+	sumDX := 0.0
+	for i := adxStart - period + 1; i <= adxStart; i++ {
+		sumDX += dx[i]
+	}
+	result[adxStart] = sumDX / float64(period)
+	for i := adxStart + 1; i < n; i++ {
+		result[i] = (result[i-1]*float64(period-1) + dx[i]) / float64(period)
+	}
+
+	return result
 }
 
 func appendScalpingBacktestFilters(baseQuery string, args []any, tradingPairColumn string, tradingPairIDs []int, exchangeFilter string) (string, []any) {

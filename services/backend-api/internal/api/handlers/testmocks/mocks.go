@@ -40,20 +40,18 @@ type marketPriceModelAdapter struct {
 	data *models.MarketPrice
 }
 
-func (a *marketPriceModelAdapter) GetPrice() float64 {
+func (a *marketPriceModelAdapter) GetPrice() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.Price.Float64()
-	return v
+	return a.data.Price
 }
 
-func (a *marketPriceModelAdapter) GetVolume() float64 {
+func (a *marketPriceModelAdapter) GetVolume() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.Volume.Float64()
-	return v
+	return a.data.Volume
 }
 
 func (a *marketPriceModelAdapter) GetTimestamp() time.Time {
@@ -77,36 +75,32 @@ func (a *marketPriceModelAdapter) GetSymbol() string {
 	return a.data.Symbol
 }
 
-func (a *marketPriceModelAdapter) GetBid() float64 {
+func (a *marketPriceModelAdapter) GetBid() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.Bid.Float64()
-	return v
+	return a.data.Bid
 }
 
-func (a *marketPriceModelAdapter) GetAsk() float64 {
+func (a *marketPriceModelAdapter) GetAsk() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.Ask.Float64()
-	return v
+	return a.data.Ask
 }
 
-func (a *marketPriceModelAdapter) GetHigh() float64 {
+func (a *marketPriceModelAdapter) GetHigh() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.High24h.Float64()
-	return v
+	return a.data.High24h
 }
 
-func (a *marketPriceModelAdapter) GetLow() float64 {
+func (a *marketPriceModelAdapter) GetLow() decimal.Decimal {
 	if a == nil || a.data == nil {
-		return 0
+		return decimal.Zero
 	}
-	v, _ := a.data.Low24h.Float64()
-	return v
+	return a.data.Low24h
 }
 
 func (a *marketPriceModelAdapter) GetPriceChange24h() float64 {
