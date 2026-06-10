@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -106,7 +107,7 @@ func NewTwitterClient(config SentimentConfig, logger *zap.Logger) *TwitterClient
 }
 
 func (c *TwitterClient) GetSentiment(ctx context.Context, symbol string, keywords []string) (*TwitterSentimentResult, error) {
-	cacheKey := strings.ToUpper(symbol)
+	cacheKey := utils.SanitizeCacheKey(strings.ToUpper(symbol))
 
 	if cached, ok := c.getFromCache(cacheKey); ok {
 		return cached, nil

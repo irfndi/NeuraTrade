@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/irfndi/neuratrade/internal/models"
+	"github.com/irfndi/neuratrade/internal/utils"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
-
-	"github.com/irfndi/neuratrade/internal/models"
-	"github.com/shopspring/decimal"
 )
 
 // validateMarketData validates ticker data before saving to database
@@ -189,13 +189,14 @@ func (c *CollectorService) ensureTradingPairExists(exchangeID int, symbol string
 // getOrCreateTradingPair gets or creates a trading pair and returns its ID
 func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string) (int, error) {
 	// Try Redis cache first if available
+	var tradingPairID int
 	if c.redisClient != nil {
-		cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, symbol)
+		cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, utils.SanitizeCacheKey(symbol))
 		cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result()
 		if err == nil {
-			if tradingPairID, parseErr := strconv.Atoi(cachedID); parseErr == nil {
-				if c.cachedTradingPairIDExists(exchangeID, symbol, tradingPairID) {
-					return tradingPairID, nil
+			if id, parseErr := strconv.Atoi(cachedID); parseErr == nil {
+				if c.cachedTradingPairIDExists(exchangeID, symbol, id) {
+					return id, nil
 				}
 				c.redisClient.Del(c.ctx, cacheKey)
 			}
@@ -203,12 +204,11 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 	}
 
 	// First try to get existing trading pair for this exchange and symbol
-	var tradingPairID int
 	err := c.db.QueryRow(c.ctx, "SELECT id FROM trading_pairs WHERE exchange_id = $1 AND symbol = $2", exchangeID, symbol).Scan(&tradingPairID)
 	if err == nil {
 		// Cache the result if Redis is available
 		if c.redisClient != nil {
-			cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, symbol)
+			cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, utils.SanitizeCacheKey(symbol))
 			c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour)
 		}
 		return tradingPairID, nil
@@ -236,7 +236,7 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 
 	// Cache the newly created trading pair if Redis is available
 	if c.redisClient != nil {
-		cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, symbol)
+		cacheKey := fmt.Sprintf("trading_pair:%d:%s", exchangeID, utils.SanitizeCacheKey(symbol))
 		c.redisClient.Set(c.ctx, cacheKey, tradingPairID, 24*time.Hour)
 	}
 
@@ -251,7 +251,7 @@ func (c *CollectorService) getOrCreateTradingPair(exchangeID int, symbol string)
 // getOrCreateExchange gets or creates an exchange and returns its ID
 func (c *CollectorService) getOrCreateExchange(ccxtID string) (int, error) {
 	// Check Redis cache first (if redis client is available)
-	cacheKey := fmt.Sprintf("exchange:ccxt_id:%s", ccxtID)
+	cacheKey := fmt.Sprintf("exchange:ccxt_id:%s", utils.SanitizeCacheKey(ccxtID))
 	if c.redisClient != nil {
 		if cachedID, err := c.redisClient.Get(c.ctx, cacheKey).Result(); err == nil {
 			if exchangeID, err := strconv.Atoi(cachedID); err == nil {

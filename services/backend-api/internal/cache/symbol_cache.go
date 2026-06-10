@@ -9,6 +9,7 @@ import (
 
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 
+	"github.com/irfndi/neuratrade/internal/utils"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -72,7 +73,7 @@ func NewRedisSymbolCache(redisClient *redis.Client, ttl time.Duration) *RedisSym
 //	bool: True if found and valid.
 func (c *RedisSymbolCache) Get(exchangeID string) ([]string, bool) {
 	ctx := context.Background()
-	cacheKey := c.prefix + exchangeID
+	cacheKey := c.prefix + utils.SanitizeCacheKey(exchangeID)
 
 	// Get cached data from Redis
 	data, err := c.redis.Get(ctx, cacheKey).Result()
@@ -124,7 +125,7 @@ func (c *RedisSymbolCache) Get(exchangeID string) ([]string, bool) {
 //	symbols: The list of symbols to cache.
 func (c *RedisSymbolCache) Set(exchangeID string, symbols []string) {
 	ctx := context.Background()
-	cacheKey := c.prefix + exchangeID
+	cacheKey := c.prefix + utils.SanitizeCacheKey(exchangeID)
 
 	// Create cache entry with metadata
 	now := time.Now()

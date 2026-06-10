@@ -52,7 +52,7 @@ func TestCollectorServiceSaveBulkTickerDataIgnoresStaleTradingPairCache(t *testi
 	`)
 	require.NoError(t, err)
 	require.NoError(t, redisClient.Set(ctx, "exchange:ccxt_id:bitget", "1", time.Hour).Err())
-	require.NoError(t, redisClient.Set(ctx, "trading_pair:1:LINK/USDT", "999", time.Hour).Err())
+	require.NoError(t, redisClient.Set(ctx, "trading_pair:1:LINK_USDT", "999", time.Hour).Err())
 
 	err = collector.saveBulkTickerData(models.MarketPrice{
 		ExchangeName: "bitget",
@@ -66,7 +66,7 @@ func TestCollectorServiceSaveBulkTickerDataIgnoresStaleTradingPairCache(t *testi
 	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM trading_pairs WHERE exchange_id = 1 AND symbol = 'LINK/USDT'", 1)
 	assertSQLiteScalar(t, db, "SELECT COUNT(*) FROM market_data", 1)
 
-	cachedTradingPairID, err := redisClient.Get(ctx, "trading_pair:1:LINK/USDT").Result()
+	cachedTradingPairID, err := redisClient.Get(ctx, "trading_pair:1:LINK_USDT").Result()
 	require.NoError(t, err)
 	assert.NotEqual(t, "999", cachedTradingPairID)
 }
