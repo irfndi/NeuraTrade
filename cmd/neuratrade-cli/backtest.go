@@ -57,11 +57,16 @@ func backtestRunAction(cCtx *cli.Context) error {
 	if start == "" || end == "" {
 		return fmt.Errorf("--start and --end are required (RFC3339, e.g. 2025-01-01T00:00:00Z)")
 	}
-	if _, err := time.Parse(time.RFC3339, start); err != nil {
+	startTime, err := time.Parse(time.RFC3339, start)
+	if err != nil {
 		return fmt.Errorf("invalid --start: %w", err)
 	}
-	if _, err := time.Parse(time.RFC3339, end); err != nil {
+	endTime, err := time.Parse(time.RFC3339, end)
+	if err != nil {
 		return fmt.Errorf("invalid --end: %w", err)
+	}
+	if !startTime.Before(endTime) {
+		return fmt.Errorf("invalid date range: --start must be before --end")
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cCtx.String("mode")))
@@ -177,7 +182,7 @@ func backtestCommand() *cli.Command {
 					},
 					&cli.DurationFlag{
 						Name:  "timeout",
-						Usage: "HTTP request timeout (default: 30s)",
+						Usage: "HTTP request timeout (default: 5s)",
 						Value: defaultTimeout,
 					},
 				},

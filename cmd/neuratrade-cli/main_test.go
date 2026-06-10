@@ -152,7 +152,7 @@ func TestGetAPIKey(t *testing.T) {
 	assert.Equal(t, "", key)
 }
 
-func TestConfigInitUsesCurrentZAIProviderDefaults(t *testing.T) {
+func TestConfigInitUsesCurrentAIProviderDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NEURATRADE_HOME", filepath.Join(home, ".neuratrade"))
@@ -177,9 +177,9 @@ func TestConfigInitUsesCurrentZAIProviderDefaults(t *testing.T) {
 	require.IsType(t, map[string]interface{}{}, config["ai"])
 	aiConfig := config["ai"].(map[string]interface{})
 
-	assert.Equal(t, "zhipu", aiConfig["provider"])
-	assert.Equal(t, "glm-5-turbo", aiConfig["model"])
-	assert.Equal(t, "https://api.z.ai/api/paas/v4", aiConfig["base_url"])
+	assert.Equal(t, "deepseek", aiConfig["provider"])
+	assert.Equal(t, "deepseek-chat", aiConfig["model"])
+	assert.Equal(t, "", aiConfig["base_url"])
 	assert.Equal(t, "test-ai-key", aiConfig["api_key"])
 }
 
@@ -230,12 +230,27 @@ func TestConfigStatusAndShowRespectNeuratradeHome(t *testing.T) {
 	require.NoFileExists(t, filepath.Join(home, "default-home", ".neuratrade", "config.json"))
 }
 
-func TestDefaultCLIAIProviderConfigReturnsCurrentZAIDefaults(t *testing.T) {
+func TestDefaultCLIAIProviderConfigReturnsCurrentDefaults(t *testing.T) {
 	defaults := defaultCLIAIProviderConfig()
 
-	assert.Equal(t, "zhipu", defaults.Provider)
-	assert.Equal(t, "glm-5-turbo", defaults.Model)
-	assert.Equal(t, "https://api.z.ai/api/paas/v4", defaults.BaseURL)
+	assert.Equal(t, "deepseek", defaults.Provider)
+	assert.Equal(t, "deepseek-chat", defaults.Model)
+	assert.Equal(t, "", defaults.BaseURL)
+}
+
+func TestNewCLIAppRegistersStableCommandSurface(t *testing.T) {
+	app := newCLIApp()
+
+	names := make([]string, 0, len(app.Commands))
+	for _, cmd := range app.Commands {
+		names = append(names, cmd.Name)
+	}
+
+	assert.Contains(t, names, "gateway")
+	assert.Contains(t, names, "ops")
+	assert.Contains(t, names, "backtest")
+	assert.Contains(t, names, "autonomous")
+	assert.Contains(t, names, "agent")
 }
 
 func TestGenerateRandomString(t *testing.T) {
