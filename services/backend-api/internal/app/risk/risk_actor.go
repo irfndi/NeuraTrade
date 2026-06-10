@@ -366,14 +366,12 @@ func (a *RiskActor) handleUpdateDrawdown(msg UpdateDrawdownMsg) {
 }
 
 func (a *RiskActor) handleUpdateDailyLoss(msg UpdateDailyLossMsg) {
-	a.mu.Lock()
-	prevLoss := a.dailyLoss
-	a.dailyLoss = msg.Loss
-	a.mu.Unlock()
-
 	if a.dailyLossRule != nil {
-		a.dailyLossRule.UpdateDailyLoss(msg.Loss.Sub(prevLoss))
+		a.dailyLossRule.UpdateDailyLoss(msg.Loss)
 	}
+	a.mu.Lock()
+	a.dailyLoss = a.dailyLoss.Add(msg.Loss)
+	a.mu.Unlock()
 }
 
 func (a *RiskActor) handleGetState(msg GetStateMsg) {

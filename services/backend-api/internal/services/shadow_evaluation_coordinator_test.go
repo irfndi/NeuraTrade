@@ -7,7 +7,11 @@ import (
 	"time"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	"github.com/irfndi/neuratrade/internal/database"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestShadowEvaluationCoordinatorUpsertAndDeleteVariant(t *testing.T) {
@@ -143,4 +147,104 @@ func TestShadowEvaluationCoordinatorCloseStalePositions(t *testing.T) {
 		t.Fatalf("expected stale position to be closed")
 	}
 	runtime.mu.Unlock()
+}
+
+// TestShadowEvaluationCoordinator_PaperTradeReconciler covers the
+// production orphan-paper-trade problem: the live path opens paper_trades
+// rows via recordPaperTradeOpen but only the backfill path closes them,
+// so rows accumulate unboundedly and break PnL accounting.
+//
+// The reconciler must:
+//   1. Close any 'open' paper_trades row older than the configured cutoff.
+//   2. Leave 'open' rows newer than the cutoff alone.
+//   3. Be idempotent (re-running does nothing on the second pass).
+//   4. Stop cleanly when ctx is cancelled.
+//
+// Run with: go test -v -count=1 -run TestShadowEvaluationCoordinator_PaperTradeReconciler ./internal/services/
+func TestShadowEvaluationCoordinator_PaperTradeReconciler(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err)
+	defer sqliteDB.Close()
+	pool := readOnlyDBPoolAdapter{pool: sqliteDB}
+	recorder := NewPaperTradeRecorder(pool, noopPaperDryRunLogger{})
+
+	// Seed paper_trades schema.
+	_, err = pool.Exec(context.Background(), `
+		CREATE TABLE paper_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			quest_id INTEGER,
+			strategy_id TEXT NOT NULL,
+			exchange TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			entry_price DECIMAL(20, 8) NOT NULL,
+			exit_price DECIMAL(20, 8) NOT NULL DEFAULT 0,
+			size DECIMAL(20, 8) NOT NULL,
+			fees DECIMAL(20, 8) NOT NULL DEFAULT 0,
+			pnl DECIMAL(20, 8) NOT NULL DEFAULT 0,
+			cost_basis DECIMAL(20, 8) NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'open',
+			opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			closed_at DATETIME,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
+	require.NoError(t, err)
+
+	// Insert one stale row and one fresh row.
+	staleOpenedAt := time.Now().UTC().Add(-6 * time.Hour)
+	freshOpenedAt := time.Now().UTC().Add(-1 * time.Minute)
+	insertTrade := func(openedAt time.Time, symbol string) int64 {
+		_, err := pool.Exec(context.Background(), `
+			INSERT INTO paper_trades
+				(user_id, strategy_id, exchange, symbol, side, entry_price, size, cost_basis, status, opened_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+		`,
+			shadowRecorderUserID, "baseline", "binance", symbol, "buy",
+			"100.0", "1.0", "100.0", openedAt,
+		)
+		require.NoError(t, err)
+		var id int64
+		err = pool.QueryRow(context.Background(),
+			"SELECT id FROM paper_trades WHERE symbol = ? ORDER BY id DESC LIMIT 1", symbol,
+		).Scan(&id)
+		require.NoError(t, err)
+		return id
+	}
+	staleID := insertTrade(staleOpenedAt, "STALE/USDT")
+	_ = insertTrade(freshOpenedAt, "FRESH/USDT")
+
+	// Wire the coordinator with the recorder.
+	coordinator := NewShadowEvaluationCoordinator(pool, zap.NewNop(), nil, recorder, nil)
+
+	// Run a single sweep with a 4h cutoff: the stale row (6h old) must close,
+	// the fresh row (1m old) must remain open.
+	cfg := ReconciliationConfig{MaxAge: 4 * time.Hour, Interval: time.Hour}
+	coordinator.runReconcileOnce(context.Background(), cfg)
+
+	var staleStatus, freshStatus string
+	require.NoError(t, pool.QueryRow(context.Background(),
+		"SELECT status FROM paper_trades WHERE id = ?", staleID,
+	).Scan(&staleStatus))
+	require.NoError(t, pool.QueryRow(context.Background(),
+		"SELECT status FROM paper_trades WHERE symbol = 'FRESH/USDT'",
+	).Scan(&freshStatus))
+	assert.Equal(t, "closed", staleStatus, "6h-old row must be closed by reconciler")
+	assert.Equal(t, "open", freshStatus, "1m-old row must remain open")
+
+	// Idempotency: re-running the sweep does not re-close anything (and
+	// does not error on the already-closed row).
+	coordinator.runReconcileOnce(context.Background(), cfg)
+
+	// Start/Stop lifecycle: a long-running sweep should terminate cleanly.
+	coordinator.Start(context.Background(), ReconciliationConfig{
+		MaxAge:   4 * time.Hour,
+		Interval: 50 * time.Millisecond,
+	})
+	time.Sleep(120 * time.Millisecond)
+	coordinator.Stop()
+	// Second Stop must be safe (no panic, no deadlock).
+	coordinator.Stop()
 }
