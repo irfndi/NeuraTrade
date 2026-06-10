@@ -412,6 +412,72 @@ func TestMaxLossMonitorService_FiresOnMaxLoss_CCLongSide(t *testing.T) {
 	assert.True(t, params.quantity.Equal(decimal.NewFromFloat(0.5)))
 }
 
+func TestMaxLossMonitorService_FiresOnMaxLoss_CCShortSide(t *testing.T) {
+	entryPrice := decimal.NewFromFloat(100)
+	breachPrice := decimal.NewFromFloat(103)
+
+	mockCCXT := &mockCCXTForMaxLoss{
+		positions: &ccxt.PositionsResponse{
+			Exchange: "binance",
+			Positions: []ccxt.Position{
+				{
+					ID:         "pos-cc-short",
+					Symbol:     "ETH/USDT",
+					Side:       "short",
+					Size:       decimal.NewFromFloat(2),
+					EntryPrice: entryPrice,
+				},
+			},
+		},
+		ticker: &mockTicker{price: breachPrice},
+	}
+
+	var (
+		mu     sync.Mutex
+		called bool
+		params struct {
+			exchange, symbol, side string
+			quantity               decimal.Decimal
+		}
+	)
+	callback := func(_ context.Context, exchange, symbol, side string, quantity decimal.Decimal) (*MaxLossExecutionResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		called = true
+		params.exchange = exchange
+		params.symbol = symbol
+		params.side = side
+		params.quantity = quantity
+		return &MaxLossExecutionResult{Success: true, ExecutedAt: time.Now().UTC()}, nil
+	}
+
+	config := MaxLossMonitorConfig{
+		MaxLossPct:   0.015,
+		PollInterval: 50 * time.Millisecond,
+	}
+
+	service := NewMaxLossMonitorService(config, mockCCXT, zaplogrus.New(), callback)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return called
+	}, 2*time.Second, 10*time.Millisecond, "execution callback should be called when CCXT returns Side=short")
+
+	service.Stop()
+	mu.Lock()
+	defer mu.Unlock()
+	assert.True(t, called, "callback should have been called for CCXT Side=short")
+	assert.Equal(t, "binance", params.exchange)
+	assert.Equal(t, "ETH/USDT", params.symbol)
+	assert.Equal(t, "buy", params.side, "short position should produce buy close order")
+	assert.True(t, params.quantity.Equal(decimal.NewFromFloat(2)))
+}
+
 func TestMaxLossMonitorService_HandlesFetchError(t *testing.T) {
 	mockCCXT := &mockCCXTForMaxLoss{
 		positionsErr: assert.AnError,

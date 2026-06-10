@@ -136,13 +136,13 @@ func (m *MaxLossMonitor) checkOne(ctx context.Context, pos PositionSnapshot) {
 
 	now := time.Now()
 	key := positionKey(pos.Exchange, pos.Symbol)
-	m.lastPriceTime.Store(key, now)
 	if t, ok := m.lastPriceTime.Load(key); ok {
 		if now.Sub(t.(time.Time)) > m.config.MaxStalePrice {
 			zaplogrus.Infof("[max-loss-monitor] skipping stale price for %s/%s", pos.Exchange, pos.Symbol)
 			return
 		}
 	}
+	m.lastPriceTime.Store(key, now)
 
 	maxLossPrice := m.computeMaxLossPrice(pos)
 	if maxLossPrice.IsZero() {

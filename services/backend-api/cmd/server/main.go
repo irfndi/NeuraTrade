@@ -30,6 +30,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
+	ccxtadapters "github.com/irfndi/neuratrade/internal/adapters/ccxt"
+	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
 )
 
@@ -379,14 +381,32 @@ func run() error {
 	stopLossAutoExec.Start()
 	defer stopLossAutoExec.Stop()
 
+	tradingAdapter := ccxtadapters.NewAdapter(ccxtService)
+
 	maxLossMonitorConfig := services.DefaultMaxLossMonitorConfig()
 	maxLossMonitor := services.NewMaxLossMonitorService(
 		maxLossMonitorConfig,
 		ccxtService,
 		logrusLogger,
-		func(_ context.Context, exchange, symbol, side string, quantity decimal.Decimal) (*services.MaxLossExecutionResult, error) {
-			logrusLogger.Warnf("max-loss-monitor: CLOSE %s %s %s qty=%s (placeholder; ExecutionActor integration not yet wired)", exchange, side, symbol, quantity.String())
-			return &services.MaxLossExecutionResult{Success: true, ExecutedAt: time.Now().UTC()}, nil
+		func(execCtx context.Context, exchange, symbol, side string, quantity decimal.Decimal) (*services.MaxLossExecutionResult, error) {
+			result, placeErr := tradingAdapter.PlaceOrder(execCtx, ports.OrderRequest{
+				Exchange:   exchange,
+				Symbol:     symbol,
+				Side:       ports.OrderSide(side),
+				Type:       ports.OrderTypeMarket,
+				Amount:     quantity,
+				ReduceOnly: true,
+			})
+			if placeErr != nil {
+				return nil, fmt.Errorf("place close order %s %s %s qty=%s: %w", exchange, side, symbol, quantity.String(), placeErr)
+			}
+			logrusLogger.Warnf("max-loss-monitor: CLOSE order placed: %s/%s side=%s qty=%s orderID=%s",
+				exchange, symbol, side, quantity.String(), result.OrderID)
+			return &services.MaxLossExecutionResult{
+				Success:    true,
+				OrderID:    result.OrderID,
+				ExecutedAt: time.Now().UTC(),
+			}, nil
 		},
 	)
 	maxLossMonitor.Start(ctx)
