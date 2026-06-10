@@ -150,8 +150,8 @@ func TestKillSwitchMonitor_FailureCounterResetsOnHealthy(t *testing.T) {
 	ks := NewKillSwitch()
 	checker := newMockHealthChecker(false)
 	monitor := NewKillSwitchMonitor(ks, nil, checker.check, KillSwitchMonitorConfig{
-		PollInterval:     10 * time.Millisecond,
-		FailureThreshold: 5,
+		PollInterval:      10 * time.Millisecond,
+		FailureThreshold:  5,
 		RecoveryThreshold: 1,
 	})
 

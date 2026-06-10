@@ -51,11 +51,11 @@ type MaxLossMonitorService struct {
 	config            MaxLossMonitorConfig
 	ccxtService       ccxt.CCXTService
 	monitor           *risk.MaxLossMonitor
-	logger           *zaplogrus.Logger
+	logger            *zaplogrus.Logger
 	executionCallback MaxLossExecutionCallback
 
 	stopCh  chan struct{}
-	mu     sync.Mutex
+	mu      sync.Mutex
 	stopped bool
 }
 
@@ -100,7 +100,7 @@ func NewMaxLossMonitorService(
 	}
 	monitor := risk.NewMaxLossMonitor(risk.MaxLossMonitorConfig{
 		MaxLossPct:    config.MaxLossPct,
-		PollInterval:   config.PollInterval,
+		PollInterval:  config.PollInterval,
 		MaxStalePrice: config.MaxStalePrice,
 	}, priceProvider, positionCloser)
 

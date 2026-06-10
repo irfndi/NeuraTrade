@@ -22,13 +22,13 @@ type mockTicker struct {
 	price decimal.Decimal
 }
 
-func (m *mockTicker) GetPrice() decimal.Decimal { return m.price }
+func (m *mockTicker) GetPrice() decimal.Decimal  { return m.price }
 func (m *mockTicker) GetVolume() decimal.Decimal { return decimal.NewFromInt(1000) }
-func (m *mockTicker) GetTimestamp() time.Time { return time.Now() }
-func (m *mockTicker) GetExchangeName() string  { return "binance" }
-func (m *mockTicker) GetSymbol() string    { return "BTC/USDT" }
-func (m *mockTicker) GetBid() decimal.Decimal   { return m.price }
-func (m *mockTicker) GetAsk() decimal.Decimal   { return m.price }
+func (m *mockTicker) GetTimestamp() time.Time    { return time.Now() }
+func (m *mockTicker) GetExchangeName() string    { return "binance" }
+func (m *mockTicker) GetSymbol() string          { return "BTC/USDT" }
+func (m *mockTicker) GetBid() decimal.Decimal    { return m.price }
+func (m *mockTicker) GetAsk() decimal.Decimal    { return m.price }
 func (m *mockTicker) GetHigh() decimal.Decimal   { return m.price }
 func (m *mockTicker) GetLow() decimal.Decimal    { return m.price }
 func (m *mockTicker) GetPriceChange24h() float64 { return 0.0 }
@@ -36,10 +36,10 @@ func (m *mockTicker) GetPriceChange24h() float64 { return 0.0 }
 // mockCCXTForMaxLoss implements ccxt.CCXTService for MaxLossMonitor testing.
 type mockCCXTForMaxLoss struct {
 	mock.Mock
-	positions     *ccxt.PositionsResponse
-	ticker        ccxt.MarketPriceInterface
-	tickerError   error
-	positionsErr  error
+	positions    *ccxt.PositionsResponse
+	ticker       ccxt.MarketPriceInterface
+	tickerError  error
+	positionsErr error
 }
 
 func (m *mockCCXTForMaxLoss) Initialize(ctx context.Context) error {

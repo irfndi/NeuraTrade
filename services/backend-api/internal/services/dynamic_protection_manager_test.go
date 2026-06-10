@@ -19,16 +19,16 @@ type stubTicker struct {
 	price  decimal.Decimal
 }
 
-func (t *stubTicker) GetPrice() decimal.Decimal       { return t.price }
-func (t *stubTicker) GetVolume() decimal.Decimal      { return decimal.Zero }
-func (t *stubTicker) GetTimestamp() time.Time         { return time.Now().UTC() }
-func (t *stubTicker) GetExchangeName() string         { return "bitget" }
-func (t *stubTicker) GetSymbol() string               { return t.symbol }
-func (t *stubTicker) GetBid() decimal.Decimal         { return t.price.Mul(decimal.NewFromFloat(0.999)) }
-func (t *stubTicker) GetAsk() decimal.Decimal         { return t.price.Mul(decimal.NewFromFloat(1.001)) }
-func (t *stubTicker) GetHigh() decimal.Decimal        { return t.price.Mul(decimal.NewFromFloat(1.01)) }
-func (t *stubTicker) GetLow() decimal.Decimal         { return t.price.Mul(decimal.NewFromFloat(0.99)) }
-func (t *stubTicker) GetPriceChange24h() float64      { return 0 }
+func (t *stubTicker) GetPrice() decimal.Decimal  { return t.price }
+func (t *stubTicker) GetVolume() decimal.Decimal { return decimal.Zero }
+func (t *stubTicker) GetTimestamp() time.Time    { return time.Now().UTC() }
+func (t *stubTicker) GetExchangeName() string    { return "bitget" }
+func (t *stubTicker) GetSymbol() string          { return t.symbol }
+func (t *stubTicker) GetBid() decimal.Decimal    { return t.price.Mul(decimal.NewFromFloat(0.999)) }
+func (t *stubTicker) GetAsk() decimal.Decimal    { return t.price.Mul(decimal.NewFromFloat(1.001)) }
+func (t *stubTicker) GetHigh() decimal.Decimal   { return t.price.Mul(decimal.NewFromFloat(1.01)) }
+func (t *stubTicker) GetLow() decimal.Decimal    { return t.price.Mul(decimal.NewFromFloat(0.99)) }
+func (t *stubTicker) GetPriceChange24h() float64 { return 0 }
 
 type stubTickerSource struct {
 	prices map[string]float64

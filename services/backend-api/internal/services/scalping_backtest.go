@@ -692,12 +692,12 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 		Size:        quantity,
 		Notional:    notional,
 		EntryPrice:  entryPrice,
-		EntryTime:    signal.Timestamp,
-		StopLoss:     *stopLoss,
-		TakeProfit:   *takeProfit,
-		RegimeEntry:  e.classifyRegime(signal.Signal),
-		Signal:       signal.Signal,
-		Decision:     decision,
+		EntryTime:   signal.Timestamp,
+		StopLoss:    *stopLoss,
+		TakeProfit:  *takeProfit,
+		RegimeEntry: e.classifyRegime(signal.Signal),
+		Signal:      signal.Signal,
+		Decision:    decision,
 	}
 
 	return position, nil
@@ -1805,8 +1805,8 @@ func computeATR(series []scalpingOHLCVPoint, period int) []float64 {
 	trValues := make([]float64, n)
 	for i := 1; i < n; i++ {
 		hl := series[i].high - series[i].low
-		hpc := math.Abs(series[i].high-series[i-1].close)
-		lpc := math.Abs(series[i].low-series[i-1].close)
+		hpc := math.Abs(series[i].high - series[i-1].close)
+		lpc := math.Abs(series[i].low - series[i-1].close)
 		trValues[i] = math.Max(hl, math.Max(hpc, lpc))
 	}
 

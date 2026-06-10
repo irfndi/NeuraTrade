@@ -15,8 +15,8 @@ import (
 // DefaultKillSwitchMonitorConfig returns a KillSwitchMonitorConfig with sensible defaults.
 func DefaultKillSwitchMonitorConfig() KillSwitchMonitorConfig {
 	return KillSwitchMonitorConfig{
-		PollInterval:     5 * time.Second,
-		FailureThreshold: 6,
+		PollInterval:      5 * time.Second,
+		FailureThreshold:  6,
 		RecoveryThreshold: 10,
 	}
 }
@@ -48,10 +48,10 @@ type KillSwitchMonitor struct {
 	checker    ExchangeHealthChecker
 	config     KillSwitchMonitorConfig
 
-	mu               sync.Mutex
-	consecutiveFails  int
+	mu                 sync.Mutex
+	consecutiveFails   int
 	consecutiveHealthy int
-	engagedByMonitor  bool
+	engagedByMonitor   bool
 }
 
 // NewKillSwitchMonitor creates a new KillSwitchMonitor.

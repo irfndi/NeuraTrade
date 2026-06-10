@@ -29,8 +29,8 @@ import (
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/redis/go-redis/v9"
 
-	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	ccxtadapters "github.com/irfndi/neuratrade/internal/adapters/ccxt"
+	apprisk "github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ports"
 	"github.com/shopspring/decimal"
 )

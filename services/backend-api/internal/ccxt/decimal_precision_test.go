@@ -133,10 +133,10 @@ func TestTickerMarketPriceAdapter_DecimalPrecision(t *testing.T) {
 // TestBalanceResponse_DecimalMaps verifies BalanceResponse uses decimal.Decimal maps.
 func TestBalanceResponse_DecimalMaps(t *testing.T) {
 	tests := []struct {
-		name     string
-		total    map[string]decimal.Decimal
-		free     map[string]decimal.Decimal
-		used     map[string]decimal.Decimal
+		name  string
+		total map[string]decimal.Decimal
+		free  map[string]decimal.Decimal
+		used  map[string]decimal.Decimal
 	}{
 		{
 			name: "standard BTC + USDT balance",

@@ -123,7 +123,7 @@ const (
 	// Bollinger Band %B entry/exit thresholds: entries require %B below the
 	// buy ceiling (oversold) or above the sell floor (overbought).
 	scalpingBBEntryMaxPct = 0.20
-	scalpingBBExitMinPct = 0.80
+	scalpingBBExitMinPct  = 0.80
 
 	// ADX regime filter: reject signals when ADX exceeds this threshold (trending market).
 	scalpingADXMaxPct = 25.0

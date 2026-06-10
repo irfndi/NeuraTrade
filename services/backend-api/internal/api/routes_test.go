@@ -1356,9 +1356,9 @@ func TestRiskLockSourcePriority(t *testing.T) {
 
 func TestValidateAIProviderName(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		provider string
-		wantErr bool
+		wantErr  bool
 	}{
 		{"empty", "", false},
 		{"openai", "openai", false},
