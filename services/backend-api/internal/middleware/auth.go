@@ -4,6 +4,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net/http"
@@ -133,8 +134,110 @@ func (am *AuthMiddleware) RequireAuth() gin.HandlerFunc {
 	}
 }
 
+// RequireAuthOrAdmin accepts either a valid user JWT (Authorization: Bearer ...)
+// or a valid admin API key (X-API-Key or Authorization: Bearer <key>) on the
+// same routes that already use RequireAuth. The CLI uses the admin key path
+// to call backtest/research endpoints without having to mint a per-user JWT.
+//
+// This is intentionally permissive for the routes it guards: backtest runs
+// are research/operator actions, not user-facing financial endpoints. Do not
+// apply this to order placement, balance queries, or any route that exposes
+// per-user data.
+//
+// Parameters:
+//
+//	adminAPIKey: The admin API key bytes (typically am.adminKey from the
+//	  AdminMiddleware). Pass the empty string to disable the admin path.
+//
+// Returns:
+//
+//	gin.HandlerFunc: A middleware that accepts either auth method.
+func (am *AuthMiddleware) RequireAuthOrAdmin(adminAPIKey string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Admin path: X-API-Key header, constant-time compared.
+		if adminAPIKey != "" {
+			if apiKeyHeader := c.GetHeader("X-API-Key"); apiKeyHeader != "" {
+				if subtle.ConstantTimeCompare([]byte(apiKeyHeader), []byte(adminAPIKey)) == 1 {
+					c.Set("user_id", "admin")
+					c.Set("auth_method", "admin_key")
+					c.Next()
+					return
+				}
+			}
+		}
+
+		// Admin path: Authorization: Bearer <admin-key>. The CLI sends the
+		// key this way when NEURATRADE_API_KEY is the admin key. We only
+		// attempt the admin-key check when the bearer doesn't look like
+		// a JWT (i.e. it has exactly two dot-separated parts... actually
+		// JWTs have three parts — so use that as the heuristic).
+		if adminAPIKey != "" {
+			if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+				if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+					token := strings.TrimSpace(parts[1])
+					if strings.Count(token, ".") != 2 && subtle.ConstantTimeCompare([]byte(token), []byte(adminAPIKey)) == 1 {
+						c.Set("user_id", "admin")
+						c.Set("auth_method", "admin_key")
+						c.Next()
+						return
+					}
+				}
+			}
+		}
+
+		// Fall back to standard JWT auth.
+		tokenString := extractBearerToken(c)
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			c.Abort()
+			return
+		}
+
+		token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return am.secretKey, nil
+		})
+
+		if err != nil {
+			if errors.Is(err, jwt.ErrTokenExpired) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Token expired"})
+				c.Abort()
+				return
+			}
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
+		if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
+			c.Set("user_id", claims.UserID)
+			c.Set("user_email", claims.Email)
+			c.Next()
+			return
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token claims"})
+		c.Abort()
+	}
+}
+
+// extractBearerToken pulls the bearer token out of the Authorization header.
+// Returns "" if the header is missing or malformed. Centralized so all
+// auth middlewares behave identically.
+func extractBearerToken(c *gin.Context) string {
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		return ""
+	}
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
 // OptionalAuth middleware validates JWT tokens but doesn't require them.
-// If a valid token is present, user context is set.
 //
 // Returns:
 //

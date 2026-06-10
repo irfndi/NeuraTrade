@@ -28,6 +28,15 @@ func (a readOnlyDBAdapter) Begin(context.Context) (database.Tx, error) {
 	return nil, fmt.Errorf("begin transaction is not supported by this adapter")
 }
 
+// IsSQLitePool reports whether the wrapped database is the in-process
+// *internaldb.SQLiteDB. The services-package scalping backtest engine
+// needs this signal to decide between SQLite-flavored and PostgreSQL-
+// flavored SQL without depending on this package.
+func (a readOnlyDBAdapter) IsSQLitePool() bool {
+	probe, ok := a.pool.(interface{ IsSQLiteBackend() bool })
+	return ok && probe != nil && probe.IsSQLiteBackend()
+}
+
 func normalizeDBPool(db any) services.DBPool {
 	switch typed := db.(type) {
 	case nil:

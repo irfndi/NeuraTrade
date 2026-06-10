@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -1646,3 +1647,88 @@ func TestScalpingBacktestEngine_ForceCloseSweepEmptiesPositions(t *testing.T) {
 	require.Equal(t, "force_close_end_of_run", engine.tradeHistory[0].ExitReason)
 	require.Equal(t, "AAA/USDT", engine.tradeHistory[0].Symbol)
 }
+
+// TestIsSQLiteTradingPairDB covers the production wrapping path: handlers
+// pass the engine a readOnlyDBPoolAdapter (not a raw *SQLiteDB), so the
+// type switch must unwrap the adapter or the engine emits PostgreSQL-flavored
+// SQL against SQLite and returns 500.
+//
+// Regression for the bug found on 2026-06-10:
+// "scalping backtest returns 500: near 'FROM': syntax error".
+func TestIsSQLiteTradingPairDB(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err)
+	defer sqliteDB.Close()
+
+	t.Run("raw_sqlite", func(t *testing.T) {
+		require.True(t, isSQLiteTradingPairDB(sqliteDB))
+	})
+
+	t.Run("wrapped_readonly_adapter", func(t *testing.T) {
+		wrapped := readOnlyDBPoolAdapter{pool: sqliteDB}
+		require.True(t, isSQLiteTradingPairDB(wrapped),
+			"production callers pass a readOnlyDBPoolAdapter; must still detect SQLite")
+	})
+
+	t.Run("unknown_db_is_not_sqlite", func(t *testing.T) {
+		var unknown DBPool = nil
+		require.False(t, isSQLiteTradingPairDB(unknown))
+	})
+}
+
+// TestIsSQLiteTradingPairDB_HandlersAdapterRegression covers the production
+// wrapping path used by the HTTP handler: it passes a *handlers*-package
+// read-only adapter wrapping *SQLiteDB. The services package cannot import
+// the handlers package, so the fix introduces a sqlitePoolProbe marker
+// interface that wraps can opt into.
+//
+// Regression for the bug found on 2026-06-10:
+// "scalping backtest returns 500: near 'FROM': syntax error" caused by
+// the engine emitting PostgreSQL-flavored SQL against SQLite.
+func TestIsSQLiteTradingPairDB_HandlersAdapterRegression(t *testing.T) {
+	sqliteDB, err := database.NewSQLiteConnection(":memory:")
+	require.NoError(t, err)
+	defer sqliteDB.Close()
+
+	// Simulate the handlers package's adapter that implements the marker.
+	shim := &markerSQLiteShim{pool: sqliteDB}
+	require.True(t, isSQLiteTradingPairDB(shim),
+		"shim implementing sqlitePoolProbe wrapping *SQLiteDB must be detected as SQLite")
+	require.False(t, isSQLiteTradingPairDB(nil))
+	require.False(t, isSQLiteTradingPairDB(markerNonSQLiteShim{}),
+		"shim whose IsSQLitePool()=false must not match")
+}
+
+type markerSQLiteShim struct {
+	pool *database.SQLiteDB
+}
+
+func (s *markerSQLiteShim) Query(ctx context.Context, q string, args ...any) (database.Rows, error) {
+	return s.pool.Query(ctx, q, args...)
+}
+func (s *markerSQLiteShim) QueryRow(ctx context.Context, q string, args ...any) database.Row {
+	return s.pool.QueryRow(ctx, q, args...)
+}
+func (s *markerSQLiteShim) Exec(ctx context.Context, q string, args ...any) (database.Result, error) {
+	return s.pool.Exec(ctx, q, args...)
+}
+func (s *markerSQLiteShim) Begin(ctx context.Context) (database.Tx, error) {
+	return nil, fmt.Errorf("read-only shim")
+}
+func (s *markerSQLiteShim) IsSQLitePool() bool { return true }
+
+type markerNonSQLiteShim struct{}
+
+func (markerNonSQLiteShim) Query(context.Context, string, ...any) (database.Rows, error) {
+	return nil, nil
+}
+func (markerNonSQLiteShim) QueryRow(context.Context, string, ...any) database.Row {
+	return nil
+}
+func (markerNonSQLiteShim) Exec(context.Context, string, ...any) (database.Result, error) {
+	return nil, nil
+}
+func (markerNonSQLiteShim) Begin(context.Context) (database.Tx, error) {
+	return nil, nil
+}
+func (markerNonSQLiteShim) IsSQLitePool() bool { return false }

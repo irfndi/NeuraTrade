@@ -1556,7 +1556,11 @@ func SetupRoutes(router *gin.Engine, db routeDB, redis *database.RedisClient, cc
 		}
 
 		backtest := v1.Group("/backtest")
-		backtest.Use(authMiddleware.RequireAuth())
+		// Backtest routes accept either a user JWT (browser/dashboard) or
+		// the admin API key (CLI). They're research/operator actions, not
+		// per-user financial endpoints, so the dual-auth middleware is
+		// appropriate here. Do NOT add this to order/balance routes.
+		backtest.Use(authMiddleware.RequireAuthOrAdmin(adminMiddleware.APIKey()))
 		{
 			scalpingBacktest := backtest.Group("/scalping")
 			scalpingBacktest.POST("/run", scalpingBacktestHandler.RunScalpingBacktest)

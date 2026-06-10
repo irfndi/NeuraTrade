@@ -16,6 +16,12 @@ type SQLiteDB struct {
 	DB *sql.DB
 }
 
+// IsSQLiteBackend reports true. This marker method lets upstream callers
+// (e.g. the services-package scalping backtest engine) detect that the
+// database pool they're holding wraps an in-process SQLite connection,
+// without depending on the concrete type or the database package.
+func (db *SQLiteDB) IsSQLiteBackend() bool { return true }
+
 // Ensure SQLiteDB implements Database interface.
 var _ Database = (*SQLiteDB)(nil)
 

@@ -2071,10 +2071,27 @@ func normalizedTradingPairSymbolExpr(db DBPool) string {
 	))`
 }
 
+// sqlitePoolProbe is implemented by adapters that wrap an in-process
+// *internaldb.SQLiteDB. The services package cannot import
+// internal/api/handlers (where the production HTTP adapter lives), so
+// it asks via this marker interface instead. Adding this method to
+// an adapter is the only change required to make a wrapper visible
+// to isSQLiteTradingPairDB.
+type sqlitePoolProbe interface {
+	IsSQLitePool() bool
+}
+
 func isSQLiteTradingPairDB(db DBPool) bool {
-	switch db.(type) {
+	switch v := db.(type) {
 	case *internaldb.SQLiteDB:
 		return true
+	case readOnlyDBPoolAdapter:
+		if sqlite, ok := v.pool.(*internaldb.SQLiteDB); ok && sqlite != nil {
+			return true
+		}
+		return false
+	case sqlitePoolProbe:
+		return v.IsSQLitePool()
 	default:
 		return false
 	}

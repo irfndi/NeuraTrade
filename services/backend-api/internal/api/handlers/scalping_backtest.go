@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
 	"github.com/irfndi/neuratrade/internal/services"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -177,6 +178,9 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = h.updateBacktestRun(cleanupCtx, runID, "failed", emptySummary, time.Now().UTC())
+		// Log internally for operator visibility, but return a generic
+		// 500 to the client to avoid leaking engine internals.
+		zaplogrus.Errorf("[BACKTEST] engine.Run error: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to run scalping backtest"})
 		return
 	}

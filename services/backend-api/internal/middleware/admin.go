@@ -23,6 +23,17 @@ type AdminMiddleware struct {
 	apiKey string
 }
 
+// APIKey returns the admin API key bytes. It is exposed so that other
+// middlewares (e.g. AuthMiddleware.RequireAuthOrAdmin) can accept the
+// admin key as an alternative auth method on research/operator routes
+// without having to construct a separate AdminMiddleware.
+func (am *AdminMiddleware) APIKey() string {
+	if am == nil {
+		return ""
+	}
+	return am.apiKey
+}
+
 // generateSecureKey generates a cryptographically secure random key.
 func generateSecureKey(length int) string {
 	bytes := make([]byte, length/2)
