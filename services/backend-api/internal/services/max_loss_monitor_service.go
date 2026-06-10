@@ -184,10 +184,11 @@ func (s *MaxLossMonitorService) checkPositions(ctx context.Context) {
 			if pos.Side == "" {
 				continue
 			}
+			side := normalizePositionSide(pos.Side)
 			snapshot := risk.PositionSnapshot{
 				Symbol:     pos.Symbol,
 				Exchange:   positions.Exchange,
-				Side:       pos.Side,
+				Side:       side,
 				EntryPrice: pos.EntryPrice,
 				Quantity:   pos.Size,
 				OpenedAt:   time.Now().UTC(),
@@ -206,4 +207,18 @@ func (s *MaxLossMonitorService) exchanges() []string {
 		return nil
 	}
 	return s.ccxtService.GetSupportedExchanges()
+}
+
+// normalizePositionSide converts CCXT position side vocabulary
+// ("long"/"short") to the risk engine vocabulary ("buy"/"sell").
+// Unknown values are passed through unchanged.
+func normalizePositionSide(side string) string {
+	switch side {
+	case "long", "buy":
+		return "buy"
+	case "short", "sell":
+		return "sell"
+	default:
+		return side
+	}
 }
