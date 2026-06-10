@@ -434,7 +434,7 @@ func TestIntegration_FullRiskPipeline(t *testing.T) {
 	if err := policy.AddRule(NewMaxDrawdownRule(decimal.NewFromFloat(0.15))); err != nil {
 		t.Fatalf("add max drawdown rule: %v", err)
 	}
-	if err := policy.AddRule(NewMaxDailyLossRule(decimal.NewFromFloat(5000.0))); err != nil {
+	if err := policy.AddRule(NewMaxDailyLossRule(decimal.NewFromFloat(5000.0), decimal.Zero)); err != nil {
 		t.Fatalf("add max daily loss rule: %v", err)
 	}
 

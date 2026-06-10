@@ -3432,6 +3432,9 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 		effectiveMaxSpread = math.Max(effectiveMaxSpread, s.maxBidAskSpreadPct())
 		effectiveMinImbalance = math.Min(effectiveMinImbalance, 0.20)
 	}
+	if effectiveMaxSpread <= 0 || math.IsNaN(effectiveMaxSpread) || math.IsInf(effectiveMaxSpread, 0) {
+		return nil, 0, false
+	}
 	if signal.Price <= 0 || signal.Symbol == "" {
 		return nil, 0, false
 	}

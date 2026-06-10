@@ -55,8 +55,11 @@ type RiskConfig struct {
 	// MaxDrawdown is the maximum allowed drawdown (e.g., 0.1 = 10%)
 	MaxDrawdown decimal.Decimal
 
-	// MaxDailyLoss is the maximum daily loss
+	// MaxDailyLoss is the maximum daily loss (fractional, e.g., 0.05 = 5%)
 	MaxDailyLoss decimal.Decimal
+
+	// MaxDailyLossAbsolute is the maximum daily loss in absolute monetary units
+	MaxDailyLossAbsolute decimal.Decimal
 
 	// CooldownPeriod after consecutive losses
 	CooldownPeriod time.Duration
@@ -71,11 +74,12 @@ type RiskConfig struct {
 // DefaultRiskConfig returns default risk configuration.
 func DefaultRiskConfig() RiskConfig {
 	cfg := RiskConfig{
-		MaxDrawdown:         decimal.NewFromFloat(0.1),  // 10%
-		MaxDailyLoss:        decimal.NewFromFloat(0.05), // 5%
-		CooldownPeriod:      5 * time.Minute,
-		CooldownAfterLosses: 3,
-		SafeMode:            risk.DefaultSafeModeConfig(),
+		MaxDrawdown:          decimal.NewFromFloat(0.1),  // 10%
+		MaxDailyLoss:         decimal.NewFromFloat(0.05), // 5%
+		MaxDailyLossAbsolute: decimal.Zero,
+		CooldownPeriod:       5 * time.Minute,
+		CooldownAfterLosses:  3,
+		SafeMode:             risk.DefaultSafeModeConfig(),
 	}
 
 	if v := os.Getenv("NEURATRADE_RISK_MAX_DRAWDOWN"); v != "" {
@@ -86,6 +90,11 @@ func DefaultRiskConfig() RiskConfig {
 	if v := os.Getenv("NEURATRADE_RISK_MAX_DAILY_LOSS"); v != "" {
 		if d, err := decimal.NewFromString(v); err == nil && d.GreaterThan(decimal.Zero) && d.LessThanOrEqual(decimal.NewFromInt(1)) {
 			cfg.MaxDailyLoss = d
+		}
+	}
+	if v := os.Getenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE"); v != "" {
+		if d, err := decimal.NewFromString(v); err == nil && d.IsPositive() {
+			cfg.MaxDailyLossAbsolute = d
 		}
 	}
 
@@ -309,9 +318,8 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 				)
 			}
 		}
-		if b.config.Risk.MaxDailyLoss.GreaterThan(decimal.Zero) {
-			threshold := b.config.Risk.MaxDailyLoss
-			if err := policyEngine.AddRule(risk.NewMaxDailyLossRule(threshold)); err != nil {
+		if b.config.Risk.MaxDailyLoss.GreaterThan(decimal.Zero) || b.config.Risk.MaxDailyLossAbsolute.IsPositive() {
+			if err := policyEngine.AddRule(risk.NewMaxDailyLossRule(b.config.Risk.MaxDailyLoss, b.config.Risk.MaxDailyLossAbsolute)); err != nil {
 				return fmt.Errorf(
 					"adding MaxDailyLoss rule (b.config.Risk.MaxDailyLoss=%s, b.config.Risk.MaxDrawdown=%s, b.config.Risk.CooldownPeriod=%s, b.config.Risk.CooldownAfterLosses=%d): %w",
 					b.config.Risk.MaxDailyLoss.String(),
@@ -364,15 +372,16 @@ func (a *Application) buildRiskComponents(ctx context.Context, b *Builder) error
 	riskActorIDValue := riskActorID(b.config.RiskActorID)
 	var err error
 	a.RiskActor, err = risk.NewRiskActor(risk.RiskActorConfig{
-		ID:                  riskActorIDValue,
-		PolicyEngine:        policyEngine,
-		KillSwitch:          ks,
-		SafeMode:            a.SafeMode,
-		EventBus:            a.EventBus,
-		MaxDrawdown:         b.config.Risk.MaxDrawdown,
-		MaxDailyLoss:        b.config.Risk.MaxDailyLoss,
-		CooldownPeriod:      b.config.Risk.CooldownPeriod,
-		CooldownAfterLosses: b.config.Risk.CooldownAfterLosses,
+		ID:                   riskActorIDValue,
+		PolicyEngine:         policyEngine,
+		KillSwitch:           ks,
+		SafeMode:             a.SafeMode,
+		EventBus:             a.EventBus,
+		MaxDrawdown:          b.config.Risk.MaxDrawdown,
+		MaxDailyLoss:         b.config.Risk.MaxDailyLoss,
+		MaxDailyLossAbsolute: b.config.Risk.MaxDailyLossAbsolute,
+		CooldownPeriod:       b.config.Risk.CooldownPeriod,
+		CooldownAfterLosses:  b.config.Risk.CooldownAfterLosses,
 	})
 	if err != nil {
 		return fmt.Errorf("create RiskActor: %w", err)

@@ -51,25 +51,59 @@ func TestLoadScalpingWeightsFromEnv_RejectsInvalidNumber(t *testing.T) {
 func TestDefaultRiskConfig_DefaultsWhenEnvUnset(t *testing.T) {
 	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "")
 	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "")
 	cfg := DefaultRiskConfig()
 	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.1")))
 	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.05")))
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.Zero))
 }
 
 func TestDefaultRiskConfig_AppliesEnvOverrides(t *testing.T) {
 	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "0.08")
 	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "0.03")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "100")
 	cfg := DefaultRiskConfig()
 	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.08")))
 	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.03")))
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.RequireFromString("100")))
 }
 
 func TestDefaultRiskConfig_RejectsInvalidValues(t *testing.T) {
 	t.Setenv("NEURATRADE_RISK_MAX_DRAWDOWN", "not-a-number")
 	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "2.0")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "abc")
 	cfg := DefaultRiskConfig()
 	require.True(t, cfg.MaxDrawdown.Equal(decimal.RequireFromString("0.1")))
 	require.True(t, cfg.MaxDailyLoss.Equal(decimal.RequireFromString("0.05")))
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.Zero))
+}
+
+func TestDefaultRiskConfig_AbsoluteEnvVar_AcceptsPositive(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "5000.50")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.RequireFromString("5000.50")))
+}
+
+func TestDefaultRiskConfig_AbsoluteEnvVar_RejectsZero(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "0")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.Zero))
+}
+
+func TestDefaultRiskConfig_AbsoluteEnvVar_RejectsNegative(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "-50")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.Zero))
+}
+
+func TestDefaultRiskConfig_AbsoluteEnvVar_RejectsNonNumeric(t *testing.T) {
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS", "")
+	t.Setenv("NEURATRADE_RISK_MAX_DAILY_LOSS_ABSOLUTE", "not-a-number")
+	cfg := DefaultRiskConfig()
+	require.True(t, cfg.MaxDailyLossAbsolute.Equal(decimal.Zero))
 }
 
 type noopActor struct{}

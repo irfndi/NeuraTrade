@@ -155,15 +155,16 @@ type RiskActor struct {
 
 // RiskActorConfig holds configuration for RiskActor.
 type RiskActorConfig struct {
-	ID                  string
-	PolicyEngine        *Engine
-	KillSwitch          *KillSwitchImpl
-	SafeMode            *SafeModeImpl
-	EventBus            *eventbus.Bus
-	MaxDrawdown         decimal.Decimal
-	MaxDailyLoss        decimal.Decimal
-	CooldownPeriod      time.Duration
-	CooldownAfterLosses int
+	ID                   string
+	PolicyEngine         *Engine
+	KillSwitch           *KillSwitchImpl
+	SafeMode             *SafeModeImpl
+	EventBus             *eventbus.Bus
+	MaxDrawdown          decimal.Decimal
+	MaxDailyLoss         decimal.Decimal
+	MaxDailyLossAbsolute decimal.Decimal
+	CooldownPeriod       time.Duration
+	CooldownAfterLosses  int
 }
 
 // NewRiskActor creates a new RiskActor.
@@ -205,8 +206,8 @@ func NewRiskActor(config RiskActorConfig) (*RiskActor, error) {
 	if config.MaxDrawdown.GreaterThan(decimal.Zero) {
 		ra.drawdownRule = NewMaxDrawdownRule(config.MaxDrawdown)
 	}
-	if config.MaxDailyLoss.GreaterThan(decimal.Zero) {
-		ra.dailyLossRule = NewMaxDailyLossRule(config.MaxDailyLoss)
+	if config.MaxDailyLoss.GreaterThan(decimal.Zero) || config.MaxDailyLossAbsolute.IsPositive() {
+		ra.dailyLossRule = NewMaxDailyLossRule(config.MaxDailyLoss, config.MaxDailyLossAbsolute)
 	}
 	if config.CooldownPeriod > 0 && config.CooldownAfterLosses > 0 {
 		ra.cooldownRule = NewCooldownRule(config.CooldownPeriod, config.CooldownAfterLosses)

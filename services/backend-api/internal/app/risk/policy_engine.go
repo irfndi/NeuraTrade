@@ -144,17 +144,20 @@ func (r *MaxNotionalRule) IsHardRule() bool { return true }
 
 // MaxDailyLossRule limits daily loss.
 type MaxDailyLossRule struct {
-	maxLoss   decimal.Decimal
-	dailyLoss decimal.Decimal
-	lastReset time.Time
-	mu        sync.RWMutex
+	maxLoss         decimal.Decimal
+	maxLossAbsolute decimal.Decimal
+	dailyLoss       decimal.Decimal
+	lastReset       time.Time
+	mu              sync.RWMutex
 }
 
 // NewMaxDailyLossRule creates a new max daily loss rule.
-func NewMaxDailyLossRule(maxLoss decimal.Decimal) *MaxDailyLossRule {
+// maxLossAbsolute of zero or negative disables the absolute check.
+func NewMaxDailyLossRule(maxLoss decimal.Decimal, maxLossAbsolute decimal.Decimal) *MaxDailyLossRule {
 	return &MaxDailyLossRule{
-		maxLoss:   maxLoss,
-		lastReset: time.Now(),
+		maxLoss:         maxLoss,
+		maxLossAbsolute: maxLossAbsolute,
+		lastReset:       time.Now(),
 	}
 }
 
@@ -189,6 +192,13 @@ func (r *MaxDailyLossRule) Evaluate(ctx context.Context, intent ports.OrderInten
 		return ports.PolicyDecision{
 			Approved: false,
 			Reason:   fmt.Sprintf("daily loss %s exceeds maximum %s", r.dailyLoss.String(), r.maxLoss.String()),
+			RuleName: r.Name(),
+		}, nil
+	}
+	if r.maxLossAbsolute.IsPositive() && r.dailyLoss.GreaterThan(r.maxLossAbsolute) {
+		return ports.PolicyDecision{
+			Approved: false,
+			Reason:   fmt.Sprintf("daily loss %s exceeds absolute maximum %s", r.dailyLoss.String(), r.maxLossAbsolute.String()),
 			RuleName: r.Name(),
 		}, nil
 	}
