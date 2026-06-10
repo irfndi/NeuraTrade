@@ -410,7 +410,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 				if attempt < maxRetries {
 					totalFilled = totalFilled.Add(filled)
 					if !totalFillPrice.IsZero() {
-						totalFillPrice = totalFillPrice.Add(fillPrice).Div(decimal.NewFromInt(1))
+						totalFillPrice = totalFillPrice.Add(fillPrice)
 					} else {
 						totalFillPrice = totalFillPrice.Mul(totalFilled.Sub(filled)).Add(fillPrice.Mul(filled)).Div(totalFilled)
 					}
@@ -437,7 +437,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 
 			totalFilled = totalFilled.Add(filled)
 			if !totalFillPrice.IsZero() {
-				totalFillPrice = totalFillPrice.Add(fillPrice).Div(decimal.NewFromInt(1))
+				totalFillPrice = totalFillPrice.Add(fillPrice)
 			} else {
 				totalFillPrice = totalFillPrice.Mul(totalFilled.Sub(filled)).Add(fillPrice.Mul(filled)).Div(totalFilled)
 			}
