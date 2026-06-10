@@ -367,7 +367,7 @@ func (e *SmartOrderExecutor) executeWithRetry(ctx context.Context, req SmartOrde
 					}
 					totalFilled = totalFilled.Add(filled)
 					if !totalFillPrice.IsZero() {
-						totalFillPrice = totalFillPrice.Add(fillPrice).Div(decimal.NewFromInt(2))
+						totalFillPrice = totalFillPrice.Mul(totalFilled.Sub(filled)).Add(fillPrice.Mul(filled)).Div(totalFilled)
 					} else {
 						totalFillPrice = totalFillPrice.Mul(totalFilled.Sub(filled)).Add(fillPrice.Mul(filled)).Div(totalFilled)
 					}
