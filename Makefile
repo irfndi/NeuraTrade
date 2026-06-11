@@ -13,7 +13,7 @@ BLUE=\033[0;34m
 NC=\033[0m
 
 .PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
-	test test-backend test-frontend lint fmt fmt-check typecheck coverage-check \
+	test test-backend test-cli test-frontend lint fmt fmt-check typecheck coverage-check \
 	test-scripts run logs logs-all scalping-soak ai-scalping-probe bd-close-qa
 
 all: build
@@ -77,6 +77,7 @@ build: mod-download services-setup ## Build backend binaries
 fmt: ## Format backend + frontend code
 	@echo "$(GREEN)Formatting Go code...$(NC)"
 	@cd services/backend-api && gofmt -w .
+	@cd cmd/neuratrade-cli && gofmt -w .
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Formatting Telegram service...$(NC)"; \
 		cd services/telegram-service && bunx prettier --write .; \
@@ -85,6 +86,7 @@ fmt: ## Format backend + frontend code
 fmt-check: ## Check if code is formatted (for CI)
 	@echo "$(GREEN)Checking Go formatting...$(NC)"
 	@cd services/backend-api && test -z "$$(gofmt -l .)" || (echo "$(RED)Go code is not formatted. Run 'make fmt'$(NC)" && gofmt -l . && exit 1)
+	@cd cmd/neuratrade-cli && test -z "$$(gofmt -l .)" || (echo "$(RED)CLI Go code is not formatted. Run 'make fmt'$(NC)" && gofmt -l . && exit 1)
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
 		cd services/telegram-service && bunx prettier --check .; \
@@ -107,7 +109,7 @@ typecheck: ## Run TypeScript type checks
 		echo "$(YELLOW)Skipping typecheck - telegram-service or bun missing$(NC)"; \
 	fi
 
-test: test-backend test-scripts ## Run default tests
+test: test-backend test-cli test-scripts ## Run default tests
 
 test-backend: mod-download ## Run backend tests
 	@echo "$(GREEN)Running backend tests...$(NC)"
@@ -122,6 +124,10 @@ test-backend: mod-download ## Run backend tests
 		TEST_EXIT=$$?; \
 		rm -rf "$$TEST_HOME"; \
 		exit $$TEST_EXIT
+
+test-cli: go-env-setup ## Run CLI tests
+	@echo "$(GREEN)Running CLI tests...$(NC)"
+	@cd cmd/neuratrade-cli && $(GO_ENV) go test -v -race ./...
 
 test-frontend: ## Run Telegram service tests
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \

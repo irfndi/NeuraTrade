@@ -22,13 +22,13 @@ type mockTicker struct {
 	price decimal.Decimal
 }
 
-func (m *mockTicker) GetPrice() decimal.Decimal { return m.price }
+func (m *mockTicker) GetPrice() decimal.Decimal  { return m.price }
 func (m *mockTicker) GetVolume() decimal.Decimal { return decimal.NewFromInt(1000) }
-func (m *mockTicker) GetTimestamp() time.Time { return time.Now() }
-func (m *mockTicker) GetExchangeName() string  { return "binance" }
-func (m *mockTicker) GetSymbol() string    { return "BTC/USDT" }
-func (m *mockTicker) GetBid() decimal.Decimal   { return m.price }
-func (m *mockTicker) GetAsk() decimal.Decimal   { return m.price }
+func (m *mockTicker) GetTimestamp() time.Time    { return time.Now() }
+func (m *mockTicker) GetExchangeName() string    { return "binance" }
+func (m *mockTicker) GetSymbol() string          { return "BTC/USDT" }
+func (m *mockTicker) GetBid() decimal.Decimal    { return m.price }
+func (m *mockTicker) GetAsk() decimal.Decimal    { return m.price }
 func (m *mockTicker) GetHigh() decimal.Decimal   { return m.price }
 func (m *mockTicker) GetLow() decimal.Decimal    { return m.price }
 func (m *mockTicker) GetPriceChange24h() float64 { return 0.0 }
@@ -36,10 +36,10 @@ func (m *mockTicker) GetPriceChange24h() float64 { return 0.0 }
 // mockCCXTForMaxLoss implements ccxt.CCXTService for MaxLossMonitor testing.
 type mockCCXTForMaxLoss struct {
 	mock.Mock
-	positions     *ccxt.PositionsResponse
-	ticker        ccxt.MarketPriceInterface
-	tickerError   error
-	positionsErr  error
+	positions    *ccxt.PositionsResponse
+	ticker       ccxt.MarketPriceInterface
+	tickerError  error
+	positionsErr error
 }
 
 func (m *mockCCXTForMaxLoss) Initialize(ctx context.Context) error {
@@ -203,6 +203,43 @@ func TestMaxLossMonitorService_TracksPositions(t *testing.T) {
 
 	service.Stop()
 	assert.GreaterOrEqual(t, service.TrackedCount(), 1, "at least one position should be tracked")
+}
+
+func TestMaxLossMonitorService_StartIsIdempotentAndStopIsOneShot(t *testing.T) {
+	mockCCXT := &mockCCXTForMaxLoss{}
+	service := NewMaxLossMonitorService(
+		MaxLossMonitorConfig{PollInterval: 50 * time.Millisecond},
+		mockCCXT,
+		zaplogrus.New(),
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service.Start(ctx)
+	service.mu.Lock()
+	firstGroup := service.group
+	service.mu.Unlock()
+	require.NotNil(t, firstGroup)
+
+	service.Start(ctx)
+	service.mu.Lock()
+	secondGroup := service.group
+	service.mu.Unlock()
+	assert.Same(t, firstGroup, secondGroup, "second Start should not replace the active supervisor")
+
+	service.Stop()
+	service.mu.Lock()
+	assert.True(t, service.stopped)
+	assert.Nil(t, service.cancel)
+	assert.Nil(t, service.group)
+	service.mu.Unlock()
+
+	service.Start(ctx)
+	service.mu.Lock()
+	assert.Nil(t, service.group, "Start after Stop should remain a no-op")
+	service.mu.Unlock()
 }
 
 func TestMaxLossMonitorService_FiresOnMaxLoss(t *testing.T) {

@@ -51,16 +51,16 @@ type mockMarketPrice struct {
 	exchange  string
 }
 
-func (m mockMarketPrice) GetPrice() decimal.Decimal       { return decimal.NewFromFloat(m.price) }
-func (m mockMarketPrice) GetVolume() decimal.Decimal      { return decimal.NewFromFloat(m.volume) }
-func (m mockMarketPrice) GetTimestamp() time.Time         { return time.Now().UTC() }
-func (m mockMarketPrice) GetExchangeName() string         { return m.exchange }
-func (m mockMarketPrice) GetSymbol() string               { return m.symbol }
-func (m mockMarketPrice) GetBid() decimal.Decimal         { return decimal.NewFromFloat(m.bid) }
-func (m mockMarketPrice) GetAsk() decimal.Decimal         { return decimal.NewFromFloat(m.ask) }
-func (m mockMarketPrice) GetHigh() decimal.Decimal        { return decimal.NewFromFloat(m.high24h) }
-func (m mockMarketPrice) GetLow() decimal.Decimal         { return decimal.NewFromFloat(m.low24h) }
-func (m mockMarketPrice) GetPriceChange24h() float64      { return m.change24h }
+func (m mockMarketPrice) GetPrice() decimal.Decimal  { return decimal.NewFromFloat(m.price) }
+func (m mockMarketPrice) GetVolume() decimal.Decimal { return decimal.NewFromFloat(m.volume) }
+func (m mockMarketPrice) GetTimestamp() time.Time    { return time.Now().UTC() }
+func (m mockMarketPrice) GetExchangeName() string    { return m.exchange }
+func (m mockMarketPrice) GetSymbol() string          { return m.symbol }
+func (m mockMarketPrice) GetBid() decimal.Decimal    { return decimal.NewFromFloat(m.bid) }
+func (m mockMarketPrice) GetAsk() decimal.Decimal    { return decimal.NewFromFloat(m.ask) }
+func (m mockMarketPrice) GetHigh() decimal.Decimal   { return decimal.NewFromFloat(m.high24h) }
+func (m mockMarketPrice) GetLow() decimal.Decimal    { return decimal.NewFromFloat(m.low24h) }
+func (m mockMarketPrice) GetPriceChange24h() float64 { return m.change24h }
 
 type mockAIScalpingCCXT struct {
 	mockCCXTForPortfolioSafety

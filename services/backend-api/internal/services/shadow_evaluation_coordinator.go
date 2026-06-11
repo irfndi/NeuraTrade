@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	appautonomy "github.com/irfndi/neuratrade/internal/app/autonomy"
+	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 )
 
 const shadowRecorderUserID = "00000000-0000-0000-0000-000000000000"
@@ -48,8 +49,10 @@ type ShadowEvaluationCoordinator struct {
 	// closes them (the close path runs only in backfills), so positions
 	// accumulate unboundedly. Without this loop, paper PnL diverges from
 	// reality and a real-money rollout would silently leak.
-	reconcilerStop chan struct{}
-	reconcilerDone chan struct{}
+	reconcilerStop   chan struct{}
+	reconcilerDone   chan struct{}
+	reconcilerCancel context.CancelFunc
+	reconcilerGroup  *supervisor.Group
 }
 
 func NewShadowEvaluationCoordinator(
@@ -744,11 +747,25 @@ func (c *ShadowEvaluationCoordinator) Start(ctx context.Context, cfg Reconciliat
 		return
 	}
 	cfg.applyDefaults()
-	c.reconcilerStop = make(chan struct{})
-	c.reconcilerDone = make(chan struct{})
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	runCtx, cancel := context.WithCancel(ctx)
+	group := supervisor.NewGroup()
+	group.AddFunc("shadow-paper-reconciler", func(ctx context.Context) error {
+		c.reconcileLoop(ctx, cfg, stop, done)
+		return nil
+	})
+	c.reconcilerStop = stop
+	c.reconcilerDone = done
+	c.reconcilerCancel = cancel
+	c.reconcilerGroup = group
 	c.mu.Unlock()
 
-	go c.reconcileLoop(ctx, cfg)
+	go func() {
+		if err := group.Run(runCtx); err != nil {
+			c.logger.Warn("shadow paper reconciler supervisor exited", zap.Error(err))
+		}
+	}()
 }
 
 // Stop signals the periodic reconciler to exit and waits for it. Safe
@@ -760,20 +777,32 @@ func (c *ShadowEvaluationCoordinator) Stop() {
 	c.mu.Lock()
 	stop := c.reconcilerStop
 	done := c.reconcilerDone
+	cancel := c.reconcilerCancel
+	group := c.reconcilerGroup
 	c.reconcilerStop = nil
 	c.reconcilerDone = nil
+	c.reconcilerCancel = nil
+	c.reconcilerGroup = nil
 	c.mu.Unlock()
 	if stop == nil {
 		return
 	}
 	close(stop)
+	if cancel != nil {
+		cancel()
+	}
 	if done != nil {
 		<-done
 	}
+	if group != nil {
+		if err := group.Shutdown(time.Second); err != nil {
+			c.logger.Warn("shadow paper reconciler supervisor shutdown failed", zap.Error(err))
+		}
+	}
 }
 
-func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg ReconciliationConfig) {
-	defer close(c.reconcilerDone)
+func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg ReconciliationConfig, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	c.runReconcileOnce(ctx, cfg) // run once immediately
@@ -781,7 +810,7 @@ func (c *ShadowEvaluationCoordinator) reconcileLoop(ctx context.Context, cfg Rec
 		select {
 		case <-ctx.Done():
 			return
-		case <-c.reconcilerStop:
+		case <-stop:
 			return
 		case <-ticker.C:
 			c.runReconcileOnce(ctx, cfg)

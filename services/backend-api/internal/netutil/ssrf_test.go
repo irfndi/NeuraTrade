@@ -53,10 +53,10 @@ func TestValidateURL_Blocked(t *testing.T) {
 
 func TestValidateURLWithAllowlist(t *testing.T) {
 	cases := []struct {
-		name         string
-		url          string
-		allowlist    []string
-		expectErr    bool
+		name      string
+		url       string
+		allowlist []string
+		expectErr bool
 	}{
 		{"exact match", "https://api.openai.com/v1", []string{"api.openai.com"}, false},
 		{"suffix match", "https://api.openai.com/v1", []string{".openai.com"}, false},
@@ -82,18 +82,18 @@ func TestIsPrivateOrReserved(t *testing.T) {
 		ip      string
 		blocked bool
 	}{
-		{"8.8.8.8", false},           // public
-		{"1.1.1.1", false},           // public
-		{"127.0.0.1", true},          // loopback
-		{"10.0.0.1", true},           // private
-		{"192.168.1.1", true},        // private
-		{"172.16.0.1", true},         // private
-		{"172.31.255.1", true},       // private
-		{"169.254.1.1", true},        // link-local
-		{"224.0.0.1", true},          // multicast
-		{"::1", true},                // loopback IPv6
-		{"fe80::1", true},            // link-local IPv6
-		{"fc00::1", true},            // unique local IPv6
+		{"8.8.8.8", false},              // public
+		{"1.1.1.1", false},              // public
+		{"127.0.0.1", true},             // loopback
+		{"10.0.0.1", true},              // private
+		{"192.168.1.1", true},           // private
+		{"172.16.0.1", true},            // private
+		{"172.31.255.1", true},          // private
+		{"169.254.1.1", true},           // link-local
+		{"224.0.0.1", true},             // multicast
+		{"::1", true},                   // loopback IPv6
+		{"fe80::1", true},               // link-local IPv6
+		{"fc00::1", true},               // unique local IPv6
 		{"2001:4860:4860::8888", false}, // public IPv6
 	}
 	for _, tc := range cases {
@@ -109,4 +109,3 @@ func TestIsPrivateOrReserved(t *testing.T) {
 		})
 	}
 }
-

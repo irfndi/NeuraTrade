@@ -155,10 +155,10 @@ func TestShadowEvaluationCoordinatorCloseStalePositions(t *testing.T) {
 // so rows accumulate unboundedly and break PnL accounting.
 //
 // The reconciler must:
-//   1. Close any 'open' paper_trades row older than the configured cutoff.
-//   2. Leave 'open' rows newer than the cutoff alone.
-//   3. Be idempotent (re-running does nothing on the second pass).
-//   4. Stop cleanly when ctx is cancelled.
+//  1. Close any 'open' paper_trades row older than the configured cutoff.
+//  2. Leave 'open' rows newer than the cutoff alone.
+//  3. Be idempotent (re-running does nothing on the second pass).
+//  4. Stop cleanly when ctx is cancelled.
 //
 // Run with: go test -v -count=1 -run TestShadowEvaluationCoordinator_PaperTradeReconciler ./internal/services/
 func TestShadowEvaluationCoordinator_PaperTradeReconciler(t *testing.T) {

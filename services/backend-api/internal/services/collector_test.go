@@ -1209,8 +1209,8 @@ func TestCollectorService_ConvertMarketPriceInterfacesToModels(t *testing.T) {
 	singleItem := &MockMarketPriceInterface{
 		exchangeName: "binance",
 		symbol:       "BTC/USDT",
-		price: decimal.NewFromFloat(50000.0),
-		volume: decimal.NewFromFloat(1000.0),
+		price:        decimal.NewFromFloat(50000.0),
+		volume:       decimal.NewFromFloat(1000.0),
 		timestamp:    time.Now(),
 	}
 
@@ -1232,8 +1232,8 @@ func TestCollectorService_ConvertMarketPriceInterfacesToModels(t *testing.T) {
 		&MockMarketPriceInterface{
 			exchangeName: "coinbase",
 			symbol:       "ETH/USD",
-			price: decimal.NewFromFloat(3000.0),
-			volume: decimal.NewFromFloat(500.0),
+			price:        decimal.NewFromFloat(3000.0),
+			volume:       decimal.NewFromFloat(500.0),
 			timestamp:    time.Now().Add(-1 * time.Hour),
 		},
 	}
@@ -1256,8 +1256,8 @@ func TestCollectorService_ConvertMarketPriceInterfacesToModels(t *testing.T) {
 	preciseItem := &MockMarketPriceInterface{
 		exchangeName: "kraken",
 		symbol:       "BTC/USD",
-		price: decimal.NewFromFloat(50000.12345678),
-		volume: decimal.NewFromFloat(1000.98765432),
+		price:        decimal.NewFromFloat(50000.12345678),
+		volume:       decimal.NewFromFloat(1000.98765432),
 		timestamp:    time.Now(),
 	}
 
@@ -1273,10 +1273,10 @@ func TestCollectorService_ConvertMarketPriceInterfacesToModels(t *testing.T) {
 	bidAskItem := &MockMarketPriceInterface{
 		exchangeName: "binance",
 		symbol:       "BTC/USDT",
-		price: decimal.NewFromFloat(50000.0),
-		bid: decimal.NewFromFloat(49999.50),
-		ask: decimal.NewFromFloat(50000.50),
-		volume: decimal.NewFromFloat(1000.0),
+		price:        decimal.NewFromFloat(50000.0),
+		bid:          decimal.NewFromFloat(49999.50),
+		ask:          decimal.NewFromFloat(50000.50),
+		volume:       decimal.NewFromFloat(1000.0),
 		timestamp:    time.Now(),
 	}
 
@@ -1303,8 +1303,8 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	input := &MockMarketPriceInterface{
 		exchangeName: "binance",
 		symbol:       "BTC/USDT",
-		price: decimal.NewFromFloat(50000.0),
-		volume: decimal.NewFromFloat(1000.0),
+		price:        decimal.NewFromFloat(50000.0),
+		volume:       decimal.NewFromFloat(1000.0),
 		timestamp:    time.Now(),
 	}
 
@@ -1323,8 +1323,8 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	zeroInput := &MockMarketPriceInterface{
 		exchangeName: "",
 		symbol:       "",
-		price: decimal.NewFromFloat(0.0),
-		volume: decimal.NewFromFloat(0.0),
+		price:        decimal.NewFromFloat(0.0),
+		volume:       decimal.NewFromFloat(0.0),
 		timestamp:    time.Time{},
 	}
 
@@ -1340,8 +1340,8 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	negativeInput := &MockMarketPriceInterface{
 		exchangeName: "test",
 		symbol:       "TEST/USD",
-		price: decimal.NewFromFloat(-100.0),
-		volume: decimal.NewFromFloat(-50.0),
+		price:        decimal.NewFromFloat(-100.0),
+		volume:       decimal.NewFromFloat(-50.0),
 		timestamp:    time.Now(),
 	}
 
@@ -1354,8 +1354,8 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	largeInput := &MockMarketPriceInterface{
 		exchangeName: "test",
 		symbol:       "LARGE/USD",
-		price: decimal.NewFromFloat(999999999.999),
-		volume: decimal.NewFromFloat(888888888.888),
+		price:        decimal.NewFromFloat(999999999.999),
+		volume:       decimal.NewFromFloat(888888888.888),
 		timestamp:    time.Now(),
 	}
 
@@ -1368,10 +1368,10 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel(t *testing.T) {
 	bidAskInput := &MockMarketPriceInterface{
 		exchangeName: "binance",
 		symbol:       "BTC/USDT",
-		price: decimal.NewFromFloat(50000.0),
-		bid: decimal.NewFromFloat(49999.50),
-		ask: decimal.NewFromFloat(50000.50),
-		volume: decimal.NewFromFloat(1000.0),
+		price:        decimal.NewFromFloat(50000.0),
+		bid:          decimal.NewFromFloat(49999.50),
+		ask:          decimal.NewFromFloat(50000.50),
+		volume:       decimal.NewFromFloat(1000.0),
 		timestamp:    time.Now(),
 	}
 
@@ -1391,8 +1391,8 @@ func TestCollectorService_ConvertMarketPriceInterfaceToModel_FunctionalInterface
 	input := &MockMarketPriceInterface{
 		exchangeName: "functional",
 		symbol:       "FUNC/USD",
-		price: decimal.NewFromFloat(123.45),
-		volume: decimal.NewFromFloat(67.89),
+		price:        decimal.NewFromFloat(123.45),
+		volume:       decimal.NewFromFloat(67.89),
 		timestamp:    time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 

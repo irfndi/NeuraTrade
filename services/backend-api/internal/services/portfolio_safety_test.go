@@ -969,11 +969,11 @@ func TestPortfolioSafetyService_ResolveScopedMarketFunds_UsesCachedSnapshotBalan
 			"bitget": {
 				Exchange: "bitget",
 				Total: map[string]decimal.Decimal{
-					"USDT": decimal.NewFromFloat(100),
+					"USDT":              decimal.NewFromFloat(100),
 					"USDT_FUTURES_USDT": decimal.NewFromFloat(3),
 				},
 				Free: map[string]decimal.Decimal{
-					"USDT": decimal.NewFromFloat(80),
+					"USDT":              decimal.NewFromFloat(80),
 					"USDT_FUTURES_USDT": decimal.NewFromFloat(2),
 				},
 			},

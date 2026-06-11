@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -264,7 +265,7 @@ func (c *APIClient) BindOperatorProfile(req *BindOperatorRequest) (*BindOperator
 	return &response, nil
 }
 
-func main() {
+func newCLIApp() *cli.App {
 	app := &cli.App{
 		Name:    "neuratrade",
 		Usage:   "NeuraTrade CLI - AI-powered trading platform",
@@ -498,20 +499,6 @@ func main() {
 				},
 			},
 		},
-		// Handle interrupt signals gracefully
-		Before: func(cCtx *cli.Context) error {
-			// Set up signal handling for graceful shutdown
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-			go func() {
-				<-sigChan
-				fmt.Println("\nReceived interrupt signal. Exiting...")
-				os.Exit(0)
-			}()
-
-			return nil
-		},
 	}
 
 	// Add agent command separately (PR-6) — it's a skeleton with 2
@@ -519,28 +506,10 @@ func main() {
 	// agent-control service. The full implementation will be added in
 	// follow-up PRs once the gateway learns to manage the agent process.
 	app.Commands = append(app.Commands, agentCommand())
+	app.Commands = append(app.Commands, opsCommand())
+	app.Commands = append(app.Commands, backtestCommand())
 
 	// Add autonomous command separately to avoid struct literal error
-	app.Commands = append(app.Commands, &cli.Command{
-		Name:  "backtest",
-		Usage: "Run a scalping backtest against the backend",
-		Subcommands: []*cli.Command{
-			{
-				Name:   "run",
-				Usage:  "Run a scalping backtest with the given date range and mode",
-				Action: backtestRunAction,
-				Flags: []cli.Flag{
-					&cli.StringFlag{Name: "start", Usage: "backtest start time (RFC3339)", Required: true},
-					&cli.StringFlag{Name: "end", Usage: "backtest end time (RFC3339)", Required: true},
-					&cli.StringFlag{Name: "mode", Usage: "decision pipeline: 'deterministic' (default) or 'ai'", Value: "deterministic"},
-					&cli.StringFlag{Name: "symbols", Usage: "comma-separated symbol list"},
-					&cli.StringFlag{Name: "exchange", Usage: "exchange name"},
-					&cli.StringFlag{Name: "initial-capital", Usage: "initial capital as a decimal string"},
-					&cli.DurationFlag{Name: "timeout", Usage: "HTTP request timeout (default: 30s)", Value: defaultTimeout},
-				},
-			},
-		},
-	})
 	app.Commands = append(app.Commands, &cli.Command{
 		Name:  "autonomous",
 		Usage: "Manage autonomous trading mode",
@@ -588,7 +557,15 @@ func main() {
 		},
 	})
 
-	if err := app.Run(os.Args); err != nil {
+	return app
+}
+
+func main() {
+	app := newCLIApp()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunContext(ctx, os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

@@ -123,7 +123,7 @@ const (
 	// Bollinger Band %B entry/exit thresholds: entries require %B below the
 	// buy ceiling (oversold) or above the sell floor (overbought).
 	scalpingBBEntryMaxPct = 0.20
-	scalpingBBExitMinPct = 0.80
+	scalpingBBExitMinPct  = 0.80
 
 	// ADX regime filter: reject signals when ADX exceeds this threshold (trending market).
 	scalpingADXMaxPct = 25.0
@@ -3792,16 +3792,6 @@ func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Deci
 	risk := decimal.Zero
 	reward := decimal.NewFromFloat(0.075)
 	return risk, reward
-}
-
-func clampDecimal(value, minValue, maxValue decimal.Decimal) decimal.Decimal {
-	if value.LessThan(minValue) {
-		return minValue
-	}
-	if value.GreaterThan(maxValue) {
-		return maxValue
-	}
-	return value
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {

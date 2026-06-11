@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ func newTestPosition(entryPrice string, side string) PositionSnapshot {
 
 func TestMaxLossMonitor_FiresOnBuyBreach(t *testing.T) {
 	pos := newTestPosition("100", "buy")
+	var mu sync.Mutex
 	var closed PositionSnapshot
 	var closeReason string
 	monitor := NewMaxLossMonitor(MaxLossMonitorConfig{
@@ -33,6 +35,8 @@ func TestMaxLossMonitor_FiresOnBuyBreach(t *testing.T) {
 	}, func(_ context.Context, _ string, _ string) (decimal.Decimal, error) {
 		return decimal.RequireFromString("98"), nil
 	}, func(_ context.Context, p PositionSnapshot, reason string) error {
+		mu.Lock()
+		defer mu.Unlock()
 		closed = p
 		closeReason = reason
 		return nil
@@ -44,11 +48,15 @@ func TestMaxLossMonitor_FiresOnBuyBreach(t *testing.T) {
 	go func() { errCh <- monitor.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
 		return closed.Symbol != ""
 	}, 500*time.Millisecond, 10*time.Millisecond)
 
 	cancel()
 	<-errCh
+	mu.Lock()
+	defer mu.Unlock()
 	assert.Equal(t, "BTC/USDT", closed.Symbol)
 	assert.Contains(t, closeReason, "max_loss")
 	assert.Equal(t, 0, monitor.TrackedCount(), "position should be untracked after close")
@@ -56,6 +64,7 @@ func TestMaxLossMonitor_FiresOnBuyBreach(t *testing.T) {
 
 func TestMaxLossMonitor_FiresOnSellBreach(t *testing.T) {
 	pos := newTestPosition("100", "sell")
+	var mu sync.Mutex
 	var closed PositionSnapshot
 	monitor := NewMaxLossMonitor(MaxLossMonitorConfig{
 		MaxLossPct:   0.015,
@@ -63,6 +72,8 @@ func TestMaxLossMonitor_FiresOnSellBreach(t *testing.T) {
 	}, func(_ context.Context, _ string, _ string) (decimal.Decimal, error) {
 		return decimal.RequireFromString("102"), nil
 	}, func(_ context.Context, p PositionSnapshot, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
 		closed = p
 		return nil
 	})
@@ -73,24 +84,28 @@ func TestMaxLossMonitor_FiresOnSellBreach(t *testing.T) {
 	go func() { errCh <- monitor.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
 		return closed.Symbol != ""
 	}, 500*time.Millisecond, 10*time.Millisecond)
 
 	cancel()
 	<-errCh
+	mu.Lock()
+	defer mu.Unlock()
 	assert.Equal(t, "BTC/USDT", closed.Symbol)
 }
 
 func TestMaxLossMonitor_DoesNotFireWithinThreshold(t *testing.T) {
 	pos := newTestPosition("100", "buy")
-	closed := false
+	var closed atomic.Bool
 	monitor := NewMaxLossMonitor(MaxLossMonitorConfig{
 		MaxLossPct:   0.015,
 		PollInterval: 10 * time.Millisecond,
 	}, func(_ context.Context, _ string, _ string) (decimal.Decimal, error) {
 		return decimal.RequireFromString("99"), nil
 	}, func(_ context.Context, _ PositionSnapshot, _ string) error {
-		closed = true
+		closed.Store(true)
 		return nil
 	})
 	monitor.TrackPosition(pos)
@@ -103,20 +118,20 @@ func TestMaxLossMonitor_DoesNotFireWithinThreshold(t *testing.T) {
 	cancel()
 	<-errCh
 
-	assert.False(t, closed, "closer should not be called when loss is within threshold")
+	assert.False(t, closed.Load(), "closer should not be called when loss is within threshold")
 	assert.Equal(t, 1, monitor.TrackedCount(), "position should remain tracked")
 }
 
 func TestMaxLossMonitor_SkipsOnPriceError(t *testing.T) {
 	pos := newTestPosition("100", "buy")
-	closed := false
+	var closed atomic.Bool
 	monitor := NewMaxLossMonitor(MaxLossMonitorConfig{
 		MaxLossPct:   0.015,
 		PollInterval: 10 * time.Millisecond,
 	}, func(_ context.Context, _, _ string) (decimal.Decimal, error) {
 		return decimal.Zero, errors.New("network failure")
 	}, func(_ context.Context, _ PositionSnapshot, _ string) error {
-		closed = true
+		closed.Store(true)
 		return nil
 	})
 	monitor.TrackPosition(pos)
@@ -129,7 +144,7 @@ func TestMaxLossMonitor_SkipsOnPriceError(t *testing.T) {
 	cancel()
 	<-errCh
 
-	assert.False(t, closed, "closer should not be called when price fetch fails")
+	assert.False(t, closed.Load(), "closer should not be called when price fetch fails")
 }
 
 func TestMaxLossMonitor_KeepsPositionOnCloserError(t *testing.T) {

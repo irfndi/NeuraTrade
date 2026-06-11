@@ -8,6 +8,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 	"github.com/shopspring/decimal"
 )
 
@@ -51,12 +52,14 @@ type MaxLossMonitorService struct {
 	config            MaxLossMonitorConfig
 	ccxtService       ccxt.CCXTService
 	monitor           *risk.MaxLossMonitor
-	logger           *zaplogrus.Logger
+	logger            *zaplogrus.Logger
 	executionCallback MaxLossExecutionCallback
 
 	stopCh  chan struct{}
-	mu     sync.Mutex
+	mu      sync.Mutex
 	stopped bool
+	cancel  context.CancelFunc
+	group   *supervisor.Group
 }
 
 // NewMaxLossMonitorService creates a new MaxLossMonitorService.
@@ -100,7 +103,7 @@ func NewMaxLossMonitorService(
 	}
 	monitor := risk.NewMaxLossMonitor(risk.MaxLossMonitorConfig{
 		MaxLossPct:    config.MaxLossPct,
-		PollInterval:   config.PollInterval,
+		PollInterval:  config.PollInterval,
 		MaxStalePrice: config.MaxStalePrice,
 	}, priceProvider, positionCloser)
 
@@ -116,19 +119,58 @@ func NewMaxLossMonitorService(
 
 // Start begins the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Start(ctx context.Context) {
-	go s.monitor.Run(ctx)
-	go s.run(ctx)
+	s.mu.Lock()
+	if s.stopped || s.group != nil {
+		s.mu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	group := supervisor.NewGroup()
+	group.AddFunc("max-loss-monitor", func(ctx context.Context) error {
+		if err := s.monitor.Run(ctx); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: monitor loop exited")
+			return err
+		}
+		return nil
+	})
+	group.AddFunc("max-loss-position-sync", func(ctx context.Context) error {
+		s.run(ctx)
+		return nil
+	})
+	s.cancel = cancel
+	s.group = group
+	s.mu.Unlock()
+
+	go func() {
+		if err := group.Run(runCtx); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: supervisor exited")
+		}
+	}()
 }
 
 // Stop halts the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopped {
+		s.mu.Unlock()
 		return
 	}
 	s.stopped = true
+	cancel := s.cancel
+	group := s.group
+	s.cancel = nil
+	s.group = nil
+	s.mu.Unlock()
+
 	close(s.stopCh)
+	if cancel != nil {
+		cancel()
+	}
+	if group != nil {
+		if err := group.Shutdown(5 * time.Second); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: supervisor shutdown timed out")
+		}
+	}
 }
 
 // Monitor returns the underlying risk.MaxLossMonitor for testing/inspection.
