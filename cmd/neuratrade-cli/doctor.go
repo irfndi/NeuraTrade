@@ -68,7 +68,7 @@ func validateRuntimeConfig(home string, report *doctorReport) *runtimeConfig {
 	}
 	report.OK = append(report.OK, "runtime config is readable")
 
-	if !isValidPort(fmt.Sprintf("%d", cfg.Server.Port)) {
+	if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
 		report.Errors = append(report.Errors, "runtime server.port must be between 1 and 65535")
 	}
 	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
@@ -86,16 +86,16 @@ func validateRuntimeConfig(home string, report *doctorReport) *runtimeConfig {
 			}
 		}
 	}
-	if cfg.Redis.Port != 0 && !isValidPort(fmt.Sprintf("%d", cfg.Redis.Port)) {
+	if cfg.Redis.Port != 0 && (cfg.Redis.Port < 1 || cfg.Redis.Port > 65535) {
 		report.Errors = append(report.Errors, "runtime redis.port must be between 1 and 65535")
 	}
-	if cfg.Gateway.CCXTPort != 0 && !isValidPort(fmt.Sprintf("%d", cfg.Gateway.CCXTPort)) {
+	if cfg.Gateway.CCXTPort != 0 && (cfg.Gateway.CCXTPort < 1 || cfg.Gateway.CCXTPort > 65535) {
 		report.Errors = append(report.Errors, "runtime gateway.ccxt_port must be between 1 and 65535")
 	}
-	if cfg.Gateway.TelegramPort != 0 && !isValidPort(fmt.Sprintf("%d", cfg.Gateway.TelegramPort)) {
+	if cfg.Gateway.TelegramPort != 0 && (cfg.Gateway.TelegramPort < 1 || cfg.Gateway.TelegramPort > 65535) {
 		report.Errors = append(report.Errors, "runtime gateway.telegram_port must be between 1 and 65535")
 	}
-	if cfg.Gateway.TelegramGRPCPort != 0 && !isValidPort(fmt.Sprintf("%d", cfg.Gateway.TelegramGRPCPort)) {
+	if cfg.Gateway.TelegramGRPCPort != 0 && (cfg.Gateway.TelegramGRPCPort < 1 || cfg.Gateway.TelegramGRPCPort > 65535) {
 		report.Errors = append(report.Errors, "runtime gateway.telegram_grpc_port must be between 1 and 65535")
 	}
 	if cfg.Gateway.HealthTimeoutSeconds <= 0 {

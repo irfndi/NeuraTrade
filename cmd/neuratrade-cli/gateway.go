@@ -127,7 +127,7 @@ func gatewayStart(cCtx *cli.Context) error {
 	telegramPort := getEnvOrRuntimePort("TELEGRAM_PORT", runtimeGatewayTelegramPort(runtimeCfg), "3002")
 	telegramGRPCPort := getEnvOrRuntimePort("TELEGRAM_GRPC_PORT", runtimeGatewayTelegramGRPCPort(runtimeCfg), "50052")
 	bindHost := getEnvOrRuntimeString("BIND_HOST", runtimeGatewayBindHost(runtimeCfg), "127.0.0.1")
-	supervised := cCtx.Bool("supervised") || getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", runtimeGatewaySupervised(runtimeCfg), false)
+	supervised := cCtx.Bool("supervised") || getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", runtimeCfg, runtimeGatewaySupervised(runtimeCfg), false)
 	healthTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", runtimeGatewayHealthTimeoutSeconds(runtimeCfg), gatewayDefaultHealthTimeoutSeconds)
 	signalTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_SIGNAL_TIMEOUT_SECONDS", runtimeGatewaySignalTimeoutSeconds(runtimeCfg), 5)
 	gracefulTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_GRACEFUL_TIMEOUT_SECONDS", runtimeGatewayGracefulTimeoutSeconds(runtimeCfg), 10)
@@ -769,7 +769,7 @@ func getEnvOrRuntimePort(key string, runtimeValue int, defaultValue string) stri
 	return runtimePort(runtimeValue, defaultValue)
 }
 
-func getEnvOrRuntimeBool(key string, runtimeValue, defaultValue bool) bool {
+func getEnvOrRuntimeBool(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) bool {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		parsed, err := strconv.ParseBool(value)
 		if err == nil {
@@ -777,14 +777,14 @@ func getEnvOrRuntimeBool(key string, runtimeValue, defaultValue bool) bool {
 		}
 		return defaultValue
 	}
-	if runtimeValue {
-		return true
+	if runtimeCfg != nil {
+		return runtimeValue
 	}
 	return defaultValue
 }
 
-func getEnvOrRuntimeBoolString(key string, runtimeValue, defaultValue bool) string {
-	return strconv.FormatBool(getEnvOrRuntimeBool(key, runtimeValue, defaultValue))
+func getEnvOrRuntimeBoolString(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) string {
+	return strconv.FormatBool(getEnvOrRuntimeBool(key, runtimeCfg, runtimeValue, defaultValue))
 }
 
 func getEnvOrRuntimeBoolStringIfPresent(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) string {

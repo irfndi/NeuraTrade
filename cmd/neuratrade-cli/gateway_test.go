@@ -181,6 +181,13 @@ func TestRuntimeBoolStringIfPresentRespectsExplicitFalse(t *testing.T) {
 	require.Equal(t, "true", getEnvOrRuntimeBoolStringIfPresent("TELEGRAM_USE_POLLING", nil, false, true))
 }
 
+func TestGetEnvOrRuntimeBoolRespectsExplicitFalseWhenDefaultTrue(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SUPERVISED", "")
+
+	require.False(t, getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", &runtimeConfig{}, false, true))
+	require.True(t, getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", nil, false, true))
+}
+
 func TestShouldSkipTelegramGatewayAcceptsLegacySingularFeatureEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
 	t.Setenv("FEATURES_PAPER_TRADING", "")

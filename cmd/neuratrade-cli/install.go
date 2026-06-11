@@ -149,13 +149,17 @@ func copyExecutable(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("create destination executable: %w", err)
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
 		return fmt.Errorf("copy executable: %w", err)
 	}
 	if err := out.Chmod(0o755); err != nil {
+		_ = out.Close()
 		return fmt.Errorf("set executable mode: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close destination executable: %w", err)
 	}
 	return nil
 }
