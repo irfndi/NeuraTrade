@@ -14,7 +14,7 @@ NC=\033[0m
 
 .PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
 	test test-backend test-cli test-frontend lint fmt fmt-check typecheck coverage-check \
-	test-scripts run logs logs-all scalping-soak ai-scalping-probe bd-close-qa
+	test-scripts run logs logs-all scalping-soak ai-scalping-probe install-cli update-cli bd-close-qa
 
 all: build
 
@@ -73,6 +73,12 @@ build: mod-download services-setup ## Build backend binaries
 		'exec bun run index.ts "$$@"' > bin/telegram-service
 	@chmod +x bin/telegram-service
 	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-scalping-soak, bin/neuratrade-paper-validation, bin/neuratrade-paper-readiness, bin/neuratrade-collect-candles, bin/neuratrade-seed-test-candles, bin/neuratrade-backfill-paper-trades, bin/neuratrade-seed-paper-trades, bin/neuratrade-fetch-real-candles$(NC)"
+
+install-cli: build ## Install the neuratrade CLI into ~/.local/bin by symlink
+	@./bin/neuratrade install --force
+
+update-cli: build ## Rebuild and refresh the installed neuratrade CLI link
+	@./bin/neuratrade update
 
 fmt: ## Format backend + frontend code
 	@echo "$(GREEN)Formatting Go code...$(NC)"

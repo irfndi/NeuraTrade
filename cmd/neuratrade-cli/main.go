@@ -288,6 +288,24 @@ func newCLIApp() *cli.App {
 				Action: health,
 			},
 			{
+				Name:   "doctor",
+				Usage:  "Validate local configuration and runtime readiness",
+				Action: cliDoctor,
+			},
+			{
+				Name:        "install",
+				Usage:       "Install the neuratrade command into a local bin directory",
+				Action:      cliInstall,
+				Flags:       installFlags(),
+				Subcommands: []*cli.Command{{Name: "status", Usage: "Show local CLI install status", Action: cliInstallStatus, Flags: installFlags()}},
+			},
+			{
+				Name:   "update",
+				Usage:  "Refresh the installed neuratrade command with the current binary",
+				Action: cliUpdate,
+				Flags:  installFlags(),
+			},
+			{
 				Name:  "gateway",
 				Usage: "Manage NeuraTrade gateway (start/stop/status)",
 				Subcommands: []*cli.Command{
@@ -492,6 +510,11 @@ func newCLIApp() *cli.App {
 						Action: configStatus,
 					},
 					{
+						Name:   "doctor",
+						Usage:  "Validate local configuration and runtime readiness",
+						Action: cliDoctor,
+					},
+					{
 						Name:   "show",
 						Usage:  "Show full configuration (mask secrets)",
 						Action: configShow,
@@ -639,6 +662,11 @@ func getBaseURL() string {
 	baseURL := strings.TrimSpace(os.Getenv("NEURATRADE_API_BASE_URL"))
 	if baseURL != "" {
 		return strings.TrimRight(baseURL, "/")
+	}
+
+	runtimeCfg := getRuntimeConfigValue(defaultNeuraTradeHome())
+	if runtimeCfg != nil && runtimeCfg.Telegram.ApiBaseURL != "" && !strings.Contains(runtimeCfg.Telegram.ApiBaseURL, "api.telegram.org") {
+		return strings.TrimRight(runtimeCfg.Telegram.ApiBaseURL, "/")
 	}
 
 	cfg := getConfigValue(defaultNeuraTradeHome())
@@ -1940,6 +1968,7 @@ func prettyPrint(data interface{}) {
 func configInit(cCtx *cli.Context) error {
 	configHome := defaultNeuraTradeHome()
 	configPath := path.Join(configHome, "config.json")
+	runtimePath := runtimeConfigPath(configHome)
 	force := cCtx.Bool("force")
 
 	// Check if config already exists
@@ -1947,6 +1976,12 @@ func configInit(cCtx *cli.Context) error {
 		if _, err := os.Stat(configPath); err == nil {
 			content, _ := os.ReadFile(configPath)
 			if string(content) != "{}" && len(content) > 5 {
+				if _, runtimeErr := os.Stat(runtimePath); os.IsNotExist(runtimeErr) {
+					if writeErr := writeRuntimeConfig(configHome, defaultRuntimeConfig(configHome)); writeErr != nil {
+						return fmt.Errorf("failed to write runtime config file: %w", writeErr)
+					}
+					fmt.Printf("Runtime configuration initialized: %s\n", runtimePath)
+				}
 				fmt.Printf("Configuration file already exists: %s\n", configPath)
 				fmt.Println("Use 'neuratrade config show' to view current configuration.")
 				fmt.Println("Use 'neuratrade config init --force' to overwrite.")
@@ -2044,14 +2079,19 @@ func configInit(cCtx *cli.Context) error {
 	if err := os.WriteFile(configPath, configData, 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
+	if err := writeRuntimeConfig(configHome, defaultRuntimeConfig(configHome)); err != nil {
+		return fmt.Errorf("failed to write runtime config file: %w", err)
+	}
 
 	fmt.Println("✓ Configuration initialized successfully!")
 	fmt.Printf("  Config file: %s\n", configPath)
+	fmt.Printf("  Runtime file: %s\n", runtimePath)
 	fmt.Println("")
 	fmt.Println("Next steps:")
 	fmt.Println("  1. Review configuration: neuratrade config show")
-	fmt.Println("  2. Start services: neuratrade gateway start")
-	fmt.Println("  3. Test Telegram bot: Send /start to your bot")
+	fmt.Println("  2. Validate locally: neuratrade doctor")
+	fmt.Println("  3. Start services: neuratrade gateway start")
+	fmt.Println("  4. Test Telegram bot: Send /start to your bot")
 	fmt.Println("")
 
 	if binanceKey == "" {
@@ -2073,6 +2113,7 @@ func configInit(cCtx *cli.Context) error {
 // configStatus shows the configuration status
 func configStatus(cCtx *cli.Context) error {
 	configPath := path.Join(defaultNeuraTradeHome(), "config.json")
+	runtimePath := runtimeConfigPath(defaultNeuraTradeHome())
 
 	fmt.Println("NeuraTrade Configuration Status")
 	fmt.Println("================================")
@@ -2085,6 +2126,14 @@ func configStatus(cCtx *cli.Context) error {
 	}
 
 	fmt.Println("✓ Configuration file exists")
+	if _, err := os.Stat(runtimePath); os.IsNotExist(err) {
+		fmt.Println("⚠ Runtime configuration file not found")
+		fmt.Printf("  Run: neuratrade config init\n")
+	} else if err != nil {
+		fmt.Printf("✗ Cannot inspect runtime config: %v\n", err)
+	} else {
+		fmt.Println("✓ Runtime configuration file exists")
+	}
 
 	// Read and parse config
 	content, err := os.ReadFile(configPath)
@@ -2161,6 +2210,7 @@ func configStatus(cCtx *cli.Context) error {
 
 	fmt.Println("")
 	fmt.Println("Use 'neuratrade config show' to view full configuration.")
+	fmt.Println("Use 'neuratrade doctor' to validate runtime readiness.")
 
 	return nil
 }
@@ -2194,6 +2244,11 @@ func configShow(cCtx *cli.Context) error {
 	maskSecretsInConfig(config)
 
 	prettyPrint(config)
+	if runtimeCfg, err := loadRuntimeConfig(defaultNeuraTradeHome()); err == nil {
+		fmt.Println()
+		fmt.Printf("%s:\n", runtimeConfigFileName)
+		prettyPrint(runtimeCfg)
+	}
 	return nil
 }
 

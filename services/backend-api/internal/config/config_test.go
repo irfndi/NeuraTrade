@@ -462,3 +462,52 @@ func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "env-host", config.Database.Host)
 }
+
+func TestLoad_RuntimeConfigOverridesLegacyConfig(t *testing.T) {
+	os.Clearenv()
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+
+	configContent := `{
+		"server": {"port": 9999},
+		"database": {
+			"driver": "sqlite",
+			"sqlite_path": "` + home + `/legacy.db"
+		},
+		"ai": {
+			"provider": "legacy",
+			"model": "legacy-model"
+		}
+	}`
+	require.NoError(t, os.WriteFile(home+"/config.json", []byte(configContent), 0644))
+
+	runtimeContent := `{
+		"server": {"port": 7070},
+		"database": {
+			"driver": "sqlite",
+			"sqlite_path": "` + home + `/runtime.db"
+		},
+		"ai": {
+			"provider": "deepseek",
+			"model": "deepseek-chat"
+		},
+		"features": {
+			"enable_ai": true,
+			"enable_ai_scalping": true
+		}
+	}`
+	require.NoError(t, os.WriteFile(home+"/runtime.json", []byte(runtimeContent), 0644))
+
+	config, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, config)
+	assert.Equal(t, 7070, config.Server.Port)
+	assert.Equal(t, home+"/runtime.db", config.Database.SQLitePath)
+	assert.Equal(t, "deepseek", config.AI.Provider)
+	assert.Equal(t, "deepseek-chat", config.AI.Model)
+
+	t.Setenv("SERVER_PORT", "8088")
+	config, err = Load()
+	require.NoError(t, err)
+	assert.Equal(t, 8088, config.Server.Port)
+}

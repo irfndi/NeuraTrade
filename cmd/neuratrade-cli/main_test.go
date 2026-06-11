@@ -210,6 +210,32 @@ func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
 	databaseConfig, ok := config["database"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), databaseConfig["sqlite_path"])
+
+	runtimeData, err := os.ReadFile(filepath.Join(configHome, runtimeConfigFileName))
+	require.NoError(t, err)
+	var runtimeCfg runtimeConfig
+	require.NoError(t, json.Unmarshal(runtimeData, &runtimeCfg))
+	assert.Equal(t, 8080, runtimeCfg.Server.Port)
+	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), runtimeCfg.Database.SQLitePath)
+	assert.Equal(t, "deepseek", runtimeCfg.AI.Provider)
+}
+
+func TestConfigInitAddsRuntimeFileWhenLegacyConfigExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"security":{"admin_api_key":"abcdefghijklmnopqrstuvwxyz123456"}}`), 0600))
+
+	flags := flag.NewFlagSet("config-init", flag.ContinueOnError)
+	flags.String("binance-key", "", "")
+	flags.String("binance-secret", "", "")
+	flags.String("telegram-token", "", "")
+	flags.String("ai-key", "", "")
+	flags.Bool("force", false, "")
+	require.NoError(t, flags.Parse([]string{}))
+
+	ctx := cli.NewContext(cli.NewApp(), flags, nil)
+	require.NoError(t, configInit(ctx))
+	require.FileExists(t, filepath.Join(home, runtimeConfigFileName))
 }
 
 func TestConfigStatusAndShowRespectNeuratradeHome(t *testing.T) {
@@ -247,6 +273,9 @@ func TestNewCLIAppRegistersStableCommandSurface(t *testing.T) {
 	}
 
 	assert.Contains(t, names, "gateway")
+	assert.Contains(t, names, "doctor")
+	assert.Contains(t, names, "install")
+	assert.Contains(t, names, "update")
 	assert.Contains(t, names, "ops")
 	assert.Contains(t, names, "backtest")
 	assert.Contains(t, names, "autonomous")
