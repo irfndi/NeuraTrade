@@ -1584,6 +1584,9 @@ type aiMarketSignal struct {
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
+	if override := scalpingSymbolsFromEnv(); len(override) > 0 {
+		return override, nil
+	}
 	exchange := s.exchangeForContext(ctx)
 	if cached := s.getCachedPairs(exchange); len(cached) > 0 {
 		return cached, nil
@@ -5488,4 +5491,31 @@ func clampFloat(value, min, max float64) float64 {
 		return max
 	}
 	return value
+}
+
+const envScalpingSymbols = "NEURATRADE_SCALPING_SYMBOLS"
+
+func scalpingSymbolsFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv(envScalpingSymbols))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	symbols := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.ToUpper(strings.TrimSpace(p))
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		symbols = append(symbols, s)
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+	return symbols
 }

@@ -860,6 +860,36 @@ func TestAIScalpingService_GatherMarketSignals_TickerFallbackWhenOrderbookUnavai
 	assert.Len(t, mockCCXT.orderBookOps, 4)
 }
 
+func TestAIScalpingService_DiscoverTradingPairs_RespectsEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT")
+
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"ZZZ/USDT", "AAA/USDT"},
+			Count:    2,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{symbol: "ZZZ/USDT", price: 1.0, volume: 1, exchange: "bitget"},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:          "bitget",
+			MaxPairsToAnalyze: 8,
+			MaxCandidatePairs: 120,
+			EnforceFutures:    false,
+		},
+		ccxtService: mockCCXT,
+	}
+
+	pairs, err := svc.discoverTradingPairs(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}, pairs,
+		"env var must override dynamic discovery; CCXT markets should be ignored")
+}
+
 func TestAIScalpingService_DiscoverTradingPairs_PrefersTradableSpreadCandidates(t *testing.T) {
 	mockCCXT := &mockAIScalpingCCXT{
 		markets: &ccxt.MarketsResponse{
