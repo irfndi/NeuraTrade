@@ -95,6 +95,13 @@ func run() error {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
+	var maxPairsPtr *int
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "max-pairs" {
+			v := maxPairs
+			maxPairsPtr = &v
+		}
+	})
 	if strategyID == "" {
 		strategyID = services.ScalpingStrategyID(chatID)
 	}
@@ -146,7 +153,7 @@ func run() error {
 		InitialCapital:    capital,
 		FeeRate:           fees,
 		HoldPeriod:        holdPeriod,
-		MaxPairsToAnalyze: maxPairs,
+		MaxPairsToAnalyze: maxPairsPtr,
 		MaxCandidatePairs: maxCandidates,
 		OrderBookPairs:    orderBookPairs,
 		Baseline:          baseline,

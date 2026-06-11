@@ -32,7 +32,7 @@ type ScalpingLivePaperSoakOptions struct {
 	InitialCapital    decimal.Decimal
 	FeeRate           decimal.Decimal
 	HoldPeriod        time.Duration
-	MaxPairsToAnalyze int
+	MaxPairsToAnalyze *int
 	MaxCandidatePairs int
 	OrderBookPairs    int
 	Baseline          *ScalpingSoakBaseline
@@ -222,8 +222,8 @@ func resolveScalpingLivePaperSoakConfig(exchange string, options ScalpingLivePap
 	base.Exchange = exchange
 	defaults := ResolveAIScalpingConfigFromEnv(base)
 	defaults.Exchange = exchange
-	if options.MaxPairsToAnalyze > 0 {
-		defaults.MaxPairsToAnalyze = clampInt(options.MaxPairsToAnalyze, 1, 64)
+	if options.MaxPairsToAnalyze != nil {
+		defaults.MaxPairsToAnalyze = clampInt(*options.MaxPairsToAnalyze, 1, 64)
 	}
 	if options.MaxCandidatePairs > 0 {
 		defaults.MaxCandidatePairs = clampInt(options.MaxCandidatePairs, defaults.MaxPairsToAnalyze, 2000)

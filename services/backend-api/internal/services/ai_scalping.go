@@ -358,8 +358,10 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	if value, ok := getEnvBool("NEURATRADE_SCALPING_ALLOW_SPOT_FALLBACK"); ok {
 		cfg.AllowSpotFallback = value
 	}
-	if value := getEnvInt("NEURATRADE_SCALPING_MAX_PAIRS"); value > 0 {
-		cfg.MaxPairsToAnalyze = clampInt(value, 1, 64)
+	if raw, ok := os.LookupEnv("NEURATRADE_SCALPING_MAX_PAIRS"); ok {
+		if value, err := strconv.Atoi(raw); err == nil {
+			cfg.MaxPairsToAnalyze = clampInt(value, 1, 64)
+		}
 	}
 	if value := getEnvInt("NEURATRADE_SCALPING_MAX_CANDIDATES"); value > 0 {
 		cfg.MaxCandidatePairs = clampInt(value, cfg.MaxPairsToAnalyze, 2000)

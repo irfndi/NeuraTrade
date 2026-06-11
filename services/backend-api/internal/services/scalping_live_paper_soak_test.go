@@ -42,6 +42,32 @@ func TestScalpingLivePaperSoakOptionNormalization(t *testing.T) {
 	}
 }
 
+func intPtr(v int) *int { return &v }
+
+func TestResolveScalpingLivePaperSoakConfig_MaxPairsNilUsesDefault(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+	config := resolveScalpingLivePaperSoakConfig("bitget", ScalpingLivePaperSoakOptions{
+		MaxPairsToAnalyze: nil,
+	})
+	require.Equal(t, 8, config.MaxPairsToAnalyze, "nil pointer should use built-in default 8")
+}
+
+func TestResolveScalpingLivePaperSoakConfig_MaxPairsZeroClampsToOne(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+	config := resolveScalpingLivePaperSoakConfig("bitget", ScalpingLivePaperSoakOptions{
+		MaxPairsToAnalyze: intPtr(0),
+	})
+	require.Equal(t, 1, config.MaxPairsToAnalyze, "explicit 0 should clamp to 1")
+}
+
+func TestResolveScalpingLivePaperSoakConfig_MaxPairsExplicit(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+	config := resolveScalpingLivePaperSoakConfig("bitget", ScalpingLivePaperSoakOptions{
+		MaxPairsToAnalyze: intPtr(16),
+	})
+	require.Equal(t, 16, config.MaxPairsToAnalyze, "explicit 16 should pass through")
+}
+
 func TestResolveScalpingLivePaperSoakConfigRespectsPairScaleEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_SCALPING_MAX_PAIRS", "32")
 	t.Setenv("NEURATRADE_SCALPING_MAX_CANDIDATES", "96")
@@ -63,7 +89,7 @@ func TestResolveScalpingLivePaperSoakConfigOptionsOverrideEnvAndClamp(t *testing
 	t.Setenv("NEURATRADE_SCALPING_ORDERBOOK_PAIRS", "12")
 
 	config := resolveScalpingLivePaperSoakConfig("okx", ScalpingLivePaperSoakOptions{
-		MaxPairsToAnalyze: 80,
+		MaxPairsToAnalyze: intPtr(80),
 		MaxCandidatePairs: 10,
 		OrderBookPairs:    80,
 	})
