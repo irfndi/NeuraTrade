@@ -39,11 +39,21 @@ type PaperTrade struct {
 
 // NewPaperTradeRecorder creates a new paper trade recorder.
 func NewPaperTradeRecorder(db DBPool, logger Logger) *PaperTradeRecorder {
+	if logger == nil {
+		logger = noopLogger{}
+	}
 	return &PaperTradeRecorder{
 		db:     db,
 		Logger: logger,
 	}
 }
+
+type noopLogger struct{}
+
+func (noopLogger) WithFields(map[string]interface{}) Logger { return noopLogger{} }
+func (noopLogger) Info(string)                             {}
+func (noopLogger) Warn(string)                             {}
+func (noopLogger) Error(string)                            {}
 
 // RecordOpenTrade records a new open paper trade.
 func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTrade) (*PaperTrade, error) {
