@@ -197,6 +197,102 @@ func (r *PaperTradeRecorder) RecordCloseTrade(ctx context.Context, tradeID int64
 	return &result, nil
 }
 
+// RecordDirectClosedTrade inserts a paper trade already in 'closed' state in a
+// single call, bypassing the RecordOpenTrade → RecordCloseTrade two-step.
+// PnL is computed from (ExitPrice-EntryPrice)*Size - Fees for buy side,
+// (EntryPrice-ExitPrice)*Size - Fees for sell side.
+func (r *PaperTradeRecorder) RecordDirectClosedTrade(ctx context.Context, trade *PaperTrade) (*PaperTrade, error) {
+	if trade.UserID == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+	if trade.Symbol == "" {
+		return nil, fmt.Errorf("symbol is required")
+	}
+	if trade.Side != "buy" && trade.Side != "sell" {
+		return nil, fmt.Errorf("side must be 'buy' or 'sell'")
+	}
+	if trade.Size.LessThanOrEqual(decimal.Zero) {
+		return nil, fmt.Errorf("size must be greater than zero")
+	}
+
+	// Compute PnL based on side.
+	var pnl decimal.Decimal
+	if trade.Side == "buy" {
+		pnl = trade.ExitPrice.Sub(trade.EntryPrice).Mul(trade.Size).Sub(trade.Fees)
+	} else {
+		pnl = trade.EntryPrice.Sub(trade.ExitPrice).Mul(trade.Size).Sub(trade.Fees)
+	}
+
+	openedAt := trade.OpenedAt
+	if openedAt.IsZero() {
+		openedAt = time.Now()
+	}
+
+	closedAt := trade.ClosedAt
+	now := time.Now()
+	if closedAt == nil {
+		closedAt = &now
+	}
+
+	query := `
+		INSERT INTO paper_trades (user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'closed', $13, $14)
+		RETURNING id, user_id, quest_id, strategy_id, exchange, symbol, side, entry_price, exit_price, size, fees, pnl, cost_basis, status, opened_at, closed_at, created_at, updated_at
+	`
+
+	var result PaperTrade
+	err := r.db.QueryRow(ctx, query,
+		trade.UserID,
+		trade.QuestID,
+		trade.StrategyID,
+		trade.Exchange,
+		trade.Symbol,
+		trade.Side,
+		trade.EntryPrice,
+		trade.ExitPrice,
+		trade.Size,
+		trade.Fees,
+		pnl,
+		trade.CostBasis,
+		openedAt,
+		closedAt,
+	).Scan(
+		&result.ID,
+		&result.UserID,
+		&result.QuestID,
+		&result.StrategyID,
+		&result.Exchange,
+		&result.Symbol,
+		&result.Side,
+		&result.EntryPrice,
+		&result.ExitPrice,
+		&result.Size,
+		&result.Fees,
+		&result.PnL,
+		&result.CostBasis,
+		&result.Status,
+		&result.OpenedAt,
+		&result.ClosedAt,
+		&result.CreatedAt,
+		&result.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to record direct closed trade: %w", err)
+	}
+
+	r.Logger.WithFields(map[string]interface{}{
+		"trade_id": result.ID,
+		"user_id":  result.UserID,
+		"symbol":   result.Symbol,
+		"side":     result.Side,
+		"size":     result.Size.String(),
+		"pnl":      result.PnL.String(),
+	}).Info("Paper trade recorded (direct closed)")
+
+	return &result, nil
+}
+
 // GetTrade retrieves a paper trade by ID.
 func (r *PaperTradeRecorder) GetTrade(ctx context.Context, tradeID int64) (*PaperTrade, error) {
 	query := `
