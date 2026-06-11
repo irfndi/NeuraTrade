@@ -74,7 +74,7 @@ func TestRealMoney_ReadinessBacktests(t *testing.T) {
 				MaxBidAskSpreadPct: 0.22,
 				MinConfidence:      0.6,
 				SpreadMultiplier:   1.5,
-				FeeRate:            decimal.NewFromFloat(0.0002),
+				FeeRate:            decimal.NewFromFloat(0.001),
 				Mode:               "deterministic",
 			}
 			engine := NewScalpingBacktestEngine(pool, cfg)
