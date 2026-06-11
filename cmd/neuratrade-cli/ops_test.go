@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,46 @@ func TestOpsCommandReturnsRunnerFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "seed-paper-trades failed")
 	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestOpsCommandAllowsParentTimeoutOverride(t *testing.T) {
+	var gotDeadline time.Time
+	var gotDeadlineOK bool
+	originalRunner := runOpsBinary
+	runOpsBinary = func(ctx context.Context, _ string, _ []string) error {
+		gotDeadline, gotDeadlineOK = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { runOpsBinary = originalRunner })
+
+	app := &cli.App{
+		Name:     "test",
+		Commands: []*cli.Command{opsCommand()},
+	}
+
+	err := app.Run([]string{"test", "ops", "--ops-timeout", "2h", "seed-paper-trades"})
+	require.NoError(t, err)
+	require.True(t, gotDeadlineOK)
+	assert.Greater(t, time.Until(gotDeadline), time.Hour)
+}
+
+func TestOpsCommandDerivesLongScalpingSoakTimeout(t *testing.T) {
+	var gotDeadline time.Time
+	var gotDeadlineOK bool
+	originalRunner := runOpsBinary
+	runOpsBinary = func(ctx context.Context, _ string, _ []string) error {
+		gotDeadline, gotDeadlineOK = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { runOpsBinary = originalRunner })
+
+	app := &cli.App{
+		Name:     "test",
+		Commands: []*cli.Command{opsCommand()},
+	}
+
+	err := app.Run([]string{"test", "ops", "scalping-soak", "--timeout-seconds", "7200"})
+	require.NoError(t, err)
+	require.True(t, gotDeadlineOK)
+	assert.Greater(t, time.Until(gotDeadline), time.Hour)
 }

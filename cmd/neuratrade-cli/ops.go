@@ -12,6 +12,7 @@ import (
 )
 
 const defaultOpsTimeout = 30 * time.Minute
+const opsChildTimeoutGrace = 5 * time.Minute
 
 type opsFlagBinding struct {
 	Flag   cli.Flag
@@ -160,8 +161,15 @@ func opsCommand() *cli.Command {
 	}
 
 	return &cli.Command{
-		Name:        "ops",
-		Usage:       "Run operational NeuraTrade tools through the main CLI",
+		Name:  "ops",
+		Usage: "Run operational NeuraTrade tools through the main CLI",
+		Flags: []cli.Flag{
+			&cli.DurationFlag{
+				Name:  "ops-timeout",
+				Usage: "maximum wrapper runtime for each ops tool; set 0 to disable the wrapper timeout",
+				Value: defaultOpsTimeout,
+			},
+		},
 		Subcommands: subcommands,
 	}
 }
@@ -176,12 +184,49 @@ func opsCLIFlags(bindings []opsFlagBinding) []cli.Flag {
 
 func runOpsTool(cCtx *cli.Context, spec opsToolSpec) error {
 	args := buildOpsArgs(cCtx, spec)
-	ctx, cancel := context.WithTimeout(cCtx.Context, defaultOpsTimeout)
-	defer cancel()
+	ctx := cCtx.Context
+	timeout := opsTimeout(cCtx, spec)
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	if err := runOpsBinary(ctx, resolveOpsBinary(spec.Binary), args); err != nil {
 		return fmt.Errorf("%s failed: %w", spec.Name, err)
 	}
 	return nil
+}
+
+func opsTimeout(cCtx *cli.Context, spec opsToolSpec) time.Duration {
+	for _, ctx := range cCtx.Lineage() {
+		if ctx.IsSet("ops-timeout") {
+			return ctx.Duration("ops-timeout")
+		}
+	}
+	timeout := defaultOpsTimeout
+	if spec.Name == "scalping-soak" {
+		timeout = maxDuration(timeout, scalpingSoakOpsTimeout(cCtx))
+	}
+	return timeout
+}
+
+func scalpingSoakOpsTimeout(cCtx *cli.Context) time.Duration {
+	if cCtx.IsSet("timeout-seconds") && cCtx.Int("timeout-seconds") > 0 {
+		return time.Duration(cCtx.Int("timeout-seconds"))*time.Second + opsChildTimeoutGrace
+	}
+	cycles := cCtx.Int("cycles")
+	interval := time.Duration(cCtx.Int("interval-ms")) * time.Millisecond
+	if cycles <= 0 || interval <= 0 {
+		return 0
+	}
+	return time.Duration(cycles)*interval + opsChildTimeoutGrace
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if b > a {
+		return b
+	}
+	return a
 }
 
 func buildOpsArgs(cCtx *cli.Context, spec opsToolSpec) []string {

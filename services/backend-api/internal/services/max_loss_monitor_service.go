@@ -8,6 +8,7 @@ import (
 	"github.com/irfndi/neuratrade/internal/app/risk"
 	"github.com/irfndi/neuratrade/internal/ccxt"
 	zaplogrus "github.com/irfndi/neuratrade/internal/logging/zaplogrus"
+	"github.com/irfndi/neuratrade/internal/platform/supervisor"
 	"github.com/shopspring/decimal"
 )
 
@@ -57,6 +58,8 @@ type MaxLossMonitorService struct {
 	stopCh  chan struct{}
 	mu      sync.Mutex
 	stopped bool
+	cancel  context.CancelFunc
+	group   *supervisor.Group
 }
 
 // NewMaxLossMonitorService creates a new MaxLossMonitorService.
@@ -116,12 +119,30 @@ func NewMaxLossMonitorService(
 
 // Start begins the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Start(ctx context.Context) {
-	go func() {
+	runCtx, cancel := context.WithCancel(ctx)
+	group := supervisor.NewGroup()
+	group.AddFunc("max-loss-monitor", func(ctx context.Context) error {
 		if err := s.monitor.Run(ctx); err != nil {
 			s.logger.WithError(err).Warn("max-loss-monitor: monitor loop exited")
+			return err
+		}
+		return nil
+	})
+	group.AddFunc("max-loss-position-sync", func(ctx context.Context) error {
+		s.run(ctx)
+		return nil
+	})
+
+	s.mu.Lock()
+	s.cancel = cancel
+	s.group = group
+	s.mu.Unlock()
+
+	go func() {
+		if err := group.Run(runCtx); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: supervisor exited")
 		}
 	}()
-	go s.run(ctx)
 }
 
 // Stop halts the monitoring loop and the underlying max-loss monitor.
@@ -132,7 +153,17 @@ func (s *MaxLossMonitorService) Stop() {
 		return
 	}
 	s.stopped = true
+	cancel := s.cancel
+	group := s.group
 	close(s.stopCh)
+	if cancel != nil {
+		cancel()
+	}
+	if group != nil {
+		if err := group.Shutdown(5 * time.Second); err != nil {
+			s.logger.WithError(err).Warn("max-loss-monitor: supervisor shutdown timed out")
+		}
+	}
 }
 
 // Monitor returns the underlying risk.MaxLossMonitor for testing/inspection.

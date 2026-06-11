@@ -127,7 +127,7 @@ test-backend: mod-download ## Run backend tests
 
 test-cli: go-env-setup ## Run CLI tests
 	@echo "$(GREEN)Running CLI tests...$(NC)"
-	@cd cmd/neuratrade-cli && $(GO_ENV) go test -v ./...
+	@cd cmd/neuratrade-cli && $(GO_ENV) go test -v -race ./...
 
 test-frontend: ## Run Telegram service tests
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \

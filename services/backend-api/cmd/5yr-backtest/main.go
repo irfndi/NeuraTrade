@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -22,7 +23,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (err error) {
 	var (
 		startStr          = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
 		endStr            = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
@@ -59,7 +60,14 @@ func run() error {
 		return fmt.Errorf("connect db: %w", err)
 	}
 	defer func() {
-		_ = db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			wrapped := fmt.Errorf("close db: %w", closeErr)
+			if err == nil {
+				err = wrapped
+				return
+			}
+			err = errors.Join(err, wrapped)
+		}
 	}()
 
 	dbPool, ok := db.(services.DBPool)
