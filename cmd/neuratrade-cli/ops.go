@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -13,6 +14,7 @@ import (
 
 const defaultOpsTimeout = 30 * time.Minute
 const opsChildTimeoutGrace = 5 * time.Minute
+const opsShutdownGrace = 10 * time.Second
 
 type opsFlagBinding struct {
 	Flag   cli.Flag
@@ -249,17 +251,51 @@ func resolveOpsBinary(binary string) string {
 }
 
 func defaultRunOpsBinary(ctx context.Context, binary string, args []string) error {
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.Command(binary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+
+	// Put the child in its own process group so cancellation reaches helper
+	// processes that the ops binary may have spawned.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return nil
+
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-waitErr:
+		return err
+	case <-ctx.Done():
+		signalOpsProcessGroup(cmd, syscall.SIGTERM)
+	}
+
+	timer := time.NewTimer(opsShutdownGrace)
+	defer timer.Stop()
+
+	select {
+	case <-waitErr:
+		return ctx.Err()
+	case <-timer.C:
+		signalOpsProcessGroup(cmd, syscall.SIGKILL)
+		<-waitErr
+		return ctx.Err()
+	}
+}
+
+func signalOpsProcessGroup(cmd *exec.Cmd, sig syscall.Signal) {
+	if cmd.Process == nil {
+		return
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil {
+		_ = cmd.Process.Signal(sig)
+	}
 }
 
 func stringOpsFlag(name, usage string) opsFlagBinding {

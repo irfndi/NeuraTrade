@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -498,20 +499,6 @@ func newCLIApp() *cli.App {
 				},
 			},
 		},
-		// Handle interrupt signals gracefully
-		Before: func(cCtx *cli.Context) error {
-			// Set up signal handling for graceful shutdown
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-			go func() {
-				<-sigChan
-				fmt.Println("\nReceived interrupt signal. Exiting...")
-				os.Exit(0)
-			}()
-
-			return nil
-		},
 	}
 
 	// Add agent command separately (PR-6) — it's a skeleton with 2
@@ -575,7 +562,10 @@ func newCLIApp() *cli.App {
 
 func main() {
 	app := newCLIApp()
-	if err := app.Run(os.Args); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.RunContext(ctx, os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}

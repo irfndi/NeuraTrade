@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -126,4 +127,26 @@ func TestOpsCommandDerivesLongScalpingSoakTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, gotDeadlineOK)
 	assert.Greater(t, time.Until(gotDeadline), time.Hour)
+}
+
+func TestDefaultRunOpsBinaryTerminatesChildOnContextCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ops process groups are Unix-specific")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- defaultRunOpsBinary(ctx, "sleep", []string{"60"})
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("ops child did not exit after context cancellation")
+	}
 }
