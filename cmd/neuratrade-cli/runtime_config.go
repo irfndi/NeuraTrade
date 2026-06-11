@@ -111,6 +111,50 @@ func defaultRuntimeConfig(home string) runtimeConfig {
 	return cfg
 }
 
+func runtimeConfigFromLocalConfig(home string, local *localConfig) runtimeConfig {
+	cfg := defaultRuntimeConfig(home)
+	if local == nil {
+		return cfg
+	}
+	if strings.TrimSpace(local.Server.Host) != "" {
+		cfg.Server.Host = strings.TrimSpace(local.Server.Host)
+	}
+	if local.Server.Port > 0 {
+		cfg.Server.Port = local.Server.Port
+	}
+	if strings.TrimSpace(local.Database.Driver) != "" {
+		cfg.Database.Driver = strings.TrimSpace(local.Database.Driver)
+	}
+	if strings.TrimSpace(local.Database.SQLitePath) != "" {
+		cfg.Database.SQLitePath = strings.TrimSpace(local.Database.SQLitePath)
+	}
+	if strings.TrimSpace(local.CCXT.ServiceURL) != "" {
+		cfg.CCXT.ServiceURL = strings.TrimSpace(local.CCXT.ServiceURL)
+	}
+	if strings.TrimSpace(local.CCXT.GrpcAddress) != "" {
+		cfg.CCXT.GrpcAddress = strings.TrimSpace(local.CCXT.GrpcAddress)
+	}
+	if strings.TrimSpace(local.Telegram.ServiceURL) != "" {
+		cfg.Telegram.ServiceURL = strings.TrimSpace(local.Telegram.ServiceURL)
+	}
+	if strings.TrimSpace(local.Telegram.GrpcAddress) != "" {
+		cfg.Telegram.GrpcAddress = strings.TrimSpace(local.Telegram.GrpcAddress)
+	}
+	if strings.TrimSpace(local.Telegram.ApiBaseURL) != "" {
+		cfg.Telegram.ApiBaseURL = strings.TrimSpace(local.Telegram.ApiBaseURL)
+	}
+	if strings.TrimSpace(local.AI.Provider) != "" {
+		cfg.AI.Provider = strings.TrimSpace(local.AI.Provider)
+	}
+	if strings.TrimSpace(local.AI.Model) != "" {
+		cfg.AI.Model = strings.TrimSpace(local.AI.Model)
+	}
+	if strings.TrimSpace(local.AI.BaseURL) != "" {
+		cfg.AI.BaseURL = strings.TrimSpace(local.AI.BaseURL)
+	}
+	return cfg
+}
+
 func loadRuntimeConfig(home string) (*runtimeConfig, error) {
 	content, err := os.ReadFile(runtimeConfigPath(home))
 	if err != nil {

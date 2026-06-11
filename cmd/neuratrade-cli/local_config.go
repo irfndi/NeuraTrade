@@ -18,6 +18,7 @@ type localConfig struct {
 		Port int    `json:"port"`
 	} `json:"server"`
 	Database struct {
+		Driver     string `json:"driver"`
 		SQLitePath string `json:"sqlite_path"`
 	} `json:"database"`
 	CCXT struct {
@@ -26,10 +27,11 @@ type localConfig struct {
 		GrpcAddress string `json:"grpc_address"`
 	} `json:"ccxt"`
 	Telegram struct {
-		BotToken   string `json:"bot_token"`
-		ApiBaseURL string `json:"api_base_url"`
-		ServiceURL string `json:"service_url"`
-		ChatID     string `json:"chat_id"`
+		BotToken    string `json:"bot_token"`
+		ApiBaseURL  string `json:"api_base_url"`
+		ServiceURL  string `json:"service_url"`
+		GrpcAddress string `json:"grpc_address"`
+		ChatID      string `json:"chat_id"`
 	} `json:"telegram"`
 	Services struct {
 		Telegram struct {

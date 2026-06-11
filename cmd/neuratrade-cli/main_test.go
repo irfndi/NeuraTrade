@@ -224,7 +224,14 @@ func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
 func TestConfigInitAddsRuntimeFileWhenLegacyConfigExists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("NEURATRADE_HOME", home)
-	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"security":{"admin_api_key":"abcdefghijklmnopqrstuvwxyz123456"}}`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), []byte(`{
+		"server":{"host":"127.0.0.1","port":9090},
+		"database":{"driver":"sqlite","sqlite_path":"/tmp/legacy-neuratrade.db"},
+		"ccxt":{"service_url":"http://legacy-ccxt:3001","grpc_address":"127.0.0.1:51051"},
+		"telegram":{"service_url":"http://legacy-telegram:3002","grpc_address":"127.0.0.1:51052","api_base_url":"http://legacy-api:9090"},
+		"ai":{"provider":"legacy-ai","model":"legacy-model","base_url":"https://legacy-ai.example/v1"},
+		"security":{"admin_api_key":"abcdefghijklmnopqrstuvwxyz123456"}
+	}`), 0600))
 
 	flags := flag.NewFlagSet("config-init", flag.ContinueOnError)
 	flags.String("binance-key", "", "")
@@ -236,7 +243,17 @@ func TestConfigInitAddsRuntimeFileWhenLegacyConfigExists(t *testing.T) {
 
 	ctx := cli.NewContext(cli.NewApp(), flags, nil)
 	require.NoError(t, configInit(ctx))
-	require.FileExists(t, filepath.Join(home, runtimeConfigFileName))
+	runtimeData, err := os.ReadFile(filepath.Join(home, runtimeConfigFileName))
+	require.NoError(t, err)
+	var runtimeCfg runtimeConfig
+	require.NoError(t, json.Unmarshal(runtimeData, &runtimeCfg))
+	assert.Equal(t, 9090, runtimeCfg.Server.Port)
+	assert.Equal(t, "/tmp/legacy-neuratrade.db", runtimeCfg.Database.SQLitePath)
+	assert.Equal(t, "legacy-ai", runtimeCfg.AI.Provider)
+	assert.Equal(t, "legacy-model", runtimeCfg.AI.Model)
+	assert.Equal(t, "https://legacy-ai.example/v1", runtimeCfg.AI.BaseURL)
+	assert.Equal(t, "http://legacy-ccxt:3001", runtimeCfg.CCXT.ServiceURL)
+	assert.Equal(t, "127.0.0.1:51052", runtimeCfg.Telegram.GrpcAddress)
 }
 
 func TestConfigStatusAndShowRespectNeuratradeHome(t *testing.T) {

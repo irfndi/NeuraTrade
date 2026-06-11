@@ -1977,7 +1977,11 @@ func configInit(cCtx *cli.Context) error {
 			content, _ := os.ReadFile(configPath)
 			if string(content) != "{}" && len(content) > 5 {
 				if _, runtimeErr := os.Stat(runtimePath); os.IsNotExist(runtimeErr) {
-					if writeErr := writeRuntimeConfig(configHome, defaultRuntimeConfig(configHome)); writeErr != nil {
+					existingCfg, loadErr := loadLocalConfig(configHome)
+					if loadErr != nil {
+						return fmt.Errorf("failed to load existing config for runtime backfill: %w", loadErr)
+					}
+					if writeErr := writeRuntimeConfig(configHome, runtimeConfigFromLocalConfig(configHome, existingCfg)); writeErr != nil {
 						return fmt.Errorf("failed to write runtime config file: %w", writeErr)
 					}
 					fmt.Printf("Runtime configuration initialized: %s\n", runtimePath)
