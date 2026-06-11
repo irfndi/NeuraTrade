@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -1714,4 +1715,69 @@ func TestTradingLifecycleStore_ReconcileExchangeSnapshot_SyncsProvidedPositionsW
 	).Scan(&openCount)
 	require.NoError(t, err)
 	assert.Equal(t, 3, openCount)
+}
+
+func TestTradingLifecycleStore_RecordClosedOrder_BridgesPaperTrades(t *testing.T) {
+	t.Setenv("NEURATRADE_HOME", t.TempDir())
+
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "lifecycle-bridge-paper.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	// Lifecycle store creates its own tables via EnsureSchema.
+	store, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+
+	// Apply paper_trades schema.
+	ctx := context.Background()
+	migrationPath := filepath.Join("..", "..", "database", "sqlite_migrations", "012_create_paper_trades_table.sql")
+	migrationSQL, err := os.ReadFile(migrationPath)
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, string(migrationSQL))
+	require.NoError(t, err)
+
+	paperRecorder := NewPaperTradeRecorder(sqliteDB, noopPaperDryRunLogger{})
+	store.SetPaperRecorder(paperRecorder)
+
+	closedAt := time.Now().UTC()
+	entryPrice := decimal.NewFromFloat(1.25)
+	exitPrice := decimal.NewFromFloat(1.35)
+
+	err = store.RecordClosedOrder(ctx, LifecycleCloseRecord{
+		OrderID:     "bridge-ord-1",
+		ChatID:      "chat-bridge",
+		Exchange:    "bitget",
+		Symbol:      "DOGE/USDT",
+		Side:        "buy",
+		MarketType:  "futures",
+		Filled:      decimal.NewFromInt(10),
+		EntryPrice:  entryPrice,
+		ExitPrice:   exitPrice,
+		RealizedPnL: decimal.NewFromFloat(1.0),
+		Fees:        decimal.NewFromFloat(0.01),
+		Source:      "test-bridge",
+		ClosedAt:    closedAt,
+	})
+	require.NoError(t, err)
+
+	// Assert: trading_orders has a row matching the order_id.
+	var orderStatus string
+	err = sqliteDB.QueryRow(ctx,
+		`SELECT status FROM trading_orders WHERE order_id = $1`, "bridge-ord-1",
+	).Scan(&orderStatus)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", orderStatus)
+
+	// Assert: paper_trades has a row with status = 'closed' and matching symbol.
+	var paperStatus string
+	var paperSymbol string
+	var paperUserID string
+	err = sqliteDB.QueryRow(ctx,
+		`SELECT status, symbol, user_id FROM paper_trades WHERE symbol = $1 AND user_id = $2`,
+		"DOGE/USDT", "chat-bridge",
+	).Scan(&paperStatus, &paperSymbol, &paperUserID)
+	require.NoError(t, err)
+	assert.Equal(t, "closed", paperStatus)
+	assert.Equal(t, "DOGE/USDT", paperSymbol)
+	assert.Equal(t, "chat-bridge", paperUserID)
 }

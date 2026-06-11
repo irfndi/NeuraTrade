@@ -15,8 +15,9 @@ import (
 
 // TradingLifecycleStore persists autonomous order/position lifecycle and realized PnL.
 type TradingLifecycleStore struct {
-	db     database.DBPool
-	logger *log.Logger
+	db           database.DBPool
+	logger       *log.Logger
+	paperRecorder *PaperTradeRecorder
 }
 
 type LifecycleExecutionRecord struct {
@@ -150,6 +151,10 @@ func NewTradingLifecycleStore(db database.DBPool, logger *log.Logger) (*TradingL
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *TradingLifecycleStore) SetPaperRecorder(recorder *PaperTradeRecorder) {
+	s.paperRecorder = recorder
 }
 
 func (s *TradingLifecycleStore) EnsureSchema(ctx context.Context) error {
@@ -524,6 +529,26 @@ func (s *TradingLifecycleStore) RecordClosedOrder(ctx context.Context, rec Lifec
 	`, journalID, orderID, strings.TrimSpace(rec.ChatID), strings.TrimSpace(rec.Exchange), strings.TrimSpace(rec.Symbol),
 		side, rec.Filled, rec.EntryPrice, rec.ExitPrice, rec.RealizedPnL, rec.Fees, source, closedAt, closedAt); err != nil {
 		return fmt.Errorf("upsert realized_pnl_journal failed: %w", err)
+	}
+
+	if s.paperRecorder != nil {
+		openedAt := closedAt.Add(-time.Hour)
+		bridgeTrade := &PaperTrade{
+			UserID:     strings.TrimSpace(rec.ChatID),
+			StrategyID: "scalping",
+			Exchange:   strings.TrimSpace(rec.Exchange),
+			Symbol:     strings.TrimSpace(rec.Symbol),
+			Side:       strings.ToLower(side),
+			EntryPrice: rec.EntryPrice,
+			ExitPrice:  rec.ExitPrice,
+			Size:       rec.Filled,
+			Fees:       rec.Fees,
+			OpenedAt:   openedAt,
+			ClosedAt:   &closedAt,
+		}
+		if _, bridgeErr := s.paperRecorder.RecordDirectClosedTrade(ctx, bridgeTrade); bridgeErr != nil {
+			s.logger.Printf("[WARN] lifecycle->paper_trades bridge failed: %v", bridgeErr)
+		}
 	}
 
 	return nil
