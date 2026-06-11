@@ -2,7 +2,10 @@ module github.com/irfndi/neuratrade/cmd/neuratrade-cli
 
 go 1.25
 
-require github.com/urfave/cli/v2 v2.27.2
+require (
+	github.com/shopspring/decimal v1.4.0
+	github.com/urfave/cli/v2 v2.27.2
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

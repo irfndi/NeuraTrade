@@ -113,6 +113,7 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	home := defaultNeuraTradeHome()
 	cfg := getConfigValue(home)
+	runtimeCfg := getRuntimeConfigValue(home)
 	statePath := filepath.Join(home, "pids", "gateway-state.json")
 	servicePIDFiles := []string{
 		filepath.Join(home, "pids", "backend.pid"),
@@ -120,19 +121,23 @@ func gatewayStart(cCtx *cli.Context) error {
 		filepath.Join(home, "pids", "telegram.pid"),
 	}
 
-	backendPort := resolveBackendPort(cfg)
+	backendPort := resolveBackendPortWithRuntime(cfg, runtimeCfg)
 
-	ccxtPort := getEnvOrDefault("CCXT_PORT", "3001")
-	telegramPort := getEnvOrDefault("TELEGRAM_PORT", "3002")
-	bindHost := getEnvOrDefault("BIND_HOST", "127.0.0.1")
-	supervised := cCtx.Bool("supervised") || getEnvBoolDefault("NEURATRADE_GATEWAY_SUPERVISED", false)
-	healthTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", gatewayDefaultHealthTimeoutSeconds)
-	signalTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_SIGNAL_TIMEOUT_SECONDS", 5)
-	gracefulTimeout := getEnvDurationSeconds("NEURATRADE_GATEWAY_GRACEFUL_TIMEOUT_SECONDS", 10)
+	ccxtPort := getEnvOrRuntimePort("CCXT_PORT", runtimeGatewayCCXTPort(runtimeCfg), "3001")
+	telegramPort := getEnvOrRuntimePort("TELEGRAM_PORT", runtimeGatewayTelegramPort(runtimeCfg), "3002")
+	telegramGRPCPort := getEnvOrRuntimePort("TELEGRAM_GRPC_PORT", runtimeGatewayTelegramGRPCPort(runtimeCfg), "50052")
+	bindHost := getEnvOrRuntimeString("BIND_HOST", runtimeGatewayBindHost(runtimeCfg), "127.0.0.1")
+	supervised := cCtx.Bool("supervised") || getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", runtimeCfg, runtimeGatewaySupervised(runtimeCfg), false)
+	healthTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_HEALTH_TIMEOUT_SECONDS", runtimeGatewayHealthTimeoutSeconds(runtimeCfg), gatewayDefaultHealthTimeoutSeconds)
+	signalTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_SIGNAL_TIMEOUT_SECONDS", runtimeGatewaySignalTimeoutSeconds(runtimeCfg), 5)
+	gracefulTimeout := getEnvOrRuntimeDurationSeconds("NEURATRADE_GATEWAY_GRACEFUL_TIMEOUT_SECONDS", runtimeGatewayGracefulTimeoutSeconds(runtimeCfg), 10)
 	adminAPIKey := normalizeAdminAPIKey(getEnvOrDefault("ADMIN_API_KEY", configAdminAPIKey(cfg)))
 	jwtSecret := normalizeJWTSecret(getEnvOrDefault("JWT_SECRET", configJWTSecret(cfg)))
 
 	sqlitePath := getEnvOrDefault("SQLITE_PATH", "")
+	if sqlitePath == "" && runtimeCfg != nil && runtimeCfg.Database.SQLitePath != "" {
+		sqlitePath = runtimeCfg.Database.SQLitePath
+	}
 	if sqlitePath == "" && cfg != nil && cfg.Database.SQLitePath != "" {
 		sqlitePath = cfg.Database.SQLitePath
 	}
@@ -153,6 +158,19 @@ func gatewayStart(cCtx *cli.Context) error {
 		if aiAPIKey == "" {
 			aiAPIKey = cfg.AI.APIKey
 		}
+	}
+	if runtimeCfg != nil {
+		if aiBaseURL == "" {
+			aiBaseURL = runtimeCfg.AI.BaseURL
+		}
+		if aiProvider == "" {
+			aiProvider = runtimeCfg.AI.Provider
+		}
+		if aiModel == "" {
+			aiModel = runtimeCfg.AI.Model
+		}
+	}
+	if cfg != nil {
 		if aiBaseURL == "" {
 			aiBaseURL = cfg.AI.BaseURL
 		}
@@ -167,6 +185,7 @@ func gatewayStart(cCtx *cli.Context) error {
 
 	fmt.Printf("📁 NeuraTrade Home: %s\n", home)
 	fmt.Printf("⚙️  Config File: %s\n", filepath.Join(home, "config.json"))
+	fmt.Printf("🧭 Runtime File: %s\n", runtimeConfigPath(home))
 	fmt.Printf("🌐 Backend Port: %s (public)\n", backendPort)
 	fmt.Printf("🔌 CCXT Port: %s (internal, bound to %s)\n", ccxtPort, bindHost)
 	fmt.Printf("📞 Telegram Port: %s (internal, bound to %s)\n", telegramPort, bindHost)
@@ -227,25 +246,30 @@ func gatewayStart(cCtx *cli.Context) error {
 	// so the backend detects embedded CCXT. In external mode, the user's env
 	// vars (CCXT_SERVICE_URL, CCXT_GRPC_ADDRESS) are inherited via os.Environ.
 	backendEnv := map[string]string{
-		"PORT":                  backendPort,
-		"SERVER_PORT":           backendPort,
-		"BACKEND_HOST_PORT":     backendPort,
-		"HOST":                  "0.0.0.0", // Backend binds to all interfaces
-		"DATABASE_DRIVER":       getEnvOrDefault("DATABASE_DRIVER", "sqlite"),
-		"SQLITE_PATH":           sqlitePath,
-		"SQLITE_DB_PATH":        sqlitePath,
-		"REDIS_HOST":            getEnvOrDefault("REDIS_HOST", "localhost"),
-		"REDIS_PORT":            getEnvOrDefault("REDIS_PORT", "6379"),
-		"TELEGRAM_SERVICE_URL":  fmt.Sprintf("http://%s:%s", bindHost, telegramPort),
-		"TELEGRAM_GRPC_ADDRESS": fmt.Sprintf("%s:%s", bindHost, getEnvOrDefault("TELEGRAM_GRPC_PORT", "50052")),
-		"JWT_SECRET":            jwtSecret,
-		"ADMIN_API_KEY":         adminAPIKey,
-		"SENTRY_ENVIRONMENT":    getEnvOrDefault("SENTRY_ENVIRONMENT", "production"),
-		"SENTRY_DSN":            getEnvOrDefault("SENTRY_DSN", ""),
-		"AI_API_KEY":            aiAPIKey,
-		"AI_BASE_URL":           aiBaseURL,
-		"AI_PROVIDER":           aiProvider,
-		"AI_MODEL":              aiModel,
+		"PORT":                   backendPort,
+		"SERVER_PORT":            backendPort,
+		"BACKEND_HOST_PORT":      backendPort,
+		"HOST":                   "0.0.0.0", // Backend binds to all interfaces
+		"DATABASE_DRIVER":        getEnvOrRuntimeString("DATABASE_DRIVER", runtimeDatabaseDriver(runtimeCfg), "sqlite"),
+		"SQLITE_PATH":            sqlitePath,
+		"SQLITE_DB_PATH":         sqlitePath,
+		"REDIS_HOST":             getEnvOrRuntimeString("REDIS_HOST", runtimeRedisHost(runtimeCfg), "localhost"),
+		"REDIS_PORT":             getEnvOrRuntimePort("REDIS_PORT", runtimeRedisPort(runtimeCfg), "6379"),
+		"TELEGRAM_SERVICE_URL":   fmt.Sprintf("http://%s:%s", bindHost, telegramPort),
+		"TELEGRAM_GRPC_ADDRESS":  fmt.Sprintf("%s:%s", bindHost, telegramGRPCPort),
+		"JWT_SECRET":             jwtSecret,
+		"ADMIN_API_KEY":          adminAPIKey,
+		"SENTRY_ENVIRONMENT":     getEnvOrDefault("SENTRY_ENVIRONMENT", "production"),
+		"SENTRY_DSN":             getEnvOrDefault("SENTRY_DSN", ""),
+		"AI_API_KEY":             aiAPIKey,
+		"AI_BASE_URL":            aiBaseURL,
+		"AI_PROVIDER":            aiProvider,
+		"AI_MODEL":               aiModel,
+		"FEATURES_ENABLE_AI":     getEnvOrRuntimeBoolEnvString("FEATURES_ENABLE_AI", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAI),
+		"ENABLE_AI_SIGNALS":      getEnvOrRuntimeBoolEnvString("ENABLE_AI_SIGNALS", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAISignals),
+		"ENABLE_AI_ARBITRAGE":    getEnvOrRuntimeBoolEnvString("ENABLE_AI_ARBITRAGE", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAIArbitrage),
+		"FEATURES_PAPER_TRADING": getEnvOrRuntimeBoolEnvString("FEATURES_PAPER_TRADING", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.PaperTrading),
+		"FEATURES_REAL_TRADING":  getEnvOrRuntimeBoolEnvString("FEATURES_REAL_TRADING", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.RealTrading),
 	}
 
 	// Start Backend API
@@ -294,7 +318,7 @@ func gatewayStart(cCtx *cli.Context) error {
 				"PORT":                  telegramPort,
 				"BIND_HOST":             bindHost,
 				"TELEGRAM_BOT_TOKEN":    telegramToken,
-				"TELEGRAM_USE_POLLING":  getEnvOrDefault("TELEGRAM_USE_POLLING", "true"),
+				"TELEGRAM_USE_POLLING":  getEnvOrRuntimeBoolStringIfPresent("TELEGRAM_USE_POLLING", runtimeCfg, runtimeTelegramUsePolling(runtimeCfg), true),
 				"TELEGRAM_API_BASE_URL": fmt.Sprintf("http://%s:%s", bindHost, backendPort),
 				"BACKEND_HOST_PORT":     backendPort,
 				"NODE_ENV":              "production",
@@ -731,6 +755,76 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+func getEnvOrRuntimeString(key, runtimeValue, defaultValue string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return runtimeString(runtimeValue, defaultValue)
+}
+
+func getEnvOrRuntimePort(key string, runtimeValue int, defaultValue string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return runtimePort(runtimeValue, defaultValue)
+}
+
+func getEnvOrRuntimeBool(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) bool {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
+		return defaultValue
+	}
+	if runtimeCfg != nil {
+		return runtimeValue
+	}
+	return defaultValue
+}
+
+func getEnvOrRuntimeBoolString(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) string {
+	return strconv.FormatBool(getEnvOrRuntimeBool(key, runtimeCfg, runtimeValue, defaultValue))
+}
+
+func getEnvOrRuntimeBoolStringIfPresent(key string, runtimeCfg *runtimeConfig, runtimeValue, defaultValue bool) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return strconv.FormatBool(parsed)
+		}
+		return strconv.FormatBool(defaultValue)
+	}
+	if runtimeCfg != nil {
+		return strconv.FormatBool(runtimeValue)
+	}
+	return strconv.FormatBool(defaultValue)
+}
+
+func getEnvOrRuntimeBoolEnvString(key string, runtimeCfg *runtimeConfig, runtimeValue bool) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	if runtimeCfg != nil {
+		return strconv.FormatBool(runtimeValue)
+	}
+	return ""
+}
+
+func getEnvOrRuntimeDurationSeconds(key string, runtimeValue, defaultSeconds int) time.Duration {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		seconds, err := strconv.Atoi(value)
+		if err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		return time.Duration(defaultSeconds) * time.Second
+	}
+	if runtimeValue > 0 {
+		return time.Duration(runtimeValue) * time.Second
+	}
+	return time.Duration(defaultSeconds) * time.Second
+}
+
 func getEnvBoolDefault(key string, defaultValue bool) bool {
 	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
 	if value == "" {
@@ -769,12 +863,35 @@ func getEnvDurationSeconds(key string, defaultSeconds int) time.Duration {
 }
 
 func shouldSkipTelegramGateway(telegramToken string) bool {
-	if getEnvBoolDefault("NEURATRADE_GATEWAY_SKIP_TELEGRAM", false) {
-		return true
+	if parsed, ok := getEnvBoolIfSet("NEURATRADE_GATEWAY_SKIP_TELEGRAM"); ok {
+		return parsed
+	}
+	if runtimeCfg := getRuntimeConfigValue(defaultNeuraTradeHome()); runtimeCfg != nil {
+		if runtimeCfg.Gateway.SkipTelegram {
+			return true
+		}
+		if strings.TrimSpace(telegramToken) == "" && runtimeCfg.Features.PaperTrading && !runtimeCfg.Features.RealTrading {
+			return true
+		}
 	}
 	return strings.TrimSpace(telegramToken) == "" &&
 		getEnvBoolAnyDefault([]string{"FEATURES_PAPER_TRADING", "FEATURE_PAPER_TRADING"}, false) &&
 		!getEnvBoolAnyDefault([]string{"FEATURES_REAL_TRADING", "FEATURE_REAL_TRADING"}, true)
+}
+
+func getEnvBoolIfSet(key string) (bool, bool) {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return false, false
+	}
+	switch value {
+	case "true", "1", "yes", "on":
+		return true, true
+	case "false", "0", "no", "off":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func ensureSQLiteParentDir(sqlitePath string) error {
@@ -795,6 +912,10 @@ func ensureSQLiteParentDir(sqlitePath string) error {
 }
 
 func resolveBackendPort(cfg *localConfig) string {
+	return resolveBackendPortWithRuntime(cfg, getRuntimeConfigValue(defaultNeuraTradeHome()))
+}
+
+func resolveBackendPortWithRuntime(cfg *localConfig, runtimeCfg *runtimeConfig) string {
 	candidates := []string{
 		os.Getenv("SERVER_PORT"),
 		os.Getenv("PORT"),
@@ -805,10 +926,94 @@ func resolveBackendPort(cfg *localConfig) string {
 			return candidate
 		}
 	}
+	if runtimeCfg != nil && runtimeCfg.Server.Port > 0 {
+		return strconv.Itoa(runtimeCfg.Server.Port)
+	}
 	if cfg != nil && cfg.Server.Port > 0 {
 		return strconv.Itoa(cfg.Server.Port)
 	}
 	return "8080"
+}
+
+func runtimeGatewayBindHost(cfg *runtimeConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Gateway.BindHost
+}
+
+func runtimeGatewayCCXTPort(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.CCXTPort
+}
+
+func runtimeGatewayTelegramPort(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.TelegramPort
+}
+
+func runtimeGatewayTelegramGRPCPort(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.TelegramGRPCPort
+}
+
+func runtimeGatewaySupervised(cfg *runtimeConfig) bool {
+	return cfg != nil && cfg.Gateway.Supervised
+}
+
+func runtimeGatewayHealthTimeoutSeconds(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.HealthTimeoutSeconds
+}
+
+func runtimeGatewaySignalTimeoutSeconds(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.SignalTimeoutSeconds
+}
+
+func runtimeGatewayGracefulTimeoutSeconds(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Gateway.GracefulTimeoutSeconds
+}
+
+func runtimeDatabaseDriver(cfg *runtimeConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Database.Driver
+}
+
+func runtimeRedisHost(cfg *runtimeConfig) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Redis.Host
+}
+
+func runtimeRedisPort(cfg *runtimeConfig) int {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Redis.Port
+}
+
+func runtimeTelegramUsePolling(cfg *runtimeConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Telegram.UsePolling
 }
 
 func isValidPort(port string) bool {

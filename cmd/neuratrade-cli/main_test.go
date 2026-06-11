@@ -210,6 +210,50 @@ func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
 	databaseConfig, ok := config["database"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), databaseConfig["sqlite_path"])
+
+	runtimeData, err := os.ReadFile(filepath.Join(configHome, runtimeConfigFileName))
+	require.NoError(t, err)
+	var runtimeCfg runtimeConfig
+	require.NoError(t, json.Unmarshal(runtimeData, &runtimeCfg))
+	assert.Equal(t, 8080, runtimeCfg.Server.Port)
+	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), runtimeCfg.Database.SQLitePath)
+	assert.Equal(t, "deepseek", runtimeCfg.AI.Provider)
+	assert.Equal(t, "10", runtimeCfg.AI.DailyBudget.String())
+}
+
+func TestConfigInitAddsRuntimeFileWhenLegacyConfigExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), []byte(`{
+		"server":{"host":"127.0.0.1","port":9090},
+		"database":{"driver":"sqlite","sqlite_path":"/tmp/legacy-neuratrade.db"},
+		"ccxt":{"service_url":"http://legacy-ccxt:3001","grpc_address":"127.0.0.1:51051"},
+		"telegram":{"service_url":"http://legacy-telegram:3002","grpc_address":"127.0.0.1:51052","api_base_url":"http://legacy-api:9090"},
+		"ai":{"provider":"legacy-ai","model":"legacy-model","base_url":"https://legacy-ai.example/v1"},
+		"security":{"admin_api_key":"abcdefghijklmnopqrstuvwxyz123456"}
+	}`), 0600))
+
+	flags := flag.NewFlagSet("config-init", flag.ContinueOnError)
+	flags.String("binance-key", "", "")
+	flags.String("binance-secret", "", "")
+	flags.String("telegram-token", "", "")
+	flags.String("ai-key", "", "")
+	flags.Bool("force", false, "")
+	require.NoError(t, flags.Parse([]string{}))
+
+	ctx := cli.NewContext(cli.NewApp(), flags, nil)
+	require.NoError(t, configInit(ctx))
+	runtimeData, err := os.ReadFile(filepath.Join(home, runtimeConfigFileName))
+	require.NoError(t, err)
+	var runtimeCfg runtimeConfig
+	require.NoError(t, json.Unmarshal(runtimeData, &runtimeCfg))
+	assert.Equal(t, 9090, runtimeCfg.Server.Port)
+	assert.Equal(t, "/tmp/legacy-neuratrade.db", runtimeCfg.Database.SQLitePath)
+	assert.Equal(t, "legacy-ai", runtimeCfg.AI.Provider)
+	assert.Equal(t, "legacy-model", runtimeCfg.AI.Model)
+	assert.Equal(t, "https://legacy-ai.example/v1", runtimeCfg.AI.BaseURL)
+	assert.Equal(t, "http://legacy-ccxt:3001", runtimeCfg.CCXT.ServiceURL)
+	assert.Equal(t, "127.0.0.1:51052", runtimeCfg.Telegram.GrpcAddress)
 }
 
 func TestConfigStatusAndShowRespectNeuratradeHome(t *testing.T) {
@@ -247,6 +291,9 @@ func TestNewCLIAppRegistersStableCommandSurface(t *testing.T) {
 	}
 
 	assert.Contains(t, names, "gateway")
+	assert.Contains(t, names, "doctor")
+	assert.Contains(t, names, "install")
+	assert.Contains(t, names, "update")
 	assert.Contains(t, names, "ops")
 	assert.Contains(t, names, "backtest")
 	assert.Contains(t, names, "autonomous")

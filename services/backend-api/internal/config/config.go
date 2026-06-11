@@ -427,6 +427,8 @@ type LiveReadinessConfig struct {
 }
 
 func Load() (*Config, error) {
+	viper.Reset()
+
 	// First: add user-local NeuraTrade config path.
 	if dir := neuratradeHomeDir(); dir != "" {
 		viper.AddConfigPath(dir)
@@ -485,6 +487,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("telegram.grpc_address", "TELEGRAM_GRPC_ADDRESS")
 	_ = viper.BindEnv("backfill.enabled", "BACKFILL_ENABLED")
 	_ = viper.BindEnv("arbitrage.enabled", "ARBITRAGE_ENABLED")
+	_ = viper.BindEnv("features.enable_ai", "FEATURES_ENABLE_AI")
+	_ = viper.BindEnv("features.enable_ai_scalping", "FEATURES_ENABLE_AI_SCALPING")
 	_ = viper.BindEnv("features.enable_ai_arbitrage", "ENABLE_AI_ARBITRAGE")
 	_ = viper.BindEnv("features.enable_ai_signals", "ENABLE_AI_SIGNALS")
 
@@ -500,6 +504,9 @@ func Load() (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, err
 		}
+	}
+	if err := mergeRuntimeConfig(); err != nil {
+		return nil, err
 	}
 
 	var config Config
@@ -728,6 +735,31 @@ func neuratradeHomeDir() string {
 		return ""
 	}
 	return filepath.Join(homeDir, ".neuratrade")
+}
+
+func mergeRuntimeConfig() error {
+	dir := neuratradeHomeDir()
+	if dir == "" {
+		return nil
+	}
+	runtimePath := filepath.Join(dir, "runtime.json")
+	if _, err := os.Stat(runtimePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect runtime config: %w", err)
+	}
+
+	runtimeViper := viper.New()
+	runtimeViper.SetConfigFile(runtimePath)
+	runtimeViper.SetConfigType("json")
+	if err := runtimeViper.ReadInConfig(); err != nil {
+		return fmt.Errorf("read runtime config: %w", err)
+	}
+	if err := viper.MergeConfigMap(runtimeViper.AllSettings()); err != nil {
+		return fmt.Errorf("merge runtime config: %w", err)
+	}
+	return nil
 }
 
 // GetServiceURL returns the CCXT service URL.
