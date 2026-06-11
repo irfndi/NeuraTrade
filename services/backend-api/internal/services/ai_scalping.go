@@ -314,7 +314,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		LossCooldown:          20 * time.Minute,
 		LossWindow:            90 * time.Minute,
 		PreTradeGate:          true,
-		MinExpectancyEdge:     0.001,
+		MinExpectancyEdge:     0.005,
 		MinExpectancyN:        50,
 		RegimeHighBand:        85,
 		RegimeLowBand:         15,

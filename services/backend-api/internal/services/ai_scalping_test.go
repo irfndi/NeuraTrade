@@ -177,7 +177,8 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, config.FailureWindow)
 	assert.Equal(t, 2, config.StructuredRetries)
 	assert.True(t, config.PreTradeGate)
-	assert.Equal(t, 0.001, config.MinExpectancyEdge)
+	assert.GreaterOrEqual(t, config.MinExpectancyEdge, 0.005,
+		"MinExpectancyEdge default must require at least 0.5%% net edge; with avg_loss > avg_win a 0.1%% threshold lets negative-expectancy trades through (READINESS_ASSESSMENT_2026_06_10)")
 	assert.Equal(t, 50, config.MinExpectancyN)
 	assert.Equal(t, 85.0, config.RegimeHighBand)
 	assert.Equal(t, 15.0, config.RegimeLowBand)
