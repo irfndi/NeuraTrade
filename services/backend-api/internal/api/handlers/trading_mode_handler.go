@@ -58,8 +58,8 @@ func (h *OperationalModeHandler) SetTradingMode(c *gin.Context) {
 	}
 
 	// Validate mode
-	if req.Mode != "dry" && req.Mode != "live" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be 'dry' or 'live'"})
+	if req.Mode != "dry" && req.Mode != "live" && req.Mode != "paper" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be 'dry', 'live', or 'paper'"})
 		return
 	}
 

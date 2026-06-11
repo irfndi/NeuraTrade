@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -1635,11 +1633,11 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_RequiresBothTPAndSL(t *test
 
 func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing.T) {
 	tests := []struct {
-		name        string
-		plans       string
-		expectTP    bool
-		expectSL    bool
-		expectEmoji string
+		name     string
+		plans    string
+		expectTP bool
+		expectSL bool
+		wantErr  bool
 	}{
 		{
 			name: "caller expected both, only TP present — partial",
@@ -1648,7 +1646,7 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			]}}`,
 			expectTP:    true,
 			expectSL:    true,
-			expectEmoji: "⚠️",
+			wantErr:  true,
 		},
 		{
 			name: "caller expected only TP, only TP present — verified",
@@ -1657,7 +1655,7 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			]}}`,
 			expectTP:    true,
 			expectSL:    false,
-			expectEmoji: "✅",
+			wantErr:  false,
 		},
 		{
 			name: "caller expected only SL, only SL present — verified",
@@ -1666,7 +1664,7 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			]}}`,
 			expectTP:    false,
 			expectSL:    true,
-			expectEmoji: "✅",
+			wantErr:  false,
 		},
 		{
 			name: "caller expected both, both present — verified",
@@ -1676,7 +1674,7 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			]}}`,
 			expectTP:    true,
 			expectSL:    true,
-			expectEmoji: "✅",
+			wantErr:  false,
 		},
 	}
 
@@ -1690,19 +1688,12 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			executor := NewBitgetOrderExecutor("k", "s", "p")
 			executor.baseURL = server.URL
 
-			// Capture stdout to verify the log message reflects expectations.
-			oldStdout := os.Stdout
-			rPipe, wPipe, _ := os.Pipe()
-			os.Stdout = wPipe
-			executor.verifyFuturesTPSLActive(context.Background(), "BTCUSDT", "long", tt.expectTP, tt.expectSL)
-			_ = wPipe.Close()
-			os.Stdout = oldStdout
-			var buf bytes.Buffer
-			_, _ = io.Copy(&buf, rPipe)
-			output := buf.String()
-
-			assert.Contains(t, output, tt.expectEmoji,
-				"expected %q in stdout for expectTP=%t expectSL=%t", tt.expectEmoji, tt.expectTP, tt.expectSL)
+			err := executor.verifyFuturesTPSLActive(context.Background(), "BTCUSDT", "long", tt.expectTP, tt.expectSL)
+			if tt.wantErr {
+				assert.Error(t, err, "expected error for expectTP=%t expectSL=%t", tt.expectTP, tt.expectSL)
+			} else {
+				assert.NoError(t, err, "expected no error for expectTP=%t expectSL=%t", tt.expectTP, tt.expectSL)
+			}
 		})
 	}
 }

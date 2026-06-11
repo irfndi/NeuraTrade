@@ -35,6 +35,10 @@ type ScalpingOrderExecutor interface {
 	IsPaperTrading() bool
 }
 
+type DailyLossRecorder interface {
+	UpdateDailyLoss(ctx context.Context, loss decimal.Decimal) error
+}
+
 type IntegratedQuestHandlers struct {
 	technicalAnalysis     *TechnicalAnalysisService
 	ccxtService           interface{}
@@ -67,6 +71,7 @@ type IntegratedQuestHandlers struct {
 	killSwitch            interface{ IsEngaged() bool }
 	safeMode              interface{ IsEnabled() bool }
 	portfolioSafety       *PortfolioSafetyService
+	riskRef               DailyLossRecorder
 }
 
 const (
@@ -306,6 +311,10 @@ func (h *IntegratedQuestHandlers) SetDrawdownHalt(halt *MaxDrawdownHalt) {
 
 func (h *IntegratedQuestHandlers) SetPortfolioSafetyService(svc *PortfolioSafetyService) {
 	h.portfolioSafety = svc
+}
+
+func (h *IntegratedQuestHandlers) SetRiskActorRef(ref DailyLossRecorder) {
+	h.riskRef = ref
 }
 
 func (h *IntegratedQuestHandlers) PortfolioSafetyService() *PortfolioSafetyService {

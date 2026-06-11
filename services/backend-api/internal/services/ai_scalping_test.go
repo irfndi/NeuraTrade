@@ -177,7 +177,8 @@ func TestAIScalpingConfig_Default(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, config.FailureWindow)
 	assert.Equal(t, 2, config.StructuredRetries)
 	assert.True(t, config.PreTradeGate)
-	assert.Equal(t, 0.001, config.MinExpectancyEdge)
+	assert.GreaterOrEqual(t, config.MinExpectancyEdge, 0.005,
+		"MinExpectancyEdge default must require at least 0.5%% net edge; with avg_loss > avg_win a 0.1%% threshold lets negative-expectancy trades through (READINESS_ASSESSMENT_2026_06_10)")
 	assert.Equal(t, 50, config.MinExpectancyN)
 	assert.Equal(t, 85.0, config.RegimeHighBand)
 	assert.Equal(t, 15.0, config.RegimeLowBand)
@@ -857,6 +858,36 @@ func TestAIScalpingService_GatherMarketSignals_TickerFallbackWhenOrderbookUnavai
 	}
 	// Verify that FetchOrderBook was indeed called (all 4 pairs attempted).
 	assert.Len(t, mockCCXT.orderBookOps, 4)
+}
+
+func TestAIScalpingService_DiscoverTradingPairs_RespectsEnvOverride(t *testing.T) {
+	t.Setenv("NEURATRADE_SCALPING_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT")
+
+	mockCCXT := &mockAIScalpingCCXT{
+		markets: &ccxt.MarketsResponse{
+			Exchange: "bitget",
+			Symbols:  []string{"ZZZ/USDT", "AAA/USDT"},
+			Count:    2,
+		},
+		marketData: []ccxt.MarketPriceInterface{
+			mockMarketPrice{symbol: "ZZZ/USDT", price: 1.0, volume: 1, exchange: "bitget"},
+		},
+	}
+
+	svc := &AIScalpingService{
+		config: AIScalpingConfig{
+			Exchange:          "bitget",
+			MaxPairsToAnalyze: 8,
+			MaxCandidatePairs: 120,
+			EnforceFutures:    false,
+		},
+		ccxtService: mockCCXT,
+	}
+
+	pairs, err := svc.discoverTradingPairs(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"BTC/USDT", "ETH/USDT", "SOL/USDT"}, pairs,
+		"env var must override dynamic discovery; CCXT markets should be ignored")
 }
 
 func TestAIScalpingService_DiscoverTradingPairs_PrefersTradableSpreadCandidates(t *testing.T) {
@@ -4542,4 +4573,103 @@ func TestAIScalpingService_ValidateDecision_RefusesLiveTradeWithMissingSLTP(t *t
 		require.NotNil(t, decision.StopLoss)
 		require.NotNil(t, decision.TakeProfit)
 	})
+}
+
+// TestDefaultExitLevelsWithLeverage verifies that the leverage-adjusted
+// fallback SL/TP scales inversely with leverage to maintain constant
+// capital risk. Base: 0.8% SL / 1.2% TP at 1x. At Nx, both divide by N.
+func TestDefaultExitLevelsWithLeverage(t *testing.T) {
+	const entry = 100.0
+
+	tests := []struct {
+		name         string
+		action       string
+		leverage     int
+		wantStopDist float64 // expected distance from entry in price units
+		wantTakeDist float64
+	}{
+		{"1x buy", "buy", 1, 0.8, 1.2},
+		{"5x buy", "buy", 5, 0.16, 0.24},
+		{"20x buy", "buy", 20, 0.04, 0.06},
+		{"1x sell", "sell", 1, 0.8, 1.2},
+		{"10x sell", "sell", 10, 0.08, 0.12},
+		{"0 leverage treated as 1x", "buy", 0, 0.8, 1.2},
+		{"negative leverage treated as 1x", "buy", -3, 0.8, 1.2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sl, tp := defaultExitLevelsWithLeverage(entry, tt.action, tt.leverage)
+
+			if tt.action == "sell" {
+				expectedSL := entry + tt.wantStopDist
+				expectedTP := entry - tt.wantTakeDist
+				if !approximatelyEqual(sl.InexactFloat64(), expectedSL, 0.0001) {
+					t.Errorf("sell SL: got %.4f, want %.4f", sl.InexactFloat64(), expectedSL)
+				}
+				if !approximatelyEqual(tp.InexactFloat64(), expectedTP, 0.0001) {
+					t.Errorf("sell TP: got %.4f, want %.4f", tp.InexactFloat64(), expectedTP)
+				}
+				if sl.LessThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("sell SL %.4f must be > entry %.4f", sl.InexactFloat64(), entry)
+				}
+				if tp.GreaterThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("sell TP %.4f must be < entry %.4f", tp.InexactFloat64(), entry)
+				}
+			} else {
+				expectedSL := entry - tt.wantStopDist
+				expectedTP := entry + tt.wantTakeDist
+				if !approximatelyEqual(sl.InexactFloat64(), expectedSL, 0.0001) {
+					t.Errorf("buy SL: got %.4f, want %.4f", sl.InexactFloat64(), expectedSL)
+				}
+				if !approximatelyEqual(tp.InexactFloat64(), expectedTP, 0.0001) {
+					t.Errorf("buy TP: got %.4f, want %.4f", tp.InexactFloat64(), expectedTP)
+				}
+				if sl.GreaterThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("buy SL %.4f must be < entry %.4f", sl.InexactFloat64(), entry)
+				}
+				if tp.LessThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("buy TP %.4f must be > entry %.4f", tp.InexactFloat64(), entry)
+				}
+			}
+		})
+	}
+}
+
+// approximatelyEqual compares two floats with a tolerance.
+func approximatelyEqual(a, b, tolerance float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
+}
+
+// TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled guards the
+// hard-disabled blowoff sell signal. It must always return false
+// regardless of input. The function is intentionally a placeholder
+// until observed paper evidence shows counter-trend blowoff shorts
+// can beat fees (see ai_scalping.go line ~3783).
+func TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal aiMarketSignal
+	}{
+		{"empty signal", aiMarketSignal{}},
+		{"strong blowoff — all conditions met", aiMarketSignal{
+			PriceChange24h:     0.10,
+			RecentChangeKnown:  true,
+			OrderBookImbalance: -0.5,
+			RangePosition24h:   0.05,
+			BidAskSpread:       0.01,
+		}},
+		{"weak blowoff", aiMarketSignal{PriceChange24h: 0.01}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scalpingBlowoffSellTrendConfirmed(tt.signal); got {
+				t.Errorf("scalpingBlowoffSellTrendConfirmed(%+v) = true, want false (hard-disabled)", tt.signal)
+			}
+		})
+	}
 }

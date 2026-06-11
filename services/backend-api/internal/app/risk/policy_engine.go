@@ -355,11 +355,18 @@ func NewMinLiquidityRule(minLiquidity decimal.Decimal) *MinLiquidityRule {
 func (r *MinLiquidityRule) Name() string { return "min_liquidity" }
 
 func (r *MinLiquidityRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	// Placeholder - would need actual liquidity data from orderbook
-	return ports.PolicyDecision{
-		Approved: true,
-		RuleName: r.Name(),
-	}, nil
+	if intent.BidDepth == nil || intent.AskDepth == nil {
+		return ports.PolicyDecision{Approved: true, RuleName: r.Name()}, nil
+	}
+	available := decimal.Min(*intent.BidDepth, *intent.AskDepth)
+	if available.LessThan(r.minLiquidity) {
+		return ports.PolicyDecision{
+			Approved: false,
+			Reason:   fmt.Sprintf("insufficient liquidity: available=%s required=%s", available.String(), r.minLiquidity.String()),
+			RuleName: r.Name(),
+		}, nil
+	}
+	return ports.PolicyDecision{Approved: true, RuleName: r.Name()}, nil
 }
 
 func (r *MinLiquidityRule) IsHardRule() bool { return false }
@@ -377,11 +384,21 @@ func NewMaxSpreadRule(maxSpread decimal.Decimal) *MaxSpreadRule {
 func (r *MaxSpreadRule) Name() string { return "max_spread" }
 
 func (r *MaxSpreadRule) Evaluate(ctx context.Context, intent ports.OrderIntent) (ports.PolicyDecision, error) {
-	// Placeholder - would need actual spread data
-	return ports.PolicyDecision{
-		Approved: true,
-		RuleName: r.Name(),
-	}, nil
+	if intent.BestBid == nil || intent.BestAsk == nil {
+		return ports.PolicyDecision{Approved: true, RuleName: r.Name()}, nil
+	}
+	if intent.BestBid.IsZero() {
+		return ports.PolicyDecision{Approved: true, RuleName: r.Name()}, nil
+	}
+	spreadPct := intent.BestAsk.Sub(*intent.BestBid).Div(*intent.BestBid).Mul(decimal.NewFromInt(100))
+	if spreadPct.GreaterThan(r.maxSpread) {
+		return ports.PolicyDecision{
+			Approved: false,
+			Reason:   fmt.Sprintf("spread %.4f%% exceeds maximum %.4f%%", spreadPct.InexactFloat64(), r.maxSpread.InexactFloat64()),
+			RuleName: r.Name(),
+		}, nil
+	}
+	return ports.PolicyDecision{Approved: true, RuleName: r.Name()}, nil
 }
 
 func (r *MaxSpreadRule) IsHardRule() bool { return false }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -27,17 +28,19 @@ func run() error {
 		strategies     string
 		outputPath     string
 		failIfNotReady bool
+		jsonOutput     bool
 	)
 
-	flag.StringVar(&startTimeStr, "start", "", "Start time (RFC3339); defaults to 7 days ago")
+	flag.StringVar(&startTimeStr, "start", "", "Start time (RFC3339); defaults to 30 days ago")
 	flag.StringVar(&endTimeStr, "end", "", "End time (RFC3339); defaults to now")
 	flag.StringVar(&strategies, "strategies", "scalping,daily_trading,swing_trading,arbitrage", "Comma-separated strategies")
 	flag.StringVar(&outputPath, "output", "", "Output path for manifest JSON")
 	flag.BoolVar(&failIfNotReady, "fail-if-not-ready", false, "Exit with non-zero code if manifest is not ready")
+	flag.BoolVar(&jsonOutput, "json", false, "Print manifest as JSON to stdout (in addition to human-readable)")
 	flag.Parse()
 
 	// Parse times
-	startTime := time.Now().Add(-7 * 24 * time.Hour)
+	startTime := time.Now().Add(-30 * 24 * time.Hour)
 	if startTimeStr != "" {
 		var err error
 		startTime, err = time.Parse(time.RFC3339, startTimeStr)
@@ -80,7 +83,15 @@ func run() error {
 	}
 
 	// Print to stdout
-	generator.PrintManifest(manifest)
+	if jsonOutput {
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal manifest: %w", err)
+		}
+		fmt.Println(string(data))
+	} else {
+		generator.PrintManifest(manifest)
+	}
 
 	// Save to file
 	if outputPath == "" {

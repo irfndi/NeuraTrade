@@ -95,6 +95,11 @@ func (h *IntegratedQuestHandlers) closeTriggeredPaperScalpingPositions(
 		}
 
 		h.updatePaperScalpingTelemetryOutcome(ctx, orderID, outcome, netPnL, position.OpenedAt, closedAt)
+		if h.riskRef != nil {
+			if updateErr := h.riskRef.UpdateDailyLoss(ctx, netPnL); updateErr != nil {
+				zaplogrus.Warnf("[RISK] Failed to update daily loss for paper close %s: %v", orderID, updateErr)
+			}
+		}
 		closed++
 		zaplogrus.Infof(
 			"[SCALPING] Paper %s closed by %s at %s (entry=%s gross_pnl=%s fees=%s)",

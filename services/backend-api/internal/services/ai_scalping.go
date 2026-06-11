@@ -314,7 +314,7 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		LossCooldown:          20 * time.Minute,
 		LossWindow:            90 * time.Minute,
 		PreTradeGate:          true,
-		MinExpectancyEdge:     0.001,
+		MinExpectancyEdge:     0.005,
 		MinExpectancyN:        50,
 		RegimeHighBand:        85,
 		RegimeLowBand:         15,
@@ -1584,6 +1584,9 @@ type aiMarketSignal struct {
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
+	if override := scalpingSymbolsFromEnv(); len(override) > 0 {
+		return override, nil
+	}
 	exchange := s.exchangeForContext(ctx)
 	if cached := s.getCachedPairs(exchange); len(cached) > 0 {
 		return cached, nil
@@ -2726,7 +2729,7 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 		return fmt.Errorf("size_pct must be > 0")
 	}
 	if decision.StopLoss == nil || decision.TakeProfit == nil {
-		defaultSL, defaultTP := defaultExitLevels(resolved.Price, decision.Action)
+		defaultSL, defaultTP := defaultExitLevelsWithLeverage(resolved.Price, decision.Action, s.config.Leverage)
 		if err := s.refuseLiveTradeWithSyntheticSLTP(ctx, decision, defaultSL, defaultTP); err != nil {
 			return err
 		}
@@ -4845,9 +4848,16 @@ func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
 }
 
 func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.Decimal) {
+	return defaultExitLevelsWithLeverage(price, action, 1)
+}
+
+func defaultExitLevelsWithLeverage(price float64, action string, leverage int) (decimal.Decimal, decimal.Decimal) {
+	if leverage <= 0 {
+		leverage = 1
+	}
 	entry := decimal.NewFromFloat(price)
-	stopPct := decimal.NewFromFloat(0.008) // 0.8%
-	takePct := decimal.NewFromFloat(0.012) // 1.2%
+	stopPct := decimal.NewFromFloat(0.008).Div(decimal.NewFromInt(int64(leverage)))
+	takePct := decimal.NewFromFloat(0.012).Div(decimal.NewFromInt(int64(leverage)))
 
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "sell":
@@ -5471,4 +5481,31 @@ func clampFloat(value, min, max float64) float64 {
 		return max
 	}
 	return value
+}
+
+const envScalpingSymbols = "NEURATRADE_SCALPING_SYMBOLS"
+
+func scalpingSymbolsFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv(envScalpingSymbols))
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	symbols := make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.ToUpper(strings.TrimSpace(p))
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		symbols = append(symbols, s)
+	}
+	if len(symbols) == 0 {
+		return nil
+	}
+	return symbols
 }
