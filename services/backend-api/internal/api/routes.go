@@ -987,6 +987,8 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 		if lifecycleErr != nil {
 			zaplogrus.Warnf("Warning: failed to initialize trading lifecycle store: %v", lifecycleErr)
 		} else {
+			bridgeRecorder := services.NewPaperTradeRecorder(db, zapNopServiceLogger{})
+			lifecycleStore.SetPaperRecorder(bridgeRecorder)
 			integratedHandlers.SetLifecycleStore(lifecycleStore)
 			zaplogrus.Infof("Trading lifecycle store initialized for autonomous execution persistence")
 		}
