@@ -12,11 +12,11 @@ func TestEvaluateAcceptance_ReadyRequiresAllGatesIncludingPositivePnL(t *testing
 	t.Run("all gates met with positive PnL -> Ready", func(t *testing.T) {
 		result := g.evaluateAcceptance(
 			decimal.NewFromFloat(720.0), // 30 days
-			10,                           // 10 closed trades
-			1,                            // 1 strategy
-			true,                         // risk limits OK
-			true,                         // backtest OK
-			decimal.NewFromFloat(50.0),   // positive PnL
+			10,                          // 10 closed trades
+			1,                           // 1 strategy
+			true,                        // risk limits OK
+			true,                        // backtest OK
+			decimal.NewFromFloat(50.0),  // positive PnL
 		)
 		if !result.Ready {
 			t.Errorf("expected Ready=true when all gates met; failures=%v", result.Failures)

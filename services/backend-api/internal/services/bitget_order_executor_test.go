@@ -1008,7 +1008,7 @@ func newBitgetFuturesTestServer(t *testing.T, orderID string) (*httptest.Server,
 			require.NoError(t, json.Unmarshal(body, &orderBody))
 			_, _ = w.Write([]byte(fmt.Sprintf(`{"code":"00000","msg":"ok","data":{"orderId":"%s"}}`, orderID)))
 		case "/api/v2/mix/order/orders-plan-pending":
-			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"nextFlag":"false","orderList":[{"orderId":"tpsl-plan-1","holdSide":"long"}]}}`))
+			_, _ = w.Write([]byte(`{"code":"00000","msg":"ok","data":{"nextFlag":"false","orderList":[{"orderId":"tpsl-plan-1","holdSide":"long","planType":"profit_loss"}]}}`))
 		default:
 			t.Fatalf("unexpected request path %s", r.URL.Path)
 		}
@@ -1644,8 +1644,8 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
 				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
 			]}}`,
-			expectTP:    true,
-			expectSL:    true,
+			expectTP: true,
+			expectSL: true,
 			wantErr:  true,
 		},
 		{
@@ -1653,8 +1653,8 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
 				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"}
 			]}}`,
-			expectTP:    true,
-			expectSL:    false,
+			expectTP: true,
+			expectSL: false,
 			wantErr:  false,
 		},
 		{
@@ -1662,8 +1662,8 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 			plans: `{"code":"00000","msg":"ok","data":{"entrustedList":[
 				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
 			]}}`,
-			expectTP:    false,
-			expectSL:    true,
+			expectTP: false,
+			expectSL: true,
 			wantErr:  false,
 		},
 		{
@@ -1672,8 +1672,8 @@ func TestBitgetOrderExecutor_VerifyFuturesTPSLActive_ExpectationAware(t *testing
 				{"orderId":"tp-1","planType":"pos_profit","holdSide":"long","triggerPrice":"50000"},
 				{"orderId":"sl-1","planType":"pos_loss","holdSide":"long","triggerPrice":"49000"}
 			]}}`,
-			expectTP:    true,
-			expectSL:    true,
+			expectTP: true,
+			expectSL: true,
 			wantErr:  false,
 		},
 	}

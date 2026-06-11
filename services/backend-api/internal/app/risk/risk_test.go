@@ -533,10 +533,10 @@ func TestMinLiquidityRule(t *testing.T) {
 	ask2000 := decimal.NewFromInt(2000)
 
 	tests := []struct {
-		name      string
-		bidDepth  *decimal.Decimal
-		askDepth  *decimal.Decimal
-		approved  bool
+		name     string
+		bidDepth *decimal.Decimal
+		askDepth *decimal.Decimal
+		approved bool
 	}{
 		{"both nil — backward compatible", nil, nil, true},
 		{"only bid — backward compatible", &bid1500, nil, true},
