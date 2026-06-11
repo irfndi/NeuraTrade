@@ -12,6 +12,8 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// defaultOpsTimeout is the fallback guardrail. Operators can override it with
+// --ops-timeout, and scalping-soak derives longer timeouts from its run flags.
 const defaultOpsTimeout = 30 * time.Minute
 const opsChildTimeoutGrace = 5 * time.Minute
 const opsShutdownGrace = 10 * time.Second
