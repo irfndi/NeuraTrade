@@ -795,7 +795,9 @@ func (c *ShadowEvaluationCoordinator) Stop() {
 		<-done
 	}
 	if group != nil {
-		_ = group.Shutdown(time.Second)
+		if err := group.Shutdown(time.Second); err != nil {
+			c.logger.Warn("shadow paper reconciler supervisor shutdown failed", zap.Error(err))
+		}
 	}
 }
 

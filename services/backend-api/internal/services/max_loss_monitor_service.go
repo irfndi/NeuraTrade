@@ -119,6 +119,11 @@ func NewMaxLossMonitorService(
 
 // Start begins the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Start(ctx context.Context) {
+	s.mu.Lock()
+	if s.stopped || s.group != nil {
+		s.mu.Unlock()
+		return
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	group := supervisor.NewGroup()
 	group.AddFunc("max-loss-monitor", func(ctx context.Context) error {
@@ -132,8 +137,6 @@ func (s *MaxLossMonitorService) Start(ctx context.Context) {
 		s.run(ctx)
 		return nil
 	})
-
-	s.mu.Lock()
 	s.cancel = cancel
 	s.group = group
 	s.mu.Unlock()
@@ -148,13 +151,17 @@ func (s *MaxLossMonitorService) Start(ctx context.Context) {
 // Stop halts the monitoring loop and the underlying max-loss monitor.
 func (s *MaxLossMonitorService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopped {
+		s.mu.Unlock()
 		return
 	}
 	s.stopped = true
 	cancel := s.cancel
 	group := s.group
+	s.cancel = nil
+	s.group = nil
+	s.mu.Unlock()
+
 	close(s.stopCh)
 	if cancel != nil {
 		cancel()

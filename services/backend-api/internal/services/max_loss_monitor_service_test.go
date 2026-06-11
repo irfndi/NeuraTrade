@@ -205,6 +205,43 @@ func TestMaxLossMonitorService_TracksPositions(t *testing.T) {
 	assert.GreaterOrEqual(t, service.TrackedCount(), 1, "at least one position should be tracked")
 }
 
+func TestMaxLossMonitorService_StartIsIdempotentAndStopIsOneShot(t *testing.T) {
+	mockCCXT := &mockCCXTForMaxLoss{}
+	service := NewMaxLossMonitorService(
+		MaxLossMonitorConfig{PollInterval: 50 * time.Millisecond},
+		mockCCXT,
+		zaplogrus.New(),
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service.Start(ctx)
+	service.mu.Lock()
+	firstGroup := service.group
+	service.mu.Unlock()
+	require.NotNil(t, firstGroup)
+
+	service.Start(ctx)
+	service.mu.Lock()
+	secondGroup := service.group
+	service.mu.Unlock()
+	assert.Same(t, firstGroup, secondGroup, "second Start should not replace the active supervisor")
+
+	service.Stop()
+	service.mu.Lock()
+	assert.True(t, service.stopped)
+	assert.Nil(t, service.cancel)
+	assert.Nil(t, service.group)
+	service.mu.Unlock()
+
+	service.Start(ctx)
+	service.mu.Lock()
+	assert.Nil(t, service.group, "Start after Stop should remain a no-op")
+	service.mu.Unlock()
+}
+
 func TestMaxLossMonitorService_FiresOnMaxLoss(t *testing.T) {
 	entryPrice := decimal.NewFromFloat(100)
 	breachPrice := decimal.NewFromFloat(98)
