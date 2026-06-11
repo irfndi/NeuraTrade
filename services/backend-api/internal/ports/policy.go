@@ -53,6 +53,10 @@ type OrderIntent struct {
 	TakeProfit      decimal.Decimal
 	CurrentPosition decimal.Decimal
 	PortfolioValue  decimal.Decimal
+	BestBid         *decimal.Decimal
+	BestAsk         *decimal.Decimal
+	BidDepth        *decimal.Decimal
+	AskDepth        *decimal.Decimal
 }
 
 // PolicyEngine evaluates order intents against policy rules.

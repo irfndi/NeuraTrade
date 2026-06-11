@@ -524,3 +524,98 @@ func TestAutoSafeModeOnLossStreak_DisabledWhenThresholdNonPositive(t *testing.T)
 		t.Error("safe mode should stay disabled when loss streak trigger is disabled")
 	}
 }
+
+func TestMinLiquidityRule(t *testing.T) {
+	minLiq := decimal.NewFromInt(1000)
+	rule := NewMinLiquidityRule(minLiq)
+	bid1500 := decimal.NewFromInt(1500)
+	bid500 := decimal.NewFromInt(500)
+	ask2000 := decimal.NewFromInt(2000)
+
+	tests := []struct {
+		name      string
+		bidDepth  *decimal.Decimal
+		askDepth  *decimal.Decimal
+		approved  bool
+	}{
+		{"both nil — backward compatible", nil, nil, true},
+		{"only bid — backward compatible", &bid1500, nil, true},
+		{"only ask — backward compatible", nil, &ask2000, true},
+		{"min(1500,2000)=1500 >= 1000 — approved", &bid1500, &ask2000, true},
+		{"min(500,2000)=500 < 1000 — rejected", &bid500, &ask2000, false},
+		{"min(500,1500)=500 < 1000 — rejected", &bid500, &bid1500, false},
+		{"min(1000,2000)=1000 >= 1000 — approved at boundary", func() *decimal.Decimal { d := decimal.NewFromInt(1000); return &d }(), &ask2000, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent := ports.OrderIntent{
+				IntentID: "test",
+				Exchange: "binance",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSideBuy,
+				Amount:   decimal.NewFromInt(1),
+				Price:    decimal.NewFromInt(50000),
+				BidDepth: tt.bidDepth,
+				AskDepth: tt.askDepth,
+			}
+			decision, err := rule.Evaluate(context.Background(), intent)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if decision.Approved != tt.approved {
+				t.Errorf("approved=%v want=%v reason=%s", decision.Approved, tt.approved, decision.Reason)
+			}
+		})
+	}
+}
+
+func decimalRequireFromInt(i int64) *decimal.Decimal {
+	d := decimal.NewFromInt(i)
+	return &d
+}
+
+func TestMaxSpreadRule(t *testing.T) {
+	maxSpread := decimal.NewFromFloat(0.5)
+	rule := NewMaxSpreadRule(maxSpread)
+	bid := decimal.NewFromInt(10000)
+	ask10010 := decimal.NewFromInt(10010)
+	ask10060 := decimal.NewFromInt(10060)
+	bidZero := decimal.Zero
+
+	tests := []struct {
+		name     string
+		bestBid  *decimal.Decimal
+		bestAsk  *decimal.Decimal
+		approved bool
+	}{
+		{"both nil — backward compatible", nil, nil, true},
+		{"only bid — backward compatible", &bid, nil, true},
+		{"only ask — backward compatible", nil, &ask10010, true},
+		{"BestBid is zero — div-by-zero guard", &bidZero, &ask10010, true},
+		{"spread=0.10% <= 0.5% — approved", &bid, &ask10010, true},
+		{"spread=0.60% > 0.5% — rejected", &bid, &ask10060, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent := ports.OrderIntent{
+				IntentID: "test",
+				Exchange: "binance",
+				Symbol:   "BTC/USDT",
+				Side:     ports.OrderSideBuy,
+				Amount:   decimal.NewFromInt(1),
+				Price:    decimal.NewFromInt(50000),
+				BestBid:  tt.bestBid,
+				BestAsk:  tt.bestAsk,
+			}
+			decision, err := rule.Evaluate(context.Background(), intent)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if decision.Approved != tt.approved {
+				t.Errorf("approved=%v want=%v reason=%s", decision.Approved, tt.approved, decision.Reason)
+			}
+		})
+	}
+}
