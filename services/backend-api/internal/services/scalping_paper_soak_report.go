@@ -44,6 +44,8 @@ func PersistScalpingPaperBacktestSoakReport(
 	if err != nil {
 		return ScalpingSoakReport{}, fmt.Errorf("create trading lifecycle store: %w", err)
 	}
+	paperRecorder := NewPaperTradeRecorder(db, nil)
+	lifecycleStore.SetPaperRecorder(paperRecorder)
 
 	chatID := strings.TrimSpace(options.ChatID)
 	if chatID == "" {

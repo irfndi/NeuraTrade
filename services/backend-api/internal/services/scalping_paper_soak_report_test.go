@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -101,4 +102,40 @@ func TestPersistScalpingPaperBacktestSoakReportRejectsInvalidInputs(t *testing.T
 
 	_, err = PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, &ScalpingBacktestResult{}, ScalpingPaperSoakPersistenceOptions{})
 	require.ErrorContains(t, err, "requires signals")
+}
+
+func TestPersistScalpingPaperBacktestSoakReportWritesPaperTrades(t *testing.T) {
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-soak-bridge.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, sqliteDB.Close())
+	})
+
+	migrationSQL, err := os.ReadFile(filepath.Join("..", "..", "database", "sqlite_migrations", "012_create_paper_trades_table.sql"))
+	require.NoError(t, err)
+	_, err = sqliteDB.Exec(ctx, string(migrationSQL))
+	require.NoError(t, err)
+
+	now := time.Date(2026, 5, 12, 3, 15, 0, 0, time.UTC)
+	engine := newRunSignalsTestEngine(now)
+	result, err := engine.RunSignals(ctx, []HistoricalSignal{
+		runSignalsTestSignal(now, "AAA/USDT", 100, 0.50, 35),
+		runSignalsTestSignal(now.Add(30*time.Second), "BBB/USDT", 50, -0.45, 65),
+		runSignalsTestSignal(now.Add(60*time.Second), "AAA/USDT", 102, 0.50, 35),
+	})
+	require.NoError(t, err)
+	require.Greater(t, result.Summary.TotalTrades, 0)
+
+	_, err = PersistScalpingPaperBacktestSoakReport(ctx, sqliteDB, result, ScalpingPaperSoakPersistenceOptions{
+		ChatID:      "paper-soak-bridge-chat",
+		Exchange:    "bitget",
+		OrderPrefix: "paper-soak-bridge",
+	})
+	require.NoError(t, err)
+
+	var closedCount int
+	err = sqliteDB.QueryRow(ctx, "SELECT COUNT(*) FROM paper_trades WHERE status = 'closed' AND user_id = ?", "paper-soak-bridge-chat").Scan(&closedCount)
+	require.NoError(t, err)
+	require.Equal(t, result.Summary.TotalTrades, closedCount, "expected one paper_trades row per trade from the backtest")
 }
