@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 const runtimeConfigFileName = "runtime.json"
@@ -34,14 +36,14 @@ type runtimeConfig struct {
 		ApiBaseURL  string `json:"api_base_url"`
 	} `json:"telegram"`
 	AI struct {
-		Provider      string  `json:"provider"`
-		Model         string  `json:"model"`
-		BaseURL       string  `json:"base_url"`
-		Temperature   float64 `json:"temperature"`
-		MaxTokens     int     `json:"max_tokens"`
-		MinConfidence float64 `json:"min_confidence"`
-		DailyBudget   float64 `json:"daily_budget"`
-		RoutingMode   string  `json:"routing_mode"`
+		Provider      string          `json:"provider"`
+		Model         string          `json:"model"`
+		BaseURL       string          `json:"base_url"`
+		Temperature   float64         `json:"temperature"`
+		MaxTokens     int             `json:"max_tokens"`
+		MinConfidence float64         `json:"min_confidence"`
+		DailyBudget   decimal.Decimal `json:"daily_budget"`
+		RoutingMode   string          `json:"routing_mode"`
 	} `json:"ai"`
 	Features struct {
 		EnableAI          bool `json:"enable_ai"`
@@ -89,7 +91,7 @@ func defaultRuntimeConfig(home string) runtimeConfig {
 	cfg.AI.Temperature = 0.7
 	cfg.AI.MaxTokens = 4096
 	cfg.AI.MinConfidence = 0.7
-	cfg.AI.DailyBudget = 10.0
+	cfg.AI.DailyBudget = decimal.NewFromInt(10)
 	cfg.AI.RoutingMode = "primary"
 	cfg.Features.EnableAI = true
 	cfg.Features.EnableAIScalping = true

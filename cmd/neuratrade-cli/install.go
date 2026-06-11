@@ -95,7 +95,7 @@ func defaultInstallBinDir() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
-		return "."
+		return "/usr/local/bin"
 	}
 	return filepath.Join(home, ".local", "bin")
 }

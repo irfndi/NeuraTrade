@@ -188,6 +188,12 @@ func TestGetEnvOrRuntimeBoolRespectsExplicitFalseWhenDefaultTrue(t *testing.T) {
 	require.True(t, getEnvOrRuntimeBool("NEURATRADE_GATEWAY_SUPERVISED", nil, false, true))
 }
 
+func TestGetEnvOrRuntimeBoolEnvStringPreservesEnvOverride(t *testing.T) {
+	t.Setenv("FEATURES_ENABLE_AI", "false")
+
+	require.Equal(t, "false", getEnvOrRuntimeBoolEnvString("FEATURES_ENABLE_AI", &runtimeConfig{}, true))
+}
+
 func TestShouldSkipTelegramGatewayAcceptsLegacySingularFeatureEnv(t *testing.T) {
 	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "")
 	t.Setenv("FEATURES_PAPER_TRADING", "")
@@ -209,6 +215,14 @@ func TestShouldSkipTelegramGatewayRequiresExplicitPaperOnlyMode(t *testing.T) {
 
 func TestShouldSkipTelegramGatewayOverride(t *testing.T) {
 	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "true")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+
+	require.True(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
+func TestShouldSkipTelegramGatewayOverrideAcceptsLegacyBoolValues(t *testing.T) {
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "yes")
 	t.Setenv("FEATURES_PAPER_TRADING", "")
 	t.Setenv("FEATURES_REAL_TRADING", "")
 

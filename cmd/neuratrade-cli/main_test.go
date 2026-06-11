@@ -218,6 +218,7 @@ func TestConfigInitRespectsNeuratradeHome(t *testing.T) {
 	assert.Equal(t, 8080, runtimeCfg.Server.Port)
 	assert.Equal(t, filepath.Join(configHome, "data", "neuratrade.db"), runtimeCfg.Database.SQLitePath)
 	assert.Equal(t, "deepseek", runtimeCfg.AI.Provider)
+	assert.Equal(t, "10", runtimeCfg.AI.DailyBudget.String())
 }
 
 func TestConfigInitAddsRuntimeFileWhenLegacyConfigExists(t *testing.T) {

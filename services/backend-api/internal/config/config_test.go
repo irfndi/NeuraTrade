@@ -464,9 +464,21 @@ func TestLoad_NeuratradeConfigEnvTakesPrecedence(t *testing.T) {
 }
 
 func TestLoad_RuntimeConfigOverridesLegacyConfig(t *testing.T) {
-	os.Clearenv()
 	home := t.TempDir()
 	t.Setenv("NEURATRADE_HOME", home)
+	for _, key := range []string{
+		"SERVER_PORT",
+		"PORT",
+		"DATABASE_DRIVER",
+		"DATABASE_URL",
+		"SQLITE_PATH",
+		"AI_PROVIDER",
+		"AI_MODEL",
+		"FEATURES_ENABLE_AI",
+		"FEATURES_ENABLE_AI_SCALPING",
+	} {
+		t.Setenv(key, "")
+	}
 
 	configContent := `{
 		"server": {"port": 9999},

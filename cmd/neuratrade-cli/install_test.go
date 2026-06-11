@@ -51,3 +51,10 @@ func TestInstallCLIExecutableCanCopyBinary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
 }
+
+func TestDefaultInstallBinDirDoesNotFallbackToCurrentDirectory(t *testing.T) {
+	t.Setenv("NEURATRADE_INSTALL_BIN_DIR", "")
+	t.Setenv("HOME", "")
+
+	require.NotEqual(t, ".", defaultInstallBinDir())
+}

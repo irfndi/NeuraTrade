@@ -265,11 +265,11 @@ func gatewayStart(cCtx *cli.Context) error {
 		"AI_BASE_URL":            aiBaseURL,
 		"AI_PROVIDER":            aiProvider,
 		"AI_MODEL":               aiModel,
-		"FEATURES_ENABLE_AI":     runtimeBoolString(runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAI),
-		"ENABLE_AI_SIGNALS":      runtimeBoolString(runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAISignals),
-		"ENABLE_AI_ARBITRAGE":    runtimeBoolString(runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAIArbitrage),
-		"FEATURES_PAPER_TRADING": runtimeBoolString(runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.PaperTrading),
-		"FEATURES_REAL_TRADING":  runtimeBoolString(runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.RealTrading),
+		"FEATURES_ENABLE_AI":     getEnvOrRuntimeBoolEnvString("FEATURES_ENABLE_AI", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAI),
+		"ENABLE_AI_SIGNALS":      getEnvOrRuntimeBoolEnvString("ENABLE_AI_SIGNALS", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAISignals),
+		"ENABLE_AI_ARBITRAGE":    getEnvOrRuntimeBoolEnvString("ENABLE_AI_ARBITRAGE", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.EnableAIArbitrage),
+		"FEATURES_PAPER_TRADING": getEnvOrRuntimeBoolEnvString("FEATURES_PAPER_TRADING", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.PaperTrading),
+		"FEATURES_REAL_TRADING":  getEnvOrRuntimeBoolEnvString("FEATURES_REAL_TRADING", runtimeCfg, runtimeCfg != nil && runtimeCfg.Features.RealTrading),
 	}
 
 	// Start Backend API
@@ -801,6 +801,16 @@ func getEnvOrRuntimeBoolStringIfPresent(key string, runtimeCfg *runtimeConfig, r
 	return strconv.FormatBool(defaultValue)
 }
 
+func getEnvOrRuntimeBoolEnvString(key string, runtimeCfg *runtimeConfig, runtimeValue bool) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	if runtimeCfg != nil {
+		return strconv.FormatBool(runtimeValue)
+	}
+	return ""
+}
+
 func getEnvOrRuntimeDurationSeconds(key string, runtimeValue, defaultSeconds int) time.Duration {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		seconds, err := strconv.Atoi(value)
@@ -853,9 +863,8 @@ func getEnvDurationSeconds(key string, defaultSeconds int) time.Duration {
 }
 
 func shouldSkipTelegramGateway(telegramToken string) bool {
-	if value := strings.TrimSpace(os.Getenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM")); value != "" {
-		parsed, err := strconv.ParseBool(value)
-		return err == nil && parsed
+	if parsed, ok := getEnvBoolIfSet("NEURATRADE_GATEWAY_SKIP_TELEGRAM"); ok {
+		return parsed
 	}
 	if runtimeCfg := getRuntimeConfigValue(defaultNeuraTradeHome()); runtimeCfg != nil {
 		if runtimeCfg.Gateway.SkipTelegram {
@@ -868,6 +877,21 @@ func shouldSkipTelegramGateway(telegramToken string) bool {
 	return strings.TrimSpace(telegramToken) == "" &&
 		getEnvBoolAnyDefault([]string{"FEATURES_PAPER_TRADING", "FEATURE_PAPER_TRADING"}, false) &&
 		!getEnvBoolAnyDefault([]string{"FEATURES_REAL_TRADING", "FEATURE_REAL_TRADING"}, true)
+}
+
+func getEnvBoolIfSet(key string) (bool, bool) {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return false, false
+	}
+	switch value {
+	case "true", "1", "yes", "on":
+		return true, true
+	case "false", "0", "no", "off":
+		return false, true
+	default:
+		return false, true
+	}
 }
 
 func ensureSQLiteParentDir(sqlitePath string) error {
@@ -990,13 +1014,6 @@ func runtimeTelegramUsePolling(cfg *runtimeConfig) bool {
 		return false
 	}
 	return cfg.Telegram.UsePolling
-}
-
-func runtimeBoolString(cfg *runtimeConfig, value bool) string {
-	if cfg == nil {
-		return ""
-	}
-	return strconv.FormatBool(value)
 }
 
 func isValidPort(port string) bool {
