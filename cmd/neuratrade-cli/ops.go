@@ -18,6 +18,15 @@ const defaultOpsTimeout = 30 * time.Minute
 const opsChildTimeoutGrace = 5 * time.Minute
 const opsShutdownGrace = 10 * time.Second
 
+// Mirrored from the scalping-soak child binary; this standalone CLI module
+// cannot import backend internal packages.
+const scalpingSoakDefaultCycles = 1
+const scalpingSoakMaxCycles = 120
+const scalpingSoakDefaultInterval = 2 * time.Second
+const scalpingSoakMaxInterval = time.Minute
+const scalpingSoakBaseTimeout = 30 * time.Second
+const scalpingSoakPerCycleTimeout = 30 * time.Second
+
 type opsFlagBinding struct {
 	Flag   cli.Flag
 	Append func(*cli.Context, []string) []string
@@ -218,12 +227,41 @@ func scalpingSoakOpsTimeout(cCtx *cli.Context) time.Duration {
 	if cCtx.IsSet("timeout-seconds") && cCtx.Int("timeout-seconds") > 0 {
 		return time.Duration(cCtx.Int("timeout-seconds"))*time.Second + opsChildTimeoutGrace
 	}
-	cycles := cCtx.Int("cycles")
-	interval := time.Duration(cCtx.Int("interval-ms")) * time.Millisecond
-	if cycles <= 0 || interval <= 0 {
+	cycles := scalpingSoakCycles(cCtx)
+	interval := scalpingSoakInterval(cCtx)
+	timeout := scalpingSoakBaseTimeout + time.Duration(cycles)*scalpingSoakPerCycleTimeout
+	if cycles > 1 {
+		timeout += time.Duration(cycles-1) * interval
+	}
+	return timeout + opsChildTimeoutGrace
+}
+
+func scalpingSoakCycles(cCtx *cli.Context) int {
+	cycles := scalpingSoakDefaultCycles
+	if cCtx.IsSet("cycles") {
+		cycles = cCtx.Int("cycles")
+	}
+	if cycles <= 0 {
+		return scalpingSoakDefaultCycles
+	}
+	if cycles > scalpingSoakMaxCycles {
+		return scalpingSoakMaxCycles
+	}
+	return cycles
+}
+
+func scalpingSoakInterval(cCtx *cli.Context) time.Duration {
+	interval := scalpingSoakDefaultInterval
+	if cCtx.IsSet("interval-ms") {
+		interval = time.Duration(cCtx.Int("interval-ms")) * time.Millisecond
+	}
+	if interval <= 0 {
 		return 0
 	}
-	return time.Duration(cycles)*interval + opsChildTimeoutGrace
+	if interval > scalpingSoakMaxInterval {
+		return scalpingSoakMaxInterval
+	}
+	return interval
 }
 
 func maxDuration(a, b time.Duration) time.Duration {

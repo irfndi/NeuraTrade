@@ -129,6 +129,35 @@ func TestOpsCommandDerivesLongScalpingSoakTimeout(t *testing.T) {
 	assert.Greater(t, time.Until(gotDeadline), time.Hour)
 }
 
+func TestOpsCommandIncludesScalpingSoakPerCycleBudget(t *testing.T) {
+	var gotDeadline time.Time
+	var gotDeadlineOK bool
+	originalRunner := runOpsBinary
+	runOpsBinary = func(ctx context.Context, _ string, _ []string) error {
+		gotDeadline, gotDeadlineOK = ctx.Deadline()
+		return nil
+	}
+	t.Cleanup(func() { runOpsBinary = originalRunner })
+
+	app := &cli.App{
+		Name:     "test",
+		Commands: []*cli.Command{opsCommand()},
+	}
+
+	start := time.Now()
+	err := app.Run([]string{"test", "ops", "scalping-soak", "--cycles", "120", "--interval-ms", "60000"})
+	require.NoError(t, err)
+	require.True(t, gotDeadlineOK)
+
+	want := scalpingSoakBaseTimeout +
+		120*scalpingSoakPerCycleTimeout +
+		119*time.Minute +
+		opsChildTimeoutGrace
+	got := gotDeadline.Sub(start)
+	assert.GreaterOrEqual(t, got, want-time.Second)
+	assert.Less(t, got, want+time.Second)
+}
+
 func TestDefaultRunOpsBinaryTerminatesChildOnContextCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ops process groups are Unix-specific")
