@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 NEURATRADE_HOME="${NEURATRADE_HOME:-$HOME/.neuratrade}"
 SERVER_PORT="${SERVER_PORT:-8080}"
 

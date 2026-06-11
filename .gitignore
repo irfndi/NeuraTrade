@@ -28,6 +28,9 @@ test_output.txt
 .gomodcache/
 .cache/
 
+# Paper-trading readiness manifest artifacts (runtime output)
+paper-trading-readiness-*.json
+
 # Temporary configuration and response files
 config.yaml
 api_response.json
