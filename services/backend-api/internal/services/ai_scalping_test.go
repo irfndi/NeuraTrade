@@ -4613,3 +4613,32 @@ func approximatelyEqual(a, b, tolerance float64) bool {
 	}
 	return diff <= tolerance
 }
+
+// TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled guards the
+// hard-disabled blowoff sell signal. It must always return false
+// regardless of input. The function is intentionally a placeholder
+// until observed paper evidence shows counter-trend blowoff shorts
+// can beat fees (see ai_scalping.go line ~3783).
+func TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal aiMarketSignal
+	}{
+		{"empty signal", aiMarketSignal{}},
+		{"strong blowoff — all conditions met", aiMarketSignal{
+			PriceChange24h:     0.10,
+			RecentChangeKnown:  true,
+			OrderBookImbalance: -0.5,
+			RangePosition24h:   0.05,
+			BidAskSpread:       0.01,
+		}},
+		{"weak blowoff", aiMarketSignal{PriceChange24h: 0.01}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := scalpingBlowoffSellTrendConfirmed(tt.signal); got {
+				t.Errorf("scalpingBlowoffSellTrendConfirmed(%+v) = true, want false (hard-disabled)", tt.signal)
+			}
+		})
+	}
+}
