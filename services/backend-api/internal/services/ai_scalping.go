@@ -156,30 +156,55 @@ type DeterministicFallbackConfig struct {
 	SizeFraction   float64
 	MinSizePct     float64
 	VolumeLogScale float64
+
+	BBEntryMaxPct          float64
+	BBExitMinPct           float64
+	ADXMaxPct              float64
+	ATRRatioMax            float64
+	RecentBuyMaxSpreadPct  float64
+	RecentBuyMinTrendPct   float64
+	RecentBuyMaxRangePct   float64
+	RecentSellMinRangePct  float64
+	ReversalBuyMaxRangePct float64
+	BlowoffSellRangeMin    float64
+	BlowoffSellRangeMax    float64
+	SellWindowMinRangePct  float64
 }
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 	return DeterministicFallbackConfig{
-		MaxBidAskSpread:       0.15,
-		MinImbalance:          0.10,
-		BuyRangeMax:           45.0,
-		SellRangeMin:          55.0,
-		BuyMinPriceChangePct:  0.0,
-		SellMaxPriceChangePct: 0.0,
-		RangeAnchor:           55.0,
-		RangeOffset:           45.0,
-		ImbalanceWeight:       0.65,
-		LiquidityWeight:       0.20,
-		RangeWeight:           0.10,
-		VolumeWeight:          0.05,
-		BaseConfidence:        0.55,
-		ConfidenceScale:       0.35,
-		MinConfidence:         0.55,
-		MaxConfidence:         0.85,
-		ConfidenceFloor:       0.72,
-		SizeFraction:          0.50,
-		MinSizePct:            0.10,
-		VolumeLogScale:        8.0,
+		MaxBidAskSpread:        0.15,
+		MinImbalance:           0.10,
+		BuyRangeMax:            45.0,
+		SellRangeMin:           55.0,
+		BuyMinPriceChangePct:   0.0,
+		SellMaxPriceChangePct:  0.0,
+		RangeAnchor:            55.0,
+		RangeOffset:            45.0,
+		ImbalanceWeight:        0.65,
+		LiquidityWeight:        0.20,
+		RangeWeight:            0.10,
+		VolumeWeight:           0.05,
+		BaseConfidence:         0.55,
+		ConfidenceScale:        0.35,
+		MinConfidence:          0.55,
+		MaxConfidence:          0.85,
+		ConfidenceFloor:        0.72,
+		SizeFraction:           0.50,
+		MinSizePct:             0.10,
+		VolumeLogScale:         8.0,
+		BBEntryMaxPct:          0.20,
+		BBExitMinPct:           0.80,
+		ADXMaxPct:              25.0,
+		ATRRatioMax:            1.5,
+		RecentBuyMaxSpreadPct:  0.04,
+		RecentBuyMinTrendPct:   0.02,
+		RecentBuyMaxRangePct:   35.0,
+		RecentSellMinRangePct:  75.0,
+		ReversalBuyMaxRangePct: 20.0,
+		BlowoffSellRangeMin:    95.0,
+		BlowoffSellRangeMax:    98.0,
+		SellWindowMinRangePct:  25.0,
 	}
 }
 
@@ -272,6 +297,43 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	}
 	if cfg.VolumeLogScale > 0 {
 		normalized.VolumeLogScale = clampFloat(cfg.VolumeLogScale, 0.1, 20)
+	}
+
+	if cfg.BBEntryMaxPct > 0 {
+		normalized.BBEntryMaxPct = clampFloat(cfg.BBEntryMaxPct, 0, 1)
+	}
+	if cfg.BBExitMinPct > 0 {
+		normalized.BBExitMinPct = clampFloat(cfg.BBExitMinPct, 0, 1)
+	}
+	if cfg.ADXMaxPct > 0 {
+		normalized.ADXMaxPct = clampFloat(cfg.ADXMaxPct, 0, 100)
+	}
+	if cfg.ATRRatioMax > 0 {
+		normalized.ATRRatioMax = clampFloat(cfg.ATRRatioMax, 0.1, 10)
+	}
+	if cfg.RecentBuyMaxSpreadPct > 0 {
+		normalized.RecentBuyMaxSpreadPct = clampFloat(cfg.RecentBuyMaxSpreadPct, 0, 1)
+	}
+	if cfg.RecentBuyMinTrendPct != 0 {
+		normalized.RecentBuyMinTrendPct = clampFloat(cfg.RecentBuyMinTrendPct, -1, 1)
+	}
+	if cfg.RecentBuyMaxRangePct > 0 {
+		normalized.RecentBuyMaxRangePct = clampFloat(cfg.RecentBuyMaxRangePct, 1, 100)
+	}
+	if cfg.RecentSellMinRangePct > 0 {
+		normalized.RecentSellMinRangePct = clampFloat(cfg.RecentSellMinRangePct, 1, 100)
+	}
+	if cfg.ReversalBuyMaxRangePct > 0 {
+		normalized.ReversalBuyMaxRangePct = clampFloat(cfg.ReversalBuyMaxRangePct, 1, 100)
+	}
+	if cfg.BlowoffSellRangeMin > 0 {
+		normalized.BlowoffSellRangeMin = clampFloat(cfg.BlowoffSellRangeMin, 1, 100)
+	}
+	if cfg.BlowoffSellRangeMax > 0 {
+		normalized.BlowoffSellRangeMax = clampFloat(cfg.BlowoffSellRangeMax, 1, 100)
+	}
+	if cfg.SellWindowMinRangePct > 0 {
+		normalized.SellWindowMinRangePct = clampFloat(cfg.SellWindowMinRangePct, 1, 100)
 	}
 
 	return normalized
@@ -552,6 +614,43 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_VOLUME_LOG_SCALE"); ok {
 		cfg.VolumeLogScale = value
+	}
+
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BB_ENTRY_MAX_PCT"); ok {
+		cfg.BBEntryMaxPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BB_EXIT_MIN_PCT"); ok {
+		cfg.BBExitMinPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_ADX_MAX_PCT"); ok {
+		cfg.ADXMaxPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_ATR_RATIO_MAX"); ok {
+		cfg.ATRRatioMax = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RECENT_BUY_MAX_SPREAD_PCT"); ok {
+		cfg.RecentBuyMaxSpreadPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RECENT_BUY_MIN_TREND_PCT"); ok {
+		cfg.RecentBuyMinTrendPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RECENT_BUY_MAX_RANGE_PCT"); ok {
+		cfg.RecentBuyMaxRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_RECENT_SELL_MIN_RANGE_PCT"); ok {
+		cfg.RecentSellMinRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_REVERSAL_BUY_MAX_RANGE_PCT"); ok {
+		cfg.ReversalBuyMaxRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_RANGE_MIN"); ok {
+		cfg.BlowoffSellRangeMin = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_RANGE_MAX"); ok {
+		cfg.BlowoffSellRangeMax = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MIN_RANGE_PCT"); ok {
+		cfg.SellWindowMinRangePct = value
 	}
 
 	return cfg
