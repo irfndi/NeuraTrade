@@ -890,7 +890,7 @@ func getEnvBoolIfSet(key string) (bool, bool) {
 	case "false", "0", "no", "off":
 		return false, true
 	default:
-		return false, true
+		return false, false
 	}
 }
 

@@ -229,6 +229,19 @@ func TestShouldSkipTelegramGatewayOverrideAcceptsLegacyBoolValues(t *testing.T) 
 	require.True(t, shouldSkipTelegramGateway("telegram-token"))
 }
 
+func TestShouldSkipTelegramGatewayInvalidOverrideFallsThroughToRuntimeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("NEURATRADE_HOME", home)
+	t.Setenv("NEURATRADE_GATEWAY_SKIP_TELEGRAM", "ye")
+	t.Setenv("FEATURES_PAPER_TRADING", "")
+	t.Setenv("FEATURES_REAL_TRADING", "")
+	runtimeCfg := defaultRuntimeConfig(home)
+	runtimeCfg.Gateway.SkipTelegram = true
+	require.NoError(t, writeRuntimeConfig(home, runtimeCfg))
+
+	require.True(t, shouldSkipTelegramGateway("telegram-token"))
+}
+
 func TestEnsureSQLiteParentDirCreatesConfiguredDataDirectory(t *testing.T) {
 	sqlitePath := filepath.Join(t.TempDir(), "runtime", "data", "neuratrade.db")
 
