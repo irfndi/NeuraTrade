@@ -2396,3 +2396,93 @@ func hasExchange(exchanges []string, exchangeName string) bool {
 	}
 	return false
 }
+
+type stubDailyLossRecorder struct {
+	calls []stubDailyLossCall
+}
+
+type stubDailyLossCall struct {
+	Loss decimal.Decimal
+}
+
+func (s *stubDailyLossRecorder) UpdateDailyLoss(_ context.Context, loss decimal.Decimal) error {
+	s.calls = append(s.calls, stubDailyLossCall{Loss: loss})
+	return nil
+}
+
+func (s *stubDailyLossRecorder) CallCount() int {
+	return len(s.calls)
+}
+
+func (s *stubDailyLossRecorder) TotalLoss() decimal.Decimal {
+	total := decimal.Zero
+	for _, c := range s.calls {
+		total = total.Add(c.Loss)
+	}
+	return total
+}
+
+func TestIntegratedQuestHandlers_SetRiskActorRef(t *testing.T) {
+	handlers := NewIntegratedQuestHandlers(nil, nil, nil, nil, nil, nil, nil, nil)
+	ref := &stubDailyLossRecorder{}
+	handlers.SetRiskActorRef(ref)
+	require.NotNil(t, ref)
+	assert.Equal(t, 0, ref.CallCount())
+
+	ref2 := &stubDailyLossRecorder{}
+	handlers.SetRiskActorRef(ref2)
+	assert.Equal(t, 0, ref.CallCount())
+	assert.Equal(t, 0, ref2.CallCount())
+}
+
+func TestIntegratedQuestHandlers_CloseTriggeredPaperScalpingPositions_RecordsDailyLoss(t *testing.T) {
+	t.Setenv("NEURATRADE_PAPER_SCALPING_SLIPPAGE_BPS", "0")
+
+	ctx := context.Background()
+	sqliteDB, err := database.NewSQLiteConnection(filepath.Join(t.TempDir(), "paper-close-daily-loss.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqliteDB.Close() })
+
+	lifecycleStore, err := NewTradingLifecycleStore(sqliteDB, nil)
+	require.NoError(t, err)
+	require.NoError(t, lifecycleStore.EnsureSchema(ctx))
+	telemetryStore := NewScalpingTelemetryStore(sqliteDB, nil)
+	require.NoError(t, telemetryStore.EnsureSchema(ctx))
+
+	positionID := "pos-test-1"
+	orderID := "order-test-1"
+	now := time.Now().UTC()
+	_, err = sqliteDB.DB.ExecContext(ctx, `
+		INSERT INTO trading_positions (
+			position_id, order_id, chat_id, exchange, symbol, side, market_type, source,
+			size, entry_price, stop_loss, take_profit, last_price,
+			status, opened_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		positionID, orderID, "test-chat", "bitget", "BTC/USDT", "buy", "futures", "autonomous_scalping_paper",
+		decimal.NewFromFloat(10),
+		decimal.NewFromFloat(100),
+		decimal.NewFromFloat(95),
+		decimal.NewFromFloat(105),
+		decimal.NewFromFloat(110),
+		"open",
+		now, now,
+	)
+	require.NoError(t, err)
+
+	handlers := &IntegratedQuestHandlers{
+		lifecycleStore: lifecycleStore,
+		telemetryStore: telemetryStore,
+	}
+	ref := &stubDailyLossRecorder{}
+	handlers.SetRiskActorRef(ref)
+
+	closed, err := handlers.closeTriggeredPaperScalpingPositions(ctx, nil, "test-chat", "bitget")
+	require.NoError(t, err)
+	assert.Equal(t, 1, closed)
+	assert.Equal(t, 1, ref.CallCount())
+
+	total := ref.TotalLoss()
+	assert.True(t, total.GreaterThan(decimal.Zero),
+		"PnL should be positive after TP hit, got %s", total.String())
+}
