@@ -53,6 +53,7 @@ type AcceptanceResult struct {
 	MinStrategiesMet bool     `json:"min_strategies_met"`
 	RiskLimitsMet    bool     `json:"risk_limits_met"`
 	BacktestMet      bool     `json:"backtest_met"`
+	PositivePnLMet   bool     `json:"positive_pnl_met"`
 	Failures         []string `json:"failures,omitempty"`
 }
 
@@ -111,7 +112,7 @@ func (g *ReadinessManifestGenerator) GenerateManifest(
 	backtestVerified := g.checkBacktestComparison(ctx, strategyNames)
 	allBacktestVerified = allBacktestVerified && backtestVerified
 
-	acceptance := g.evaluateAcceptance(continuousHours, totalClosed, len(strategies), allRiskLimitsEnforced, allBacktestVerified)
+	acceptance := g.evaluateAcceptance(continuousHours, totalClosed, len(strategies), allRiskLimitsEnforced, allBacktestVerified, totalNetPnL)
 
 	manifest := &PaperTradingReadinessManifest{
 		Timestamp:                  time.Now(),
@@ -237,8 +238,9 @@ func (g *ReadinessManifestGenerator) evaluateAcceptance(
 	strategyCount int,
 	riskLimitsEnforced bool,
 	backtestVerified bool,
+	netPnL decimal.Decimal,
 ) AcceptanceResult {
-	const minHours = 168.0 // 7 days
+	const minHours = 720.0 // 30 days
 	const minTrades = 10
 	const minStrategies = 1
 
@@ -249,6 +251,7 @@ func (g *ReadinessManifestGenerator) evaluateAcceptance(
 		MinStrategiesMet: strategyCount >= minStrategies,
 		RiskLimitsMet:    riskLimitsEnforced,
 		BacktestMet:      backtestVerified,
+		PositivePnLMet:   netPnL.GreaterThan(decimal.Zero),
 	}
 
 	if !result.MinHoursMet {
@@ -269,8 +272,12 @@ func (g *ReadinessManifestGenerator) evaluateAcceptance(
 	if !result.BacktestMet {
 		result.Failures = append(result.Failures, "backtest comparison not verified for all strategies")
 	}
+	if !result.PositivePnLMet {
+		result.Failures = append(result.Failures,
+			fmt.Sprintf("net PnL %s is not positive (must be > 0 for real-money escalation)", netPnL.StringFixed(2)))
+	}
 
-	result.Ready = result.MinHoursMet && result.MinTradesMet && result.MinStrategiesMet && result.RiskLimitsMet && result.BacktestMet
+	result.Ready = result.MinHoursMet && result.MinTradesMet && result.MinStrategiesMet && result.RiskLimitsMet && result.BacktestMet && result.PositivePnLMet
 	return result
 }
 
