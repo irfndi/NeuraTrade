@@ -2726,7 +2726,7 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 		return fmt.Errorf("size_pct must be > 0")
 	}
 	if decision.StopLoss == nil || decision.TakeProfit == nil {
-		defaultSL, defaultTP := defaultExitLevels(resolved.Price, decision.Action)
+		defaultSL, defaultTP := defaultExitLevelsWithLeverage(resolved.Price, decision.Action, s.config.Leverage)
 		if err := s.refuseLiveTradeWithSyntheticSLTP(ctx, decision, defaultSL, defaultTP); err != nil {
 			return err
 		}
@@ -4855,9 +4855,16 @@ func parseOptionalDecimal(raw json.RawMessage) (*decimal.Decimal, error) {
 }
 
 func defaultExitLevels(price float64, action string) (decimal.Decimal, decimal.Decimal) {
+	return defaultExitLevelsWithLeverage(price, action, 1)
+}
+
+func defaultExitLevelsWithLeverage(price float64, action string, leverage int) (decimal.Decimal, decimal.Decimal) {
+	if leverage <= 0 {
+		leverage = 1
+	}
 	entry := decimal.NewFromFloat(price)
-	stopPct := decimal.NewFromFloat(0.008) // 0.8%
-	takePct := decimal.NewFromFloat(0.012) // 1.2%
+	stopPct := decimal.NewFromFloat(0.008).Div(decimal.NewFromInt(int64(leverage)))
+	takePct := decimal.NewFromFloat(0.012).Div(decimal.NewFromInt(int64(leverage)))
 
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "sell":

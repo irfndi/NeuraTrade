@@ -4543,3 +4543,73 @@ func TestAIScalpingService_ValidateDecision_RefusesLiveTradeWithMissingSLTP(t *t
 		require.NotNil(t, decision.TakeProfit)
 	})
 }
+
+// TestDefaultExitLevelsWithLeverage verifies that the leverage-adjusted
+// fallback SL/TP scales inversely with leverage to maintain constant
+// capital risk. Base: 0.8% SL / 1.2% TP at 1x. At Nx, both divide by N.
+func TestDefaultExitLevelsWithLeverage(t *testing.T) {
+	const entry = 100.0
+
+	tests := []struct {
+		name         string
+		action       string
+		leverage     int
+		wantStopDist float64 // expected distance from entry in price units
+		wantTakeDist float64
+	}{
+		{"1x buy", "buy", 1, 0.8, 1.2},
+		{"5x buy", "buy", 5, 0.16, 0.24},
+		{"20x buy", "buy", 20, 0.04, 0.06},
+		{"1x sell", "sell", 1, 0.8, 1.2},
+		{"10x sell", "sell", 10, 0.08, 0.12},
+		{"0 leverage treated as 1x", "buy", 0, 0.8, 1.2},
+		{"negative leverage treated as 1x", "buy", -3, 0.8, 1.2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sl, tp := defaultExitLevelsWithLeverage(entry, tt.action, tt.leverage)
+
+			if tt.action == "sell" {
+				expectedSL := entry + tt.wantStopDist
+				expectedTP := entry - tt.wantTakeDist
+				if !approximatelyEqual(sl.InexactFloat64(), expectedSL, 0.0001) {
+					t.Errorf("sell SL: got %.4f, want %.4f", sl.InexactFloat64(), expectedSL)
+				}
+				if !approximatelyEqual(tp.InexactFloat64(), expectedTP, 0.0001) {
+					t.Errorf("sell TP: got %.4f, want %.4f", tp.InexactFloat64(), expectedTP)
+				}
+				if sl.LessThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("sell SL %.4f must be > entry %.4f", sl.InexactFloat64(), entry)
+				}
+				if tp.GreaterThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("sell TP %.4f must be < entry %.4f", tp.InexactFloat64(), entry)
+				}
+			} else {
+				expectedSL := entry - tt.wantStopDist
+				expectedTP := entry + tt.wantTakeDist
+				if !approximatelyEqual(sl.InexactFloat64(), expectedSL, 0.0001) {
+					t.Errorf("buy SL: got %.4f, want %.4f", sl.InexactFloat64(), expectedSL)
+				}
+				if !approximatelyEqual(tp.InexactFloat64(), expectedTP, 0.0001) {
+					t.Errorf("buy TP: got %.4f, want %.4f", tp.InexactFloat64(), expectedTP)
+				}
+				if sl.GreaterThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("buy SL %.4f must be < entry %.4f", sl.InexactFloat64(), entry)
+				}
+				if tp.LessThanOrEqual(decimal.NewFromFloat(entry)) {
+					t.Errorf("buy TP %.4f must be > entry %.4f", tp.InexactFloat64(), entry)
+				}
+			}
+		})
+	}
+}
+
+// approximatelyEqual compares two floats with a tolerance.
+func approximatelyEqual(a, b, tolerance float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
+}
