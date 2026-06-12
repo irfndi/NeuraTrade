@@ -12,9 +12,9 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m
 
-.PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup \
-	test test-backend test-cli test-frontend lint fmt fmt-check typecheck coverage-check \
-	test-scripts run logs logs-all scalping-soak ai-scalping-probe install-cli update-cli bd-close-qa
+.PHONY: help all go-env-setup proto-gen mod-download build services-setup telegram-setup cli-ts-setup \
+	test test-backend test-cli test-cli-ts test-frontend lint fmt fmt-check typecheck coverage-check \
+	test-scripts run run-ts logs logs-all scalping-soak ai-scalping-probe install-cli update-cli bd-close-qa
 
 all: build
 
@@ -45,7 +45,15 @@ telegram-setup: ## Install Telegram service dependencies
 		echo "$(YELLOW)Skipping Telegram setup - directory or bun not found$(NC)"; \
 	fi
 
-services-setup: telegram-setup ## Install service dependencies
+cli-ts-setup: ## Install TypeScript CLI dependencies
+	@echo "$(GREEN)Installing TypeScript CLI dependencies...$(NC)"
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		cd services/neuratrade-cli-ts && bun install --frozen-lockfile; \
+	else \
+		echo "$(YELLOW)Skipping TypeScript CLI setup - directory or bun not found$(NC)"; \
+	fi
+
+services-setup: telegram-setup cli-ts-setup ## Install service dependencies
 	@echo "$(GREEN)Service dependencies ready$(NC)"
 
 build: mod-download services-setup ## Build backend binaries
@@ -61,6 +69,12 @@ build: mod-download services-setup ## Build backend binaries
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-seed-paper-trades ./cmd/seed-paper-trades
 	@cd services/backend-api && $(GO_ENV) go build -o ../../bin/neuratrade-fetch-real-candles ./cmd/fetch-real-candles
 	@cd cmd/neuratrade-cli && $(GO_ENV) go build -o ../../bin/neuratrade .
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Building TypeScript CLI...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx tsc --noEmit && bun build index.ts --compile --outfile ../../bin/neuratrade-ts; \
+	else \
+		echo "$(YELLOW)Skipping TypeScript CLI build - directory or bun not found$(NC)"; \
+	fi
 	@printf '%s\n' '#!/usr/bin/env bash' \
 		'# CCXT Service Stub' \
 		'echo "[CCXT Service] Native CCXT implementation is running within neuratrade-server"' \
@@ -72,7 +86,7 @@ build: mod-download services-setup ## Build backend binaries
 		'cd "$$SCRIPT_DIR/../services/telegram-service"' \
 		'exec bun run index.ts "$$@"' > bin/telegram-service
 	@chmod +x bin/telegram-service
-	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-scalping-soak, bin/neuratrade-paper-validation, bin/neuratrade-paper-readiness, bin/neuratrade-collect-candles, bin/neuratrade-seed-test-candles, bin/neuratrade-backfill-paper-trades, bin/neuratrade-seed-paper-trades, bin/neuratrade-fetch-real-candles$(NC)"
+	@echo "$(GREEN)Build complete: bin/neuratrade-server, bin/neuratrade, bin/neuratrade-ts, bin/neuratrade-scalping-soak, bin/neuratrade-paper-validation, bin/neuratrade-paper-readiness, bin/neuratrade-collect-candles, bin/neuratrade-seed-test-candles, bin/neuratrade-backfill-paper-trades, bin/neuratrade-seed-paper-trades, bin/neuratrade-fetch-real-candles$(NC)"
 
 install-cli: build ## Install the neuratrade CLI into ~/.local/bin by symlink
 	@./bin/neuratrade install --force
@@ -88,6 +102,10 @@ fmt: ## Format backend + frontend code
 		echo "$(GREEN)Formatting Telegram service...$(NC)"; \
 		cd services/telegram-service && bunx prettier --write .; \
 	fi
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Formatting TypeScript CLI...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx prettier --write .; \
+	fi
 
 fmt-check: ## Check if code is formatted (for CI)
 	@echo "$(GREEN)Checking Go formatting...$(NC)"
@@ -96,6 +114,10 @@ fmt-check: ## Check if code is formatted (for CI)
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
 		cd services/telegram-service && bunx prettier --check .; \
+	fi
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx prettier --check .; \
 	fi
 	@echo "$(GREEN)Format checks passed!$(NC)"
 
@@ -106,16 +128,26 @@ lint: ## Run lints
 		echo "$(GREEN)Running Telegram lint...$(NC)"; \
 		cd services/telegram-service && bunx oxlint .; \
 	fi
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running TypeScript CLI lint...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx oxlint .; \
+	fi
 
 typecheck: ## Run TypeScript type checks
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
-		cd services/telegram-service && bunx @typescript/native-preview; \
+		cd services/telegram-service && bunx tsc --noEmit; \
 	else \
-		echo "$(YELLOW)Skipping typecheck - telegram-service or bun missing$(NC)"; \
+		echo "$(YELLOW)Skipping Telegram typecheck - telegram-service or bun missing$(NC)"; \
+	fi
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running TypeScript CLI typecheck...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx tsc --noEmit; \
+	else \
+		echo "$(YELLOW)Skipping TypeScript CLI typecheck - directory or bun missing$(NC)"; \
 	fi
 
-test: test-backend test-cli test-scripts ## Run default tests
+test: test-backend test-cli test-cli-ts test-scripts ## Run default tests
 
 test-backend: mod-download ## Run backend tests
 	@echo "$(GREEN)Running backend tests...$(NC)"
@@ -134,6 +166,14 @@ test-backend: mod-download ## Run backend tests
 test-cli: go-env-setup ## Run CLI tests
 	@echo "$(GREEN)Running CLI tests...$(NC)"
 	@cd cmd/neuratrade-cli && $(GO_ENV) go test -v -race ./...
+
+test-cli-ts: ## Run TypeScript CLI tests
+	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running TypeScript CLI tests...$(NC)"; \
+		cd services/neuratrade-cli-ts && bun test; \
+	else \
+		echo "$(YELLOW)Skipping TypeScript CLI tests - directory or bun missing$(NC)"; \
+	fi
 
 test-frontend: ## Run Telegram service tests
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
@@ -155,9 +195,13 @@ coverage-check: ## Run coverage threshold checks
 	@echo "$(GREEN)Running coverage checks...$(NC)"
 	@cd services/backend-api && STRICT=$${STRICT:-false} ./scripts/coverage-check.sh
 
-run: build ## Start NeuraTrade gateway in native mode
+run: build ## Start NeuraTrade gateway in native mode (Go CLI)
 	@echo "$(GREEN)Starting NeuraTrade gateway...$(NC)"
 	@./bin/neuratrade gateway start
+
+run-ts: build ## Start NeuraTrade gateway using the TypeScript CLI
+	@echo "$(GREEN)Starting NeuraTrade gateway with TypeScript CLI...$(NC)"
+	@./bin/neuratrade-ts gateway start
 
 logs: ## Show backend logs from NEURATRADE_HOME
 	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/backend.log

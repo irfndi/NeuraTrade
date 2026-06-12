@@ -53,7 +53,7 @@ jobs:
         run: cd services/backend-api && ../../bin/golangci-lint run
 
   frontend-quality:
-    name: Frontend Quality (telegram-service)
+    name: Frontend Quality (Bun services)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Cache Bun dependencies
+      - name: Cache Telegram Bun dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -73,17 +73,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-telegram-
 
-      - name: Install dependencies
+      - name: Install Telegram dependencies
         run: cd services/telegram-service && bun install --frozen-lockfile
 
-      - name: Check formatting
+      - name: Check Telegram formatting
         run: cd services/telegram-service && bunx prettier --check .
 
-      - name: Run lint
+      - name: Run Telegram lint
         run: cd services/telegram-service && bunx oxlint .
 
-      - name: Run build
+      - name: Run Telegram build
         run: cd services/telegram-service && bun run build
+
+      - name: Cache TypeScript CLI Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/neuratrade-cli-ts/node_modules
+          key: ${{ runner.os }}-bun-cli-ts-${{ hashFiles('services/neuratrade-cli-ts/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-cli-ts-
+
+      - name: Install TypeScript CLI dependencies
+        run: cd services/neuratrade-cli-ts && bun install --frozen-lockfile
+
+      - name: Check TypeScript CLI formatting
+        run: cd services/neuratrade-cli-ts && bunx prettier --check .
+
+      - name: Run TypeScript CLI lint
+        run: cd services/neuratrade-cli-ts && bunx oxlint .
+
+      - name: Run TypeScript CLI typecheck
+        run: cd services/neuratrade-cli-ts && bunx tsc --noEmit
+
+      - name: Build TypeScript CLI
+        run: cd services/neuratrade-cli-ts && bun build index.ts --compile --outfile ../../bin/neuratrade-ts
 
   backend-tests:
     name: Backend Tests (native/sqlite)
@@ -123,7 +148,7 @@ jobs:
         run: STRICT=true make coverage-check
 
   frontend-tests:
-    name: Frontend Tests (telegram-service)
+    name: Frontend Tests (Bun services)
     runs-on: ubuntu-latest
     env:
       ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
@@ -136,7 +161,7 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - name: Cache Bun dependencies
+      - name: Cache Telegram Bun dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -146,10 +171,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-telegram-tests-
 
-      - name: Install dependencies
+      - name: Install Telegram dependencies
         run: cd services/telegram-service && bun install --frozen-lockfile
 
-      - name: Prepare test credentials
+      - name: Prepare Telegram test credentials
         run: |
           admin_api_key="${ADMIN_API_KEY:-}"
           webhook_secret="${TELEGRAM_WEBHOOK_SECRET:-}"
@@ -175,8 +200,24 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_ENV"
 
-      - name: Run tests
+      - name: Run Telegram tests
         run: cd services/telegram-service && bun test
+
+      - name: Cache TypeScript CLI Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            services/neuratrade-cli-ts/node_modules
+          key: ${{ runner.os }}-bun-cli-ts-tests-${{ hashFiles('services/neuratrade-cli-ts/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-cli-ts-tests-
+
+      - name: Install TypeScript CLI dependencies
+        run: cd services/neuratrade-cli-ts && bun install --frozen-lockfile
+
+      - name: Run TypeScript CLI tests
+        run: cd services/neuratrade-cli-ts && bun test
 
   backend-security:
     name: Backend Security
