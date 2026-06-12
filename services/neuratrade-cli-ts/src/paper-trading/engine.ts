@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
 import { calculateATR } from "../scalping/indicators.js";
+import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   MarketDataError,
   MarketDataGateway,
@@ -53,6 +54,9 @@ export interface PaperTradingIterationResult {
  * Run a single paper-trading iteration: fetch market data, generate a signal,
  * execute entry/exit through the exchange adapter, persist state, and return a
  * human-readable result.
+ *
+ * All capital, position-size, and PnL math uses Decimal.js internally. Numbers
+ * are converted back only at persistence and exchange boundaries.
  */
 export function runPaperTradingIteration(
   options: PaperTradingOptions,
@@ -69,8 +73,9 @@ export function runPaperTradingIteration(
     yield* repo.ensureTables();
 
     const portfolio = yield* repo.getPortfolio();
-    let capital = portfolio.capital <= 0 ? options.initialCapital : portfolio.capital;
-    let peakCapital = Math.max(portfolio.peakCapital, capital);
+    let capital =
+      portfolio.capital <= 0 ? money(options.initialCapital) : money(portfolio.capital);
+    let peakCapital = Decimal.max(money(portfolio.peakCapital), capital);
 
     let position = yield* repo.getOpenPosition(options.exchange, options.symbol);
 
@@ -83,7 +88,12 @@ export function runPaperTradingIteration(
     const orderBook = yield* gateway.fetchOrderBook(options.exchange, options.symbol, 20);
 
     if (candles.length < 30) {
-      return { action: "hold" as const, position, capital, note: "insufficient candles" };
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: "insufficient candles",
+      };
     }
 
     const currentCandle = candles[candles.length - 1];
@@ -109,20 +119,22 @@ export function runPaperTradingIteration(
         let exitPrice: number;
         if (fill) {
           exitPrice = fill.filledPrice;
-          capital -= fill.fee;
+          capital = capital.minus(money(fill.fee));
         } else {
           exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
         }
 
         const trade = yield* repo.closePosition(position, exitPrice, exitReason, currentCandle.timestamp);
-        capital += trade.pnl - position.entryPrice * position.size * (options.feePct / 100);
-        if (capital > peakCapital) peakCapital = capital;
-        yield* repo.setPortfolio(capital, peakCapital);
+        const entryCost = money(position.entryPrice).times(position.size);
+        const exitFee = entryCost.times(options.feePct / 100);
+        capital = capital.plus(money(trade.pnl)).minus(exitFee);
+        peakCapital = Decimal.max(peakCapital, capital);
+        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
         return {
           action: "closed" as const,
           position: null,
-          capital,
+          capital: toNumber(capital),
           note: `${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
         };
       }
@@ -131,37 +143,38 @@ export function runPaperTradingIteration(
     // Open new position if signal is strong enough and no position.
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
       const side = signal.direction === "buy" ? "long" : "short";
-      const positionValue = capital * (options.positionSizePct / 100);
+      const positionValue = capital.times(options.positionSizePct / 100);
 
       // Pre-compute size from orderbook mid to size the order.
-      const entryPrice = midPrice(orderBook);
-      const size = positionValue / entryPrice;
+      const entryPriceNum = midPrice(orderBook);
+      const entryPrice = money(entryPriceNum);
+      const size = positionValue.div(entryPrice);
 
       // Pre-trade risk gate.
       const todayPnl = yield* repo.getTodayRealizedPnl();
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const startOfDayCapital = capital - todayPnl;
+      const startOfDayCapital = capital.minus(money(todayPnl));
       const riskGuard = yield* RiskGuard;
       const riskCheck = yield* riskGuard
         .check({
           isLive: options.isLive,
-          capital,
-          peakCapital,
-          startOfDayCapital,
+          capital: toNumber(capital),
+          peakCapital: toNumber(peakCapital),
+          startOfDayCapital: toNumber(startOfDayCapital),
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
-          positionValue,
+          positionValue: toNumber(positionValue),
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
         })
         .pipe(Effect.either);
 
       if (riskCheck._tag === "Left") {
-        yield* repo.setPortfolio(capital, peakCapital);
+        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
         return {
           action: "hold" as const,
           position,
-          capital,
+          capital: toNumber(capital),
           note: `RISK BLOCKED: ${riskCheck.left.violations.join("; ")}`,
         };
       }
@@ -170,30 +183,34 @@ export function runPaperTradingIteration(
         symbol: options.symbol,
         side: signal.direction as "buy" | "sell",
         type: "market",
-        quantity: size,
+        quantity: toNumber(size, 8),
       });
 
-      const filledPrice = fill.filledPrice;
-      const filledSize = fill.filledQty;
-      capital -= filledPrice * filledSize * (options.feePct / 100) + fill.fee;
+      const filledPrice = money(fill.filledPrice);
+      const filledSize = money(fill.filledQty);
+      const entryFee = filledPrice.times(filledSize).times(options.feePct / 100).plus(fill.fee);
+      capital = capital.minus(entryFee);
 
       const atr = options.useAtrStops ? calculateATR(candles, 14) : null;
       const useAtr = options.useAtrStops && atr !== null && atr > 0;
 
-      let stopLoss: number;
-      let takeProfit: number;
+      let stopLoss: Decimal;
+      let takeProfit: Decimal;
+      const atrValue = money(atr ?? 0);
       if (useAtr) {
         stopLoss =
           side === "long"
-            ? filledPrice - atr * options.atrStopMultiplier
-            : filledPrice + atr * options.atrStopMultiplier;
+            ? filledPrice.minus(atrValue.times(options.atrStopMultiplier))
+            : filledPrice.plus(atrValue.times(options.atrStopMultiplier));
         takeProfit =
           side === "long"
-            ? filledPrice + atr * options.atrTakeProfitMultiplier
-            : filledPrice - atr * options.atrTakeProfitMultiplier;
+            ? filledPrice.plus(atrValue.times(options.atrTakeProfitMultiplier))
+            : filledPrice.minus(atrValue.times(options.atrTakeProfitMultiplier));
       } else {
-        stopLoss = side === "long" ? filledPrice * 0.985 : filledPrice * 1.015;
-        takeProfit = side === "long" ? filledPrice * 1.03 : filledPrice * 0.97;
+        stopLoss =
+          side === "long" ? filledPrice.times(0.985) : filledPrice.times(1.015);
+        takeProfit =
+          side === "long" ? filledPrice.times(1.03) : filledPrice.times(0.97);
       }
 
       const newPosition: PaperPosition = {
@@ -202,30 +219,30 @@ export function runPaperTradingIteration(
         symbol: options.symbol,
         timeframe: options.timeframe,
         side,
-        entryPrice: filledPrice,
-        size: filledSize,
-        stopLoss,
-        takeProfit,
+        entryPrice: fill.filledPrice,
+        size: fill.filledQty,
+        stopLoss: toNumber(stopLoss, 8),
+        takeProfit: toNumber(takeProfit, 8),
         openedAt: new Date(),
         signalId: signal.id,
       };
 
       yield* repo.saveOpenPosition(newPosition);
-      yield* repo.setPortfolio(capital, peakCapital);
+      yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
       return {
         action: "opened" as const,
         position: newPosition,
-        capital,
-        note: `${side} ${filledPrice.toFixed(2)} size=${filledSize.toFixed(6)} SL=${stopLoss.toFixed(2)} TP=${takeProfit.toFixed(2)}`,
+        capital: toNumber(capital),
+        note: `${side} ${fill.filledPrice.toFixed(2)} size=${fill.filledQty.toFixed(6)} SL=${newPosition.stopLoss.toFixed(2)} TP=${newPosition.takeProfit.toFixed(2)}`,
       };
     }
 
-    yield* repo.setPortfolio(capital, peakCapital);
+    yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
     return {
       action: "hold" as const,
       position,
-      capital,
+      capital: toNumber(capital),
       note: signal ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})` : "no signal",
     };
   });

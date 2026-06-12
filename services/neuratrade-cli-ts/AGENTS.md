@@ -75,8 +75,9 @@ bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --live --api
   `maxTradesPerDay=10`, `minCapital=100`. Paper mode defaults are permissive.
 - Override any limit with `--max-position-size-pct`, `--max-daily-loss-pct`,
   `--max-drawdown-pct`, `--max-trades-per-day`, `--min-capital`.
-- Position-size and PnL math currently uses `number`; migrate to `decimal.js`
-  before production real-money sizing.
+- Position-size and PnL math in `src/paper-trading/` uses `decimal.js` via
+  `src/utils/money.ts`. Values are converted to `number` only at persistence and
+  exchange boundaries.
 
 ## CONVENTIONS
 

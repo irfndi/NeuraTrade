@@ -1,5 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { Database } from "bun:sqlite";
+import { Decimal } from "../utils/money.js";
 import type { PaperPosition, PaperTrade } from "./types.js";
 
 /**
@@ -199,12 +200,19 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   ): Effect.Effect<PaperTrade, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
+        const entryPrice = new Decimal(position.entryPrice);
+        const exitPriceDec = new Decimal(exitPrice);
+        const size = new Decimal(position.size);
         const priceDiff =
           position.side === "long"
-            ? exitPrice - position.entryPrice
-            : position.entryPrice - exitPrice;
-        const pnl = priceDiff * position.size;
-        const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
+            ? exitPriceDec.minus(entryPrice)
+            : entryPrice.minus(exitPriceDec);
+        const pnl = priceDiff.times(size);
+        const pnlPct = pnl
+          .div(entryPrice.times(size))
+          .times(100)
+          .toNumber();
+        const pnlNum = pnl.toNumber();
         const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         const insert = this.db.query(
@@ -221,7 +229,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           position.entryPrice,
           exitPrice,
           position.size,
-          pnl,
+          pnlNum,
           pnlPct,
           exitReason,
           position.openedAt.toISOString(),
@@ -241,7 +249,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           entryPrice: position.entryPrice,
           exitPrice,
           size: position.size,
-          pnl,
+          pnl: pnlNum,
           pnlPct,
           exitReason,
           openedAt: position.openedAt,
