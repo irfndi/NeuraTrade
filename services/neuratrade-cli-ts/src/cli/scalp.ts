@@ -539,6 +539,16 @@ const optimizeScanOption = Options.boolean("optimize").pipe(
   Options.withDescription("Run a coarse per-symbol parameter grid search and report best params"),
 );
 
+const minReturnOption = Options.float("min-return-pct").pipe(
+  Options.optional,
+  Options.withDescription("Skip symbols with total return below this threshold"),
+);
+
+const saveWatchlistOption = Options.text("save-watchlist").pipe(
+  Options.optional,
+  Options.withDescription("Write passing symbols to a JSON watchlist file in NEURATRADE_HOME/data"),
+);
+
 interface ScanArgs {
   readonly exchange: string;
   readonly timeframe: string;
@@ -557,6 +567,9 @@ interface ScanArgs {
   readonly minCandles: number;
   readonly top: number;
   readonly optimize: boolean;
+  readonly minReturnPct: Option.Option<number>;
+  readonly saveWatchlist: Option.Option<string>;
+  readonly watchlistPath?: string;
 }
 
 export const scanCommand = Command.make(
@@ -579,6 +592,8 @@ export const scanCommand = Command.make(
     minCandles: minCandlesOption,
     top: topOption,
     optimize: optimizeScanOption,
+    minReturnPct: minReturnOption,
+    saveWatchlist: saveWatchlistOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -589,7 +604,12 @@ export const scanCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* scanProgram(args).pipe(
+      const watchlistPath = Option.match(args.saveWatchlist, {
+        onNone: () => undefined as string | undefined,
+        onSome: (file) => resolve(path.homeDir, "data", file),
+      });
+
+      const result = yield* scanProgram({ ...args, watchlistPath }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printScanResult(r)),
         Effect.catchAll((err) =>
@@ -640,6 +660,10 @@ export function scanProgram(args: ScanArgs) {
             minConfidence: args.minConfidence,
           });
 
+      if (Option.isSome(args.minReturnPct) && result.totalReturnPct < args.minReturnPct.value) {
+        continue;
+      }
+
       results.push({
         symbol,
         totalTrades: result.totalTrades,
@@ -649,6 +673,28 @@ export function scanProgram(args: ScanArgs) {
         sharpeRatio: result.sharpeRatio,
         bestParams: result.bestParams,
       });
+    }
+
+    if (args.watchlistPath && results.length > 0) {
+      const payload = JSON.stringify(
+        results.map((r) => ({
+          symbol: r.symbol,
+          returnPct: r.totalReturnPct,
+          sharpe: r.sharpeRatio,
+          bestParams: r.bestParams,
+        })),
+        null,
+        2,
+      );
+      yield* Effect.tryPromise({
+        try: () => Bun.write(args.watchlistPath!, payload),
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to write watchlist: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+      yield* Console.log(`Watchlist saved to ${args.watchlistPath}`);
     }
 
     return results;
