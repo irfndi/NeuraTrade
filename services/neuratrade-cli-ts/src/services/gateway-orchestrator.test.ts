@@ -174,7 +174,7 @@ function createMockPM(
 // Mock HealthCheck
 // ---------------------------------------------------------------------------
 
-function createMockHC(healthy: boolean) {
+function createMockHC(healthy: boolean): HealthCheck {
   return {
     probeHTTP: (_url: string, _timeoutMs: number) =>
       Effect.succeed({
@@ -194,6 +194,15 @@ function createMockHC(healthy: boolean) {
 
     probeProcess: (_pattern: string) =>
       Effect.succeed({ running: true, detail: "found 1 process" }),
+
+    probeHealthJSON: (_url: string, _timeoutMs: number) =>
+      Effect.succeed({
+        ok: healthy,
+        status: healthy ? "healthy" : "unhealthy",
+        services: healthy
+          ? { database: "healthy", redis: "healthy", ccxt: "healthy" }
+          : undefined,
+      }),
   };
 }
 
@@ -572,6 +581,8 @@ describe("GatewayOrchestrator service", () => {
         },
         probeProcess: (_pattern: string) =>
           Effect.succeed({ running: true, detail: "found 1 process" }),
+        probeHealthJSON: (_url: string, _timeoutMs: number) =>
+          Effect.succeed({ ok: false, status: "unhealthy" }),
       };
 
       const pm = createMockPM(mockProc, mockState);
@@ -770,6 +781,8 @@ describe("GatewayOrchestrator service", () => {
           Effect.succeed({ healthy: true, detail: "ok" }),
         probeProcess: () =>
           Effect.succeed({ running: true, detail: "ok" }),
+        probeHealthJSON: (_url: string, _timeoutMs: number) =>
+          Effect.succeed({ ok: true, status: "healthy", services: { database: "healthy" } }),
       };
       const pm = createMockPM(mockProc, mockState);
 

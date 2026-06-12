@@ -66,6 +66,11 @@ export interface StatusResult {
     { readonly status: string; readonly detail?: string; readonly endpoint?: string }
   >;
   readonly backendHealth: { readonly healthy: boolean; readonly detail: string };
+  readonly processes: Record<
+    string,
+    { readonly running: boolean; readonly pid?: number; readonly detail?: string }
+  >;
+  readonly backendServices?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +510,41 @@ export const GatewayOrchestratorLive: Layer.Layer<
         }
 
         const healthUrl = `http://${probeHost}:${backendPort}/health`;
-        const healthResult = yield* hc.probeHTTP(healthUrl, 5000);
+        const [healthResult, healthJSON] = yield* Effect.all(
+          [hc.probeHTTP(healthUrl, 5000), hc.probeHealthJSON(healthUrl, 5000)],
+          { concurrency: 2 },
+        );
+
+        // Process checks for each managed service (mirror Go checkProcess)
+        const processes: StatusResult["processes"] = {};
+        for (const svc of STOP_SERVICES) {
+          const pidFilePath = nodePath.join(path.pidDir, `${svc.pidFile}.pid`);
+          let pid: number | undefined;
+          try {
+            const content = fs.readFileSync(pidFilePath, "utf8").trim();
+            pid = Number(content);
+            if (Number.isNaN(pid)) pid = undefined;
+          } catch {
+            pid = undefined;
+          }
+
+          let running = false;
+          let detail = "no processes found";
+          for (const pattern of svc.patterns) {
+            const probe = yield* hc.probeProcess(pattern);
+            if (probe.running) {
+              running = true;
+              detail = probe.detail;
+              break;
+            }
+          }
+
+          processes[svc.name] = {
+            running,
+            pid,
+            detail,
+          };
+        }
 
         return {
           mode: state.mode,
@@ -516,6 +555,8 @@ export const GatewayOrchestratorLive: Layer.Layer<
             healthy: healthResult.healthy,
             detail: healthResult.detail,
           },
+          processes,
+          backendServices: healthJSON.ok ? healthJSON.services : undefined,
         };
       });
 

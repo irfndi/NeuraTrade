@@ -10,6 +10,13 @@ export interface ProbeProcessResult {
   readonly detail: string;
 }
 
+export interface HealthJSONResult {
+  readonly ok: boolean;
+  readonly status: string;
+  readonly services?: Record<string, string>;
+  readonly error?: string;
+}
+
 export interface HealthCheck {
   /** GET with timeout; healthy when status is 2xx–4xx (mirrors Go >= 200 && < 500). */
   readonly probeHTTP: (
@@ -28,6 +35,12 @@ export interface HealthCheck {
   readonly probeProcess: (
     pattern: string,
   ) => Effect.Effect<ProbeProcessResult, never, never>;
+
+  /** GET /health style JSON and parse { status, services }. */
+  readonly probeHealthJSON: (
+    url: string,
+    timeoutMs: number,
+  ) => Effect.Effect<HealthJSONResult, never, never>;
 }
 
 export const HealthCheck = Context.GenericTag<HealthCheck>("HealthCheck");
@@ -153,6 +166,83 @@ function probeProcessOnce(
   });
 }
 
+function probeHealthJSONOnce(
+  url: string,
+  timeoutMs: number,
+): Effect.Effect<HealthJSONResult, never, never> {
+  return Effect.gen(function* () {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const outcome = yield* Effect.tryPromise({
+        try: () =>
+          fetch(url, {
+            method: "GET",
+            signal: controller.signal,
+            redirect: "follow",
+            headers: { Accept: "application/json" },
+          }),
+        catch: (err) =>
+          new Error(
+            `Health JSON probe failed for ${url}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
+      }).pipe(
+        Effect.catchAll((err) =>
+          Effect.succeed({ _failed: true, error: err } as {
+            _failed: true;
+            error: Error;
+          }),
+        ),
+      );
+
+      if ("_failed" in outcome) {
+        return {
+          ok: false,
+          status: "unreachable",
+          error: outcome.error.message,
+        };
+      }
+
+      if (!outcome.ok) {
+        return {
+          ok: false,
+          status: String(outcome.status),
+          error: `HTTP ${outcome.status} from ${url}`,
+        };
+      }
+
+      const textResult = yield* Effect.tryPromise({
+        try: () => outcome.text(),
+        catch: () => new Error("Failed to read response body"),
+      }).pipe(
+        Effect.catchAll(() => Effect.succeed("")),
+      );
+
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(textResult) as Record<string, unknown>;
+      } catch {
+        // ignore parse errors — fall back to empty object
+      }
+
+      const status = typeof parsed.status === "string" ? parsed.status : "unknown";
+      const services: Record<string, string> = {};
+      if (parsed.services && typeof parsed.services === "object" && !Array.isArray(parsed.services)) {
+        for (const [key, value] of Object.entries(parsed.services)) {
+          services[key] = String(value);
+        }
+      }
+
+      return { ok: true, status, services };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+}
+
 export const HealthCheckLive: Layer.Layer<HealthCheck> = Layer.succeed(
   HealthCheck,
   {
@@ -193,6 +283,10 @@ export const HealthCheckLive: Layer.Layer<HealthCheck> = Layer.succeed(
 
     probeProcess(pattern) {
       return probeProcessOnce(pattern);
+    },
+
+    probeHealthJSON(url, timeoutMs) {
+      return probeHealthJSONOnce(url, timeoutMs);
     },
   },
 );
