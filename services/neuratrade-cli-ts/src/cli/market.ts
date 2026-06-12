@@ -47,6 +47,23 @@ const quoteOption = Options.text("quote").pipe(
   Options.withDescription("Quote asset to filter (e.g. USDT, BTC)"),
 );
 
+const minVolumeOption = Options.float("min-volume").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum 24h quote-volume threshold (0 = disabled)"),
+);
+
+const STABLECOIN_BASES = new Set([
+  "USDT",
+  "USDC",
+  "BUSD",
+  "TUSD",
+  "FDUSD",
+  "DAI",
+  "PAX",
+  "USDD",
+  "RLUSD",
+]);
+
 function makeLayer(home?: string) {
   return Layer.mergeAll(BunContext.layer, PathLive(home), MarketDataGatewayLive);
 }
@@ -160,6 +177,7 @@ interface FetchUniverseArgs {
   readonly batch: number;
   readonly top: number;
   readonly quote: string;
+  readonly minVolume: number;
 }
 
 export const fetchUniverseCommand = Command.make(
@@ -171,8 +189,9 @@ export const fetchUniverseCommand = Command.make(
     batch: batchOption,
     top: topOption,
     quote: quoteOption,
+    minVolume: minVolumeOption,
   },
-  ({ exchange, timeframe, days, batch, top, quote }) =>
+  ({ exchange, timeframe, days, batch, top, quote, minVolume }) =>
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
@@ -181,7 +200,7 @@ export const fetchUniverseCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* fetchUniverseProgram({ exchange, timeframe, days, batch, top, quote }).pipe(
+      const result = yield* fetchUniverseProgram({ exchange, timeframe, days, batch, top, quote, minVolume }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((summary) =>
           Console.log(
@@ -210,7 +229,14 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
 
     yield* Console.log(`Loading symbol universe for ${args.quote}...`);
     const allSymbols = yield* gateway.fetchSymbols(args.exchange);
-    const quoteSymbols = allSymbols.filter((s) => s.endsWith(`/${args.quote.toUpperCase()}`));
+    const quoteSymbols = allSymbols.filter((s) => {
+      const [base, quote] = s.split("/");
+      return (
+        quote === args.quote.toUpperCase() &&
+        base !== undefined &&
+        !STABLECOIN_BASES.has(base)
+      );
+    });
 
     if (quoteSymbols.length === 0) {
       return yield* Effect.fail(
@@ -228,6 +254,7 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
         symbol,
         volume: volumes[symbol.replace("/", "")] ?? 0,
       }))
+      .filter((s) => s.volume >= args.minVolume)
       .sort((a, b) => b.volume - a.volume)
       .slice(0, args.top)
       .map((s) => s.symbol);

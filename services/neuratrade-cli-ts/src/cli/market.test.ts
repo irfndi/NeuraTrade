@@ -64,6 +64,7 @@ describe("fetchUniverseProgram", () => {
         batch: 1000,
         top: 2,
         quote: "USDT",
+        minVolume: 0,
       }).pipe(
         Effect.provide(repoLayer),
         Effect.provideService(MarketDataGateway, gateway),
