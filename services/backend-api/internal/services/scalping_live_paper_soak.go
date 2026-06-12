@@ -329,7 +329,7 @@ func runPublicScalpingLivePaperSoakSignals(
 		MaxCapitalPct:         defaults.MaxCapitalPct,
 		DefaultHoldPeriod:     holdPeriod,
 		EntryCutoffTime:       entryCutoffTime,
-		RequireRecentMomentum: true,
+		RequireRecentMomentum: resolveSoakRequireRecentMomentum(),
 		MinRecentMomentumPct:  0.05,
 		DeterministicFallback: fallbackConfig,
 	})
@@ -343,4 +343,11 @@ func runPublicScalpingLivePaperSoakSignals(
 		fees = fees.Add(trade.Fees)
 	}
 	return result, fees, nil
+}
+
+func resolveSoakRequireRecentMomentum() bool {
+	if v, ok := getEnvBool("NEURATRADE_SCALPING_REQUIRE_RECENT_MOMENTUM"); ok {
+		return v
+	}
+	return true
 }
