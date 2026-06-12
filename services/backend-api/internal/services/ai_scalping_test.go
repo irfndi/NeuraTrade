@@ -4667,7 +4667,7 @@ func TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := scalpingBlowoffSellTrendConfirmed(tt.signal); got {
+			if got := scalpingBlowoffSellTrendConfirmed(tt.signal, DefaultDeterministicFallbackConfig()); got {
 				t.Errorf("scalpingBlowoffSellTrendConfirmed(%+v) = true, want false (hard-disabled)", tt.signal)
 			}
 		})

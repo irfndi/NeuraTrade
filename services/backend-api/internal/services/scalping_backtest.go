@@ -1189,7 +1189,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	var rejectionReason string
 	defer func() {
 		if decision == nil {
-			zaplogrus.Debugf("[SCALPING-BACKTEST] reject %s on %s (spread=%.4f%%, imbalance=%.4f, ADX=%.1f, ATR=%.2f, BB%%b=%.4f, range=%.1f%%, trend_24h=%.4f%%, recent=%.4f%%)",
+			zaplogrus.Infof("[SCALPING-BACKTEST] reject %s on %s (spread=%.4f%%, imbalance=%.4f, ADX=%.1f, ATR=%.2f, BB%%b=%.4f, range=%.1f%%, trend_24h=%.4f%%, recent=%.4f%%)",
 				rejectionReason, signal.Symbol, signal.BidAskSpread, signal.OrderBookImbalance, signal.ADX, signal.ATRRatio, signal.BBPercentB, signal.RangePosition24h, signal.PriceChange24h, signal.RecentPriceChange)
 		}
 	}()
