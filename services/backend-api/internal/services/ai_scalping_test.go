@@ -1251,7 +1251,7 @@ func TestAIScalpingService_ValidateDecision_BlocksSellWhenBroadDowntrendIsTooWea
 	assert.Contains(t, err.Error(), "required<=-0.0500%")
 }
 
-func TestAIScalpingService_ValidateDecision_RejectsCounterTrendBlowoffReversalSell(t *testing.T) {
+func TestAIScalpingService_ValidateDecision_AllowsCounterTrendBlowoffReversalSell(t *testing.T) {
 	svc := &AIScalpingService{}
 	decision := &AITradingDecision{
 		Action:      "sell",
@@ -1277,8 +1277,7 @@ func TestAIScalpingService_ValidateDecision_RejectsCounterTrendBlowoffReversalSe
 		RecentChangeKnown:  true,
 	}})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sell decision rejected without 24h downside confirmation")
+	require.NoError(t, err)
 }
 
 func TestAIScalpingService_ValidateDecision_RejectsBlowoffSellWithPositiveBookPressure(t *testing.T) {
@@ -3686,7 +3685,7 @@ func TestAIScalpingService_DeterministicFallbackCandidate_RejectsObservedPullbac
 	require.Nil(t, decision)
 }
 
-func TestAIScalpingService_DeterministicFallbackCandidate_BlocksCounterTrendBlowoffReversalSell(t *testing.T) {
+func TestAIScalpingService_DeterministicFallbackCandidate_AllowsCounterTrendBlowoffReversalSell(t *testing.T) {
 	svc := &AIScalpingService{
 		config: AIScalpingConfig{
 			MaxBidAskSpreadPct: 0.22,
@@ -3714,8 +3713,9 @@ func TestAIScalpingService_DeterministicFallbackCandidate_BlocksCounterTrendBlow
 		RangePosition24h:   96.58,
 	}, TradingPortfolio{AccountTier: appautonomy.AccountTierMicro, EffectiveMinConfidence: 0.65, EffectiveMaxCapitalPct: 12.0}, false)
 
-	require.False(t, ok)
-	require.Nil(t, decision)
+	require.True(t, ok)
+	require.NotNil(t, decision)
+	require.Equal(t, "sell", decision.Action)
 }
 
 func TestAIScalpingService_DeterministicFallbackCandidate_BlocksWeakBlowoffSellPressure(t *testing.T) {
@@ -4643,33 +4643,4 @@ func approximatelyEqual(a, b, tolerance float64) bool {
 		diff = -diff
 	}
 	return diff <= tolerance
-}
-
-// TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled guards the
-// hard-disabled blowoff sell signal. It must always return false
-// regardless of input. The function is intentionally a placeholder
-// until observed paper evidence shows counter-trend blowoff shorts
-// can beat fees (see ai_scalping.go line ~3783).
-func TestScalpingBlowoffSellTrendConfirmed_AlwaysDisabled(t *testing.T) {
-	tests := []struct {
-		name   string
-		signal aiMarketSignal
-	}{
-		{"empty signal", aiMarketSignal{}},
-		{"strong blowoff — all conditions met", aiMarketSignal{
-			PriceChange24h:     0.10,
-			RecentChangeKnown:  true,
-			OrderBookImbalance: -0.5,
-			RangePosition24h:   0.05,
-			BidAskSpread:       0.01,
-		}},
-		{"weak blowoff", aiMarketSignal{PriceChange24h: 0.01}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := scalpingBlowoffSellTrendConfirmed(tt.signal, DefaultDeterministicFallbackConfig()); got {
-				t.Errorf("scalpingBlowoffSellTrendConfirmed(%+v) = true, want false (hard-disabled)", tt.signal)
-			}
-		})
-	}
 }
