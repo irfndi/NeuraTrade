@@ -39,16 +39,16 @@ function buildRootLayer() {
   const pm = Layer.provide(ProcessManagerLive, withPidFile);
   const config = Layer.provide(ConfigLive(home), base);
   const gwState = Layer.provide(GatewayStateLive, base);
-  const apiClient = buildApiClientLayer();
   const health = HealthCheckLive;
+  const apiClient = buildApiClientLayer();
 
   const serviceLayers = Layer.mergeAll(
     config,
     pidFile,
     pm,
     gwState,
-    apiClient,
     health,
+    apiClient,
   );
   const orch = Layer.provide(GatewayOrchestratorLive, serviceLayers);
   const allServices = Layer.mergeAll(serviceLayers, orch);

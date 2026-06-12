@@ -147,15 +147,15 @@ function createMockPM(
       name: string,
       pidFile: string,
       patterns: ReadonlyArray<string>,
-    ) =>
-      Effect.gen(function* () {
-        state.stopCalls.push({ name, pidFile, patterns });
-        if (opts?.stopFails) {
-          return yield* Effect.fail(
-            new ProcessError(`${name}: not running (PID file not found)`),
-          );
-        }
-      }) as Effect.Effect<void, ProcessError, never>,
+    ) => {
+      state.stopCalls.push({ name, pidFile, patterns });
+      if (opts?.stopFails) {
+        return Effect.fail(
+          new ProcessError(`${name}: not running (PID file not found)`),
+        ) as Effect.Effect<void, ProcessError, never>;
+      }
+      return Effect.void as Effect.Effect<void, ProcessError, never>;
+    },
 
     signalAndWait: (
       _subprocess: Bun.Subprocess,
@@ -557,21 +557,20 @@ describe("GatewayOrchestrator service", () => {
     it("supervised mode tolerates telegram health failure", async () => {
       let callCount = 0;
       const hc = {
-        probeHTTP: () =>
+        probeHTTP: (_url: string, _timeoutMs: number) =>
           Effect.succeed({ healthy: false, detail: "not ready" }),
-        waitForHealthy: () =>
-          Effect.sync(() => {
-            callCount++;
-            // First call is backend (healthy), second is telegram (unhealthy)
-            return {
-              healthy: callCount <= 1,
-              detail:
-                callCount <= 1
-                  ? "Backend API reachable (200)"
-                  : "Telegram failed",
-            };
-          }),
-        probeProcess: () =>
+        waitForHealthy: (_url: string, _timeoutMs: number) => {
+          callCount++;
+          // First call is backend (healthy), second is telegram (unhealthy)
+          return Effect.succeed({
+            healthy: callCount <= 1,
+            detail:
+              callCount <= 1
+                ? "Backend API reachable (200)"
+                : "Telegram failed",
+          });
+        },
+        probeProcess: (_pattern: string) =>
           Effect.succeed({ running: true, detail: "found 1 process" }),
       };
 
