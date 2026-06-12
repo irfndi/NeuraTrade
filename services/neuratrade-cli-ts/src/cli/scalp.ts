@@ -13,6 +13,9 @@ import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
 import { runBacktest } from "../scalping/backtest.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
+import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
+import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
+import { ExchangeAdapter } from "../exchange/adapter.js";
 import { runPaperTradingIteration } from "../paper-trading/engine.js";
 import {
   PaperTradingRepository,
@@ -712,6 +715,21 @@ const iterationsOption = Options.integer("iterations").pipe(
   Options.withDescription("Number of iterations to run (0 = infinite)"),
 );
 
+const liveOption = Options.boolean("live").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Use live Binance exchange adapter (requires API key/secret)"),
+);
+
+const apiKeyOption = Options.text("api-key").pipe(
+  Options.withDefault(""),
+  Options.withDescription("Binance API key (or set BINANCE_API_KEY env)"),
+);
+
+const apiSecretOption = Options.text("api-secret").pipe(
+  Options.withDefault(""),
+  Options.withDescription("Binance API secret (or set BINANCE_API_SECRET env)"),
+);
+
 interface PaperTradeArgs {
   readonly exchange: string;
   readonly symbol: string;
@@ -730,6 +748,9 @@ interface PaperTradeArgs {
   readonly regimeMode: "trend" | "reversion";
   readonly interval: number;
   readonly iterations: number;
+  readonly live: boolean;
+  readonly apiKey: string;
+  readonly apiSecret: string;
 }
 
 export const paperTradeCommand = Command.make(
@@ -752,6 +773,9 @@ export const paperTradeCommand = Command.make(
     regimeMode: regimeModeOption,
     interval: intervalOption,
     iterations: iterationsOption,
+    live: liveOption,
+    apiKey: apiKeyOption,
+    apiSecret: apiSecretOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -762,7 +786,20 @@ export const paperTradeCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
-      const layers = Layer.mergeAll(BunContext.layer, PathLive(process.env.NEURATRADE_HOME), MarketDataGatewayLive, repoLayer, paperRepoLayer);
+      const adapterLayer = args.live
+        ? BinanceLiveExchangeAdapterLive({
+            apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
+            apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
+          })
+        : SimulatedExchangeAdapterLive();
+      const layers = Layer.mergeAll(
+        BunContext.layer,
+        PathLive(process.env.NEURATRADE_HOME),
+        MarketDataGatewayLive,
+        adapterLayer,
+        repoLayer,
+        paperRepoLayer,
+      );
 
       const result = yield* paperTradeProgram(args).pipe(
         Effect.provide(layers),

@@ -1,10 +1,19 @@
-import { Effect, Console } from "effect";
+import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
 import { calculateATR } from "../scalping/indicators.js";
-import { MarketDataError, MarketDataGateway, type MarketDataGatewayService } from "../market-data/gateway.js";
+import {
+  MarketDataError,
+  MarketDataGateway,
+  type MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
+import {
+  ExchangeAdapter,
+  ExchangeError,
+  type ExchangeAdapterService,
+} from "../exchange/adapter.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -35,19 +44,21 @@ export interface PaperTradingIterationResult {
 }
 
 /**
- * Run a single paper-trading iteration: fetch market data, update or open
- * positions, persist state, and return a human-readable result.
+ * Run a single paper-trading iteration: fetch market data, generate a signal,
+ * execute entry/exit through the exchange adapter, persist state, and return a
+ * human-readable result.
  */
 export function runPaperTradingIteration(
   options: PaperTradingOptions,
 ): Effect.Effect<
   PaperTradingIterationResult,
-  MarketDataError | PaperTradingRepositoryError,
-  MarketDataGatewayService | PaperTradingRepositoryService
+  MarketDataError | PaperTradingRepositoryError | ExchangeError,
+  MarketDataGatewayService | PaperTradingRepositoryService | ExchangeAdapterService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
     const gateway = yield* MarketDataGateway;
+    const adapter = yield* ExchangeAdapter;
 
     yield* repo.ensureTables();
 
@@ -85,17 +96,23 @@ export function runPaperTradingIteration(
 
     // Exit existing position first.
     if (position) {
-      const exit = checkExit(position, currentCandle, signal, options);
-      if (exit) {
-        const trade = yield* repo.closePosition(
-          position,
-          exit.price,
-          exit.reason,
-          currentCandle.timestamp,
-        );
+      const exitReason = checkExitReason(position, currentCandle, signal, options);
+      if (exitReason) {
+        const fill = yield* adapter.closePosition(options.symbol);
+
+        let exitPrice: number;
+        if (fill) {
+          exitPrice = fill.filledPrice;
+          capital -= fill.fee;
+        } else {
+          exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
+        }
+
+        const trade = yield* repo.closePosition(position, exitPrice, exitReason, currentCandle.timestamp);
         capital += trade.pnl - position.entryPrice * position.size * (options.feePct / 100);
         if (capital > peakCapital) peakCapital = capital;
         yield* repo.setPortfolio(capital, peakCapital);
+
         return {
           action: "closed" as const,
           position: null,
@@ -107,31 +124,41 @@ export function runPaperTradingIteration(
 
     // Open new position if signal is strong enough and no position.
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
-      const entryPrice = midPrice(orderBook);
+      const side = signal.direction === "buy" ? "long" : "short";
       const positionValue = capital * (options.positionSizePct / 100);
+
+      // Pre-compute size from orderbook mid to size the order.
+      const entryPrice = midPrice(orderBook);
       const size = positionValue / entryPrice;
+
+      const fill = yield* adapter.placeOrder({
+        symbol: options.symbol,
+        side: signal.direction as "buy" | "sell",
+        type: "market",
+        quantity: size,
+      });
+
+      const filledPrice = fill.filledPrice;
+      const filledSize = fill.filledQty;
+      capital -= filledPrice * filledSize * (options.feePct / 100) + fill.fee;
 
       const atr = options.useAtrStops ? calculateATR(candles, 14) : null;
       const useAtr = options.useAtrStops && atr !== null && atr > 0;
-      const side = signal.direction === "buy" ? "long" : "short";
 
       let stopLoss: number;
       let takeProfit: number;
       if (useAtr) {
         stopLoss =
           side === "long"
-            ? entryPrice - atr * options.atrStopMultiplier
-            : entryPrice + atr * options.atrStopMultiplier;
+            ? filledPrice - atr * options.atrStopMultiplier
+            : filledPrice + atr * options.atrStopMultiplier;
         takeProfit =
           side === "long"
-            ? entryPrice + atr * options.atrTakeProfitMultiplier
-            : entryPrice - atr * options.atrTakeProfitMultiplier;
+            ? filledPrice + atr * options.atrTakeProfitMultiplier
+            : filledPrice - atr * options.atrTakeProfitMultiplier;
       } else {
-        // Fallback to a fixed 1.5% / 3.0% default if ATR stops disabled.
-        stopLoss =
-          side === "long" ? entryPrice * 0.985 : entryPrice * 1.015;
-        takeProfit =
-          side === "long" ? entryPrice * 1.03 : entryPrice * 0.97;
+        stopLoss = side === "long" ? filledPrice * 0.985 : filledPrice * 1.015;
+        takeProfit = side === "long" ? filledPrice * 1.03 : filledPrice * 0.97;
       }
 
       const newPosition: PaperPosition = {
@@ -140,15 +167,14 @@ export function runPaperTradingIteration(
         symbol: options.symbol,
         timeframe: options.timeframe,
         side,
-        entryPrice,
-        size,
+        entryPrice: filledPrice,
+        size: filledSize,
         stopLoss,
         takeProfit,
         openedAt: new Date(),
         signalId: signal.id,
       };
 
-      capital -= entryPrice * size * (options.feePct / 100);
       yield* repo.saveOpenPosition(newPosition);
       yield* repo.setPortfolio(capital, peakCapital);
 
@@ -156,7 +182,7 @@ export function runPaperTradingIteration(
         action: "opened" as const,
         position: newPosition,
         capital,
-        note: `${side} ${entryPrice.toFixed(2)} size=${size.toFixed(6)} SL=${stopLoss.toFixed(2)} TP=${takeProfit.toFixed(2)}`,
+        note: `${side} ${filledPrice.toFixed(2)} size=${filledSize.toFixed(6)} SL=${stopLoss.toFixed(2)} TP=${takeProfit.toFixed(2)}`,
       };
     }
 
@@ -170,33 +196,43 @@ export function runPaperTradingIteration(
   });
 }
 
-function checkExit(
+function checkExitReason(
   position: PaperPosition,
   candle: Candle,
   signal: ReturnType<typeof composeSignal>,
   options: PaperTradingOptions,
-): { price: number; reason: "stop_loss" | "take_profit" | "signal" } | null {
+): "stop_loss" | "take_profit" | "signal" | null {
   if (position.side === "long") {
-    if (candle.low <= position.stopLoss) {
-      return { price: Math.min(candle.open, position.stopLoss), reason: "stop_loss" };
-    }
-    if (candle.high >= position.takeProfit) {
-      return { price: Math.max(candle.open, position.takeProfit), reason: "take_profit" };
-    }
+    if (candle.low <= position.stopLoss) return "stop_loss";
+    if (candle.high >= position.takeProfit) return "take_profit";
   } else {
-    if (candle.high >= position.stopLoss) {
-      return { price: Math.max(candle.open, position.stopLoss), reason: "stop_loss" };
-    }
-    if (candle.low <= position.takeProfit) {
-      return { price: Math.min(candle.open, position.takeProfit), reason: "take_profit" };
-    }
+    if (candle.high >= position.stopLoss) return "stop_loss";
+    if (candle.low <= position.takeProfit) return "take_profit";
   }
 
   if (!options.holdUntilStop && signal && shouldExitPosition(position, signal)) {
-    return { price: candle.close, reason: "signal" };
+    return "signal";
   }
 
   return null;
+}
+
+function fallbackExitPrice(
+  position: PaperPosition,
+  candle: Candle,
+  reason: "stop_loss" | "take_profit" | "signal",
+): number {
+  if (reason === "stop_loss") {
+    return position.side === "long"
+      ? Math.min(candle.open, position.stopLoss)
+      : Math.max(candle.open, position.stopLoss);
+  }
+  if (reason === "take_profit") {
+    return position.side === "long"
+      ? Math.max(candle.open, position.takeProfit)
+      : Math.min(candle.open, position.takeProfit);
+  }
+  return candle.close;
 }
 
 function shouldExitPosition(
