@@ -103,6 +103,7 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
         args.symbol,
         args.timeframe,
         candlesPerBatch,
+        new Date(currentStart),
       );
 
       if (candles.length === 0) break;

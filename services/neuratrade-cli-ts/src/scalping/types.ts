@@ -85,6 +85,7 @@ export interface ComposerWeights {
   readonly trend: number;
   readonly liquidity: number;
   readonly rsi: number;
+  readonly regime: number;
 }
 
 export interface ComposerThresholds {
@@ -104,7 +105,13 @@ export interface ComposerThresholds {
   readonly rsiOversoldMedium: number;
   readonly rsiOverboughtMedium: number;
   readonly rsiOverboughtStrong: number;
+  readonly adxStrongTrend: number;
+  readonly adxWeakTrend: number;
+  readonly atrMaxPctOfPrice: number;
+  readonly bollingerEntryMaxPct: number;
+  readonly bollingerEntryMinPct: number;
   readonly minConfidenceSpread: number;
+  readonly regimeMode?: "trend" | "reversion";
 }
 
 export interface ComposerConfig {

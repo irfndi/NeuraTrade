@@ -10,6 +10,7 @@ import {
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
+import type { ComposerConfig } from "../scalping/types.js";
 import { runBacktest } from "../scalping/backtest.js";
 
 const exchangeOption = Options.text("exchange").pipe(
@@ -57,6 +58,46 @@ const confidenceOption = Options.float("min-confidence").pipe(
   Options.withDescription("Minimum signal confidence to enter a trade"),
 );
 
+const useAtrStopsOption = Options.boolean("use-atr-stops").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Use ATR-based dynamic stop loss and take profit"),
+);
+
+const atrStopMultiplierOption = Options.float("atr-stop-multiplier").pipe(
+  Options.withDefault(1.5),
+  Options.withDescription("ATR multiplier for stop loss when --use-atr-stops is set"),
+);
+
+const atrTakeProfitMultiplierOption = Options.float("atr-take-profit-multiplier").pipe(
+  Options.withDefault(2.5),
+  Options.withDescription("ATR multiplier for take profit when --use-atr-stops is set"),
+);
+
+const priceOnlyOption = Options.boolean("price-only").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Ignore synthetic order-book components in backtest (trend/volatility/RSI/regime only)"),
+);
+
+const noRsiOption = Options.boolean("no-rsi").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Disable RSI mean-reversion component in backtest"),
+);
+
+const holdUntilStopOption = Options.boolean("hold-until-stop").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Ignore opposite-signal exits and only exit on stop/take-profit"),
+);
+
+const noTrendOption = Options.boolean("no-trend").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Disable trend-following EMA component in backtest"),
+);
+
+const regimeModeOption = Options.choice("regime-mode", ["trend", "reversion"] as const).pipe(
+  Options.withDefault("trend" as const),
+  Options.withDescription("Regime filter mode: trend-following or mean-reversion"),
+);
+
 function makeLayer(home?: string) {
   return Layer.mergeAll(BunContext.layer, PathLive(home));
 }
@@ -73,6 +114,14 @@ export const backtestCommand = Command.make(
     takeProfit: takeProfitOption,
     fee: feeOption,
     minConfidence: confidenceOption,
+    useAtrStops: useAtrStopsOption,
+    atrStopMultiplier: atrStopMultiplierOption,
+    atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    priceOnly: priceOnlyOption,
+    noRsi: noRsiOption,
+    holdUntilStop: holdUntilStopOption,
+    noTrend: noTrendOption,
+    regimeMode: regimeModeOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -109,6 +158,56 @@ interface BacktestArgs {
   readonly takeProfit: number;
   readonly fee: number;
   readonly minConfidence: number;
+  readonly useAtrStops: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrTakeProfitMultiplier: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly holdUntilStop: boolean;
+  readonly noTrend: boolean;
+  readonly regimeMode: "trend" | "reversion";
+}
+
+function buildBacktestComposerConfig(
+  priceOnly: boolean,
+  noRsi: boolean,
+  noTrend: boolean,
+  regimeMode: "trend" | "reversion" = "trend",
+): ComposerConfig {
+  if (!priceOnly && !noRsi && !noTrend && regimeMode === defaultComposerConfig.thresholds.regimeMode) {
+    return defaultComposerConfig;
+  }
+
+  const weights = { ...defaultComposerConfig.weights };
+  if (priceOnly) {
+    weights.spread = 0;
+    weights.imbalance = 0;
+    weights.liquidity = 0;
+  }
+  if (noRsi) {
+    weights.rsi = 0;
+  }
+  if (noTrend) {
+    weights.trend = 0;
+  }
+
+  const activeSum = Object.values(weights).reduce((a, b) => a + b, 0);
+  if (activeSum <= 0) return defaultComposerConfig;
+
+  const normalized: ComposerConfig["weights"] = {
+    spread: weights.spread / activeSum,
+    imbalance: weights.imbalance / activeSum,
+    volatility: weights.volatility / activeSum,
+    trend: weights.trend / activeSum,
+    liquidity: weights.liquidity / activeSum,
+    rsi: weights.rsi / activeSum,
+    regime: weights.regime / activeSum,
+  };
+
+  return {
+    weights: normalized,
+    thresholds: { ...defaultComposerConfig.thresholds, regimeMode },
+  };
 }
 
 function backtestProgram(args: BacktestArgs) {
@@ -129,18 +228,24 @@ function backtestProgram(args: BacktestArgs) {
       );
     }
 
+    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+
     return runBacktest({
       symbol: args.symbol,
       exchange: args.exchange,
       timeframe: args.timeframe,
       candles,
-      composerConfig: defaultComposerConfig,
+      composerConfig,
       initialCapital: args.capital,
       positionSizePct: args.positionSize,
       stopLossPct: args.stopLoss,
       takeProfitPct: args.takeProfit,
       feePct: args.fee,
       minConfidence: args.minConfidence,
+      useAtrStops: args.useAtrStops,
+      atrStopMultiplier: args.atrStopMultiplier,
+      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+      holdUntilStop: args.holdUntilStop,
     });
   });
 }
@@ -181,9 +286,236 @@ function emptyResult(symbol: string): import("../scalping/backtest.js").Backtest
   };
 }
 
+const atrStopMinOption = Options.float("atr-stop-min").pipe(
+  Options.withDefault(1.0),
+  Options.withDescription("Minimum ATR stop multiplier to test"),
+);
+
+const atrStopMaxOption = Options.float("atr-stop-max").pipe(
+  Options.withDefault(3.0),
+  Options.withDescription("Maximum ATR stop multiplier to test"),
+);
+
+const atrStopStepOption = Options.float("atr-stop-step").pipe(
+  Options.withDefault(0.5),
+  Options.withDescription("Step size for ATR stop multiplier"),
+);
+
+const atrTpMinOption = Options.float("atr-tp-min").pipe(
+  Options.withDefault(2.0),
+  Options.withDescription("Minimum ATR take-profit multiplier to test"),
+);
+
+const atrTpMaxOption = Options.float("atr-tp-max").pipe(
+  Options.withDefault(5.0),
+  Options.withDescription("Maximum ATR take-profit multiplier to test"),
+);
+
+const atrTpStepOption = Options.float("atr-tp-step").pipe(
+  Options.withDefault(0.5),
+  Options.withDescription("Step size for ATR take-profit multiplier"),
+);
+
+const confMinOption = Options.float("conf-min").pipe(
+  Options.withDefault(0.5),
+  Options.withDescription("Minimum min-confidence to test"),
+);
+
+const confMaxOption = Options.float("conf-max").pipe(
+  Options.withDefault(0.7),
+  Options.withDescription("Maximum min-confidence to test"),
+);
+
+const confStepOption = Options.float("conf-step").pipe(
+  Options.withDefault(0.1),
+  Options.withDescription("Step size for min-confidence"),
+);
+
+interface OptimizeArgs {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly capital: number;
+  readonly positionSize: number;
+  readonly fee: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly noTrend: boolean;
+  readonly holdUntilStop: boolean;
+  readonly regimeMode: "trend" | "reversion";
+  readonly atrStopMin: number;
+  readonly atrStopMax: number;
+  readonly atrStopStep: number;
+  readonly atrTpMin: number;
+  readonly atrTpMax: number;
+  readonly atrTpStep: number;
+  readonly confMin: number;
+  readonly confMax: number;
+  readonly confStep: number;
+}
+
+export const optimizeCommand = Command.make(
+  "optimize",
+  {
+    exchange: exchangeOption,
+    symbol: symbolOption,
+    timeframe: timeframeOption,
+    capital: capitalOption,
+    positionSize: positionSizeOption,
+    fee: feeOption,
+    priceOnly: priceOnlyOption,
+    noRsi: noRsiOption,
+    noTrend: noTrendOption,
+    holdUntilStop: holdUntilStopOption,
+    regimeMode: regimeModeOption,
+    atrStopMin: atrStopMinOption,
+    atrStopMax: atrStopMaxOption,
+    atrStopStep: atrStopStepOption,
+    atrTpMin: atrTpMinOption,
+    atrTpMax: atrTpMaxOption,
+    atrTpStep: atrTpStepOption,
+    confMin: confMinOption,
+    confMax: confMaxOption,
+    confStep: confStepOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const result = yield* optimizeProgram(args).pipe(
+        Effect.provide(repoLayer),
+        Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
+        Effect.catchAll((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(`optimize failed: ${err.reason}`);
+            return [];
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Grid-search ATR/confidence parameters over historical candles"));
+
+function optimizeProgram(args: OptimizeArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* MarketDataRepository;
+
+    const candles = yield* repo.getCandles({
+      exchange: args.exchange,
+      symbol: args.symbol,
+      timeframe: args.timeframe,
+    });
+
+    if (candles.length === 0) {
+      return yield* Effect.fail(
+        new MarketDataRepositoryError(
+          `No candles found for ${args.exchange}:${args.symbol}:${args.timeframe}. Run 'market fetch-candles' first.`,
+        ),
+      );
+    }
+
+    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const results: Array<{
+      readonly stopMult: number;
+      readonly tpMult: number;
+      readonly minConfidence: number;
+      readonly totalReturnPct: number;
+      readonly sharpeRatio: number;
+      readonly totalTrades: number;
+      readonly winRate: number;
+      readonly maxDrawdownPct: number;
+    }> = [];
+
+    for (let stopMult = args.atrStopMin; stopMult <= args.atrStopMax + 1e-9; stopMult += args.atrStopStep) {
+      for (let tpMult = args.atrTpMin; tpMult <= args.atrTpMax + 1e-9; tpMult += args.atrTpStep) {
+        for (let conf = args.confMin; conf <= args.confMax + 1e-9; conf += args.confStep) {
+          const result = runBacktest({
+            symbol: args.symbol,
+            exchange: args.exchange,
+            timeframe: args.timeframe,
+            candles,
+            composerConfig,
+            initialCapital: args.capital,
+            positionSizePct: args.positionSize,
+            stopLossPct: 1.5,
+            takeProfitPct: 3.0,
+            feePct: args.fee,
+            minConfidence: Number(conf.toFixed(4)),
+            useAtrStops: true,
+            atrStopMultiplier: Number(stopMult.toFixed(4)),
+            atrTakeProfitMultiplier: Number(tpMult.toFixed(4)),
+            holdUntilStop: args.holdUntilStop,
+          });
+          results.push({
+            stopMult: Number(stopMult.toFixed(4)),
+            tpMult: Number(tpMult.toFixed(4)),
+            minConfidence: Number(conf.toFixed(4)),
+            totalReturnPct: result.totalReturnPct,
+            sharpeRatio: result.sharpeRatio,
+            totalTrades: result.totalTrades,
+            winRate: result.winRate,
+            maxDrawdownPct: result.maxDrawdownPct,
+          });
+        }
+      }
+    }
+
+    return results;
+  });
+}
+
+function printOptimizeResult(
+  results: ReadonlyArray<{
+    readonly stopMult: number;
+    readonly tpMult: number;
+    readonly minConfidence: number;
+    readonly totalReturnPct: number;
+    readonly sharpeRatio: number;
+    readonly totalTrades: number;
+    readonly winRate: number;
+    readonly maxDrawdownPct: number;
+  }>,
+  symbol: string,
+  timeframe: string,
+) {
+  return Effect.gen(function* () {
+    if (results.length === 0) {
+      yield* Console.log("No optimization results.");
+      return;
+    }
+
+    const byReturn = [...results].sort((a, b) => b.totalReturnPct - a.totalReturnPct).slice(0, 5);
+    const bySharpe = [...results].sort((a, b) => b.sharpeRatio - a.sharpeRatio).slice(0, 5);
+
+    yield* Console.log(`\n🔬 Optimization results for ${symbol} ${timeframe} (${results.length} configs tested)`);
+    yield* Console.log("\nTop 5 by total return:");
+    for (const r of byReturn) {
+      yield* Console.log(
+        `  stop=${r.stopMult.toFixed(2)} tp=${r.tpMult.toFixed(2)} conf=${r.minConfidence.toFixed(2)} | ` +
+          `return=${r.totalReturnPct.toFixed(2)}% sharpe=${r.sharpeRatio.toFixed(3)} trades=${r.totalTrades} win=${(r.winRate * 100).toFixed(1)}% dd=${r.maxDrawdownPct.toFixed(2)}%`,
+      );
+    }
+
+    yield* Console.log("\nTop 5 by Sharpe ratio:");
+    for (const r of bySharpe) {
+      yield* Console.log(
+        `  stop=${r.stopMult.toFixed(2)} tp=${r.tpMult.toFixed(2)} conf=${r.minConfidence.toFixed(2)} | ` +
+          `return=${r.totalReturnPct.toFixed(2)}% sharpe=${r.sharpeRatio.toFixed(3)} trades=${r.totalTrades} win=${(r.winRate * 100).toFixed(1)}% dd=${r.maxDrawdownPct.toFixed(2)}%`,
+      );
+    }
+  });
+}
+
 export const scalpCommand = Command.make("scalp", {}, () =>
-  Console.log("Scalping commands. Use 'scalp backtest --help' for details."),
+  Console.log("Scalping commands. Use 'scalp backtest --help' or 'scalp optimize --help' for details."),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
-  Command.withSubcommands([backtestCommand]),
+  Command.withSubcommands([backtestCommand, optimizeCommand]),
 );

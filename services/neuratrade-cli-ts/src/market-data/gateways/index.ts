@@ -17,9 +17,9 @@ export const MarketDataGatewayLive = Layer.succeed(
     fetchTick: (exchange, symbol) =>
       dispatch(exchange, "fetchTick", () => Binance.fetchTick(symbol)),
 
-    fetchOHLCV: (exchange, symbol, timeframe, limit) =>
+    fetchOHLCV: (exchange, symbol, timeframe, limit, startTime) =>
       dispatch(exchange, "fetchOHLCV", () =>
-        Binance.fetchOHLCV(symbol, timeframe, limit),
+        Binance.fetchOHLCV(symbol, timeframe, limit, startTime),
       ),
 
     fetchOrderBook: (exchange, symbol, limit) =>

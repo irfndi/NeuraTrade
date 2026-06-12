@@ -29,6 +29,7 @@ export interface MarketDataGatewayService {
     symbol: string,
     timeframe: string,
     limit: number,
+    startTime?: Date,
   ) => Effect.Effect<readonly Candle[], MarketDataError, never>;
 
   readonly fetchOrderBook: (

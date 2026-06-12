@@ -1,5 +1,6 @@
 import type { CandleLike, ComposerConfig, OHLCVInput, OrderBookMetricsInput, ScalpingSignal } from "./types.js";
 import { composeSignal } from "./composer.js";
+import { calculateATR } from "./indicators.js";
 
 export interface BacktestPosition {
   readonly entrySignal: ScalpingSignal;
@@ -48,6 +49,12 @@ export interface BacktestOptions {
   readonly takeProfitPct: number;
   readonly feePct: number;
   readonly minConfidence: number;
+  /** When true, use ATR(14) * multiplier for dynamic stops instead of fixed pct. */
+  readonly useAtrStops?: boolean;
+  readonly atrStopMultiplier?: number;
+  readonly atrTakeProfitMultiplier?: number;
+  /** When true, ignore opposite-direction signal exits and only exit on stop/take-profit. */
+  readonly holdUntilStop?: boolean;
 }
 
 /**
@@ -117,8 +124,8 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         continue;
       }
 
-      // Exit on signal reversal
-      if (signal && shouldExitPosition(position, signal)) {
+      // Exit on signal reversal unless holding until stop/take-profit.
+      if (!options.holdUntilStop && signal && shouldExitPosition(position, signal)) {
         const exitPrice = next.open;
         const pnl = calculatePnl(position, exitPrice);
         const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
@@ -145,14 +152,29 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       const entryPrice = next.open;
       const positionValue = capital * (options.positionSizePct / 100);
       const size = positionValue / entryPrice;
-      const stopLoss =
-        side === "long"
-          ? entryPrice * (1 - options.stopLossPct / 100)
-          : entryPrice * (1 + options.stopLossPct / 100);
-      const takeProfit =
-        side === "long"
-          ? entryPrice * (1 + options.takeProfitPct / 100)
-          : entryPrice * (1 - options.takeProfitPct / 100);
+
+      const atr = options.useAtrStops ? calculateATR(window, 14) : null;
+      const useAtr = options.useAtrStops && atr !== null && atr > 0;
+      const stopMult = options.atrStopMultiplier ?? 1.5;
+      const tpMult = options.atrTakeProfitMultiplier ?? 2.5;
+
+      let stopLoss: number;
+      let takeProfit: number;
+      if (useAtr) {
+        stopLoss =
+          side === "long" ? entryPrice - atr * stopMult : entryPrice + atr * stopMult;
+        takeProfit =
+          side === "long" ? entryPrice + atr * tpMult : entryPrice - atr * tpMult;
+      } else {
+        stopLoss =
+          side === "long"
+            ? entryPrice * (1 - options.stopLossPct / 100)
+            : entryPrice * (1 + options.stopLossPct / 100);
+        takeProfit =
+          side === "long"
+            ? entryPrice * (1 + options.takeProfitPct / 100)
+            : entryPrice * (1 - options.takeProfitPct / 100);
+      }
 
       position = {
         entrySignal: signal,

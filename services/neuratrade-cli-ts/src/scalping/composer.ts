@@ -11,15 +11,23 @@ import type {
   SignalComponent,
   SignalStrength,
 } from "./types.js";
-import { calculateEMA, calculateRSI, calculateVolatility } from "./indicators.js";
+import {
+  calculateADX,
+  calculateATR,
+  calculateBollingerBands,
+  calculateEMA,
+  calculateRSI,
+  calculateVolatility,
+} from "./indicators.js";
 
 const defaultWeights: ComposerWeights = {
-  spread: 0.20,
-  imbalance: 0.25,
-  volatility: 0.15,
-  trend: 0.20,
-  liquidity: 0.10,
-  rsi: 0.10,
+  spread: 0.18,
+  imbalance: 0.22,
+  volatility: 0.13,
+  trend: 0.18,
+  liquidity: 0.09,
+  rsi: 0.09,
+  regime: 0.11,
 };
 
 const defaultThresholds: ComposerThresholds = {
@@ -39,7 +47,13 @@ const defaultThresholds: ComposerThresholds = {
   rsiOversoldMedium: 40,
   rsiOverboughtMedium: 60,
   rsiOverboughtStrong: 70,
+  adxStrongTrend: 30,
+  adxWeakTrend: 20,
+  atrMaxPctOfPrice: 0.025,
+  bollingerEntryMaxPct: 0.75,
+  bollingerEntryMinPct: 0.25,
   minConfidenceSpread: 0.10,
+  regimeMode: "trend",
 };
 
 export const defaultComposerConfig: ComposerConfig = {
@@ -54,7 +68,8 @@ export function validateWeights(weights: ComposerWeights): boolean {
     weights.volatility +
     weights.trend +
     weights.liquidity +
-    weights.rsi;
+    weights.rsi +
+    weights.regime;
   return Math.abs(sum - 1.0) <= 0.001;
 }
 
@@ -101,6 +116,9 @@ export function composeSignal(
 
   const rsiComponent = buildRsiComponent(candles, config.weights.rsi, config.thresholds);
   if (rsiComponent) components.push(rsiComponent);
+
+  const regimeComponent = buildRegimeComponent(candles, obMetrics, config.weights.regime, config.thresholds);
+  if (regimeComponent) components.push(regimeComponent);
 
   if (components.length === 0) return null;
 
@@ -246,17 +264,17 @@ function buildTrendComponent(
   weight: number,
   thresholds: ComposerThresholds,
 ): SignalComponent | null {
-  if (candles.length < 5) return null;
+  if (candles.length < 30) return null;
 
   const closes = candles.map((c) => c.close);
-  const ema3 = calculateEMA(closes, 3);
-  const ema5 = calculateEMA(closes, 5);
+  const emaFast = calculateEMA(closes, 9);
+  const emaSlow = calculateEMA(closes, 21);
 
-  const lastEma3 = ema3[ema3.length - 1];
-  const lastEma5 = ema5[ema5.length - 1];
-  if (Number.isNaN(lastEma3) || Number.isNaN(lastEma5) || lastEma5 === 0) return null;
+  const lastFast = emaFast[emaFast.length - 1];
+  const lastSlow = emaSlow[emaSlow.length - 1];
+  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0) return null;
 
-  const diff = (lastEma3 - lastEma5) / lastEma5;
+  const diff = (lastFast - lastSlow) / lastSlow;
   let signal: Direction = "hold";
   let strength: SignalStrength = "weak";
 
@@ -276,7 +294,7 @@ function buildTrendComponent(
 
   return {
     name: "trend",
-    description: "EMA 3 vs EMA 5 slope",
+    description: "EMA 9 vs EMA 21 slope",
     value: diff,
     signal,
     strength,
@@ -342,6 +360,90 @@ function buildRsiComponent(
     name: "rsi",
     description: "14-period Relative Strength Index",
     value: rsi,
+    signal,
+    strength,
+    weight,
+  };
+}
+
+function buildRegimeComponent(
+  candles: readonly CandleLike[],
+  ob: OrderBookMetricsInput,
+  weight: number,
+  thresholds: ComposerThresholds,
+): SignalComponent | null {
+  if (candles.length < 30) return null;
+
+  const { adx, plusDI, minusDI } = calculateADX(candles, 14);
+  const atr = calculateATR(candles, 14);
+  const bb = calculateBollingerBands(candles, 20);
+
+  if (adx === null || plusDI === null || minusDI === null || atr === null || bb === null) {
+    return null;
+  }
+
+  const midPrice = ob.midPrice;
+  const atrPct = midPrice > 0 ? atr / midPrice : 0;
+
+  // Skip if volatility is excessive (ATR too large relative to price).
+  if (atrPct > thresholds.atrMaxPctOfPrice) {
+    return {
+      name: "regime",
+      description: "Volatility regime filter",
+      value: atrPct,
+      signal: "hold",
+      strength: "strong",
+      weight,
+    };
+  }
+
+  // Skip if price is in the middle of the Bollinger band (no directional edge).
+  if (bb.percentB > thresholds.bollingerEntryMinPct && bb.percentB < thresholds.bollingerEntryMaxPct) {
+    return {
+      name: "regime",
+      description: "Bollinger band position filter",
+      value: bb.percentB,
+      signal: "hold",
+      strength: "medium",
+      weight,
+    };
+  }
+
+  const mode = thresholds.regimeMode ?? "trend";
+  let signal: Direction = "hold";
+  let strength: SignalStrength = "weak";
+
+  if (mode === "reversion") {
+    // Mean-reversion regime: price near Bollinger extremes and DI not
+    // strongly opposing the reversal (i.e. avoid fading a raging trend).
+    if (bb.percentB <= thresholds.bollingerEntryMinPct && plusDI >= minusDI) {
+      signal = "buy";
+      strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
+    } else if (bb.percentB >= thresholds.bollingerEntryMaxPct && minusDI >= plusDI) {
+      signal = "sell";
+      strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
+    }
+  } else {
+    // Trend-strength regime: require ADX to confirm a directional market and
+    // the DI lines to agree with the Bollinger band position.
+    if (adx > thresholds.adxWeakTrend) {
+      if (plusDI > minusDI && bb.percentB >= thresholds.bollingerEntryMinPct) {
+        signal = "buy";
+        strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
+      } else if (minusDI > plusDI && bb.percentB <= thresholds.bollingerEntryMaxPct) {
+        signal = "sell";
+        strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
+      }
+    }
+  }
+
+  return {
+    name: "regime",
+    description:
+      mode === "reversion"
+        ? "Bollinger band mean-reversion regime"
+        : "ADX trend strength + Bollinger band direction",
+    value: adx,
     signal,
     strength,
     weight,

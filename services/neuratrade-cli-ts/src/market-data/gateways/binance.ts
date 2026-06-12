@@ -82,13 +82,15 @@ export function fetchOHLCV(
   symbol: string,
   timeframe: string,
   limit: number,
+  startTime?: Date,
 ): Effect.Effect<readonly Candle[], MarketDataError, never> {
   const bSymbol = binanceSymbol(symbol);
   const interval = binanceInterval(timeframe);
+  const startParam = startTime ? `&startTime=${startTime.getTime()}` : "";
   return Effect.gen(function* () {
     const data = yield* getJSON<
       Array<[number, string, string, string, string, string, number, string, number, string, string, string]>
-    >(`/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}`);
+    >(`/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`);
 
     return data.map(
       (c): Candle => ({
