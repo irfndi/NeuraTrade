@@ -157,54 +157,82 @@ type DeterministicFallbackConfig struct {
 	MinSizePct     float64
 	VolumeLogScale float64
 
-	BBEntryMaxPct          float64
-	BBExitMinPct           float64
-	ADXMaxPct              float64
-	ATRRatioMax            float64
-	RecentBuyMaxSpreadPct  float64
-	RecentBuyMinTrendPct   float64
-	RecentBuyMaxRangePct   float64
-	RecentSellMinRangePct  float64
-	ReversalBuyMaxRangePct float64
-	BlowoffSellRangeMin    float64
-	BlowoffSellRangeMax    float64
-	SellWindowMinRangePct  float64
+	BBEntryMaxPct           float64
+	BBExitMinPct            float64
+	ADXMaxPct               float64
+	ATRRatioMax             float64
+	RecentBuyMaxSpreadPct   float64
+	RecentBuyMinTrendPct    float64
+	RecentBuyMaxRangePct    float64
+	RecentSellMinRangePct   float64
+	ReversalBuyMaxRangePct  float64
+	ReversalBuyMaxSpreadPct float64
+	ReversalBuyMaxRecentPct float64
+	ReversalBuyMaxTrendPct  float64
+	BlowoffSellRangeMin     float64
+	BlowoffSellRangeMax     float64
+	BlowoffSellTrendMinPct  float64
+	BlowoffSellRecentMinPct float64
+	BlowoffSellMaxImbalance float64
+	SellWindowMinRangePct   float64
+	SellWindowMaxRangePct   float64
+	SellWindowMaxSpreadPct  float64
+	SellWindowMaxImbalance  float64
+	SellWindowMinRecentPct  float64
+	SellWindowMaxRecentPct  float64
+	SellWindowMinTrendPct   float64
+	SellWindowMaxTrendPct   float64
+	NoRecentBuyMaxRangePct  float64
 }
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 	return DeterministicFallbackConfig{
-		MaxBidAskSpread:        0.15,
-		MinImbalance:           0.10,
-		BuyRangeMax:            45.0,
-		SellRangeMin:           55.0,
-		BuyMinPriceChangePct:   0.0,
-		SellMaxPriceChangePct:  0.0,
-		RangeAnchor:            55.0,
-		RangeOffset:            45.0,
-		ImbalanceWeight:        0.65,
-		LiquidityWeight:        0.20,
-		RangeWeight:            0.10,
-		VolumeWeight:           0.05,
-		BaseConfidence:         0.55,
-		ConfidenceScale:        0.35,
-		MinConfidence:          0.55,
-		MaxConfidence:          0.85,
-		ConfidenceFloor:        0.72,
-		SizeFraction:           0.50,
-		MinSizePct:             0.10,
-		VolumeLogScale:         8.0,
-		BBEntryMaxPct:          0.20,
-		BBExitMinPct:           0.80,
-		ADXMaxPct:              25.0,
-		ATRRatioMax:            1.5,
-		RecentBuyMaxSpreadPct:  0.04,
-		RecentBuyMinTrendPct:   0.02,
-		RecentBuyMaxRangePct:   35.0,
-		RecentSellMinRangePct:  75.0,
-		ReversalBuyMaxRangePct: 20.0,
-		BlowoffSellRangeMin:    95.0,
-		BlowoffSellRangeMax:    98.0,
-		SellWindowMinRangePct:  25.0,
+		MaxBidAskSpread:         0.15,
+		MinImbalance:            0.10,
+		BuyRangeMax:             45.0,
+		SellRangeMin:            55.0,
+		BuyMinPriceChangePct:    0.0,
+		SellMaxPriceChangePct:   0.0,
+		RangeAnchor:             55.0,
+		RangeOffset:             45.0,
+		ImbalanceWeight:         0.65,
+		LiquidityWeight:         0.20,
+		RangeWeight:             0.10,
+		VolumeWeight:            0.05,
+		BaseConfidence:          0.55,
+		ConfidenceScale:         0.35,
+		MinConfidence:           0.55,
+		MaxConfidence:           0.85,
+		ConfidenceFloor:         0.72,
+		SizeFraction:            0.50,
+		MinSizePct:              0.10,
+		VolumeLogScale:          8.0,
+		BBEntryMaxPct:           0.20,
+		BBExitMinPct:            0.80,
+		ADXMaxPct:               25.0,
+		ATRRatioMax:             1.5,
+		RecentBuyMaxSpreadPct:   0.04,
+		RecentBuyMinTrendPct:    0.02,
+		RecentBuyMaxRangePct:    35.0,
+		RecentSellMinRangePct:   75.0,
+		ReversalBuyMaxRangePct:  20.0,
+		ReversalBuyMaxSpreadPct: 0.06,
+		ReversalBuyMaxRecentPct: -0.15,
+		ReversalBuyMaxTrendPct:  0.0,
+		BlowoffSellRangeMin:     95.0,
+		BlowoffSellRangeMax:     98.0,
+		BlowoffSellTrendMinPct:  0.075,
+		BlowoffSellRecentMinPct: 0.15,
+		BlowoffSellMaxImbalance: -0.35,
+		SellWindowMinRangePct:   25.0,
+		SellWindowMaxRangePct:   75.0,
+		SellWindowMaxSpreadPct:  0.10,
+		SellWindowMaxImbalance:  -0.30,
+		SellWindowMinRecentPct:  -0.60,
+		SellWindowMaxRecentPct:  0.20,
+		SellWindowMinTrendPct:   0.0,
+		SellWindowMaxTrendPct:   0.50,
+		NoRecentBuyMaxRangePct:  20.0,
 	}
 }
 
@@ -334,6 +362,48 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	}
 	if cfg.SellWindowMinRangePct > 0 {
 		normalized.SellWindowMinRangePct = clampFloat(cfg.SellWindowMinRangePct, 1, 100)
+	}
+	if cfg.ReversalBuyMaxSpreadPct > 0 {
+		normalized.ReversalBuyMaxSpreadPct = clampFloat(cfg.ReversalBuyMaxSpreadPct, 0, 1)
+	}
+	if cfg.ReversalBuyMaxRecentPct != 0 {
+		normalized.ReversalBuyMaxRecentPct = clampFloat(cfg.ReversalBuyMaxRecentPct, -1, 1)
+	}
+	if cfg.ReversalBuyMaxTrendPct != 0 {
+		normalized.ReversalBuyMaxTrendPct = clampFloat(cfg.ReversalBuyMaxTrendPct, -1, 1)
+	}
+	if cfg.BlowoffSellTrendMinPct > 0 {
+		normalized.BlowoffSellTrendMinPct = clampFloat(cfg.BlowoffSellTrendMinPct, -1, 1)
+	}
+	if cfg.BlowoffSellRecentMinPct > 0 {
+		normalized.BlowoffSellRecentMinPct = clampFloat(cfg.BlowoffSellRecentMinPct, -1, 1)
+	}
+	if cfg.BlowoffSellMaxImbalance != 0 {
+		normalized.BlowoffSellMaxImbalance = clampFloat(cfg.BlowoffSellMaxImbalance, -1, 0)
+	}
+	if cfg.SellWindowMaxRangePct > 0 {
+		normalized.SellWindowMaxRangePct = clampFloat(cfg.SellWindowMaxRangePct, 1, 100)
+	}
+	if cfg.SellWindowMaxSpreadPct > 0 {
+		normalized.SellWindowMaxSpreadPct = clampFloat(cfg.SellWindowMaxSpreadPct, 0, 1)
+	}
+	if cfg.SellWindowMaxImbalance != 0 {
+		normalized.SellWindowMaxImbalance = clampFloat(cfg.SellWindowMaxImbalance, -1, 0)
+	}
+	if cfg.SellWindowMinRecentPct != 0 {
+		normalized.SellWindowMinRecentPct = clampFloat(cfg.SellWindowMinRecentPct, -1, 1)
+	}
+	if cfg.SellWindowMaxRecentPct != 0 {
+		normalized.SellWindowMaxRecentPct = clampFloat(cfg.SellWindowMaxRecentPct, -1, 1)
+	}
+	if cfg.SellWindowMinTrendPct != 0 {
+		normalized.SellWindowMinTrendPct = clampFloat(cfg.SellWindowMinTrendPct, -1, 1)
+	}
+	if cfg.SellWindowMaxTrendPct != 0 {
+		normalized.SellWindowMaxTrendPct = clampFloat(cfg.SellWindowMaxTrendPct, -1, 1)
+	}
+	if cfg.NoRecentBuyMaxRangePct > 0 {
+		normalized.NoRecentBuyMaxRangePct = clampFloat(cfg.NoRecentBuyMaxRangePct, 1, 100)
 	}
 
 	return normalized
@@ -548,6 +618,36 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.DeterministicFallback.SizeFraction,
 	)
 
+	zaplogrus.Infof(
+		"[AI-SCALPING] DeterministicFallback: BBEntryMaxPct=%.4f BBExitMinPct=%.4f ADXMaxPct=%.2f ATRRatioMax=%.2f RecentBuyMaxSpreadPct=%.4f RecentBuyMinTrendPct=%.4f RecentBuyMaxRangePct=%.2f RecentSellMinRangePct=%.2f ReversalBuyMaxSpreadPct=%.4f ReversalBuyMaxRangePct=%.2f ReversalBuyMaxRecentPct=%.4f ReversalBuyMaxTrendPct=%.4f BlowoffSellRangeMin=%.2f BlowoffSellRangeMax=%.2f BlowoffSellTrendMinPct=%.4f BlowoffSellRecentMinPct=%.4f BlowoffSellMaxImbalance=%.4f SellWindowMinRangePct=%.2f SellWindowMaxRangePct=%.2f SellWindowMaxSpreadPct=%.4f SellWindowMaxImbalance=%.4f SellWindowMinRecentPct=%.4f SellWindowMaxRecentPct=%.4f SellWindowMinTrendPct=%.4f SellWindowMaxTrendPct=%.4f NoRecentBuyMaxRangePct=%.2f",
+		cfg.DeterministicFallback.BBEntryMaxPct,
+		cfg.DeterministicFallback.BBExitMinPct,
+		cfg.DeterministicFallback.ADXMaxPct,
+		cfg.DeterministicFallback.ATRRatioMax,
+		cfg.DeterministicFallback.RecentBuyMaxSpreadPct,
+		cfg.DeterministicFallback.RecentBuyMinTrendPct,
+		cfg.DeterministicFallback.RecentBuyMaxRangePct,
+		cfg.DeterministicFallback.RecentSellMinRangePct,
+		cfg.DeterministicFallback.ReversalBuyMaxSpreadPct,
+		cfg.DeterministicFallback.ReversalBuyMaxRangePct,
+		cfg.DeterministicFallback.ReversalBuyMaxRecentPct,
+		cfg.DeterministicFallback.ReversalBuyMaxTrendPct,
+		cfg.DeterministicFallback.BlowoffSellRangeMin,
+		cfg.DeterministicFallback.BlowoffSellRangeMax,
+		cfg.DeterministicFallback.BlowoffSellTrendMinPct,
+		cfg.DeterministicFallback.BlowoffSellRecentMinPct,
+		cfg.DeterministicFallback.BlowoffSellMaxImbalance,
+		cfg.DeterministicFallback.SellWindowMinRangePct,
+		cfg.DeterministicFallback.SellWindowMaxRangePct,
+		cfg.DeterministicFallback.SellWindowMaxSpreadPct,
+		cfg.DeterministicFallback.SellWindowMaxImbalance,
+		cfg.DeterministicFallback.SellWindowMinRecentPct,
+		cfg.DeterministicFallback.SellWindowMaxRecentPct,
+		cfg.DeterministicFallback.SellWindowMinTrendPct,
+		cfg.DeterministicFallback.SellWindowMaxTrendPct,
+		cfg.DeterministicFallback.NoRecentBuyMaxRangePct,
+	)
+
 	return cfg
 }
 
@@ -651,6 +751,48 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MIN_RANGE_PCT"); ok {
 		cfg.SellWindowMinRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_REVERSAL_BUY_MAX_SPREAD_PCT"); ok {
+		cfg.ReversalBuyMaxSpreadPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_REVERSAL_BUY_MAX_RECENT_PCT"); ok {
+		cfg.ReversalBuyMaxRecentPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_REVERSAL_BUY_MAX_TREND_PCT"); ok {
+		cfg.ReversalBuyMaxTrendPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_TREND_MIN_PCT"); ok {
+		cfg.BlowoffSellTrendMinPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_RECENT_MIN_PCT"); ok {
+		cfg.BlowoffSellRecentMinPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_MAX_IMBALANCE"); ok {
+		cfg.BlowoffSellMaxImbalance = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MAX_RANGE_PCT"); ok {
+		cfg.SellWindowMaxRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MAX_SPREAD_PCT"); ok {
+		cfg.SellWindowMaxSpreadPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MAX_IMBALANCE"); ok {
+		cfg.SellWindowMaxImbalance = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MIN_RECENT_PCT"); ok {
+		cfg.SellWindowMinRecentPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MAX_RECENT_PCT"); ok {
+		cfg.SellWindowMaxRecentPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MIN_TREND_PCT"); ok {
+		cfg.SellWindowMinTrendPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_SELL_WINDOW_MAX_TREND_PCT"); ok {
+		cfg.SellWindowMaxTrendPct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_NO_RECENT_BUY_MAX_RANGE_PCT"); ok {
+		cfg.NoRecentBuyMaxRangePct = value
 	}
 
 	return cfg
@@ -2822,8 +2964,8 @@ func (s *AIScalpingService) validateDecision(ctx context.Context, decision *AITr
 	}
 	if decision.Action == "sell" &&
 		!scalpingSellTrendConfirmed(resolved) &&
-		!scalpingBlowoffSellTrendConfirmed(resolved) &&
-		!scalpingSellWindowCandidate(resolved) {
+		!scalpingBlowoffSellTrendConfirmed(resolved, s.deterministicFallbackConfig()) &&
+		!scalpingSellWindowCandidate(resolved, s.deterministicFallbackConfig()) {
 		return fmt.Errorf("sell decision rejected without 24h downside confirmation on %s (price_change_24h=%.4f%%, required<=%.4f%%)", resolved.Symbol, resolved.PriceChange24h, scalpingSellBroadTrendMaxPct)
 	}
 	if decision.SizePercent <= 0 {
@@ -2897,11 +3039,11 @@ func (s *AIScalpingService) decisionSpreadThreshold(action string, signal aiMark
 	threshold := s.maxBidAskSpreadPct()
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "buy":
-		if scalpingReversalBuyCandidate(signal) {
+		if scalpingReversalBuyCandidate(signal, s.deterministicFallbackConfig()) {
 			threshold = math.Max(threshold, scalpingReversalBuyMaxSpreadPct)
 		}
 	case "sell":
-		if scalpingSellWindowCandidate(signal) {
+		if scalpingSellWindowCandidate(signal, s.deterministicFallbackConfig()) {
 			threshold = math.Max(threshold, scalpingSellWindowMaxSpreadPct)
 		}
 	}
@@ -2909,7 +3051,7 @@ func (s *AIScalpingService) decisionSpreadThreshold(action string, signal aiMark
 }
 
 func (s *AIScalpingService) scalpingBuySignalRejectionReason(signal aiMarketSignal) string {
-	if scalpingReversalBuyCandidate(signal) {
+	if scalpingReversalBuyCandidate(signal, s.deterministicFallbackConfig()) {
 		return ""
 	}
 	buyMomentumMin := math.Max(s.deterministicFallbackConfig().BuyMinPriceChangePct, 0.05)
@@ -3542,14 +3684,14 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if signal.Price <= 0 || signal.Symbol == "" {
 		return nil, 0, false
 	}
-	reversalBuy := scalpingReversalBuyCandidate(signal)
-	sellWindow := scalpingSellWindowCandidate(signal)
+	reversalBuy := scalpingReversalBuyCandidate(signal, s.deterministicFallbackConfig())
+	sellWindow := scalpingSellWindowCandidate(signal, s.deterministicFallbackConfig())
 	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > effectiveMaxSpread && !reversalBuy && !sellWindow) {
 		return nil, 0, false
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	blowoffReversal := scalpingBlowoffSellTrendConfirmed(signal)
+	blowoffReversal := scalpingBlowoffSellTrendConfirmed(signal, s.deterministicFallbackConfig())
 	// Ticker-only signals have OrderBookImbalance=0 (no orderbook fetched) but
 	// carry a ticker-derived BidAskSpread > 0. The imbalance gate is meant to
 	// filter empty orderbook data, not to reject valid ticker-only candidates;
@@ -3641,7 +3783,7 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 			0,
 			1,
 		)
-	case scalpingBlowoffSellTrendConfirmed(signal):
+	case scalpingBlowoffSellTrendConfirmed(signal, s.deterministicFallbackConfig()):
 		action = "sell"
 		momentumAligned = true
 		blowoffReversal = true
@@ -3862,31 +4004,33 @@ func scalpingSellTrendConfirmed(signal aiMarketSignal) bool {
 	return signal.PriceChange24h <= scalpingSellBroadTrendMaxPct
 }
 
-func scalpingReversalBuyCandidate(signal aiMarketSignal) bool {
+func scalpingReversalBuyCandidate(signal aiMarketSignal, fallback DeterministicFallbackConfig) bool {
 	return signal.RecentChangeKnown &&
 		signal.BidAskSpread > 0 &&
-		signal.BidAskSpread <= scalpingReversalBuyMaxSpreadPct &&
-		signal.RangePosition24h <= scalpingReversalBuyMaxRangePct &&
-		signal.RecentPriceChange <= scalpingReversalBuyMaxRecentPct &&
-		signal.PriceChange24h <= scalpingReversalBuyMaxTrendPct
+		signal.BidAskSpread <= fallback.ReversalBuyMaxSpreadPct &&
+		signal.RangePosition24h <= fallback.ReversalBuyMaxRangePct &&
+		signal.RecentPriceChange <= fallback.ReversalBuyMaxRecentPct &&
+		signal.PriceChange24h <= fallback.ReversalBuyMaxTrendPct
 }
 
-func scalpingSellWindowCandidate(signal aiMarketSignal) bool {
+func scalpingSellWindowCandidate(signal aiMarketSignal, fallback DeterministicFallbackConfig) bool {
 	return signal.RecentChangeKnown &&
 		signal.BidAskSpread > 0 &&
-		signal.BidAskSpread <= scalpingSellWindowMaxSpreadPct &&
-		signal.OrderBookImbalance <= scalpingSellWindowMaxImbalance &&
-		signal.RangePosition24h >= scalpingSellWindowMinRangePct &&
-		signal.RangePosition24h <= scalpingSellWindowMaxRangePct &&
-		signal.RecentPriceChange >= scalpingSellWindowMinRecentPct &&
-		signal.RecentPriceChange <= scalpingSellWindowMaxRecentPct &&
-		signal.PriceChange24h >= scalpingSellWindowMinTrendPct &&
-		signal.PriceChange24h <= scalpingSellWindowMaxTrendPct
+		signal.BidAskSpread <= fallback.SellWindowMaxSpreadPct &&
+		signal.OrderBookImbalance <= fallback.SellWindowMaxImbalance &&
+		signal.RangePosition24h >= fallback.SellWindowMinRangePct &&
+		signal.RangePosition24h <= fallback.SellWindowMaxRangePct &&
+		signal.RecentPriceChange >= fallback.SellWindowMinRecentPct &&
+		signal.RecentPriceChange <= fallback.SellWindowMaxRecentPct &&
+		signal.PriceChange24h >= fallback.SellWindowMinTrendPct &&
+		signal.PriceChange24h <= fallback.SellWindowMaxTrendPct
 }
 
-func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal) bool {
-	// Disabled until observed paper evidence shows counter-trend blowoff shorts can beat fees.
-	return false
+func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal, fallback DeterministicFallbackConfig) bool {
+	return signal.RecentChangeKnown &&
+		signal.PriceChange24h >= fallback.BlowoffSellTrendMinPct &&
+		signal.RecentPriceChange >= fallback.BlowoffSellRecentMinPct &&
+		signal.OrderBookImbalance <= fallback.BlowoffSellMaxImbalance
 }
 
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {

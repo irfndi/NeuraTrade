@@ -836,7 +836,7 @@ func TestScalpingBacktestEngine_BuildDecisionRejectsObservedPullbackBuy(t *testi
 	require.Nil(t, decision)
 }
 
-func TestScalpingBacktestEngine_BuildDecisionBlocksCounterTrendBlowoffReversalSell(t *testing.T) {
+func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testing.T) {
 	now := time.Date(2026, 5, 12, 2, 47, 50, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
@@ -854,7 +854,8 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksCounterTrendBlowoffReversalSe
 		RecentChangeKnown:  true,
 	})
 
-	require.Nil(t, decision)
+	require.NotNil(t, decision)
+	require.Equal(t, "sell", decision.Action)
 }
 
 func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *testing.T) {

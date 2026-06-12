@@ -855,11 +855,12 @@ func (e *ScalpingBacktestEngine) classifyRegimeVolatility(signal MarketSignal) s
 
 func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AITradingDecision) map[string]GateResult {
 	results := map[string]GateResult{}
+	fallback := e.config.DeterministicFallback.Normalized()
 
 	spreadAllowed := signal.BidAskSpread >= 0 &&
 		(signal.BidAskSpread <= e.config.MaxBidAskSpreadPct ||
-			scalpingReversalBuyCandidate(signal) ||
-			scalpingSellWindowCandidate(signal))
+			scalpingReversalBuyCandidate(signal, fallback) ||
+			scalpingSellWindowCandidate(signal, fallback))
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
 	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.05
@@ -1160,7 +1161,7 @@ func (e *ScalpingBacktestEngine) computeSignalHints(signal MarketSignal, decisio
 // When RequireRecentMomentum=true, buildDecisionFromSignal already applies
 // these gates itself and returns nil before reaching computeSignalHints.
 func scalpingBacktestBuyRejectionReason(signal MarketSignal) string {
-	if scalpingReversalBuyCandidate(signal) {
+	if scalpingReversalBuyCandidate(signal, DefaultDeterministicFallbackConfig()) {
 		return ""
 	}
 	buyMomentumMin := scalpingRecentBuyMinTrendPct
@@ -1184,30 +1185,42 @@ func scalpingBacktestBuyRejectionReason(signal MarketSignal) string {
 	}
 }
 
-func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) *AITradingDecision {
+func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) (decision *AITradingDecision) {
+	var rejectionReason string
+	defer func() {
+		if decision == nil {
+			zaplogrus.Debugf("[SCALPING-BACKTEST] reject %s on %s (spread=%.4f%%, imbalance=%.4f, ADX=%.1f, ATR=%.2f, BB%%b=%.4f, range=%.1f%%, trend_24h=%.4f%%, recent=%.4f%%)",
+				rejectionReason, signal.Symbol, signal.BidAskSpread, signal.OrderBookImbalance, signal.ADX, signal.ATRRatio, signal.BBPercentB, signal.RangePosition24h, signal.PriceChange24h, signal.RecentPriceChange)
+		}
+	}()
 	_ = ctx
 	fallback := e.config.DeterministicFallback.Normalized()
 	if signal.Price <= 0 || strings.TrimSpace(signal.Symbol) == "" {
+		rejectionReason = "invalid_signal"
 		return nil
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	reversalBuy := scalpingReversalBuyCandidate(signal)
-	sellWindow := scalpingSellWindowCandidate(signal)
+	reversalBuy := scalpingReversalBuyCandidate(signal, fallback)
+	sellWindow := scalpingSellWindowCandidate(signal, fallback)
 	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > e.config.MaxBidAskSpreadPct && !reversalBuy && !sellWindow) {
+		rejectionReason = "spread_too_wide"
 		return nil
 	}
 	if signal.ADX > fallback.ADXMaxPct {
+		rejectionReason = "adx_too_high"
 		return nil
 	}
 	if signal.ATRRatio > fallback.ATRRatioMax {
+		rejectionReason = "atr_too_high"
 		return nil
 	}
 	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
 	if e.config.RequireRecentMomentum {
 		effectiveMinImbalance = fallback.MinImbalance
 	}
-	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal) && !reversalBuy && !sellWindow {
+	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal, fallback) && !reversalBuy && !sellWindow {
+		rejectionReason = "imbalance_too_weak"
 		return nil
 	}
 
@@ -1216,6 +1229,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	sellMomentumMax := fallback.SellMaxPriceChangePct
 	if e.config.RequireRecentMomentum {
 		if !signal.RecentChangeKnown {
+			rejectionReason = "recent_momentum_required"
 			return nil
 		}
 		momentumPct = signal.RecentPriceChange
@@ -1254,7 +1268,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		action = "sell"
 		momentumAligned = momentumPct <= sellMomentumMax
 		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.SellRangeMin-5))/math.Max(100-(fallback.SellRangeMin-5), 1), 0, 1)
-	case scalpingBlowoffSellTrendConfirmed(signal):
+	case scalpingBlowoffSellTrendConfirmed(signal, fallback):
 		action = "sell"
 		momentumAligned = true
 		rangeAlignment = clampFloat(
@@ -1271,23 +1285,29 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		momentumAligned = true
 		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.BuyRangeMax-5))/math.Max(fallback.SellRangeMin-(fallback.BuyRangeMax-5), 1), 0, 1)
 	default:
+		rejectionReason = "no_directional_edge"
 		return nil
 	}
 
 	if !momentumAligned {
+		rejectionReason = "momentum_not_aligned"
 		return nil
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.BidAskSpread > fallback.RecentBuyMaxSpreadPct {
+		rejectionReason = "recent_buy_spread_too_wide"
 		return nil
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.PriceChange24h < fallback.RecentBuyMinTrendPct {
+		rejectionReason = "recent_buy_trend_too_low"
 		return nil
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.RangePosition24h > fallback.RecentBuyMaxRangePct {
+		rejectionReason = "recent_buy_range_too_high"
 		return nil
 	}
-	if e.config.RequireRecentMomentum && action == "sell" && !scalpingBlowoffSellTrendConfirmed(signal) &&
+	if e.config.RequireRecentMomentum && action == "sell" && !scalpingBlowoffSellTrendConfirmed(signal, fallback) &&
 		!sellWindow && signal.RangePosition24h < fallback.RecentSellMinRangePct {
+		rejectionReason = "recent_sell_range_too_low"
 		return nil
 	}
 
@@ -1304,6 +1324,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	)
 
 	if confidence < e.config.MinConfidence {
+		rejectionReason = "confidence_below_floor"
 		return nil
 	}
 
@@ -1311,6 +1332,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	projectedNetEdgePct := fallbackProjectedNetEdgePct(signal.BidAskSpread, reward)
 	requiredNetEdgePct := fallbackRequiredNetEdgePct(TradingPortfolio{AccountTier: e.policy.AccountTier}, e.config.MinExpectancyEdge)
 	if projectedNetEdgePct.LessThan(requiredNetEdgePct) {
+		rejectionReason = "expectancy_below_min_edge"
 		return nil
 	}
 
