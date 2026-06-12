@@ -183,6 +183,10 @@ type DeterministicFallbackConfig struct {
 	SellWindowMinTrendPct   float64
 	SellWindowMaxTrendPct   float64
 	NoRecentBuyMaxRangePct  float64
+
+	BacktestImbalanceFloor      float64
+	BacktestStrongImbalanceFloor float64
+	BacktestRangeBufferPct      float64
 }
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
@@ -233,6 +237,9 @@ func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 		SellWindowMinTrendPct:   0.0,
 		SellWindowMaxTrendPct:   0.50,
 		NoRecentBuyMaxRangePct:  20.0,
+		BacktestImbalanceFloor:      0.05,
+		BacktestStrongImbalanceFloor: 0.20,
+		BacktestRangeBufferPct:      5.0,
 	}
 }
 
@@ -404,6 +411,15 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	}
 	if cfg.NoRecentBuyMaxRangePct > 0 {
 		normalized.NoRecentBuyMaxRangePct = clampFloat(cfg.NoRecentBuyMaxRangePct, 1, 100)
+	}
+	if cfg.BacktestImbalanceFloor > 0 {
+		normalized.BacktestImbalanceFloor = clampFloat(cfg.BacktestImbalanceFloor, 0.0001, 1)
+	}
+	if cfg.BacktestStrongImbalanceFloor > 0 {
+		normalized.BacktestStrongImbalanceFloor = clampFloat(cfg.BacktestStrongImbalanceFloor, 0.0001, 1)
+	}
+	if cfg.BacktestRangeBufferPct > 0 {
+		normalized.BacktestRangeBufferPct = clampFloat(cfg.BacktestRangeBufferPct, 0, 50)
 	}
 
 	return normalized
@@ -619,7 +635,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	)
 
 	zaplogrus.Infof(
-		"[AI-SCALPING] DeterministicFallback: BBEntryMaxPct=%.4f BBExitMinPct=%.4f ADXMaxPct=%.2f ATRRatioMax=%.2f RecentBuyMaxSpreadPct=%.4f RecentBuyMinTrendPct=%.4f RecentBuyMaxRangePct=%.2f RecentSellMinRangePct=%.2f ReversalBuyMaxSpreadPct=%.4f ReversalBuyMaxRangePct=%.2f ReversalBuyMaxRecentPct=%.4f ReversalBuyMaxTrendPct=%.4f BlowoffSellRangeMin=%.2f BlowoffSellRangeMax=%.2f BlowoffSellTrendMinPct=%.4f BlowoffSellRecentMinPct=%.4f BlowoffSellMaxImbalance=%.4f SellWindowMinRangePct=%.2f SellWindowMaxRangePct=%.2f SellWindowMaxSpreadPct=%.4f SellWindowMaxImbalance=%.4f SellWindowMinRecentPct=%.4f SellWindowMaxRecentPct=%.4f SellWindowMinTrendPct=%.4f SellWindowMaxTrendPct=%.4f NoRecentBuyMaxRangePct=%.2f",
+		"[AI-SCALPING] DeterministicFallback: BBEntryMaxPct=%.4f BBExitMinPct=%.4f ADXMaxPct=%.2f ATRRatioMax=%.2f RecentBuyMaxSpreadPct=%.4f RecentBuyMinTrendPct=%.4f RecentBuyMaxRangePct=%.2f RecentSellMinRangePct=%.2f ReversalBuyMaxSpreadPct=%.4f ReversalBuyMaxRangePct=%.2f ReversalBuyMaxRecentPct=%.4f ReversalBuyMaxTrendPct=%.4f BlowoffSellRangeMin=%.2f BlowoffSellRangeMax=%.2f BlowoffSellTrendMinPct=%.4f BlowoffSellRecentMinPct=%.4f BlowoffSellMaxImbalance=%.4f SellWindowMinRangePct=%.2f SellWindowMaxRangePct=%.2f SellWindowMaxSpreadPct=%.4f SellWindowMaxImbalance=%.4f SellWindowMinRecentPct=%.4f SellWindowMaxRecentPct=%.4f SellWindowMinTrendPct=%.4f SellWindowMaxTrendPct=%.4f NoRecentBuyMaxRangePct=%.2f BacktestImbalanceFloor=%.4f BacktestStrongImbalanceFloor=%.4f BacktestRangeBufferPct=%.2f",
 		cfg.DeterministicFallback.BBEntryMaxPct,
 		cfg.DeterministicFallback.BBExitMinPct,
 		cfg.DeterministicFallback.ADXMaxPct,
@@ -646,6 +662,26 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.DeterministicFallback.SellWindowMinTrendPct,
 		cfg.DeterministicFallback.SellWindowMaxTrendPct,
 		cfg.DeterministicFallback.NoRecentBuyMaxRangePct,
+		cfg.DeterministicFallback.BacktestImbalanceFloor,
+		cfg.DeterministicFallback.BacktestStrongImbalanceFloor,
+		cfg.DeterministicFallback.BacktestRangeBufferPct,
+	)
+
+	scalpingPolicy := appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig())
+	zaplogrus.Infof(
+		"[AI-SCALPING] ScalpingPolicy: StrongImbalanceFloor=%.4f NeutralImbalanceFloor=%.4f BuyRangeMax=%.2f SellRangeMin=%.2f ContinuationRangeBuffer=%.2f BreakdownSellRangeMin=%.2f ConfidenceBase=%.4f ConfidenceImbalanceW=%.4f ConfidenceLiquidityW=%.4f ConfidenceRangeW=%.4f ConfidenceVolumeW=%.4f ConfidenceVolumeLogBase=%.2f",
+		scalpingPolicy.StrongImbalanceFloor,
+		scalpingPolicy.NeutralImbalanceFloor,
+		scalpingPolicy.BuyRangeMax,
+		scalpingPolicy.SellRangeMin,
+		scalpingPolicy.ContinuationRangeBuffer,
+		scalpingPolicy.BreakdownSellRangeMin,
+		scalpingPolicy.ConfidenceBase,
+		scalpingPolicy.ConfidenceImbalanceW,
+		scalpingPolicy.ConfidenceLiquidityW,
+		scalpingPolicy.ConfidenceRangeW,
+		scalpingPolicy.ConfidenceVolumeW,
+		scalpingPolicy.ConfidenceVolumeLogBase,
 	)
 
 	return cfg
@@ -793,6 +829,15 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_NO_RECENT_BUY_MAX_RANGE_PCT"); ok {
 		cfg.NoRecentBuyMaxRangePct = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_IMBALANCE_FLOOR"); ok {
+		cfg.BacktestImbalanceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_STRONG_IMBALANCE_FLOOR"); ok {
+		cfg.BacktestStrongImbalanceFloor = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_RANGE_BUFFER_PCT"); ok {
+		cfg.BacktestRangeBufferPct = value
 	}
 
 	return cfg
@@ -1511,7 +1556,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
 	zaplogrus.Infof("[AI-SCALPING] Gathered %d market signals", len(signals))
-	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy)
+	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig()))
 
 	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {

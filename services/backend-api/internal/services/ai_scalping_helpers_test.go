@@ -19,6 +19,9 @@ func TestApplyDeterministicFallbackConfigFromEnv_ReadsNewHelperFields(t *testing
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_RECENT_MIN_PCT", "0.20")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_BLOWOFF_SELL_MAX_IMBALANCE", "-0.10")
 	t.Setenv("NEURATRADE_SCALPING_FALLBACK_NO_RECENT_BUY_MAX_RANGE_PCT", "60.0")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_BT_IMBALANCE_FLOOR", "0.02")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_BT_STRONG_IMBALANCE_FLOOR", "0.10")
+	t.Setenv("NEURATRADE_SCALPING_FALLBACK_BT_RANGE_BUFFER_PCT", "12.0")
 
 	got := applyDeterministicFallbackConfigFromEnv(DefaultDeterministicFallbackConfig()).Normalized()
 
@@ -41,6 +44,9 @@ func TestApplyDeterministicFallbackConfigFromEnv_ReadsNewHelperFields(t *testing
 		{"BlowoffSellRecentMinPct", got.BlowoffSellRecentMinPct, 0.20},
 		{"BlowoffSellMaxImbalance", got.BlowoffSellMaxImbalance, -0.10},
 		{"NoRecentBuyMaxRangePct", got.NoRecentBuyMaxRangePct, 60.0},
+		{"BacktestImbalanceFloor", got.BacktestImbalanceFloor, 0.02},
+		{"BacktestStrongImbalanceFloor", got.BacktestStrongImbalanceFloor, 0.10},
+		{"BacktestRangeBufferPct", got.BacktestRangeBufferPct, 12.0},
 	}
 	for _, c := range checks {
 		if c.got != c.want {

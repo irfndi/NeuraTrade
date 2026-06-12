@@ -428,7 +428,7 @@ func TestBuildCandidateFunnel_CapturesStructuredRejectReasons(t *testing.T) {
 			RangePosition24h:   40,
 			PriceChange24hPct:  0.90,
 		},
-	}, policy)
+	}, policy, DefaultScalpingPolicyConfig())
 
 	require.Equal(t, 4, snapshot.CandidateUniverseCount)
 	require.Equal(t, 4, snapshot.CandidateRankedCount)
@@ -515,7 +515,7 @@ func TestEvaluateCandidateSignal_RejectsInvalidMetrics(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ranked, viable, rejection := evaluateCandidateSignal(tc.signal, policy)
+			ranked, viable, rejection := evaluateCandidateSignal(tc.signal, policy, DefaultScalpingPolicyConfig())
 			require.False(t, ranked)
 			require.False(t, viable)
 			require.Equal(t, CandidateRejectMissingOrderbookSignal, rejection.Reason)
@@ -540,7 +540,7 @@ func TestEvaluateCandidateSignal_AllowsStrongMomentumContinuationSell(t *testing
 		OrderBookImbalance: -0.23,
 		RangePosition24h:   50,
 		PriceChange24hPct:  -0.8,
-	}, policy)
+	}, policy, DefaultScalpingPolicyConfig())
 
 	require.True(t, ranked)
 	require.True(t, viable)
@@ -564,7 +564,7 @@ func TestEvaluateCandidateSignal_AllowsBufferedMidRangeBuy(t *testing.T) {
 		OrderBookImbalance: 0.15,
 		RangePosition24h:   48,
 		PriceChange24hPct:  -0.8,
-	}, policy)
+	}, policy, DefaultScalpingPolicyConfig())
 
 	require.True(t, ranked)
 	require.True(t, viable)
@@ -588,7 +588,7 @@ func TestEvaluateCandidateSignal_AllowsControlledBreakdownSell(t *testing.T) {
 		OrderBookImbalance: -0.23,
 		RangePosition24h:   29,
 		PriceChange24hPct:  -0.8,
-	}, policy)
+	}, policy, DefaultScalpingPolicyConfig())
 
 	require.True(t, ranked)
 	require.True(t, viable)

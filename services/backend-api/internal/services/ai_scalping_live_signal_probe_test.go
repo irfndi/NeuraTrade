@@ -67,7 +67,7 @@ func TestAIScalpingService_LiveSignalProbe(t *testing.T) {
 		USDTBalance: 48,
 		TotalValue:  48,
 	})
-	funnel := appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy)
+	funnel := appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig()))
 
 	withOrderbook := 0
 	for _, signal := range signals {
