@@ -201,3 +201,6 @@ dist/
 .clawpatch/
 .deepsec/
 services/backend-api/5yr-backtest
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key
