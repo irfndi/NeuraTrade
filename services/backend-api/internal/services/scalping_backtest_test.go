@@ -1075,7 +1075,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRequiresDefaultImbal
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
-	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 2, result.Summary.RejectionByReason["recent_buy_range_too_high"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsNearMaxSpreadBuy(t *testing.T) {
@@ -1123,7 +1123,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsNearMaxSpread
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
-	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 2, result.Summary.RejectionByReason["recent_buy_spread_too_wide"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsRejectsENJRecentBuyLossShape(t *testing.T) {
@@ -1154,7 +1154,7 @@ func TestScalpingBacktestEngine_RunSignalsRejectsENJRecentBuyLossShape(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
-	require.Equal(t, 1, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 1, result.Summary.RejectionByReason["recent_buy_spread_too_wide"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsDowntrendBuy(t *testing.T) {
@@ -1202,7 +1202,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsDowntrendBuy(
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
-	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 2, result.Summary.RejectionByReason["recent_buy_trend_too_low"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsFlatTrendRangeBuy(t *testing.T) {
@@ -1250,7 +1250,7 @@ func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumRejectsFlatTrendRang
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Summary.EligibleSignals)
 	require.Equal(t, 0, result.Summary.TotalTrades)
-	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 2, result.Summary.RejectionByReason["recent_buy_trend_too_low"])
 }
 
 func TestScalpingBacktestEngine_RunSignalsWithRecentMomentumAllowsStrongBookBuy(t *testing.T) {
@@ -1547,7 +1547,7 @@ func TestScalpingBacktestEngine_RunSignalsUsesConfiguredFallbackThresholds(t *te
 
 	require.NoError(t, err)
 	require.Zero(t, result.Summary.TotalTrades)
-	require.Equal(t, 2, result.Summary.RejectionByReason["no_directional_edge"])
+	require.Equal(t, 2, result.Summary.RejectionByReason["imbalance_too_weak"])
 }
 
 func newRunSignalsTestEngine(now time.Time) *ScalpingBacktestEngine {
