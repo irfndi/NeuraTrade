@@ -2,6 +2,8 @@
 
 > Read this first. It is intentionally short. It assumes you know Go, the `make` command line, and the `bd` issue tracker. Anything you cannot verify here, grep/Read in the source of truth.
 
+> **Shell commands**: this project uses [RTK](RTK.md) (Rust Token Killer). When executing shell commands, prefix them with `rtk` (e.g., `rtk git status`, `rtk go test ./...`) so output is token-efficient. If a command is not recognized by RTK it passes through unchanged.
+
 ## OVERVIEW
 
 NeuraTrade is a multi-service crypto trading platform. The runtime is native (no Docker required). SQLite is the default database; Redis is optional and non-fatal if absent.
