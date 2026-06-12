@@ -44,7 +44,7 @@ describe("CLI e2e", () => {
     rmDir(home);
   });
 
-  it("--help shows command tree", { timeout: 30000 }, async () => {
+  it("--help shows command tree", async () => {
     const { exitCode, stdout } = await runCli(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("NeuraTrade CLI");
@@ -54,7 +54,7 @@ describe("CLI e2e", () => {
     expect(stdout).toContain("doctor");
   });
 
-  it("doctor checks runtime paths", { timeout: 30000 }, async () => {
+  it("doctor checks runtime paths", async () => {
     const { exitCode, stdout } = await runCli(["doctor"], {
       NEURATRADE_HOME: home,
     });
@@ -65,7 +65,7 @@ describe("CLI e2e", () => {
     expect(stdout).toContain("Runtime file");
   });
 
-  it("status reports unreachable backend when not running", { timeout: 30000 }, async () => {
+  it("status reports unreachable backend when not running", async () => {
     const { exitCode, stdout } = await runCli(["status"], {
       NEURATRADE_HOME: home,
       SERVER_PORT: "19999",
@@ -75,7 +75,7 @@ describe("CLI e2e", () => {
     expect(stdout).toContain("unknown");
   });
 
-  it("health reports failure when backend is not running", { timeout: 30000 }, async () => {
+  it("health reports failure when backend is not running", async () => {
     const { exitCode, stdout, stderr } = await runCli(["health"], {
       NEURATRADE_HOME: home,
       SERVER_PORT: "19998",
@@ -84,7 +84,7 @@ describe("CLI e2e", () => {
     expect(stdout + stderr).toContain("Could not reach API");
   });
 
-  it("gateway status reports down when no state exists", { timeout: 30000 }, async () => {
+  it("gateway status reports down when no state exists", async () => {
     const { exitCode, stdout } = await runCli(["gateway", "status"], {
       NEURATRADE_HOME: home,
     });
@@ -92,7 +92,7 @@ describe("CLI e2e", () => {
     expect(stdout).toContain("NeuraTrade Service Status");
   });
 
-  it("gateway stop reports no running services", { timeout: 30000 }, async () => {
+  it("gateway stop reports no running services", async () => {
     const { exitCode, stdout } = await runCli(["gateway", "stop"], {
       NEURATRADE_HOME: home,
     });

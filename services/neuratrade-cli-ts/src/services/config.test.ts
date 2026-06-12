@@ -431,6 +431,8 @@ describe("Config service", () => {
     it("resolves sqlite_path with env > runtime > local > default", async () => {
       const home = tmpDir();
       try {
+        delete process.env.SQLITE_PATH;
+
         writeJson(nodePath.join(home, "config.json"), {
           database: { sqlite_path: "/local/path/db.sqlite" },
         });

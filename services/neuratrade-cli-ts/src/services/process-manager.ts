@@ -301,18 +301,12 @@ export const ProcessManagerLive: Layer.Layer<
           }
         }
 
-        // Send SIGTERM
         yield* logger.info(`Stopping ${name}`, { pid, signal: "SIGTERM" });
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch (err) {
-          // Process may have exited between our check and signal
-          yield* pidFile.remove(pidFileService);
-          return yield* Effect.fail(
-            new ProcessError(
-              `failed to send SIGTERM to ${name} (PID ${pid}): ${String(err)}`,
-            ),
-          );
+        const stopped = yield* signalAndWaitUtil(pid, "SIGTERM", 5000);
+        if (!stopped) {
+          yield* logger.warn(`${name}: did not exit gracefully, force-killed`, {
+            pid,
+          });
         }
 
         yield* logger.info(`${name}: Stopped`, { pid });
