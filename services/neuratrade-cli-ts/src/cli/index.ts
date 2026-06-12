@@ -4,6 +4,7 @@ import { gatewayCommand } from "./gateway.ts";
 import { statusCommand } from "./status.ts";
 import { healthCommand } from "./health.ts";
 import { doctorCommand } from "./doctor.ts";
+import { marketCommand } from "./market.ts";
 
 export const rootCommand = Command.make(
   "neuratrade",
@@ -16,5 +17,6 @@ export const rootCommand = Command.make(
     statusCommand,
     healthCommand,
     doctorCommand,
+    marketCommand,
   ]),
 );
