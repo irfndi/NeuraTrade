@@ -366,4 +366,94 @@ describe("HealthCheck service", () => {
       }
     });
   });
+
+  // -----------------------------------------------------------------------
+  // probeHealthJSON
+  // -----------------------------------------------------------------------
+
+  describe("probeHealthJSON", () => {
+    it("parses a healthy backend /health response", async () => {
+      const server = startTestServer(() =>
+        new Response(JSON.stringify({ status: "healthy", services: { database: "healthy", redis: "healthy" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const hc = yield* HealthCheck;
+          return yield* hc.probeHealthJSON(server.url + "/health", 2000);
+        });
+
+        const result = await Effect.runPromise(
+          program.pipe(Effect.provide(HealthCheckLive)),
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.status).toBe("healthy");
+        expect(result.services).toEqual({ database: "healthy", redis: "healthy" });
+      } finally {
+        server.stop();
+      }
+    });
+
+    it("returns ok=false when connection is refused", async () => {
+      const program = Effect.gen(function* () {
+        const hc = yield* HealthCheck;
+        return yield* hc.probeHealthJSON("http://127.0.0.1:1/health", 500);
+      });
+
+      const result = await Effect.runPromise(
+        program.pipe(Effect.provide(HealthCheckLive)),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe("unreachable");
+      expect(result.error).toContain("127.0.0.1:1");
+    });
+
+    it("returns ok=false for non-2xx responses", async () => {
+      const server = startTestServer(() =>
+        new Response("Internal Server Error", { status: 500 }),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const hc = yield* HealthCheck;
+          return yield* hc.probeHealthJSON(server.url + "/health", 2000);
+        });
+
+        const result = await Effect.runPromise(
+          program.pipe(Effect.provide(HealthCheckLive)),
+        );
+
+        expect(result.ok).toBe(false);
+        expect(result.status).toBe("500");
+        expect(result.error).toContain("HTTP 500");
+      } finally {
+        server.stop();
+      }
+    });
+
+    it("tolerates invalid JSON bodies", async () => {
+      const server = startTestServer(() =>
+        new Response("not json", { status: 200 }),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const hc = yield* HealthCheck;
+          return yield* hc.probeHealthJSON(server.url + "/health", 2000);
+        });
+
+        const result = await Effect.runPromise(
+          program.pipe(Effect.provide(HealthCheckLive)),
+        );
+
+        expect(result.ok).toBe(true);
+        expect(result.status).toBe("unknown");
+        expect(result.services).toEqual({});
+      } finally {
+        server.stop();
+      }
+    });
+  });
 });
