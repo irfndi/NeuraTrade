@@ -116,6 +116,9 @@ func RunPublicScalpingLivePaperSoak(
 	if holdPeriod <= 0 {
 		holdPeriod = DefaultScalpingBacktestHoldPeriod
 	}
+	if v := getEnvInt("NEURATRADE_SCALPING_DEFAULT_HOLD_PERIOD_SECONDS"); v > 0 {
+		holdPeriod = time.Duration(v) * time.Second
+	}
 	chatID := strings.TrimSpace(options.ChatID)
 	if chatID == "" {
 		chatID = defaultScalpingLivePaperSoakChatID
@@ -350,4 +353,11 @@ func resolveSoakRequireRecentMomentum() bool {
 		return v
 	}
 	return true
+}
+
+func resolveSoakDefaultHoldPeriod() time.Duration {
+	if v := getEnvInt("NEURATRADE_SCALPING_DEFAULT_HOLD_PERIOD_SECONDS"); v > 0 {
+		return time.Duration(v) * time.Second
+	}
+	return DefaultScalpingBacktestHoldPeriod
 }
