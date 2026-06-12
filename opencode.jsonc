@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "effect": {
+      "repository": "Effect-TS/effect",
+      "branch": "main",
+      "description": "Use for Effect-TS API patterns: CLI, Config, Layer, FileSystem, Command/process spawning, testing"
+    },
+    "effect-examples": {
+      "repository": "Effect-TS/examples",
+      "branch": "main",
+      "description": "Use for Effect-TS example apps and templates"
+    },
+    "bun": {
+      "repository": "oven-sh/bun",
+      "branch": "main",
+      "description": "Use for Bun runtime APIs: spawn, test, file system, process signals"
+    },
+    "ccxt": {
+      "repository": "ccxt/ccxt",
+      "branch": "master",
+      "description": "Use for CCXT integration: market data, order execution, exchange adapters"
+    }
+  }
+}
