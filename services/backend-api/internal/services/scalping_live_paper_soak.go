@@ -324,7 +324,8 @@ func runPublicScalpingLivePaperSoakSignals(
 		Exchange:              exchange,
 		InitialCapital:        initialCapital,
 		FeeRate:               feeRate,
-		SlippagePct:           decimal.NewFromFloat(DefaultScalpingBacktestSlippage),
+		SlippagePct:           decimal.NewFromFloat(resolveSoakBacktestSlippagePct()),
+		NoisePct:              resolveSoakBacktestNoisePct(),
 		MaxBidAskSpreadPct:    math.Min(defaults.MaxBidAskSpreadPct, fallbackConfig.MaxBidAskSpread),
 		MinConfidence:         defaults.MinConfidence,
 		MinExpectancyN:        defaults.MinExpectancyN,
@@ -360,4 +361,18 @@ func resolveSoakDefaultHoldPeriod() time.Duration {
 		return time.Duration(v) * time.Second
 	}
 	return DefaultScalpingBacktestHoldPeriod
+}
+
+func resolveSoakBacktestSlippagePct() float64 {
+	if v, ok := getEnvFloat("NEURATRADE_SCALPING_BACKTEST_SLIPPAGE_PCT"); ok && v >= 0 {
+		return v
+	}
+	return DefaultScalpingBacktestSlippage
+}
+
+func resolveSoakBacktestNoisePct() float64 {
+	if v, ok := getEnvFloat("NEURATRADE_SCALPING_BACKTEST_NOISE_PCT"); ok && v >= 0 {
+		return v
+	}
+	return 0
 }
