@@ -41,6 +41,10 @@ export interface MarketDataGatewayService {
   readonly fetchSymbols: (
     exchange: string,
   ) => Effect.Effect<readonly string[], MarketDataError, never>;
+
+  readonly fetch24hrVolumes: (
+    exchange: string,
+  ) => Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never>;
 }
 
 export const MarketDataGateway = Context.GenericTag<MarketDataGatewayService>(

@@ -42,6 +42,7 @@ describe("SimulatedExchangeAdapter", () => {
           timestamp: new Date(),
         }),
       fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
     });
 
     const fill = await Effect.runPromise(
@@ -79,6 +80,7 @@ describe("SimulatedExchangeAdapter", () => {
           timestamp: new Date(),
         }),
       fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
     });
 
     await Effect.runPromise(

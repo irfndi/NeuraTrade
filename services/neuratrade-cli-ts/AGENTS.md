@@ -36,7 +36,8 @@ services/neuratrade-cli-ts/
 | Process spawning | `src/services/process-manager.ts` | Bun.spawn, signals, cleanup |
 | API client | `src/services/api-client.ts` | HTTP client for backend endpoints |
 | Health checks | `src/services/health-check.ts` | HTTP probe + process probe |
-| Market data gateway | `src/market-data/gateways/` | Binance REST adapter |
+| Market data commands | `src/cli/market.ts` | fetch-candles, fetch-universe |
+| Market data gateway | `src/market-data/gateways/` | Binance REST adapter (ticks, candles, order book, symbols, 24h volumes) |
 | Market data persistence | `src/market-data/repository.ts` | SQLite candles/ticks repository |
 | Deterministic scalping | `src/scalping/composer.ts`, `src/scalping/backtest.ts` | Signal composition + backtest engine |
 | Exchange adapter port | `src/exchange/adapter.ts`, `src/exchange/adapters/` | Simulated + live Binance adapters |
@@ -55,6 +56,7 @@ bun run index.ts gateway start
 bun run index.ts gateway stop
 bun run index.ts gateway status
 bun run index.ts market fetch-candles --symbol BTC/USDT --timeframe 1h --start "2025-06-01"
+bun run index.ts market fetch-universe --quote USDT --top 20 --timeframe 1h --days 365
 bun run index.ts scalp backtest --symbol BTC/USDT --timeframe 1h --use-atr-stops --regime-mode reversion
 bun run index.ts scalp optimize --symbol BTC/USDT --timeframe 1h --regime-mode reversion
 bun run index.ts scalp scan --timeframe 1h --regime-mode reversion

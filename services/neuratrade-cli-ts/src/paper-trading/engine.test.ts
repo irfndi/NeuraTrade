@@ -127,6 +127,7 @@ function makeGateway(price: number): MarketDataGatewayService {
     fetchOHLCV: () => Effect.succeed(candles),
     fetchOrderBook: () => Effect.succeed(orderBook),
     fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+    fetch24hrVolumes: () => Effect.succeed({}),
   };
 }
 

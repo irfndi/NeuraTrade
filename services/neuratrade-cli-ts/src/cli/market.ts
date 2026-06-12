@@ -7,6 +7,7 @@ import { Path, PathLive } from "../services/path.js";
 import { MarketDataGateway } from "../market-data/gateway.js";
 import {
   MarketDataRepository,
+  MarketDataRepositoryError,
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
@@ -34,6 +35,16 @@ const daysOption = Options.integer("days").pipe(
 const batchOption = Options.integer("batch").pipe(
   Options.withDefault(1000),
   Options.withDescription("Candles per exchange request (max 1000 for Binance)"),
+);
+
+const topOption = Options.integer("top").pipe(
+  Options.withDefault(20),
+  Options.withDescription("Number of top-volume symbols to fetch"),
+);
+
+const quoteOption = Options.text("quote").pipe(
+  Options.withDefault("USDT"),
+  Options.withDescription("Quote asset to filter (e.g. USDT, BTC)"),
 );
 
 function makeLayer(home?: string) {
@@ -142,9 +153,107 @@ function timeframeToMs(timeframe: string): number {
   return value * (multiplier[unit] ?? 60_000);
 }
 
+interface FetchUniverseArgs {
+  readonly exchange: string;
+  readonly timeframe: string;
+  readonly days: number;
+  readonly batch: number;
+  readonly top: number;
+  readonly quote: string;
+}
+
+export const fetchUniverseCommand = Command.make(
+  "fetch-universe",
+  {
+    exchange: exchangeOption,
+    timeframe: timeframeOption,
+    days: daysOption,
+    batch: batchOption,
+    top: topOption,
+    quote: quoteOption,
+  },
+  ({ exchange, timeframe, days, batch, top, quote }) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const result = yield* fetchUniverseProgram({ exchange, timeframe, days, batch, top, quote }).pipe(
+        Effect.provide(repoLayer),
+        Effect.tap((summary) =>
+          Console.log(
+            `Universe fetch complete: ${summary.symbols.length} symbols, ${summary.totalCandles} candles`,
+          ),
+        ),
+        Effect.catchAll((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(`fetch-universe failed: ${err.reason}`);
+            return { symbols: [], totalCandles: 0 };
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Fetch historical candles for the top-volume symbol universe"));
+
+export function fetchUniverseProgram(args: FetchUniverseArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* MarketDataRepository;
+    const gateway = yield* MarketDataGateway;
+
+    yield* repo.ensureTables();
+
+    yield* Console.log(`Loading symbol universe for ${args.quote}...`);
+    const allSymbols = yield* gateway.fetchSymbols(args.exchange);
+    const quoteSymbols = allSymbols.filter((s) => s.endsWith(`/${args.quote.toUpperCase()}`));
+
+    if (quoteSymbols.length === 0) {
+      return yield* Effect.fail(
+        new MarketDataRepositoryError(
+          `No symbols found for quote asset ${args.quote} on ${args.exchange}`,
+        ),
+      );
+    }
+
+    yield* Console.log(`Loading 24h volumes to rank ${quoteSymbols.length} ${args.quote} symbols...`);
+    const volumes = yield* gateway.fetch24hrVolumes(args.exchange);
+
+    const ranked = quoteSymbols
+      .map((symbol) => ({
+        symbol,
+        volume: volumes[symbol.replace("/", "")] ?? 0,
+      }))
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, args.top)
+      .map((s) => s.symbol);
+
+    yield* Console.log(`Fetching ${ranked.length} symbols: ${ranked.join(", ")}`);
+
+    let totalCandles = 0;
+    for (const symbol of ranked) {
+      const saved = yield* fetchCandlesProgram({
+        exchange: args.exchange,
+        symbol,
+        timeframe: args.timeframe,
+        days: args.days,
+        batch: args.batch,
+      });
+      totalCandles += saved;
+      yield* Console.log(`  ${symbol}: ${saved} candles`);
+    }
+
+    return { symbols: ranked, totalCandles };
+  });
+}
+
 export const marketCommand = Command.make("market", {}, () =>
-  Console.log("Market data commands. Use 'market fetch-candles --help' for details."),
+  Console.log("Market data commands. Use 'market fetch-candles|fetch-universe --help' for details."),
 ).pipe(
   Command.withDescription("Market data operations"),
-  Command.withSubcommands([fetchCandlesCommand]),
+  Command.withSubcommands([fetchCandlesCommand, fetchUniverseCommand]),
 );

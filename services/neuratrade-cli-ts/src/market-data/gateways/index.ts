@@ -29,6 +29,9 @@ export const MarketDataGatewayLive = Layer.succeed(
 
     fetchSymbols: (exchange) =>
       dispatch(exchange, "fetchSymbols", () => Binance.fetchSymbols()),
+
+    fetch24hrVolumes: (exchange) =>
+      dispatch(exchange, "fetch24hrVolumes", () => Binance.fetch24hrVolumes()),
   } satisfies MarketDataGatewayService,
 );
 

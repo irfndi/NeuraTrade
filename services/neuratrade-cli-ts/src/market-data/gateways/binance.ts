@@ -142,6 +142,20 @@ export function fetchSymbols(): Effect.Effect<readonly string[], MarketDataError
   });
 }
 
+export function fetch24hrVolumes(): Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never> {
+  return Effect.gen(function* () {
+    const data = yield* getJSON<
+      Array<{ symbol: string; volume: string; quoteVolume: string }>
+    >("/api/v3/ticker/24hr");
+
+    const volumes: Record<string, number> = {};
+    for (const ticker of data) {
+      volumes[ticker.symbol] = Number(ticker.quoteVolume);
+    }
+    return volumes;
+  });
+}
+
 function binanceInterval(timeframe: string): string {
   switch (timeframe) {
     case "1m":
