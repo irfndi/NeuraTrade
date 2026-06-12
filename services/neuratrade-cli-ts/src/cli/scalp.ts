@@ -12,6 +12,13 @@ import {
 import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
 import { runBacktest } from "../scalping/backtest.js";
+import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
+import { runPaperTradingIteration } from "../paper-trading/engine.js";
+import {
+  PaperTradingRepository,
+  PaperTradingRepositoryError,
+  PaperTradingRepositorySQLiteLive,
+} from "../paper-trading/repository.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -695,9 +702,142 @@ function printScanResult(
   });
 }
 
+const intervalOption = Options.integer("interval").pipe(
+  Options.withDefault(60),
+  Options.withDescription("Seconds between paper-trading iterations"),
+);
+
+const iterationsOption = Options.integer("iterations").pipe(
+  Options.withDefault(1),
+  Options.withDescription("Number of iterations to run (0 = infinite)"),
+);
+
+interface PaperTradeArgs {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly capital: number;
+  readonly positionSize: number;
+  readonly fee: number;
+  readonly minConfidence: number;
+  readonly useAtrStops: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrTakeProfitMultiplier: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly noTrend: boolean;
+  readonly holdUntilStop: boolean;
+  readonly regimeMode: "trend" | "reversion";
+  readonly interval: number;
+  readonly iterations: number;
+}
+
+export const paperTradeCommand = Command.make(
+  "paper-trade",
+  {
+    exchange: exchangeOption,
+    symbol: symbolOption,
+    timeframe: timeframeOption,
+    capital: capitalOption,
+    positionSize: positionSizeOption,
+    fee: feeOption,
+    minConfidence: confidenceOption,
+    useAtrStops: useAtrStopsOption,
+    atrStopMultiplier: atrStopMultiplierOption,
+    atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    priceOnly: priceOnlyOption,
+    noRsi: noRsiOption,
+    noTrend: noTrendOption,
+    holdUntilStop: holdUntilStopOption,
+    regimeMode: regimeModeOption,
+    interval: intervalOption,
+    iterations: iterationsOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
+      const layers = Layer.mergeAll(BunContext.layer, PathLive(process.env.NEURATRADE_HOME), MarketDataGatewayLive, repoLayer, paperRepoLayer);
+
+      const result = yield* paperTradeProgram(args).pipe(
+        Effect.provide(layers),
+        Effect.catchAll((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(`paper-trade failed: ${"reason" in err ? err.reason : String(err)}`);
+            return undefined;
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Run deterministic scalping paper-trading loop"));
+
+function paperTradeProgram(args: PaperTradeArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* MarketDataRepository;
+    yield* repo.ensureTables();
+
+    const paperRepo = yield* PaperTradingRepository;
+    yield* paperRepo.ensureTables();
+
+    const portfolio = yield* paperRepo.getPortfolio();
+    const startCapital = portfolio.capital <= 0 ? args.capital : portfolio.capital;
+    yield* paperRepo.setPortfolio(startCapital, Math.max(portfolio.peakCapital, startCapital));
+
+    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const options = {
+      exchange: args.exchange,
+      symbol: args.symbol,
+      timeframe: args.timeframe,
+      composerConfig,
+      positionSizePct: args.positionSize,
+      feePct: args.fee,
+      minConfidence: args.minConfidence,
+      useAtrStops: args.useAtrStops,
+      atrStopMultiplier: args.atrStopMultiplier,
+      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+      holdUntilStop: args.holdUntilStop,
+      initialCapital: args.capital,
+    };
+
+    let remaining = args.iterations;
+    while (remaining !== 0) {
+      const result = yield* runPaperTradingIteration(options);
+      yield* Console.log(
+        `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
+      );
+
+      if (remaining > 0) {
+        remaining -= 1;
+      }
+
+      if (remaining !== 0) {
+        yield* Effect.sleep(`${args.interval} seconds`);
+      }
+    }
+
+    const closedTrades = yield* paperRepo.listRecentTrades(5);
+    if (closedTrades.length > 0) {
+      yield* Console.log("\nRecent closed trades:");
+      for (const t of closedTrades) {
+        yield* Console.log(
+          `  ${t.side} ${t.entryPrice.toFixed(2)} → ${t.exitPrice.toFixed(2)} | PnL ${t.pnlPct.toFixed(2)}% | ${t.exitReason}`,
+        );
+      }
+    }
+  });
+}
+
 export const scalpCommand = Command.make("scalp", {}, () =>
-  Console.log("Scalping commands. Use 'scalp backtest|optimize|scan --help' for details."),
+  Console.log("Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade --help' for details."),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
-  Command.withSubcommands([backtestCommand, optimizeCommand, scanCommand]),
+  Command.withSubcommands([backtestCommand, optimizeCommand, scanCommand, paperTradeCommand]),
 );
