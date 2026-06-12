@@ -52,18 +52,6 @@ const (
 	NeuraScalpingMaxBidAskSpreadPctEnv = "NEURATRADE_SCALPING_MAX_BID_ASK_SPREAD_PCT"
 	minScalpingMaxBidAskSpreadPct      = 0.0001
 	maxScalpingMaxBidAskSpreadPct      = 5.0
-	scalpingStrongImbalanceFloor       = 0.20
-	scalpingNeutralImbalanceFloor      = 0.10
-	scalpingBuyRangeMax                = 45.0
-	scalpingSellRangeMin               = 55.0
-	scalpingContinuationRangeBuffer    = 5.0
-	scalpingBreakdownSellRangeMin      = 20.0
-	scalpingConfidenceBase             = 0.50
-	scalpingConfidenceImbalanceW       = 0.55
-	scalpingConfidenceLiquidityW       = 0.20
-	scalpingConfidenceRangeW           = 0.15
-	scalpingConfidenceVolumeW          = 0.10
-	scalpingConfidenceVolumeLogBase    = 8.0
 )
 
 type ScalpingPolicyConfig struct {
