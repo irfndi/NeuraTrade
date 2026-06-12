@@ -1,6 +1,6 @@
 import { Command, Options } from "@effect/cli";
 import { BunContext } from "@effect/platform-bun";
-import { Console, Effect, Layer } from "effect";
+import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
@@ -16,6 +16,7 @@ import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { ExchangeAdapter } from "../exchange/adapter.js";
+import { RiskGuardLive } from "../risk/guards.js";
 import { runPaperTradingIteration } from "../paper-trading/engine.js";
 import {
   PaperTradingRepository,
@@ -730,6 +731,31 @@ const apiSecretOption = Options.text("api-secret").pipe(
   Options.withDescription("Binance API secret (or set BINANCE_API_SECRET env)"),
 );
 
+const maxDrawdownOption = Options.float("max-drawdown-pct").pipe(
+  Options.optional,
+  Options.withDescription("Max drawdown % before blocking new trades (live default 5%)"),
+);
+
+const maxDailyLossOption = Options.float("max-daily-loss-pct").pipe(
+  Options.optional,
+  Options.withDescription("Max daily loss % before blocking new trades (live default 2%)"),
+);
+
+const maxPositionSizeOption = Options.float("max-position-size-pct").pipe(
+  Options.optional,
+  Options.withDescription("Max position size % of capital per trade (live default 10%)"),
+);
+
+const maxTradesPerDayOption = Options.integer("max-trades-per-day").pipe(
+  Options.optional,
+  Options.withDescription("Max trades per day (live default 10)"),
+);
+
+const minCapitalOption = Options.integer("min-capital").pipe(
+  Options.optional,
+  Options.withDescription("Minimum capital required to trade (live default 100)"),
+);
+
 interface PaperTradeArgs {
   readonly exchange: string;
   readonly symbol: string;
@@ -751,6 +777,25 @@ interface PaperTradeArgs {
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
+  readonly maxDrawdownPct: Option.Option<number>;
+  readonly maxDailyLossPct: Option.Option<number>;
+  readonly maxPositionSizePct: Option.Option<number>;
+  readonly maxTradesPerDay: Option.Option<number>;
+  readonly minCapital: Option.Option<number>;
+}
+
+type MutablePartialRiskLimits = {
+  -readonly [K in keyof import("../risk/guards.js").RiskLimits]?: import("../risk/guards.js").RiskLimits[K];
+};
+
+function buildRiskOverrides(args: PaperTradeArgs): MutablePartialRiskLimits {
+  const overrides: MutablePartialRiskLimits = {};
+  if (Option.isSome(args.maxDrawdownPct)) overrides.maxDrawdownPct = args.maxDrawdownPct.value;
+  if (Option.isSome(args.maxDailyLossPct)) overrides.maxDailyLossPct = args.maxDailyLossPct.value;
+  if (Option.isSome(args.maxPositionSizePct)) overrides.maxPositionSizePct = args.maxPositionSizePct.value;
+  if (Option.isSome(args.maxTradesPerDay)) overrides.maxTradesPerDay = args.maxTradesPerDay.value;
+  if (Option.isSome(args.minCapital)) overrides.minCapital = args.minCapital.value;
+  return overrides;
 }
 
 export const paperTradeCommand = Command.make(
@@ -776,6 +821,11 @@ export const paperTradeCommand = Command.make(
     live: liveOption,
     apiKey: apiKeyOption,
     apiSecret: apiSecretOption,
+    maxDrawdownPct: maxDrawdownOption,
+    maxDailyLossPct: maxDailyLossOption,
+    maxPositionSizePct: maxPositionSizeOption,
+    maxTradesPerDay: maxTradesPerDayOption,
+    minCapital: minCapitalOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -792,6 +842,7 @@ export const paperTradeCommand = Command.make(
             apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
+      const riskGuardLayer = RiskGuardLive(args.live, buildRiskOverrides(args));
       const layers = Layer.mergeAll(
         BunContext.layer,
         PathLive(process.env.NEURATRADE_HOME),
@@ -799,6 +850,7 @@ export const paperTradeCommand = Command.make(
         adapterLayer,
         repoLayer,
         paperRepoLayer,
+        riskGuardLayer,
       );
 
       const result = yield* paperTradeProgram(args).pipe(
@@ -842,6 +894,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
       holdUntilStop: args.holdUntilStop,
       initialCapital: args.capital,
+      isLive: args.live,
     };
 
     let remaining = args.iterations;

@@ -40,6 +40,12 @@ export interface PaperTradingRepositoryService {
   readonly listRecentTrades: (
     limit: number,
   ) => Effect.Effect<readonly PaperTrade[], PaperTradingRepositoryError, never>;
+
+  readonly countTradesForDate: (
+    date: Date,
+  ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
+
+  readonly getTodayRealizedPnl: () => Effect.Effect<number, PaperTradingRepositoryError, never>;
 }
 
 export const PaperTradingRepository = Context.GenericTag<PaperTradingRepositoryService>(
@@ -341,6 +347,46 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to list trades: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  countTradesForDate(date: Date): Effect.Effect<number, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const row = this.db
+          .query(
+            `SELECT COUNT(*) AS count
+             FROM paper_trades
+             WHERE date(closed_at) = date(?)`,
+          )
+          .get(date.toISOString()) as { count: number } | null;
+        return row?.count ?? 0;
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to count trades: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  getTodayRealizedPnl(): Effect.Effect<number, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const row = this.db
+          .query(
+            `SELECT COALESCE(SUM(pnl), 0) AS pnl
+             FROM paper_trades
+             WHERE date(closed_at) = date('now')`,
+          )
+          .get() as { pnl: number } | null;
+        return row?.pnl ?? 0;
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load today PnL: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

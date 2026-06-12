@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Either } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
@@ -14,6 +14,11 @@ import {
   ExchangeError,
   type ExchangeAdapterService,
 } from "../exchange/adapter.js";
+import {
+  RiskError,
+  RiskGuard,
+  type RiskGuardService,
+} from "../risk/guards.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -34,6 +39,7 @@ export interface PaperTradingOptions {
   readonly atrTakeProfitMultiplier: number;
   readonly holdUntilStop: boolean;
   readonly initialCapital: number;
+  readonly isLive: boolean;
 }
 
 export interface PaperTradingIterationResult {
@@ -52,8 +58,8 @@ export function runPaperTradingIteration(
   options: PaperTradingOptions,
 ): Effect.Effect<
   PaperTradingIterationResult,
-  MarketDataError | PaperTradingRepositoryError | ExchangeError,
-  MarketDataGatewayService | PaperTradingRepositoryService | ExchangeAdapterService
+  MarketDataError | PaperTradingRepositoryError | ExchangeError | RiskError,
+  MarketDataGatewayService | PaperTradingRepositoryService | ExchangeAdapterService | RiskGuardService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
@@ -130,6 +136,35 @@ export function runPaperTradingIteration(
       // Pre-compute size from orderbook mid to size the order.
       const entryPrice = midPrice(orderBook);
       const size = positionValue / entryPrice;
+
+      // Pre-trade risk gate.
+      const todayPnl = yield* repo.getTodayRealizedPnl();
+      const tradesTodayCount = yield* repo.countTradesForDate(new Date());
+      const startOfDayCapital = capital - todayPnl;
+      const riskGuard = yield* RiskGuard;
+      const riskCheck = yield* riskGuard
+        .check({
+          isLive: options.isLive,
+          capital,
+          peakCapital,
+          startOfDayCapital,
+          dailyRealizedPnl: todayPnl,
+          tradesTodayCount,
+          positionValue,
+          symbol: options.symbol,
+          side: signal.direction as "buy" | "sell",
+        })
+        .pipe(Effect.either);
+
+      if (riskCheck._tag === "Left") {
+        yield* repo.setPortfolio(capital, peakCapital);
+        return {
+          action: "hold" as const,
+          position,
+          capital,
+          note: `RISK BLOCKED: ${riskCheck.left.violations.join("; ")}`,
+        };
+      }
 
       const fill = yield* adapter.placeOrder({
         symbol: options.symbol,
