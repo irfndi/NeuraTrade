@@ -138,3 +138,4 @@
 {"id":"int-ec142639","kind":"field_change","created_at":"2026-06-12T16:31:29.592493Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-20gi","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"QA gate passed: test evidence recorded"}}
 {"id":"int-557f033f","kind":"field_change","created_at":"2026-06-12T16:33:25.540176Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-nx2m","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
 {"id":"int-325e53b4","kind":"field_change","created_at":"2026-06-12T16:38:07.972387Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-nx2m","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"QA gate passed: test evidence recorded"}}
+{"id":"int-225f119f","kind":"field_change","created_at":"2026-06-12T16:46:04.135674Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-30xx","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}

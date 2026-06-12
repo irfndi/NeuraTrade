@@ -60,6 +60,7 @@ bun run index.ts market fetch-universe --quote USDT --top 20 --timeframe 1h --da
 bun run index.ts scalp backtest --symbol BTC/USDT --timeframe 1h --use-atr-stops --regime-mode reversion
 bun run index.ts scalp optimize --symbol BTC/USDT --timeframe 1h --regime-mode reversion
 bun run index.ts scalp scan --timeframe 1h --regime-mode reversion
+bun run index.ts scalp scan --timeframe 1h --price-only --no-trend --regime-mode reversion --use-atr-stops --optimize
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --iterations 10
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --live --api-key $BINANCE_API_KEY --api-secret $BINANCE_API_SECRET
 ```

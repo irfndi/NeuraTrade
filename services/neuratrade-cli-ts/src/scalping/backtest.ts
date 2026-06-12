@@ -77,7 +77,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
   // We need a rolling window of candles plus current OB metrics.
   // For backtesting, derive synthetic order-book metrics from the candle.
   for (let i = 20; i < candles.length - 1; i++) {
-    const window = candles.slice(0, i + 1);
+    const window = candles.slice(Math.max(0, i + 1 - 200), i + 1);
     const current = candles[i];
     const next = candles[i + 1];
 

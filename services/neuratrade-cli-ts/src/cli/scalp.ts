@@ -11,7 +11,7 @@ import {
 } from "../market-data/repository.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
-import { runBacktest } from "../scalping/backtest.js";
+import { runBacktest, type BacktestResult } from "../scalping/backtest.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
@@ -534,6 +534,11 @@ const topOption = Options.integer("top").pipe(
   Options.withDescription("Limit scan to top N symbols by candle count (0 = all)"),
 );
 
+const optimizeScanOption = Options.boolean("optimize").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Run a coarse per-symbol parameter grid search and report best params"),
+);
+
 interface ScanArgs {
   readonly exchange: string;
   readonly timeframe: string;
@@ -551,6 +556,7 @@ interface ScanArgs {
   readonly regimeMode: "trend" | "reversion";
   readonly minCandles: number;
   readonly top: number;
+  readonly optimize: boolean;
 }
 
 export const scanCommand = Command.make(
@@ -572,6 +578,7 @@ export const scanCommand = Command.make(
     regimeMode: regimeModeOption,
     minCandles: minCandlesOption,
     top: topOption,
+    optimize: optimizeScanOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -598,7 +605,7 @@ export const scanCommand = Command.make(
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Backtest deterministic scalping across all stored symbols"));
 
-function scanProgram(args: ScanArgs) {
+export function scanProgram(args: ScanArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
 
@@ -614,14 +621,7 @@ function scanProgram(args: ScanArgs) {
     const selected = args.top > 0 ? symbols.slice(0, args.top) : symbols;
     const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
 
-    const results: Array<{
-      readonly symbol: string;
-      readonly totalTrades: number;
-      readonly winRate: number;
-      readonly totalReturnPct: number;
-      readonly maxDrawdownPct: number;
-      readonly sharpeRatio: number;
-    }> = [];
+    const results: Array<ScanResult> = [];
 
     for (const symbol of selected) {
       const candles = yield* repo.getCandles({
@@ -632,23 +632,13 @@ function scanProgram(args: ScanArgs) {
 
       if (candles.length < 50) continue;
 
-      const result = runBacktest({
-        symbol,
-        exchange: args.exchange,
-        timeframe: args.timeframe,
-        candles,
-        composerConfig,
-        initialCapital: args.capital,
-        positionSizePct: args.positionSize,
-        stopLossPct: 1.5,
-        takeProfitPct: 3.0,
-        feePct: args.fee,
-        minConfidence: args.minConfidence,
-        useAtrStops: args.useAtrStops,
-        atrStopMultiplier: args.atrStopMultiplier,
-        atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-        holdUntilStop: args.holdUntilStop,
-      });
+      const result = args.optimize
+        ? optimizeForSymbol(symbol, candles, args, composerConfig)
+        : runBacktestWithParams(symbol, candles, args, composerConfig, {
+            atrStopMultiplier: args.atrStopMultiplier,
+            atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+            minConfidence: args.minConfidence,
+          });
 
       results.push({
         symbol,
@@ -657,6 +647,7 @@ function scanProgram(args: ScanArgs) {
         totalReturnPct: result.totalReturnPct,
         maxDrawdownPct: result.maxDrawdownPct,
         sharpeRatio: result.sharpeRatio,
+        bestParams: result.bestParams,
       });
     }
 
@@ -664,15 +655,108 @@ function scanProgram(args: ScanArgs) {
   });
 }
 
+interface ScanResult {
+  readonly symbol: string;
+  readonly totalTrades: number;
+  readonly winRate: number;
+  readonly totalReturnPct: number;
+  readonly maxDrawdownPct: number;
+  readonly sharpeRatio: number;
+  readonly bestParams?: {
+    readonly atrStopMultiplier: number;
+    readonly atrTakeProfitMultiplier: number;
+    readonly minConfidence: number;
+  };
+}
+
+function runBacktestWithParams(
+  symbol: string,
+  candles: readonly import("../scalping/types.js").CandleLike[],
+  args: ScanArgs,
+  composerConfig: ComposerConfig,
+  params: { readonly atrStopMultiplier: number; readonly atrTakeProfitMultiplier: number; readonly minConfidence: number },
+): BacktestResult & { readonly bestParams?: undefined } {
+  return runBacktest({
+    symbol,
+    exchange: args.exchange,
+    timeframe: args.timeframe,
+    candles,
+    composerConfig,
+    initialCapital: args.capital,
+    positionSizePct: args.positionSize,
+    stopLossPct: 1.5,
+    takeProfitPct: 3.0,
+    feePct: args.fee,
+    minConfidence: params.minConfidence,
+    useAtrStops: args.useAtrStops,
+    atrStopMultiplier: params.atrStopMultiplier,
+    atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
+    holdUntilStop: args.holdUntilStop,
+  });
+}
+
+const SCAN_STOP_MULTS = [1.5, 2.0, 2.5];
+const SCAN_TP_MULTS = [2.0, 3.0, 4.0];
+const SCAN_CONFIDENCES = [0.4, 0.5, 0.6];
+
+function optimizeForSymbol(
+  symbol: string,
+  candles: readonly import("../scalping/types.js").CandleLike[],
+  args: ScanArgs,
+  composerConfig: ComposerConfig,
+): BacktestResult & {
+  readonly bestParams: {
+    readonly atrStopMultiplier: number;
+    readonly atrTakeProfitMultiplier: number;
+    readonly minConfidence: number;
+  };
+} {
+  let best: BacktestResult | null = null;
+  let bestParams = {
+    atrStopMultiplier: args.atrStopMultiplier,
+    atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+    minConfidence: args.minConfidence,
+  };
+
+  for (const stopMult of SCAN_STOP_MULTS) {
+    for (const tpMult of SCAN_TP_MULTS) {
+      for (const conf of SCAN_CONFIDENCES) {
+        const result = runBacktestWithParams(symbol, candles, args, composerConfig, {
+          atrStopMultiplier: stopMult,
+          atrTakeProfitMultiplier: tpMult,
+          minConfidence: conf,
+        });
+        if (!best || result.totalReturnPct > best.totalReturnPct) {
+          best = result;
+          bestParams = {
+            atrStopMultiplier: stopMult,
+            atrTakeProfitMultiplier: tpMult,
+            minConfidence: conf,
+          };
+        }
+      }
+    }
+  }
+
+  return { ...(best ?? emptyScanResult(symbol)), bestParams };
+}
+
+function emptyScanResult(symbol: string): BacktestResult {
+  return {
+    symbol,
+    totalTrades: 0,
+    winningTrades: 0,
+    losingTrades: 0,
+    winRate: 0,
+    totalReturnPct: 0,
+    maxDrawdownPct: 0,
+    sharpeRatio: 0,
+    trades: [],
+  };
+}
+
 function printScanResult(
-  results: ReadonlyArray<{
-    readonly symbol: string;
-    readonly totalTrades: number;
-    readonly winRate: number;
-    readonly totalReturnPct: number;
-    readonly maxDrawdownPct: number;
-    readonly sharpeRatio: number;
-  }>,
+  results: ReadonlyArray<ScanResult>,
 ) {
   return Effect.gen(function* () {
     if (results.length === 0) {
@@ -697,6 +781,19 @@ function printScanResult(
     const profitable = results.filter((r) => r.totalReturnPct > 0);
     const avgReturn = results.reduce((sum, r) => sum + r.totalReturnPct, 0) / results.length;
     const avgSharpe = results.reduce((sum, r) => sum + r.sharpeRatio, 0) / results.length;
+
+    if (results.some((r) => r.bestParams)) {
+      yield* Console.log("\nBest params per symbol");
+      for (const r of results) {
+        if (r.bestParams) {
+          yield* Console.log(
+            `  ${r.symbol.padEnd(13)} stop=${r.bestParams.atrStopMultiplier.toFixed(1)} ` +
+              `tp=${r.bestParams.atrTakeProfitMultiplier.toFixed(1)} ` +
+              `conf=${r.bestParams.minConfidence.toFixed(1)}`,
+          );
+        }
+      }
+    }
 
     yield* Console.log("\nSummary");
     yield* Console.log(`  Symbols tested: ${results.length}`);
