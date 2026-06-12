@@ -41,6 +41,7 @@ services/neuratrade-cli-ts/
 | Market data persistence | `src/market-data/repository.ts` | SQLite candles/ticks repository |
 | Deterministic scalping | `src/scalping/composer.ts`, `src/scalping/backtest.ts` | Signal composition + backtest engine |
 | Exchange adapter port | `src/exchange/adapter.ts`, `src/exchange/adapters/` | Simulated + live Binance adapters |
+| Exchange testnet validation | `src/cli/exchange.ts` | `exchange test` round-trip command |
 | Paper/live trading | `src/paper-trading/engine.ts`, `src/paper-trading/repository.ts` | Iteration loop + persistence |
 | Pre-trade risk guards | `src/risk/guards.ts` | Drawdown, daily loss, position size limits |
 
@@ -65,6 +66,7 @@ bun run index.ts scalp scan --timeframe 1h --price-only --no-trend --regime-mode
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --iterations 10
 bun run index.ts scalp paper-trade --watchlist watchlist.json --timeframe 1h --iterations 30 --interval 60
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --live --api-key $BINANCE_API_KEY --api-secret $BINANCE_API_SECRET
+bun run index.ts exchange test --api-key $BINANCE_API_KEY --api-secret $BINANCE_API_SECRET --symbol BTC/USDT --quantity 0.001
 ```
 
 ## REAL-MONEY / RISK READINESS

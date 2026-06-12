@@ -6,6 +6,7 @@ import { healthCommand } from "./health.ts";
 import { doctorCommand } from "./doctor.ts";
 import { marketCommand } from "./market.ts";
 import { scalpCommand } from "./scalp.ts";
+import { exchangeCommand } from "./exchange.ts";
 
 export const rootCommand = Command.make(
   "neuratrade",
@@ -20,5 +21,6 @@ export const rootCommand = Command.make(
     doctorCommand,
     marketCommand,
     scalpCommand,
+    exchangeCommand,
   ]),
 );
