@@ -141,3 +141,5 @@
 {"id":"int-225f119f","kind":"field_change","created_at":"2026-06-12T16:46:04.135674Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-30xx","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
 {"id":"int-eed989a0","kind":"field_change","created_at":"2026-06-12T17:03:03.116716Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-30xx","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"QA gate passed: test evidence recorded"}}
 {"id":"int-432f9a6c","kind":"field_change","created_at":"2026-06-12T17:04:36.807804Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-0dpl","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
+{"id":"int-6fb80ccd","kind":"field_change","created_at":"2026-06-12T17:09:07.449001Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-0dpl","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"QA gate passed: test evidence recorded"}}
+{"id":"int-01f425d2","kind":"field_change","created_at":"2026-06-12T17:13:47.803623Z","actor":"Irfandi Marsya","issue_id":"NeuraTrade-s1fv","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}

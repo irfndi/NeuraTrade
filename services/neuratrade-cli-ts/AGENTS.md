@@ -63,6 +63,7 @@ bun run index.ts scalp scan --timeframe 1h --regime-mode reversion
 bun run index.ts scalp scan --timeframe 1h --price-only --no-trend --regime-mode reversion --use-atr-stops --optimize
 bun run index.ts scalp scan --timeframe 1h --price-only --no-trend --regime-mode reversion --use-atr-stops --optimize --min-return-pct 0 --save-watchlist watchlist.json
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --iterations 10
+bun run index.ts scalp paper-trade --watchlist watchlist.json --timeframe 1h --iterations 30 --interval 60
 bun run index.ts scalp paper-trade --symbol BTC/USDT --timeframe 1h --live --api-key $BINANCE_API_KEY --api-secret $BINANCE_API_SECRET
 ```
 

@@ -17,7 +17,10 @@ import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js"
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { ExchangeAdapter } from "../exchange/adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
-import { runPaperTradingIteration } from "../paper-trading/engine.js";
+import {
+  runPaperTradingIteration,
+  type PaperTradingOptions,
+} from "../paper-trading/engine.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -899,6 +902,22 @@ const minCapitalOption = Options.integer("min-capital").pipe(
   Options.withDescription("Minimum capital required to trade (live default 100)"),
 );
 
+const watchlistOption = Options.text("watchlist").pipe(
+  Options.optional,
+  Options.withDescription("Path to a JSON watchlist in NEURATRADE_HOME/data (uses per-symbol best params)"),
+);
+
+interface WatchlistEntry {
+  readonly symbol: string;
+  readonly returnPct: number;
+  readonly sharpe: number;
+  readonly bestParams?: {
+    readonly atrStopMultiplier: number;
+    readonly atrTakeProfitMultiplier: number;
+    readonly minConfidence: number;
+  };
+}
+
 interface PaperTradeArgs {
   readonly exchange: string;
   readonly symbol: string;
@@ -925,11 +944,28 @@ interface PaperTradeArgs {
   readonly maxPositionSizePct: Option.Option<number>;
   readonly maxTradesPerDay: Option.Option<number>;
   readonly minCapital: Option.Option<number>;
+  readonly watchlist: Option.Option<string>;
+  readonly entries?: readonly WatchlistEntry[];
 }
 
 type MutablePartialRiskLimits = {
   -readonly [K in keyof import("../risk/guards.js").RiskLimits]?: import("../risk/guards.js").RiskLimits[K];
 };
+
+function loadWatchlist(path: string): Effect.Effect<readonly WatchlistEntry[], MarketDataRepositoryError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const file = Bun.file(path);
+      const text = await file.text();
+      return JSON.parse(text) as readonly WatchlistEntry[];
+    },
+    catch: (err) =>
+      new MarketDataRepositoryError(
+        `Failed to load watchlist from ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      ),
+  });
+}
 
 function buildRiskOverrides(args: PaperTradeArgs): MutablePartialRiskLimits {
   const overrides: MutablePartialRiskLimits = {};
@@ -969,6 +1005,7 @@ export const paperTradeCommand = Command.make(
     maxPositionSizePct: maxPositionSizeOption,
     maxTradesPerDay: maxTradesPerDayOption,
     minCapital: minCapitalOption,
+    watchlist: watchlistOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -976,6 +1013,11 @@ export const paperTradeCommand = Command.make(
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
       const db = new Database(sqlitePath);
       db.exec("PRAGMA foreign_keys = ON;");
+
+      const watchlist = yield* Option.match(args.watchlist, {
+        onNone: () => Effect.succeed<readonly WatchlistEntry[]>([]),
+        onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
@@ -996,7 +1038,7 @@ export const paperTradeCommand = Command.make(
         riskGuardLayer,
       );
 
-      const result = yield* paperTradeProgram(args).pipe(
+      const result = yield* paperTradeProgram({ ...args, entries: watchlist }).pipe(
         Effect.provide(layers),
         Effect.catchAll((err) =>
           Effect.gen(function* () {
@@ -1024,35 +1066,61 @@ function paperTradeProgram(args: PaperTradeArgs) {
     yield* paperRepo.setPortfolio(startCapital, Math.max(portfolio.peakCapital, startCapital));
 
     const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
-    const options = {
+
+    const entries = args.entries && args.entries.length > 0 ? args.entries : undefined;
+    const makeOptions = (symbol: string, overrides?: Partial<PaperTradingOptions>): PaperTradingOptions => ({
       exchange: args.exchange,
-      symbol: args.symbol,
+      symbol,
       timeframe: args.timeframe,
       composerConfig,
       positionSizePct: args.positionSize,
       feePct: args.fee,
-      minConfidence: args.minConfidence,
-      useAtrStops: args.useAtrStops,
-      atrStopMultiplier: args.atrStopMultiplier,
-      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-      holdUntilStop: args.holdUntilStop,
+      minConfidence: overrides?.minConfidence ?? args.minConfidence,
+      useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
+      atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
+      atrTakeProfitMultiplier: overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+      holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
       initialCapital: args.capital,
       isLive: args.live,
-    };
+    });
 
     let remaining = args.iterations;
     while (remaining !== 0) {
-      const result = yield* runPaperTradingIteration(options);
-      yield* Console.log(
-        `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
-      );
+      if (entries) {
+        for (const entry of entries) {
+          if (remaining === 0) break;
+          const options = makeOptions(entry.symbol, {
+            minConfidence: entry.bestParams?.minConfidence,
+            atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
+            atrTakeProfitMultiplier: entry.bestParams?.atrTakeProfitMultiplier,
+          });
+          const result = yield* runPaperTradingIteration(options);
+          yield* Console.log(
+            `[${new Date().toISOString()}] ${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
+          );
 
-      if (remaining > 0) {
-        remaining -= 1;
-      }
+          if (remaining > 0) {
+            remaining -= 1;
+          }
 
-      if (remaining !== 0) {
-        yield* Effect.sleep(`${args.interval} seconds`);
+          if (remaining !== 0) {
+            yield* Effect.sleep(`${args.interval} seconds`);
+          }
+        }
+      } else {
+        const options = makeOptions(args.symbol);
+        const result = yield* runPaperTradingIteration(options);
+        yield* Console.log(
+          `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
+        );
+
+        if (remaining > 0) {
+          remaining -= 1;
+        }
+
+        if (remaining !== 0) {
+          yield* Effect.sleep(`${args.interval} seconds`);
+        }
       }
     }
 
