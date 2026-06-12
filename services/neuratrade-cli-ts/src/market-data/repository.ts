@@ -44,6 +44,12 @@ export interface MarketDataRepositoryService {
     symbol: string,
   ) => Effect.Effect<Tick | null, MarketDataRepositoryError, never>;
 
+  readonly listSymbols: (
+    exchange: string,
+    timeframe: string,
+    minCandles?: number,
+  ) => Effect.Effect<readonly string[], MarketDataRepositoryError, never>;
+
   readonly ensureTables: () => Effect.Effect<void, MarketDataRepositoryError, never>;
 }
 
@@ -326,6 +332,40 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
         catch: (err) =>
           new MarketDataRepositoryError(
             `Failed to load latest tick: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+    });
+  }
+
+  listSymbols(
+    exchange: string,
+    timeframe: string,
+    minCandles = 100,
+  ): Effect.Effect<readonly string[], MarketDataRepositoryError, never> {
+    const db = this.db;
+    return Effect.gen(function* () {
+      const exchangeId = yield* getOrCreateExchange(exchange, db);
+
+      return yield* Effect.try({
+        try: () => {
+          const rows = db
+            .query(
+              `SELECT tp.symbol, COUNT(o.id) AS candle_count
+               FROM ohlcv_data o
+               JOIN trading_pairs tp ON o.trading_pair_id = tp.id
+               WHERE o.exchange_id = ? AND o.timeframe = ?
+               GROUP BY tp.symbol
+               HAVING candle_count >= ?
+               ORDER BY candle_count DESC`,
+            )
+            .all(exchangeId, timeframe, minCandles) as Array<{ symbol: string; candle_count: number }>;
+
+          return rows.map((r) => r.symbol);
+        },
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to list symbols: ${err instanceof Error ? err.message : String(err)}`,
             err,
           ),
       });

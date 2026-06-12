@@ -513,9 +513,191 @@ function printOptimizeResult(
   });
 }
 
+const minCandlesOption = Options.integer("min-candles").pipe(
+  Options.withDefault(500),
+  Options.withDescription("Minimum candles required for a symbol to be included in scan"),
+);
+
+const topOption = Options.integer("top").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Limit scan to top N symbols by candle count (0 = all)"),
+);
+
+interface ScanArgs {
+  readonly exchange: string;
+  readonly timeframe: string;
+  readonly capital: number;
+  readonly positionSize: number;
+  readonly fee: number;
+  readonly minConfidence: number;
+  readonly useAtrStops: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrTakeProfitMultiplier: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly noTrend: boolean;
+  readonly holdUntilStop: boolean;
+  readonly regimeMode: "trend" | "reversion";
+  readonly minCandles: number;
+  readonly top: number;
+}
+
+export const scanCommand = Command.make(
+  "scan",
+  {
+    exchange: exchangeOption,
+    timeframe: timeframeOption,
+    capital: capitalOption,
+    positionSize: positionSizeOption,
+    fee: feeOption,
+    minConfidence: confidenceOption,
+    useAtrStops: useAtrStopsOption,
+    atrStopMultiplier: atrStopMultiplierOption,
+    atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    priceOnly: priceOnlyOption,
+    noRsi: noRsiOption,
+    noTrend: noTrendOption,
+    holdUntilStop: holdUntilStopOption,
+    regimeMode: regimeModeOption,
+    minCandles: minCandlesOption,
+    top: topOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const result = yield* scanProgram(args).pipe(
+        Effect.provide(repoLayer),
+        Effect.tap((r) => printScanResult(r)),
+        Effect.catchAll((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(`scan failed: ${err.reason}`);
+            return [];
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Backtest deterministic scalping across all stored symbols"));
+
+function scanProgram(args: ScanArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* MarketDataRepository;
+
+    const symbols = yield* repo.listSymbols(args.exchange, args.timeframe, args.minCandles);
+    if (symbols.length === 0) {
+      return yield* Effect.fail(
+        new MarketDataRepositoryError(
+          `No symbols found for ${args.exchange}:${args.timeframe} with >= ${args.minCandles} candles.`,
+        ),
+      );
+    }
+
+    const selected = args.top > 0 ? symbols.slice(0, args.top) : symbols;
+    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+
+    const results: Array<{
+      readonly symbol: string;
+      readonly totalTrades: number;
+      readonly winRate: number;
+      readonly totalReturnPct: number;
+      readonly maxDrawdownPct: number;
+      readonly sharpeRatio: number;
+    }> = [];
+
+    for (const symbol of selected) {
+      const candles = yield* repo.getCandles({
+        exchange: args.exchange,
+        symbol,
+        timeframe: args.timeframe,
+      });
+
+      if (candles.length < 50) continue;
+
+      const result = runBacktest({
+        symbol,
+        exchange: args.exchange,
+        timeframe: args.timeframe,
+        candles,
+        composerConfig,
+        initialCapital: args.capital,
+        positionSizePct: args.positionSize,
+        stopLossPct: 1.5,
+        takeProfitPct: 3.0,
+        feePct: args.fee,
+        minConfidence: args.minConfidence,
+        useAtrStops: args.useAtrStops,
+        atrStopMultiplier: args.atrStopMultiplier,
+        atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+        holdUntilStop: args.holdUntilStop,
+      });
+
+      results.push({
+        symbol,
+        totalTrades: result.totalTrades,
+        winRate: result.winRate,
+        totalReturnPct: result.totalReturnPct,
+        maxDrawdownPct: result.maxDrawdownPct,
+        sharpeRatio: result.sharpeRatio,
+      });
+    }
+
+    return results;
+  });
+}
+
+function printScanResult(
+  results: ReadonlyArray<{
+    readonly symbol: string;
+    readonly totalTrades: number;
+    readonly winRate: number;
+    readonly totalReturnPct: number;
+    readonly maxDrawdownPct: number;
+    readonly sharpeRatio: number;
+  }>,
+) {
+  return Effect.gen(function* () {
+    if (results.length === 0) {
+      yield* Console.log("No scan results.");
+      return;
+    }
+
+    yield* Console.log("\n🔎 Multi-ticker backtest scan");
+    yield* Console.log("Symbol        Trades  Win%    Return   Drawdown  Sharpe");
+    yield* Console.log("---------------------------------------------------------");
+
+    for (const r of results) {
+      yield* Console.log(
+        `${r.symbol.padEnd(13)} ${String(r.totalTrades).padStart(6)}  ` +
+          `${(r.winRate * 100).toFixed(1).padStart(5)}%  ` +
+          `${r.totalReturnPct.toFixed(2).padStart(6)}%  ` +
+          `${r.maxDrawdownPct.toFixed(2).padStart(7)}%   ` +
+          `${r.sharpeRatio.toFixed(3)}`,
+      );
+    }
+
+    const profitable = results.filter((r) => r.totalReturnPct > 0);
+    const avgReturn = results.reduce((sum, r) => sum + r.totalReturnPct, 0) / results.length;
+    const avgSharpe = results.reduce((sum, r) => sum + r.sharpeRatio, 0) / results.length;
+
+    yield* Console.log("\nSummary");
+    yield* Console.log(`  Symbols tested: ${results.length}`);
+    yield* Console.log(`  Profitable:     ${profitable.length} (${((profitable.length / results.length) * 100).toFixed(1)}%)`);
+    yield* Console.log(`  Avg return:     ${avgReturn.toFixed(2)}%`);
+    yield* Console.log(`  Avg Sharpe:     ${avgSharpe.toFixed(3)}`);
+  });
+}
+
 export const scalpCommand = Command.make("scalp", {}, () =>
-  Console.log("Scalping commands. Use 'scalp backtest --help' or 'scalp optimize --help' for details."),
+  Console.log("Scalping commands. Use 'scalp backtest|optimize|scan --help' for details."),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
-  Command.withSubcommands([backtestCommand, optimizeCommand]),
+  Command.withSubcommands([backtestCommand, optimizeCommand, scanCommand]),
 );

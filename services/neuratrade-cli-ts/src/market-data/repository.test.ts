@@ -165,4 +165,38 @@ describe("MarketDataRepositorySQLite", () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0].close).toBe(2);
   });
+
+  it("lists symbols with enough candles", async () => {
+    await Effect.runPromise(repo.ensureTables());
+
+    const btc: Candle[] = Array.from({ length: 5 }, (_, i) => ({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      open: i,
+      high: i,
+      low: i,
+      close: i,
+      volume: i,
+      timestamp: new Date(Date.UTC(2026, 0, 1, i)),
+    }));
+
+    const eth: Candle[] = Array.from({ length: 2 }, (_, i) => ({
+      exchange: "binance",
+      symbol: "ETH/USDT",
+      timeframe: "1h",
+      open: i,
+      high: i,
+      low: i,
+      close: i,
+      volume: i,
+      timestamp: new Date(Date.UTC(2026, 0, 1, i)),
+    }));
+
+    await Effect.runPromise(repo.saveCandles(btc));
+    await Effect.runPromise(repo.saveCandles(eth));
+
+    const symbols = await Effect.runPromise(repo.listSymbols("binance", "1h", 3));
+    expect(symbols).toEqual(["BTC/USDT"]);
+  });
 });
