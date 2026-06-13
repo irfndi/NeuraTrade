@@ -32,6 +32,8 @@ func run() (err error) {
 		minExpectancyN    = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
 		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
 		maxLossPct        = flag.Float64("max-loss-pct", 0, "Hard max-loss per trade as decimal fraction (0 = default: 0.015 = 1.5%)")
+		trailingStopPct   = flag.Float64("trailing-stop-pct", 0, "Trailing stop distance from HWM as decimal fraction (0 = disabled, e.g., 0.005 = 0.5%)")
+		minEntryMomentum  = flag.Float64("min-entry-momentum", 0, "Min price change since last signal in direction of trade (0 = disabled, e.g., 0.001 = 0.1%)")
 		enableTrendFilter = flag.Bool("trend-filter", false, "Enable higher-TF EMA trend filter (off by default; r9/r10 showed it makes losses worse)")
 		holdPeriod        = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
 	)
@@ -95,8 +97,10 @@ func run() (err error) {
 		MaxCapitalPct:      25.0,
 		DefaultHoldPeriod:  *holdPeriod,
 		Mode:               "deterministic",
-		MaxLossPct:         *maxLossPct,
-		EnableTrendFilter:  *enableTrendFilter,
+		MaxLossPct:          *maxLossPct,
+		TrailingStopPct:     *trailingStopPct,
+		MinEntryMomentumPct: *minEntryMomentum,
+		EnableTrendFilter:   *enableTrendFilter,
 	}
 
 	fmt.Printf("Starting backtest...\n")

@@ -93,6 +93,8 @@ type ScalpingBacktestConfig struct {
 	RegimeHighBand        float64
 	RegimeLowBand         float64
 	MaxLossPct            float64
+	TrailingStopPct       float64
+	MinEntryMomentumPct   float64
 	EnableTrendFilter     bool
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
@@ -248,18 +250,19 @@ type SignalEvaluation struct {
 }
 
 type SimulatedPosition struct {
-	Symbol      string
-	Side        string
-	Size        decimal.Decimal
-	Notional    decimal.Decimal
-	EntryPrice  decimal.Decimal
-	EntryTime   time.Time
-	StopLoss    decimal.Decimal
-	TakeProfit  decimal.Decimal
-	RegimeEntry string
-	Signal      MarketSignal
-	Decision    *AITradingDecision
-	HoldCandles int
+	Symbol        string
+	Side          string
+	Size          decimal.Decimal
+	Notional      decimal.Decimal
+	EntryPrice    decimal.Decimal
+	EntryTime     time.Time
+	StopLoss      decimal.Decimal
+	TakeProfit    decimal.Decimal
+	RegimeEntry   string
+	Signal        MarketSignal
+	Decision      *AITradingDecision
+	HoldCandles   int
+	HighWaterMark decimal.Decimal
 }
 
 type SimulatedTrade struct {
@@ -373,6 +376,15 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			candleLow := decimal.NewFromFloat(signal.Signal.Low)
 			candleHigh := decimal.NewFromFloat(signal.Signal.High)
 
+			if position.HighWaterMark.IsZero() {
+				position.HighWaterMark = position.EntryPrice
+			}
+			if strings.EqualFold(position.Side, "buy") && candleHigh.GreaterThan(position.HighWaterMark) {
+				position.HighWaterMark = candleHigh
+			} else if strings.EqualFold(position.Side, "sell") && (position.HighWaterMark.IsZero() || candleLow.LessThan(position.HighWaterMark)) {
+				position.HighWaterMark = candleLow
+			}
+
 			slTPExit := false
 			switch strings.ToLower(strings.TrimSpace(position.Side)) {
 			case "buy":
@@ -388,7 +400,24 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 					slTPExit = true
 				}
 			}
-			if slTPExit || e.positionCanCloseAt(signal.Timestamp, position) {
+			trailStopExit := false
+			if !slTPExit && e.config.TrailingStopPct > 0 && !position.HighWaterMark.IsZero() {
+				trailPct := decimal.NewFromFloat(e.config.TrailingStopPct)
+				one := decimal.NewFromInt(1)
+				switch strings.ToLower(strings.TrimSpace(position.Side)) {
+				case "buy":
+					trailStopPrice := position.HighWaterMark.Mul(one.Sub(trailPct))
+					if (candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(trailStopPrice)) || markPrice.LessThanOrEqual(trailStopPrice) {
+						trailStopExit = true
+					}
+				case "sell":
+					trailStopPrice := position.HighWaterMark.Mul(one.Add(trailPct))
+					if (candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(trailStopPrice)) || markPrice.GreaterThanOrEqual(trailStopPrice) {
+						trailStopExit = true
+					}
+				}
+			}
+			if slTPExit || trailStopExit || e.positionCanCloseAt(signal.Timestamp, position) {
 				trade := e.closeSimulatedPosition(signal, position)
 				e.tradeHistory = append(e.tradeHistory, trade)
 				e.capital = e.capital.Add(trade.PnL)
@@ -411,6 +440,26 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			evaluation.Decision = nil
 			evaluation.FunnelStage = "entry_close_unobserved"
 			evaluation.RejectionReason = "entry_without_close_signal"
+		}
+		if evaluation.Allowed && evaluation.Decision != nil && e.config.MinEntryMomentumPct > 0 {
+			lastPrice := lastPriceBySymbol[signal.Symbol]
+			if lastPrice > 0 {
+				momentumPct := e.config.MinEntryMomentumPct
+				priceChange := (signal.Signal.Price - lastPrice) / lastPrice
+				momentumAligned := false
+				switch strings.ToLower(strings.TrimSpace(evaluation.Decision.Action)) {
+				case "buy":
+					momentumAligned = priceChange >= momentumPct
+				case "sell":
+					momentumAligned = priceChange <= -momentumPct
+				}
+				if !momentumAligned {
+					evaluation.Allowed = false
+					evaluation.Decision = nil
+					evaluation.FunnelStage = "entry_momentum"
+					evaluation.RejectionReason = "entry_momentum_misaligned"
+				}
+			}
 		}
 
 		recorded := ScalpingBacktestSignal{
@@ -693,17 +742,18 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 	}
 
 	position := &SimulatedPosition{
-		Symbol:      signal.Symbol,
-		Side:        decision.Action,
-		Size:        quantity,
-		Notional:    notional,
-		EntryPrice:  entryPrice,
-		EntryTime:   signal.Timestamp,
-		StopLoss:    *stopLoss,
-		TakeProfit:  *takeProfit,
-		RegimeEntry: e.classifyRegime(signal.Signal),
-		Signal:      signal.Signal,
-		Decision:    decision,
+		Symbol:        signal.Symbol,
+		Side:          decision.Action,
+		Size:          quantity,
+		Notional:      notional,
+		EntryPrice:    entryPrice,
+		EntryTime:     signal.Timestamp,
+		StopLoss:      *stopLoss,
+		TakeProfit:    *takeProfit,
+		RegimeEntry:   e.classifyRegime(signal.Signal),
+		Signal:        signal.Signal,
+		Decision:      decision,
+		HighWaterMark: entryPrice,
 	}
 
 	return position, nil
@@ -789,6 +839,37 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 					exitPrice = position.StopLoss
 				}
 				exitReason = "stop_loss"
+			}
+		}
+	}
+
+	if exitReason == "mark_to_market" && e.config.TrailingStopPct > 0 && !position.HighWaterMark.IsZero() {
+		trailPct := decimal.NewFromFloat(e.config.TrailingStopPct)
+		one := decimal.NewFromInt(1)
+		switch side {
+		case "buy":
+			trailStopPrice := position.HighWaterMark.Mul(one.Sub(trailPct))
+			candleLowHit := candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(trailStopPrice)
+			markHit := markPrice.LessThanOrEqual(trailStopPrice)
+			if candleLowHit || markHit {
+				if markPrice.LessThan(trailStopPrice) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = trailStopPrice
+				}
+				exitReason = "trailing_stop"
+			}
+		case "sell":
+			trailStopPrice := position.HighWaterMark.Mul(one.Add(trailPct))
+			candleHighHit := candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(trailStopPrice)
+			markHit := markPrice.GreaterThanOrEqual(trailStopPrice)
+			if candleHighHit || markHit {
+				if markPrice.GreaterThan(trailStopPrice) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = trailStopPrice
+				}
+				exitReason = "trailing_stop"
 			}
 		}
 	}
