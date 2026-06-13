@@ -184,62 +184,62 @@ type DeterministicFallbackConfig struct {
 	SellWindowMaxTrendPct   float64
 	NoRecentBuyMaxRangePct  float64
 
-	BacktestImbalanceFloor      float64
+	BacktestImbalanceFloor       float64
 	BacktestStrongImbalanceFloor float64
-	BacktestRangeBufferPct      float64
+	BacktestRangeBufferPct       float64
 }
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 	return DeterministicFallbackConfig{
-		MaxBidAskSpread:         0.15,
-		MinImbalance:            0.10,
-		BuyRangeMax:             45.0,
-		SellRangeMin:            55.0,
-		BuyMinPriceChangePct:    0.0,
-		SellMaxPriceChangePct:   0.0,
-		RangeAnchor:             55.0,
-		RangeOffset:             45.0,
-		ImbalanceWeight:         0.65,
-		LiquidityWeight:         0.20,
-		RangeWeight:             0.10,
-		VolumeWeight:            0.05,
-		BaseConfidence:          0.55,
-		ConfidenceScale:         0.35,
-		MinConfidence:           0.55,
-		MaxConfidence:           0.85,
-		ConfidenceFloor:         0.72,
-		SizeFraction:            0.50,
-		MinSizePct:              0.10,
-		VolumeLogScale:          8.0,
-		BBEntryMaxPct:           0.20,
-		BBExitMinPct:            0.80,
-		ADXMaxPct:               25.0,
-		ATRRatioMax:             1.5,
-		RecentBuyMaxSpreadPct:   0.04,
-		RecentBuyMinTrendPct:    0.02,
-		RecentBuyMaxRangePct:    35.0,
-		RecentSellMinRangePct:   75.0,
-		ReversalBuyMaxRangePct:  20.0,
-		ReversalBuyMaxSpreadPct: 0.06,
-		ReversalBuyMaxRecentPct: -0.15,
-		ReversalBuyMaxTrendPct:  0.0,
-		BlowoffSellRangeMin:     95.0,
-		BlowoffSellRangeMax:     98.0,
-		BlowoffSellTrendMinPct:  0.075,
-		BlowoffSellRecentMinPct: 0.15,
-		BlowoffSellMaxImbalance: -0.35,
-		SellWindowMinRangePct:   25.0,
-		SellWindowMaxRangePct:   75.0,
-		SellWindowMaxSpreadPct:  0.10,
-		SellWindowMaxImbalance:  -0.30,
-		SellWindowMinRecentPct:  -0.60,
-		SellWindowMaxRecentPct:  0.20,
-		SellWindowMinTrendPct:   0.0,
-		SellWindowMaxTrendPct:   0.50,
-		NoRecentBuyMaxRangePct:  20.0,
-		BacktestImbalanceFloor:      0.05,
+		MaxBidAskSpread:              0.15,
+		MinImbalance:                 0.10,
+		BuyRangeMax:                  45.0,
+		SellRangeMin:                 55.0,
+		BuyMinPriceChangePct:         0.0,
+		SellMaxPriceChangePct:        0.0,
+		RangeAnchor:                  55.0,
+		RangeOffset:                  45.0,
+		ImbalanceWeight:              0.65,
+		LiquidityWeight:              0.20,
+		RangeWeight:                  0.10,
+		VolumeWeight:                 0.05,
+		BaseConfidence:               0.55,
+		ConfidenceScale:              0.35,
+		MinConfidence:                0.55,
+		MaxConfidence:                0.85,
+		ConfidenceFloor:              0.72,
+		SizeFraction:                 0.50,
+		MinSizePct:                   0.10,
+		VolumeLogScale:               8.0,
+		BBEntryMaxPct:                0.20,
+		BBExitMinPct:                 0.80,
+		ADXMaxPct:                    25.0,
+		ATRRatioMax:                  1.5,
+		RecentBuyMaxSpreadPct:        0.04,
+		RecentBuyMinTrendPct:         0.02,
+		RecentBuyMaxRangePct:         35.0,
+		RecentSellMinRangePct:        75.0,
+		ReversalBuyMaxRangePct:       20.0,
+		ReversalBuyMaxSpreadPct:      0.06,
+		ReversalBuyMaxRecentPct:      -0.15,
+		ReversalBuyMaxTrendPct:       0.0,
+		BlowoffSellRangeMin:          95.0,
+		BlowoffSellRangeMax:          98.0,
+		BlowoffSellTrendMinPct:       0.075,
+		BlowoffSellRecentMinPct:      0.15,
+		BlowoffSellMaxImbalance:      -0.35,
+		SellWindowMinRangePct:        25.0,
+		SellWindowMaxRangePct:        75.0,
+		SellWindowMaxSpreadPct:       0.10,
+		SellWindowMaxImbalance:       -0.30,
+		SellWindowMinRecentPct:       -0.60,
+		SellWindowMaxRecentPct:       0.20,
+		SellWindowMinTrendPct:        0.0,
+		SellWindowMaxTrendPct:        0.50,
+		NoRecentBuyMaxRangePct:       20.0,
+		BacktestImbalanceFloor:       0.05,
 		BacktestStrongImbalanceFloor: 0.20,
-		BacktestRangeBufferPct:      5.0,
+		BacktestRangeBufferPct:       5.0,
 	}
 }
 
@@ -4078,10 +4078,45 @@ func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal, fallback Determini
 		signal.OrderBookImbalance <= fallback.BlowoffSellMaxImbalance
 }
 
+var (
+	scalpingFallbackRiskFloorPct   float64 = 0.015
+	scalpingFallbackRiskCeilPct    float64 = 0.05
+	scalpingFallbackRiskSpreadMult float64 = 2.0
+	scalpingFallbackRewardPct      float64 = 0.075
+	scalpingFallbackEnvOnce        sync.Once
+)
+
+func applyScalpingFallbackRiskRewardFromEnv() {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskFloorPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskCeilPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskSpreadMult = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRewardPct = v
+	}
+}
+
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {
-	risk := decimal.Zero
-	reward := decimal.NewFromFloat(0.075)
-	return risk, reward
+	scalpingFallbackEnvOnce.Do(applyScalpingFallbackRiskRewardFromEnv)
+	reward := decimal.NewFromFloat(scalpingFallbackRewardPct)
+	spreadFloor := decimal.NewFromFloat(math.Max(signal.BidAskSpread, 0) * scalpingFallbackRiskSpreadMult)
+	minRisk := decimal.NewFromFloat(scalpingFallbackRiskFloorPct)
+	if spreadFloor.GreaterThan(minRisk) {
+		minRisk = spreadFloor
+	}
+	ceil := decimal.NewFromFloat(scalpingFallbackRiskCeilPct)
+	if minRisk.GreaterThan(ceil) {
+		minRisk = ceil
+	}
+	if minRisk.LessThan(decimal.Zero) {
+		minRisk = decimal.Zero
+	}
+	return minRisk, reward
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {

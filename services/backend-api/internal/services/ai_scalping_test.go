@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -3848,6 +3850,120 @@ func TestFallbackProjectedNetEdgePct(t *testing.T) {
 	marginalEdge, _ := fallbackProjectedNetEdgePct(0.22, decimal.NewFromFloat(0.0040)).Float64()
 	assert.InDelta(t, 1.58, standardEdge, 0.0001)
 	assert.InDelta(t, -0.02, marginalEdge, 0.0001)
+}
+
+func TestFallbackRiskRewardPctRiskIsAlwaysPositive(t *testing.T) {
+	prevFloor, prevCeil, prevMult, prevReward := scalpingFallbackRiskFloorPct, scalpingFallbackRiskCeilPct, scalpingFallbackRiskSpreadMult, scalpingFallbackRewardPct
+	scalpingFallbackEnvOnce = sync.Once{}
+	scalpingFallbackRiskFloorPct = 0.015
+	scalpingFallbackRiskCeilPct = 0.05
+	scalpingFallbackRiskSpreadMult = 2.0
+	scalpingFallbackRewardPct = 0.075
+	t.Cleanup(func() {
+		scalpingFallbackRiskFloorPct = prevFloor
+		scalpingFallbackRiskCeilPct = prevCeil
+		scalpingFallbackRiskSpreadMult = prevMult
+		scalpingFallbackRewardPct = prevReward
+		scalpingFallbackEnvOnce = sync.Once{}
+	})
+
+	cases := []struct {
+		name   string
+		signal aiMarketSignal
+	}{
+		{"tight_spread", aiMarketSignal{BidAskSpread: 0.02}},
+		{"wide_spread", aiMarketSignal{BidAskSpread: 0.5}},
+		{"zero_spread", aiMarketSignal{BidAskSpread: 0}},
+		{"huge_spread", aiMarketSignal{BidAskSpread: 5.0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			risk, reward := fallbackRiskRewardPct(tc.signal)
+			assert.True(t, risk.GreaterThan(decimal.Zero), "risk must be >0, got %s for spread=%f", risk.String(), tc.signal.BidAskSpread)
+			assert.True(t, reward.GreaterThan(decimal.Zero), "reward must be >0, got %s", reward.String())
+		})
+	}
+}
+
+func TestFallbackRiskRewardPctRiskHonorsFloorAndCeil(t *testing.T) {
+	prevFloor, prevCeil, prevMult, prevReward := scalpingFallbackRiskFloorPct, scalpingFallbackRiskCeilPct, scalpingFallbackRiskSpreadMult, scalpingFallbackRewardPct
+	scalpingFallbackEnvOnce = sync.Once{}
+	t.Cleanup(func() {
+		scalpingFallbackRiskFloorPct = prevFloor
+		scalpingFallbackRiskCeilPct = prevCeil
+		scalpingFallbackRiskSpreadMult = prevMult
+		scalpingFallbackRewardPct = prevReward
+		scalpingFallbackEnvOnce = sync.Once{}
+	})
+
+	scalpingFallbackRiskFloorPct = 0.01
+	scalpingFallbackRiskCeilPct = 0.04
+	scalpingFallbackRiskSpreadMult = 2.0
+	scalpingFallbackRewardPct = 0.075
+
+	tightD, _ := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.001})
+	wideD, _ := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.5})
+	tight, _ := tightD.Float64()
+	wide, _ := wideD.Float64()
+
+	assert.InDelta(t, 0.01, tight, 0.0001, "tight spread should fall back to floor=1.0%%")
+	assert.InDelta(t, 0.04, wide, 0.0001, "wide spread should be clamped to ceil=4.0%% (1.0 spread*2.0 mult=2.0, clamped to 0.04)")
+}
+
+func TestFallbackRiskRewardPctRiskScalesWithSpread(t *testing.T) {
+	prevFloor, prevCeil, prevMult, prevReward := scalpingFallbackRiskFloorPct, scalpingFallbackRiskCeilPct, scalpingFallbackRiskSpreadMult, scalpingFallbackRewardPct
+	scalpingFallbackEnvOnce = sync.Once{}
+	t.Cleanup(func() {
+		scalpingFallbackRiskFloorPct = prevFloor
+		scalpingFallbackRiskCeilPct = prevCeil
+		scalpingFallbackRiskSpreadMult = prevMult
+		scalpingFallbackRewardPct = prevReward
+		scalpingFallbackEnvOnce = sync.Once{}
+	})
+
+	scalpingFallbackRiskFloorPct = 0.005
+	scalpingFallbackRiskCeilPct = 0.5
+	scalpingFallbackRiskSpreadMult = 2.0
+	scalpingFallbackRewardPct = 0.075
+
+	r5D, _ := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.005})
+	r10D, _ := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.01})
+	r20D, _ := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.02})
+	r5, _ := r5D.Float64()
+	r10, _ := r10D.Float64()
+	r20, _ := r20D.Float64()
+
+	assert.InDelta(t, 0.01, r5, 0.0001, "spread=0.005, mult=2 → risk=0.01")
+	assert.InDelta(t, 0.02, r10, 0.0001, "spread=0.01, mult=2 → risk=0.02")
+	assert.InDelta(t, 0.04, r20, 0.0001, "spread=0.02, mult=2 → risk=0.04")
+}
+
+func TestFallbackRiskRewardPctEnvOverride(t *testing.T) {
+	prevFloor, prevCeil, prevMult, prevReward := scalpingFallbackRiskFloorPct, scalpingFallbackRiskCeilPct, scalpingFallbackRiskSpreadMult, scalpingFallbackRewardPct
+	scalpingFallbackEnvOnce = sync.Once{}
+	t.Cleanup(func() {
+		scalpingFallbackRiskFloorPct = prevFloor
+		scalpingFallbackRiskCeilPct = prevCeil
+		scalpingFallbackRiskSpreadMult = prevMult
+		scalpingFallbackRewardPct = prevReward
+		scalpingFallbackEnvOnce = sync.Once{}
+		os.Unsetenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT")
+		os.Unsetenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT")
+		os.Unsetenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT")
+		os.Unsetenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")
+	})
+
+	os.Setenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT", "0.02")
+	os.Setenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT", "0.08")
+	os.Setenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT", "3.0")
+	os.Setenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT", "0.05")
+
+	risk, reward := fallbackRiskRewardPct(aiMarketSignal{BidAskSpread: 0.01})
+
+	riskF, _ := risk.Float64()
+	rewardF, _ := reward.Float64()
+	assert.InDelta(t, 0.03, riskF, 0.0001, "spread=0.01*mult=3.0=0.03, above floor 0.02, below ceil 0.08")
+	assert.InDelta(t, 0.05, rewardF, 0.0001, "reward should be 0.05 from env")
 }
 
 func TestAIScalpingService_ValidateDecisionAllowsValidatedReversalBuy(t *testing.T) {

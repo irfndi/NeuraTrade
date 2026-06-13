@@ -376,13 +376,13 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			case "buy":
 				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.TakeProfit) {
 					slTPExit = true
-				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
 					slTPExit = true
 				}
 			case "sell":
 				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.TakeProfit) {
 					slTPExit = true
-				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
 					slTPExit = true
 				}
 			}
@@ -755,12 +755,12 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	if exitReason == "mark_to_market" {
 		switch side {
 		case "buy":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+			if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
 				exitPrice = position.StopLoss
 				exitReason = "stop_loss"
 			}
 		case "sell":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+			if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
 				exitPrice = position.StopLoss
 				exitReason = "stop_loss"
 			}
