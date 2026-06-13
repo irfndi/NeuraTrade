@@ -96,6 +96,8 @@ type ScalpingBacktestConfig struct {
 	TrailingStopPct       float64
 	MinEntryMomentumPct   float64
 	EnableTrendFilter     bool
+	EnablePanicDropEntry  bool
+	MinPanicDropPct       float64
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -1188,6 +1190,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.MaxLossPct <= 0 {
 		config.MaxLossPct = 0.015
 	}
+	if config.MinPanicDropPct <= 0 {
+		config.MinPanicDropPct = 0.02
+	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
 	}
@@ -1362,6 +1367,10 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 	rangeAlignment := 0.0
 	momentumAligned := false
 	switch {
+	case e.config.EnablePanicDropEntry && signal.RecentChangeKnown && signal.RecentPriceChange < -e.config.MinPanicDropPct && imbalance > fallback.BacktestImbalanceFloor && signal.RangePosition24h <= fallback.BuyRangeMax+fallback.BacktestRangeBufferPct:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = clampFloat((fallback.BuyRangeMax+fallback.BacktestRangeBufferPct-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+fallback.BacktestRangeBufferPct, 1), 0, 1)
 	case reversalBuy:
 		action = "buy"
 		momentumAligned = true

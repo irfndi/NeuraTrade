@@ -39,6 +39,8 @@ func run() (err error) {
 		bbEntryMaxPct     = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
 		minConfidence     = flag.Float64("min-confidence", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
 		maxSpreadPct      = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
+		enablePanicDrop   = flag.Bool("enable-panic-drop", false, "Enable panic-drop entry: buy when RecentPriceChange < -min-panic-drop-pct (event-based, bypasses BB%B)")
+		minPanicDropPct   = flag.Float64("min-panic-drop-pct", 0, "Min absolute RecentPriceChange drop to trigger panic-drop entry (0 = default 0.02 = 2%, e.g., 0.03 = 3%)")
 	)
 	flag.Parse()
 
@@ -86,24 +88,26 @@ func run() (err error) {
 	initialCapital, _ := decimal.NewFromString("10000")
 
 	svcConfig := services.ScalpingBacktestConfig{
-		StartTime:           startTime,
-		EndTime:             endTime,
-		Symbols:             symbolList,
-		Exchange:            "binance",
-		InitialCapital:      initialCapital,
-		FeeRate:             decimal.NewFromFloat(0.0002),
-		MaxBidAskSpreadPct:  0.08,
-		MinConfidence:       0.60,
-		MinExpectancyN:      *minExpectancyN,
-		MinExpectancyEdge:   *minExpectancyEdge,
-		SpreadMultiplier:    8,
-		MaxCapitalPct:       25.0,
-		DefaultHoldPeriod:   *holdPeriod,
-		Mode:                "deterministic",
-		MaxLossPct:          *maxLossPct,
-		TrailingStopPct:     *trailingStopPct,
-		MinEntryMomentumPct: *minEntryMomentum,
-		EnableTrendFilter:   *enableTrendFilter,
+		StartTime:            startTime,
+		EndTime:              endTime,
+		Symbols:              symbolList,
+		Exchange:             "binance",
+		InitialCapital:       initialCapital,
+		FeeRate:              decimal.NewFromFloat(0.0002),
+		MaxBidAskSpreadPct:   0.08,
+		MinConfidence:        0.60,
+		MinExpectancyN:       *minExpectancyN,
+		MinExpectancyEdge:    *minExpectancyEdge,
+		SpreadMultiplier:     8,
+		MaxCapitalPct:        25.0,
+		DefaultHoldPeriod:    *holdPeriod,
+		Mode:                 "deterministic",
+		MaxLossPct:           *maxLossPct,
+		TrailingStopPct:      *trailingStopPct,
+		MinEntryMomentumPct:  *minEntryMomentum,
+		EnableTrendFilter:    *enableTrendFilter,
+		EnablePanicDropEntry: *enablePanicDrop,
+		MinPanicDropPct:      *minPanicDropPct,
 		DeterministicFallback: services.DeterministicFallbackConfig{
 			BBEntryMaxPct: *bbEntryMaxPct,
 		},
