@@ -25,22 +25,24 @@ func main() {
 
 func run() (err error) {
 	var (
-		startStr          = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
-		endStr            = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
-		symbols           = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
-		persist           = flag.Bool("persist", true, "Persist results to database")
-		minExpectancyN    = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
-		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
-		maxLossPct        = flag.Float64("max-loss-pct", 0, "Hard max-loss per trade as decimal fraction (0 = default: 0.015 = 1.5%)")
-		trailingStopPct   = flag.Float64("trailing-stop-pct", 0, "Trailing stop distance from HWM as decimal fraction (0 = disabled, e.g., 0.005 = 0.5%)")
-		minEntryMomentum  = flag.Float64("min-entry-momentum", 0, "Min price change since last signal in direction of trade (0 = disabled, e.g., 0.001 = 0.1%)")
-		enableTrendFilter = flag.Bool("trend-filter", false, "Enable higher-TF EMA trend filter (off by default; r9/r10 showed it makes losses worse)")
-		holdPeriod        = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
-		bbEntryMaxPct     = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
-		minConfidence     = flag.Float64("min-confidence", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
-		maxSpreadPct      = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
-		enablePanicDrop   = flag.Bool("enable-panic-drop", false, "Enable panic-drop entry: buy when RecentPriceChange < -min-panic-drop-pct (event-based, bypasses BB%B)")
-		minPanicDropPct   = flag.Float64("min-panic-drop-pct", 0, "Min absolute RecentPriceChange drop to trigger panic-drop entry (0 = default 0.02 = 2%, e.g., 0.03 = 3%)")
+		startStr            = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
+		endStr              = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
+		symbols             = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
+		persist             = flag.Bool("persist", true, "Persist results to database")
+		minExpectancyN      = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
+		minExpectancyEdge   = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
+		maxLossPct          = flag.Float64("max-loss-pct", 0, "Hard max-loss per trade as decimal fraction (0 = default: 0.015 = 1.5%)")
+		trailingStopPct     = flag.Float64("trailing-stop-pct", 0, "Trailing stop distance from HWM as decimal fraction (0 = disabled, e.g., 0.005 = 0.5%)")
+		minEntryMomentum    = flag.Float64("min-entry-momentum", 0, "Min price change since last signal in direction of trade (0 = disabled, e.g., 0.001 = 0.1%)")
+		enableTrendFilter   = flag.Bool("trend-filter", false, "Enable higher-TF EMA trend filter (off by default; r9/r10 showed it makes losses worse)")
+		holdPeriod          = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
+		bbEntryMaxPct       = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
+		minConfidence       = flag.Float64("min-confidence", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
+		maxSpreadPct        = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
+		enablePanicDrop     = flag.Bool("enable-panic-drop", false, "Enable panic-drop entry: buy when RecentPriceChange < -min-panic-drop-pct (event-based, bypasses BB%B)")
+		minPanicDropPct     = flag.Float64("min-panic-drop-pct", 0, "Min absolute RecentPriceChange drop to trigger panic-drop entry (0 = default 0.02 = 2%, e.g., 0.03 = 3%)")
+		enableTrendFollow   = flag.Bool("enable-trend-follow", false, "Enable trend-following entry: buy when TrendEMA20 > TrendEMA50 AND momentum > threshold (trend-following, bypasses BB%B)")
+		trendFollowMomentum = flag.Float64("trend-follow-momentum", 0, "Min RecentPriceChange for trend-follow entry (0 = default 0.001 = 0.1%)")
 	)
 	flag.Parse()
 
@@ -88,26 +90,28 @@ func run() (err error) {
 	initialCapital, _ := decimal.NewFromString("10000")
 
 	svcConfig := services.ScalpingBacktestConfig{
-		StartTime:            startTime,
-		EndTime:              endTime,
-		Symbols:              symbolList,
-		Exchange:             "binance",
-		InitialCapital:       initialCapital,
-		FeeRate:              decimal.NewFromFloat(0.0002),
-		MaxBidAskSpreadPct:   0.08,
-		MinConfidence:        0.60,
-		MinExpectancyN:       *minExpectancyN,
-		MinExpectancyEdge:    *minExpectancyEdge,
-		SpreadMultiplier:     8,
-		MaxCapitalPct:        25.0,
-		DefaultHoldPeriod:    *holdPeriod,
-		Mode:                 "deterministic",
-		MaxLossPct:           *maxLossPct,
-		TrailingStopPct:      *trailingStopPct,
-		MinEntryMomentumPct:  *minEntryMomentum,
-		EnableTrendFilter:    *enableTrendFilter,
-		EnablePanicDropEntry: *enablePanicDrop,
-		MinPanicDropPct:      *minPanicDropPct,
+		StartTime:              startTime,
+		EndTime:                endTime,
+		Symbols:                symbolList,
+		Exchange:               "binance",
+		InitialCapital:         initialCapital,
+		FeeRate:                decimal.NewFromFloat(0.0002),
+		MaxBidAskSpreadPct:     0.08,
+		MinConfidence:          0.60,
+		MinExpectancyN:         *minExpectancyN,
+		MinExpectancyEdge:      *minExpectancyEdge,
+		SpreadMultiplier:       8,
+		MaxCapitalPct:          25.0,
+		DefaultHoldPeriod:      *holdPeriod,
+		Mode:                   "deterministic",
+		MaxLossPct:             *maxLossPct,
+		TrailingStopPct:        *trailingStopPct,
+		MinEntryMomentumPct:    *minEntryMomentum,
+		EnableTrendFilter:      *enableTrendFilter,
+		EnablePanicDropEntry:   *enablePanicDrop,
+		MinPanicDropPct:        *minPanicDropPct,
+		EnableTrendFollowEntry: *enableTrendFollow,
+		TrendFollowMinMomentum: *trendFollowMomentum,
 		DeterministicFallback: services.DeterministicFallbackConfig{
 			BBEntryMaxPct: *bbEntryMaxPct,
 		},

@@ -70,34 +70,36 @@ type ScalpingCyclePolicy = appautonomy.ScalpingCyclePolicy
 type MarketSignal = aiMarketSignal
 
 type ScalpingBacktestConfig struct {
-	StartTime             time.Time
-	EndTime               time.Time
-	Symbols               []string
-	Exchange              string
-	InitialCapital        decimal.Decimal
-	FeeRate               decimal.Decimal
-	SlippagePct           decimal.Decimal
-	NoisePct              float64
-	MaxBidAskSpreadPct    float64
-	MinConfidence         float64
-	MinExpectancyN        int
-	MinExpectancyEdge     float64
-	MaxCapitalPct         float64
-	DefaultHoldPeriod     time.Duration
-	MaxHoldCandles        int
-	EntryCutoffTime       time.Time
-	RequireRecentMomentum bool
-	MinRecentMomentumPct  float64
-	SpreadMultiplier      float64
-	DeterministicFallback DeterministicFallbackConfig
-	RegimeHighBand        float64
-	RegimeLowBand         float64
-	MaxLossPct            float64
-	TrailingStopPct       float64
-	MinEntryMomentumPct   float64
-	EnableTrendFilter     bool
-	EnablePanicDropEntry  bool
-	MinPanicDropPct       float64
+	StartTime              time.Time
+	EndTime                time.Time
+	Symbols                []string
+	Exchange               string
+	InitialCapital         decimal.Decimal
+	FeeRate                decimal.Decimal
+	SlippagePct            decimal.Decimal
+	NoisePct               float64
+	MaxBidAskSpreadPct     float64
+	MinConfidence          float64
+	MinExpectancyN         int
+	MinExpectancyEdge      float64
+	MaxCapitalPct          float64
+	DefaultHoldPeriod      time.Duration
+	MaxHoldCandles         int
+	EntryCutoffTime        time.Time
+	RequireRecentMomentum  bool
+	MinRecentMomentumPct   float64
+	SpreadMultiplier       float64
+	DeterministicFallback  DeterministicFallbackConfig
+	RegimeHighBand         float64
+	RegimeLowBand          float64
+	MaxLossPct             float64
+	TrailingStopPct        float64
+	MinEntryMomentumPct    float64
+	EnableTrendFilter      bool
+	EnablePanicDropEntry   bool
+	MinPanicDropPct        float64
+	EnableTrendFollowEntry bool
+	TrendFollowMinMomentum float64
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -1193,6 +1195,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.MinPanicDropPct <= 0 {
 		config.MinPanicDropPct = 0.02
 	}
+	if config.TrendFollowMinMomentum <= 0 {
+		config.TrendFollowMinMomentum = 0.001
+	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
 	}
@@ -1371,6 +1376,10 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 		action = "buy"
 		momentumAligned = true
 		rangeAlignment = clampFloat((fallback.BuyRangeMax+fallback.BacktestRangeBufferPct-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+fallback.BacktestRangeBufferPct, 1), 0, 1)
+	case e.config.EnableTrendFollowEntry && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 && signal.TrendEMA20 > signal.TrendEMA50 && signal.RecentChangeKnown && signal.RecentPriceChange > e.config.TrendFollowMinMomentum && imbalance > fallback.BacktestImbalanceFloor:
+		action = "buy"
+		momentumAligned = true
+		rangeAlignment = 0.5
 	case reversalBuy:
 		action = "buy"
 		momentumAligned = true
