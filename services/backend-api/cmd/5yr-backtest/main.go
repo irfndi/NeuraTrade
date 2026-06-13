@@ -33,6 +33,7 @@ func run() (err error) {
 		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
 		maxLossPct        = flag.Float64("max-loss-pct", 0, "Hard max-loss per trade as decimal fraction (0 = default: 0.015 = 1.5%)")
 		enableTrendFilter = flag.Bool("trend-filter", false, "Enable higher-TF EMA trend filter (off by default; r9/r10 showed it makes losses worse)")
+		holdPeriod        = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
 	)
 	flag.Parse()
 
@@ -92,7 +93,7 @@ func run() (err error) {
 		MinExpectancyEdge:  *minExpectancyEdge,
 		SpreadMultiplier:   8,
 		MaxCapitalPct:      25.0,
-		DefaultHoldPeriod:  4 * time.Hour,
+		DefaultHoldPeriod:  *holdPeriod,
 		Mode:               "deterministic",
 		MaxLossPct:         *maxLossPct,
 		EnableTrendFilter:  *enableTrendFilter,
