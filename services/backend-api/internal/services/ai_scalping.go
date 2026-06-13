@@ -1869,6 +1869,8 @@ type aiMarketSignal struct {
 	RecentChangeKnown  bool    `json:"-"`
 	Low                float64 `json:"candle_low,omitempty"`
 	High               float64 `json:"candle_high,omitempty"`
+	TrendEMA20         float64 `json:"trend_ema_20,omitempty"`
+	TrendEMA50         float64 `json:"trend_ema_50,omitempty"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -3865,6 +3867,14 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if !momentumAligned {
 		return nil, 0, false
 	}
+	if s.scalpingFallbackTrendFilterEnabled() && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 {
+		if action == "buy" && signal.TrendEMA20 <= signal.TrendEMA50 {
+			return nil, 0, false
+		}
+		if action == "sell" && signal.TrendEMA20 >= signal.TrendEMA50 {
+			return nil, 0, false
+		}
+	}
 	if signal.RecentChangeKnown && action == "buy" && !reversalBuy && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil, 0, false
 	}
@@ -4083,6 +4093,7 @@ var (
 	scalpingFallbackRiskCeilPct    float64 = 0.05
 	scalpingFallbackRiskSpreadMult float64 = 2.0
 	scalpingFallbackRewardPct      float64 = 0.075
+	scalpingFallbackTrendFilter    bool    = false
 	scalpingFallbackEnvOnce        sync.Once
 )
 
@@ -4099,6 +4110,14 @@ func applyScalpingFallbackRiskRewardFromEnv() {
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
 		scalpingFallbackRewardPct = v
 	}
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("NEURATRADE_SCALPING_FALLBACK_TREND_FILTER"))); v == "true" || v == "1" || v == "yes" {
+		scalpingFallbackTrendFilter = true
+	}
+}
+
+func (s *AIScalpingService) scalpingFallbackTrendFilterEnabled() bool {
+	scalpingFallbackEnvOnce.Do(applyScalpingFallbackRiskRewardFromEnv)
+	return scalpingFallbackTrendFilter
 }
 
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {

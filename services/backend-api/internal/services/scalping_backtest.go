@@ -93,6 +93,7 @@ type ScalpingBacktestConfig struct {
 	RegimeHighBand        float64
 	RegimeLowBand         float64
 	MaxLossPct            float64
+	EnableTrendFilter     bool
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -1329,6 +1330,16 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 		rejectionReason = "momentum_not_aligned"
 		return nil, rejectionReason
 	}
+	if e.config.EnableTrendFilter && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 {
+		if action == "buy" && signal.TrendEMA20 <= signal.TrendEMA50 {
+			rejectionReason = "trend_filter_buy_bearish"
+			return nil, rejectionReason
+		}
+		if action == "sell" && signal.TrendEMA20 >= signal.TrendEMA50 {
+			rejectionReason = "trend_filter_sell_bullish"
+			return nil, rejectionReason
+		}
+	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.BidAskSpread > fallback.RecentBuyMaxSpreadPct {
 		rejectionReason = "recent_buy_spread_too_wide"
 		return nil, rejectionReason
@@ -1697,6 +1708,8 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 		atrValues := computeATR(series, 14)
 		atrSMA := computeSMA(atrValues, 20)
 		bbUpper, _, bbLower := computeBollingerBands(series, 20, 2.0)
+		ema20 := computeEMA(series, 80)
+		ema50 := computeEMA(series, 200)
 
 		var prevClose float64
 		for i, point := range series {
@@ -1716,7 +1729,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 				bbPctB = (point.close - bbLower[i]) / bbRange
 			}
 
-			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB))
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB, ema20[i], ema50[i]))
 			prevClose = point.close
 		}
 	}
@@ -1799,7 +1812,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	return metrics
 }
 
-func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64) HistoricalSignal {
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64, trendEMA20 float64, trendEMA50 float64) HistoricalSignal {
 	imbalance := 0.0
 	if point.high > point.low {
 		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
@@ -1838,6 +1851,8 @@ func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWin
 			BBPercentB:         bbPctB,
 			Low:                point.low,
 			High:               point.high,
+			TrendEMA20:         trendEMA20,
+			TrendEMA50:         trendEMA50,
 		},
 	}
 }
@@ -1900,6 +1915,27 @@ func computeSMA(values []float64, period int) []float64 {
 		result[i] = sum / float64(period)
 	}
 
+	return result
+}
+
+func computeEMA(series []scalpingOHLCVPoint, period int) []float64 {
+	n := len(series)
+	result := make([]float64, n)
+	if n == 0 || period <= 0 {
+		return result
+	}
+	if n < period {
+		return result
+	}
+	k := 2.0 / float64(period+1)
+	var seed float64
+	for i := 0; i < period; i++ {
+		seed += series[i].close
+	}
+	result[period-1] = seed / float64(period)
+	for i := period; i < n; i++ {
+		result[i] = series[i].close*k + result[i-1]*(1-k)
+	}
 	return result
 }
 
