@@ -92,6 +92,7 @@ type ScalpingBacktestConfig struct {
 	DeterministicFallback DeterministicFallbackConfig
 	RegimeHighBand        float64
 	RegimeLowBand         float64
+	MaxLossPct            float64
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -735,18 +736,30 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	}
 
 	if exitReason == "mark_to_market" {
-		maxLossPct := decimal.NewFromFloat(0.015)
+		maxLossPct := decimal.NewFromFloat(e.config.MaxLossPct)
 		switch side {
 		case "buy":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Sub(maxLossPct))
-			if candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice) {
-				exitPrice = maxLossPrice
+			candleLowHit := candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice)
+			markHit := markPrice.LessThanOrEqual(maxLossPrice)
+			if candleLowHit || markHit {
+				if markPrice.LessThan(maxLossPrice) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = maxLossPrice
+				}
 				exitReason = "max_loss"
 			}
 		case "sell":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Add(maxLossPct))
-			if candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice) {
-				exitPrice = maxLossPrice
+			candleHighHit := candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice)
+			markHit := markPrice.GreaterThanOrEqual(maxLossPrice)
+			if candleHighHit || markHit {
+				if markPrice.GreaterThan(maxLossPrice) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = maxLossPrice
+				}
 				exitReason = "max_loss"
 			}
 		}
@@ -755,13 +768,25 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	if exitReason == "mark_to_market" {
 		switch side {
 		case "buy":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
-				exitPrice = position.StopLoss
+			candleLowHit := position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss)
+			markHit := position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss)
+			if candleLowHit || markHit {
+				if markPrice.LessThan(position.StopLoss) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = position.StopLoss
+				}
 				exitReason = "stop_loss"
 			}
 		case "sell":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
-				exitPrice = position.StopLoss
+			candleHighHit := position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss)
+			markHit := position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss)
+			if candleHighHit || markHit {
+				if markPrice.GreaterThan(position.StopLoss) {
+					exitPrice = markPrice
+				} else {
+					exitPrice = position.StopLoss
+				}
 				exitReason = "stop_loss"
 			}
 		}
@@ -1077,6 +1102,9 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	}
 	if config.FeeRate.LessThanOrEqual(decimal.Zero) {
 		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
+	}
+	if config.MaxLossPct <= 0 {
+		config.MaxLossPct = 0.015
 	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)

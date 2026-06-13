@@ -15,8 +15,8 @@ import (
 
 // TradingLifecycleStore persists autonomous order/position lifecycle and realized PnL.
 type TradingLifecycleStore struct {
-	db           database.DBPool
-	logger       *log.Logger
+	db            database.DBPool
+	logger        *log.Logger
 	paperRecorder *PaperTradeRecorder
 }
 

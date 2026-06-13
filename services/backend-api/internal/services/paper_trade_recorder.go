@@ -51,9 +51,9 @@ func NewPaperTradeRecorder(db DBPool, logger Logger) *PaperTradeRecorder {
 type noopLogger struct{}
 
 func (noopLogger) WithFields(map[string]interface{}) Logger { return noopLogger{} }
-func (noopLogger) Info(string)                             {}
-func (noopLogger) Warn(string)                             {}
-func (noopLogger) Error(string)                            {}
+func (noopLogger) Info(string)                              {}
+func (noopLogger) Warn(string)                              {}
+func (noopLogger) Error(string)                             {}
 
 // RecordOpenTrade records a new open paper trade.
 func (r *PaperTradeRecorder) RecordOpenTrade(ctx context.Context, trade *PaperTrade) (*PaperTrade, error) {

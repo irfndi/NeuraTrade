@@ -31,6 +31,7 @@ func run() (err error) {
 		persist           = flag.Bool("persist", true, "Persist results to database")
 		minExpectancyN    = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
 		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
+		maxLossPct        = flag.Float64("max-loss-pct", 0, "Hard max-loss per trade as decimal fraction (0 = default: 0.015 = 1.5%)")
 	)
 	flag.Parse()
 
@@ -92,6 +93,7 @@ func run() (err error) {
 		MaxCapitalPct:      25.0,
 		DefaultHoldPeriod:  4 * time.Hour,
 		Mode:               "deterministic",
+		MaxLossPct:         *maxLossPct,
 	}
 
 	fmt.Printf("Starting backtest...\n")
