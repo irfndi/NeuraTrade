@@ -2,7 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { composeSignal, defaultComposerConfig, validateWeights } from "./composer.js";
 import type { CandleLike, OHLCVInput, OrderBookMetricsInput } from "./types.js";
 
-function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "flat" = "flat"): CandleLike[] {
+function makeCandles(
+  count: number,
+  baseClose = 100,
+  trend: "up" | "down" | "flat" = "flat",
+): CandleLike[] {
   const candles: CandleLike[] = [];
   let close = baseClose;
   for (let i = 0; i < count; i++) {
@@ -11,7 +15,14 @@ function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "fla
     else if (trend === "down") close *= 0.99;
     const high = Math.max(open, close) * 1.002;
     const low = Math.min(open, close) * 0.998;
-    candles.push({ open, high, low, close, volume: 10, timestamp: new Date(Date.now() + i * 60000) });
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      volume: 10,
+      timestamp: new Date(Date.now() + i * 60000),
+    });
   }
   return candles;
 }
@@ -57,7 +68,12 @@ describe("ScalpingSignalComposer", () => {
 
   it("produces a buy signal on strong uptrend + positive imbalance", () => {
     const candles = makeCandles(30, 100, "up");
-    const ob = makeOB({ imbalance: 0.3, spreadPercent: 0.0003, bidDepth: 80, askDepth: 80 });
+    const ob = makeOB({
+      imbalance: 0.3,
+      spreadPercent: 0.0003,
+      bidDepth: 80,
+      askDepth: 80,
+    });
     const signal = composeSignal(makeOHLCV(candles), ob);
 
     expect(signal).not.toBeNull();
@@ -68,7 +84,12 @@ describe("ScalpingSignalComposer", () => {
 
   it("produces sell trend and imbalance components on downtrend + negative imbalance", () => {
     const candles = makeCandles(30, 100, "down");
-    const ob = makeOB({ imbalance: -0.25, spreadPercent: 0.0003, bidDepth: 80, askDepth: 80 });
+    const ob = makeOB({
+      imbalance: -0.25,
+      spreadPercent: 0.0003,
+      bidDepth: 80,
+      askDepth: 80,
+    });
     const signal = composeSignal(makeOHLCV(candles), ob);
 
     expect(signal).not.toBeNull();
@@ -99,6 +120,24 @@ describe("ScalpingSignalComposer", () => {
     expect(signal).not.toBeNull();
     expect(signal!.microstructure.spread).toBe(5);
     expect(signal!.microstructure.imbalance).toBe(0.1);
+  });
+
+  it("drops synthetic order-book weights to avoid candle-derived noise", () => {
+    const candles = makeCandles(60, 100, "up");
+    const ob = makeOB({
+      exchange: "synthetic",
+      imbalance: -0.3,
+      spreadPercent: 0.002,
+      bidDepth: 10,
+      askDepth: 10,
+    });
+    const signal = composeSignal(makeOHLCV(candles), ob);
+
+    expect(signal).not.toBeNull();
+    expect(signal!.direction).toBe("buy");
+    expect(Math.abs(signal!.attributionWeights.spread)).toBeCloseTo(0, 10);
+    expect(Math.abs(signal!.attributionWeights.imbalance)).toBeCloseTo(0, 10);
+    expect(Math.abs(signal!.attributionWeights.liquidity)).toBeCloseTo(0, 10);
   });
 });
 

@@ -35,7 +35,7 @@ const defaultThresholds: ComposerThresholds = {
   spreadModeratePct: 0.001,
   spreadWidePct: 0.002,
   imbalanceWeak: 0.05,
-  imbalanceStrong: 0.20,
+  imbalanceStrong: 0.2,
   volatilityLowPct: 0.005,
   volatilityModeratePct: 0.02,
   volatilityHighPct: 0.05,
@@ -52,8 +52,10 @@ const defaultThresholds: ComposerThresholds = {
   atrMaxPctOfPrice: 0.025,
   bollingerEntryMaxPct: 0.75,
   bollingerEntryMinPct: 0.25,
-  minConfidenceSpread: 0.10,
+  minConfidenceSpread: 0.1,
   regimeMode: "trend",
+  trendFilterFastPeriod: 50,
+  trendFilterSlowPeriod: 100,
 };
 
 export const defaultComposerConfig: ComposerConfig = {
@@ -73,51 +75,70 @@ export function validateWeights(weights: ComposerWeights): boolean {
   return Math.abs(sum - 1.0) <= 0.001;
 }
 
+function isSyntheticInput(ohlcv: OHLCVInput, obMetrics: OrderBookMetricsInput): boolean {
+  // When backtesting from candles we derive synthetic order-book metrics.
+  // Those metrics are noise, so we drop order-book weights automatically.
+  return ohlcv.exchange === "synthetic" || obMetrics.exchange === "synthetic";
+}
+
+function withoutOrderBookWeights(config: ComposerConfig): ComposerConfig {
+  const weights = { ...config.weights, spread: 0, imbalance: 0, liquidity: 0 };
+  const activeSum = weights.volatility + weights.trend + weights.rsi + weights.regime;
+  if (activeSum <= 0) return config;
+
+  return {
+    ...config,
+    weights: {
+      spread: 0,
+      imbalance: 0,
+      liquidity: 0,
+      volatility: weights.volatility / activeSum,
+      trend: weights.trend / activeSum,
+      rsi: weights.rsi / activeSum,
+      regime: weights.regime / activeSum,
+    },
+  };
+}
+
 export function composeSignal(
   ohlcv: OHLCVInput,
   obMetrics: OrderBookMetricsInput,
   config: ComposerConfig = defaultComposerConfig,
 ): ScalpingSignal | null {
-  if (!validateWeights(config.weights)) {
+  const effectiveConfig = isSyntheticInput(ohlcv, obMetrics)
+    ? withoutOrderBookWeights(config)
+    : config;
+
+  if (!validateWeights(effectiveConfig.weights)) {
     return null;
   }
 
   const candles = ohlcv.candles;
   if (candles.length < 2) return null;
 
+  const weights = effectiveConfig.weights;
+  const thresholds = effectiveConfig.thresholds;
   const components: SignalComponent[] = [];
 
-  const spreadComponent = buildSpreadComponent(obMetrics, config.weights.spread, config.thresholds);
+  const spreadComponent = buildSpreadComponent(obMetrics, weights.spread, thresholds);
   if (spreadComponent) components.push(spreadComponent);
 
-  const imbalanceComponent = buildImbalanceComponent(
-    obMetrics,
-    config.weights.imbalance,
-    config.thresholds,
-  );
+  const imbalanceComponent = buildImbalanceComponent(obMetrics, weights.imbalance, thresholds);
   if (imbalanceComponent) components.push(imbalanceComponent);
 
-  const volatilityComponent = buildVolatilityComponent(
-    candles,
-    config.weights.volatility,
-    config.thresholds,
-  );
+  const volatilityComponent = buildVolatilityComponent(candles, weights.volatility, thresholds);
   if (volatilityComponent) components.push(volatilityComponent);
 
-  const trendComponent = buildTrendComponent(candles, config.weights.trend, config.thresholds);
+  const trendComponent = buildTrendComponent(candles, weights.trend, thresholds);
   if (trendComponent) components.push(trendComponent);
 
-  const liquidityComponent = buildLiquidityComponent(
-    obMetrics,
-    config.weights.liquidity,
-    config.thresholds,
-  );
+  const liquidityComponent = buildLiquidityComponent(obMetrics, weights.liquidity, thresholds);
   if (liquidityComponent) components.push(liquidityComponent);
 
-  const rsiComponent = buildRsiComponent(candles, config.weights.rsi, config.thresholds);
+  const rsiComponent = buildRsiComponent(candles, weights.rsi, thresholds);
   if (rsiComponent) components.push(rsiComponent);
 
-  const regimeComponent = buildRegimeComponent(candles, obMetrics, config.weights.regime, config.thresholds);
+  const regimeComponent = buildRegimeComponent(candles, obMetrics, weights.regime, thresholds);
   if (regimeComponent) components.push(regimeComponent);
 
   if (components.length === 0) return null;
@@ -398,7 +419,10 @@ function buildRegimeComponent(
   }
 
   // Skip if price is in the middle of the Bollinger band (no directional edge).
-  if (bb.percentB > thresholds.bollingerEntryMinPct && bb.percentB < thresholds.bollingerEntryMaxPct) {
+  if (
+    bb.percentB > thresholds.bollingerEntryMinPct &&
+    bb.percentB < thresholds.bollingerEntryMaxPct
+  ) {
     return {
       name: "regime",
       description: "Bollinger band position filter",
@@ -409,28 +433,33 @@ function buildRegimeComponent(
     };
   }
 
+  const higherTrend = higherTimeframeTrend(candles, thresholds);
+  const allowLong = higherTrend === null || higherTrend === true;
+  const allowShort = higherTrend === null || higherTrend === false;
+
   const mode = thresholds.regimeMode ?? "trend";
   let signal: Direction = "hold";
   let strength: SignalStrength = "weak";
 
   if (mode === "reversion") {
-    // Mean-reversion regime: price near Bollinger extremes and DI not
-    // strongly opposing the reversal (i.e. avoid fading a raging trend).
-    if (bb.percentB <= thresholds.bollingerEntryMinPct && plusDI >= minusDI) {
+    // Mean-reversion regime: only fade extremes in the direction of the
+    // higher-timeframe trend. This avoids catching falling knives in a
+    // sustained downtrend or shorting into a sustained uptrend.
+    if (bb.percentB <= thresholds.bollingerEntryMinPct && plusDI >= minusDI && allowLong) {
       signal = "buy";
       strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
-    } else if (bb.percentB >= thresholds.bollingerEntryMaxPct && minusDI >= plusDI) {
+    } else if (bb.percentB >= thresholds.bollingerEntryMaxPct && minusDI >= plusDI && allowShort) {
       signal = "sell";
       strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
     }
   } else {
-    // Trend-strength regime: require ADX to confirm a directional market and
-    // the DI lines to agree with the Bollinger band position.
+    // Trend-strength regime: require ADX, DI lines, Bollinger position, and
+    // higher-timeframe trend alignment to agree before entering.
     if (adx > thresholds.adxWeakTrend) {
-      if (plusDI > minusDI && bb.percentB >= thresholds.bollingerEntryMinPct) {
+      if (allowLong && plusDI > minusDI && bb.percentB >= thresholds.bollingerEntryMinPct) {
         signal = "buy";
         strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
-      } else if (minusDI > plusDI && bb.percentB <= thresholds.bollingerEntryMaxPct) {
+      } else if (allowShort && minusDI > plusDI && bb.percentB <= thresholds.bollingerEntryMaxPct) {
         signal = "sell";
         strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
       }
@@ -441,13 +470,30 @@ function buildRegimeComponent(
     name: "regime",
     description:
       mode === "reversion"
-        ? "Bollinger band mean-reversion regime"
-        : "ADX trend strength + Bollinger band direction",
+        ? "Bollinger band mean-reversion regime + higher-timeframe trend filter"
+        : "ADX trend strength + Bollinger direction + higher-timeframe trend filter",
     value: adx,
     signal,
     strength,
     weight,
   };
+}
+
+function higherTimeframeTrend(
+  candles: readonly CandleLike[],
+  thresholds: ComposerThresholds,
+): boolean | null {
+  const fastPeriod = thresholds.trendFilterFastPeriod ?? 50;
+  const slowPeriod = thresholds.trendFilterSlowPeriod ?? 100;
+  if (candles.length < slowPeriod + 1) return null;
+
+  const closes = candles.map((c) => c.close);
+  const fastEMA = calculateEMA(closes, fastPeriod);
+  const slowEMA = calculateEMA(closes, slowPeriod);
+  const lastFast = fastEMA[fastEMA.length - 1];
+  const lastSlow = slowEMA[slowEMA.length - 1];
+  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0) return null;
+  return lastFast > lastSlow;
 }
 
 function aggregateDirection(
@@ -474,7 +520,10 @@ function aggregateDirection(
   if (sellConfidence - buyConfidence >= minConfidenceSpread) {
     return { direction: "sell", confidence: sellConfidence };
   }
-  return { direction: "hold", confidence: Math.max(buyConfidence, sellConfidence) };
+  return {
+    direction: "hold",
+    confidence: Math.max(buyConfidence, sellConfidence),
+  };
 }
 
 function strengthValue(strength: SignalStrength): number {

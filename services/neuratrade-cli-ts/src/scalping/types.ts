@@ -112,6 +112,11 @@ export interface ComposerThresholds {
   readonly bollingerEntryMinPct: number;
   readonly minConfidenceSpread: number;
   readonly regimeMode?: "trend" | "reversion";
+  /** Higher-timeframe trend filter periods. Buy entries are allowed only when
+   *  EMA(trendFilterFastPeriod) > EMA(trendFilterSlowPeriod); sells when below.
+   *  The filter is skipped when insufficient candles are available. */
+  readonly trendFilterFastPeriod?: number;
+  readonly trendFilterSlowPeriod?: number;
 }
 
 export interface ComposerConfig {
