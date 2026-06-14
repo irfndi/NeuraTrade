@@ -202,5 +202,12 @@ dist/
 .deepsec/
 services/backend-api/5yr-backtest
 
-# Beads / Dolt files (added by bd init)
-.beads-credential-key
+# Agent / editor local skills and session artifacts (worktree-local, not project code)
+.agents/
+.claude/
+.cline/
+.claude.json
+.kiro/
+.opencode/
+session_*/
+skills-lock.json
