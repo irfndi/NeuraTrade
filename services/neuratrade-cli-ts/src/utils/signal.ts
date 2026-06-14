@@ -14,7 +14,7 @@ import { Effect } from "effect";
 export function signalAndWait(
   pid: number,
   signal: NodeJS.Signals,
-  timeoutMs: number
+  timeoutMs: number,
 ): Effect.Effect<boolean, never, never> {
   return Effect.gen(function* () {
     return yield* Effect.tryPromise({

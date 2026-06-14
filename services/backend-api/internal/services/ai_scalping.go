@@ -67,6 +67,10 @@ type AIScalpingConfig struct {
 	RegimeChopConfidence  float64
 	ShadowMirrorTimeout   time.Duration
 	DeterministicFallback DeterministicFallbackConfig
+	// AsymmetricExit overrides the default symmetric stop-loss/take-profit
+	// levels with a tighter stop / wider target and optional breakeven/trailing
+	// stop. Controlled via NEURATRADE_SCALPING_ASYMMETRIC_* env vars.
+	AsymmetricExit AsymmetricExitConfig
 }
 
 const (
@@ -409,6 +413,55 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	return normalized
 }
 
+// AsymmetricExitConfig configures tighter stops / wider targets and optional
+// breakeven/trailing behaviour for the scalping strategy. When enabled, the
+// engine replaces the symmetric 0.8%/1.2% default with a configurable R:R,
+// moves the stop to breakeven once a trigger profit is reached, and trails the
+// stop by TrailingStopPct once breakeven is active.
+type AsymmetricExitConfig struct {
+	UseAsymmetricExits  bool
+	StopLossPct         float64
+	TakeProfitPct       float64
+	BreakevenEnabled    bool
+	BreakevenTriggerPct float64
+	BreakevenOffsetPct  float64
+	TrailingStopEnabled bool
+	TrailingStopPct     float64
+}
+
+// Normalized fills sensible defaults and clamps bounds for asymmetric exits.
+func (cfg AsymmetricExitConfig) Normalized() AsymmetricExitConfig {
+	if !cfg.UseAsymmetricExits {
+		return cfg
+	}
+	normalized := cfg
+	if normalized.StopLossPct <= 0 {
+		normalized.StopLossPct = 0.005
+	}
+	if normalized.TakeProfitPct <= 0 {
+		normalized.TakeProfitPct = 0.015
+	}
+	if normalized.BreakevenEnabled {
+		if normalized.BreakevenTriggerPct <= 0 {
+			normalized.BreakevenTriggerPct = normalized.StopLossPct
+		}
+		if normalized.BreakevenOffsetPct < 0 {
+			normalized.BreakevenOffsetPct = 0
+		}
+	}
+	if normalized.TrailingStopEnabled {
+		if normalized.TrailingStopPct <= 0 {
+			normalized.TrailingStopPct = normalized.StopLossPct
+		}
+	}
+	normalized.StopLossPct = clampFloat(normalized.StopLossPct, 0.0001, 0.50)
+	normalized.TakeProfitPct = clampFloat(normalized.TakeProfitPct, 0.0001, 1.0)
+	normalized.BreakevenTriggerPct = clampFloat(normalized.BreakevenTriggerPct, 0.0001, 0.50)
+	normalized.BreakevenOffsetPct = clampFloat(normalized.BreakevenOffsetPct, 0, 0.05)
+	normalized.TrailingStopPct = clampFloat(normalized.TrailingStopPct, 0.0001, 0.50)
+	return normalized
+}
+
 func resolveEnvModel() string {
 	if m := strings.TrimSpace(os.Getenv("AI_MODEL")); m != "" {
 		return m
@@ -453,6 +506,16 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		RegimeChopConfidence:  0.65,
 		ShadowMirrorTimeout:   10 * time.Second,
 		DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  false,
+			StopLossPct:         0.005,
+			TakeProfitPct:       0.015,
+			BreakevenEnabled:    true,
+			BreakevenTriggerPct: 0.006,
+			BreakevenOffsetPct:  0.0005,
+			TrailingStopEnabled: true,
+			TrailingStopPct:     0.004,
+		},
 	}
 }
 
@@ -579,10 +642,37 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.RegimeLowBand = 15
 		cfg.RegimeHighBand = 85
 	}
+
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_USE"); ok {
+		cfg.AsymmetricExit.UseAsymmetricExits = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_SL_PCT"); ok {
+		cfg.AsymmetricExit.StopLossPct = clampFloat(value, 0.0001, 0.50)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_TP_PCT"); ok {
+		cfg.AsymmetricExit.TakeProfitPct = clampFloat(value, 0.0001, 1.0)
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN"); ok {
+		cfg.AsymmetricExit.BreakevenEnabled = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN_TRIGGER_PCT"); ok {
+		cfg.AsymmetricExit.BreakevenTriggerPct = clampFloat(value, 0.0001, 0.50)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN_OFFSET_PCT"); ok {
+		cfg.AsymmetricExit.BreakevenOffsetPct = clampFloat(value, 0, 0.05)
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_TRAILING"); ok {
+		cfg.AsymmetricExit.TrailingStopEnabled = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_TRAILING_PCT"); ok {
+		cfg.AsymmetricExit.TrailingStopPct = clampFloat(value, 0.0001, 0.50)
+	}
+	cfg.AsymmetricExit = cfg.AsymmetricExit.Normalized()
+
 	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
 	zaplogrus.Infof(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f asymmetric=%t asymmetric_sl_pct=%.4f asymmetric_tp_pct=%.4f breakeven=%t trailing=%t fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -612,6 +702,11 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.RegimeLowBand,
 		cfg.RegimeHighBand,
 		cfg.RegimeChopConfidence,
+		cfg.AsymmetricExit.UseAsymmetricExits,
+		cfg.AsymmetricExit.StopLossPct,
+		cfg.AsymmetricExit.TakeProfitPct,
+		cfg.AsymmetricExit.BreakevenEnabled,
+		cfg.AsymmetricExit.TrailingStopEnabled,
 		cfg.DeterministicFallback.MaxBidAskSpread,
 		cfg.DeterministicFallback.MinImbalance,
 		cfg.DeterministicFallback.ConfidenceFloor,
@@ -5114,6 +5209,41 @@ func defaultExitLevelsWithLeverage(price float64, action string, leverage int) (
 		takeProfit := entry.Mul(decimal.NewFromInt(1).Add(takePct))
 		return stopLoss, takeProfit
 	}
+}
+
+// asymmetricExitLevels computes stop-loss and take-profit using the configured
+// asymmetric percentages, divided by leverage to match how the exchange scales
+// liquidations/margin. The result is a tighter stop and wider target than the
+// legacy symmetric 0.8%/1.2% defaults.
+func asymmetricExitLevels(price float64, action string, leverage int, cfg AsymmetricExitConfig) (decimal.Decimal, decimal.Decimal) {
+	cfg = cfg.Normalized()
+	if leverage <= 0 {
+		leverage = 1
+	}
+	entry := decimal.NewFromFloat(price)
+	stopPct := decimal.NewFromFloat(cfg.StopLossPct).Div(decimal.NewFromInt(int64(leverage)))
+	takePct := decimal.NewFromFloat(cfg.TakeProfitPct).Div(decimal.NewFromInt(int64(leverage)))
+	one := decimal.NewFromInt(1)
+
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "sell":
+		stopLoss := entry.Mul(one.Add(stopPct))
+		takeProfit := entry.Mul(one.Sub(takePct))
+		return stopLoss, takeProfit
+	default:
+		stopLoss := entry.Mul(one.Sub(stopPct))
+		takeProfit := entry.Mul(one.Add(takePct))
+		return stopLoss, takeProfit
+	}
+}
+
+// defaultExitLevelsForService returns either the asymmetric levels (when
+// enabled in service config) or the legacy symmetric defaults.
+func (s *AIScalpingService) defaultExitLevelsForService(price float64, action string) (decimal.Decimal, decimal.Decimal) {
+	if s != nil && s.config.AsymmetricExit.UseAsymmetricExits {
+		return asymmetricExitLevels(price, action, s.config.Leverage, s.config.AsymmetricExit)
+	}
+	return defaultExitLevelsWithLeverage(price, action, 1)
 }
 
 func (s *AIScalpingService) refuseLiveTradeWithSyntheticSLTP(ctx context.Context, decision *AITradingDecision, defaultSL, defaultTP decimal.Decimal) error {

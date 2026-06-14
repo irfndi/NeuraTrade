@@ -201,3 +201,13 @@ dist/
 .clawpatch/
 .deepsec/
 services/backend-api/5yr-backtest
+
+# Agent / editor local skills and session artifacts (worktree-local, not project code)
+.agents/
+.claude/
+.cline/
+.claude.json
+.kiro/
+.opencode/
+session_*/
+skills-lock.json

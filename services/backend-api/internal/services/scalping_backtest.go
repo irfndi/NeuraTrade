@@ -597,10 +597,11 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	}
 
 	eval.Allowed = eval.RejectionReason == ""
-	if eval.Allowed && e.config.Mode == "ai" {
-		eval.Hints = e.computeSignalHints(signal.Signal, decision)
-	}
 	if eval.Allowed {
+		// Hints are computed deterministically from the same fallback config
+		// the AI path uses; no LLM is invoked. Exposing them for both modes
+		// lets CLI paper-trading loops read the action side directly.
+		eval.Hints = e.computeSignalHints(signal.Signal, decision)
 		eval.FunnelStage = "eligible"
 	}
 	return eval, nil

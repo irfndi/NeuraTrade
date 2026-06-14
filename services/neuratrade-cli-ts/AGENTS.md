@@ -22,15 +22,23 @@ services/neuratrade-cli-ts/
 
 ## WHERE TO LOOK
 
-| Task | Location | Notes |
-|------|----------|-------|
-| CLI command tree | `src/cli/index.ts` | Root command + subcommand wiring |
-| Gateway start/stop/status | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts` | Process lifecycle |
-| Config loading | `src/services/config.ts`, `src/schemas/*.ts` | env → runtime.json → config.json → defaults |
-| PID files | `src/services/pid.ts` | Read/write/liveness/pattern matching |
-| Process spawning | `src/services/process-manager.ts` | Bun.spawn, signals, cleanup |
-| API client | `src/services/api-client.ts` | HTTP client for backend endpoints |
-| Health checks | `src/services/health-check.ts` | HTTP probe + process probe |
+| Task                      | Location                                                     | Notes                                       |
+| ------------------------- | ------------------------------------------------------------ | ------------------------------------------- | ------------- | --------- |
+| CLI command tree          | `src/cli/index.ts`                                           | Root command + subcommand wiring            |
+| Gateway start/stop/status | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts` | Process lifecycle                           |
+| Config loading            | `src/services/config.ts`, `src/schemas/*.ts`                 | env → runtime.json → config.json → defaults |
+| PID files                 | `src/services/pid.ts`                                        | Read/write/liveness/pattern matching        |
+| Process spawning          | `src/services/process-manager.ts`                            | Bun.spawn, signals, cleanup                 |
+| API client                | `src/services/api-client.ts`                                 | HTTP client for backend endpoints           |
+| SQLite client             | `src/services/sqlite.ts`                                     | `bun:sqlite` client (scoped layer)          |
+| Market repository         | `src/services/market-repository.ts`                          | Exchange, pair, and OHLCV persistence       |
+| Binance client            | `src/services/binance-client.ts`                             | Public REST market data client              |
+| Bitget futures safety     | `src/services/bitget-futures-safety.ts`                      | Pre-flight live-order guards (reduce-only, margin-mode, leverage) |
+| Rate limiter              | `src/services/rate-limiter.ts`                               | Token-bucket limiter for HTTP calls         |
+| Health checks             | `src/services/health-check.ts`                               | HTTP probe + process probe                  |
+| Market data commands      | `src/cli/market.ts`                                          | `market fetch-universe                      | fetch-candles | coverage` |
+| Backtest commands         | `src/cli/backtest.ts`                                        | `backtest scalping run`                     |
+| Paper trading             | `src/cli/paper.ts`, `src/services/paper-trading-engine.ts`   | Deterministic scalping paper trades with SL/TP/leverage |
 
 ## COMMANDS
 
@@ -43,6 +51,10 @@ bun run index.ts --help
 bun run index.ts gateway start
 bun run index.ts gateway stop
 bun run index.ts gateway status
+bun run index.ts market fetch-universe --top 5 --dry-run
+bun run index.ts market fetch-candles --symbols BTC/USDT --start 2025-01-01 --end 2025-01-31
+bun run index.ts market coverage --symbols BTC/USDT --start 2025-01-01 --end 2025-01-31
+bun run index.ts backtest scalping run --start 2025-01-01T00:00:00Z --end 2025-01-31T00:00:00Z
 ```
 
 ## CONVENTIONS

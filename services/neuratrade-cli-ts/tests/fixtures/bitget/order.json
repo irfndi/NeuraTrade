@@ -1,0 +1,18 @@
+{
+  "code": "00000",
+  "msg": "success",
+  "requestTime": 1718275200000,
+  "data": {
+    "orderId": "12345",
+    "clientOid": "client-oid-1",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "orderType": "market",
+    "status": "live",
+    "size": "0.001",
+    "price": "0",
+    "accBaseVolume": "0",
+    "accQuoteVolume": "0",
+    "fee": "0"
+  }
+}

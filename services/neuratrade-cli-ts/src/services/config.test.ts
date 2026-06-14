@@ -135,7 +135,10 @@ describe("Config service", () => {
     });
 
     it("returns defaultLocalConfig when home directory does not exist", async () => {
-      const home = nodePath.join(os.tmpdir(), "nonexistent-config-dir-" + Date.now());
+      const home = nodePath.join(
+        os.tmpdir(),
+        "nonexistent-config-dir-" + Date.now(),
+      );
       const program = loadLocalConfigEffect(home);
       const result = await Effect.runPromise(
         program.pipe(Effect.provide(BunFileSystem.layer)),
@@ -212,7 +215,10 @@ describe("Config service", () => {
     });
 
     it("returns defaultRuntimeConfig when home directory does not exist", async () => {
-      const home = nodePath.join(os.tmpdir(), "nonexistent-runtime-dir-" + Date.now());
+      const home = nodePath.join(
+        os.tmpdir(),
+        "nonexistent-runtime-dir-" + Date.now(),
+      );
       const program = loadRuntimeConfigEffect(home);
       const result = await Effect.runPromise(
         program.pipe(Effect.provide(BunFileSystem.layer)),
@@ -400,7 +406,9 @@ describe("Config service", () => {
           program.pipe(Effect.provide(BunFileSystem.layer)),
         );
 
-        expect(result.admin_api_key).toBe("env-admin-key-32chars-long-enough!!");
+        expect(result.admin_api_key).toBe(
+          "env-admin-key-32chars-long-enough!!",
+        );
       } finally {
         delete process.env.ADMIN_API_KEY;
         rmDir(home);

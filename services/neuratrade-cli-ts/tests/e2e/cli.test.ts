@@ -99,4 +99,35 @@ describe("CLI e2e", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("No running services found");
   });
+
+  it("bitget --help lists spot and futures commands", async () => {
+    const { exitCode, stdout } = await runCli(["bitget", "--help"], {
+      NEURATRADE_HOME: home,
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("verify");
+    expect(stdout).toContain("futures");
+    expect(stdout).toContain("order place");
+  });
+
+  it("bitget futures order place --dry-run fails gracefully without credentials", async () => {
+    const { exitCode, stdout, stderr } = await runCli(
+      [
+        "bitget",
+        "futures",
+        "order",
+        "place",
+        "--symbol",
+        "BTC/USDT:USDT",
+        "--side",
+        "buy",
+        "--size",
+        "0.001",
+        "--dry-run",
+      ],
+      { NEURATRADE_HOME: home },
+    );
+    expect(exitCode).toBe(1);
+    expect(stdout + stderr).toContain("Bitget credentials missing");
+  });
 });

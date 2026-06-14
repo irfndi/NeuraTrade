@@ -53,7 +53,9 @@ describe("GatewayStateSchema", () => {
       expect(state.services["telegram-service"].endpoint).toBeUndefined();
 
       expect(state.services["ccxt-service"].status).toBe("stopped");
-      expect(state.services["ccxt-service"].detail).toBe("skipped: native mode");
+      expect(state.services["ccxt-service"].detail).toBe(
+        "skipped: native mode",
+      );
     }
   });
 

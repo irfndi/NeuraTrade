@@ -65,57 +65,46 @@ const startCommand = Command.make(
     ),
 ).pipe(Command.withDescription("Start all NeuraTrade services"));
 
-const stopCommand = Command.make(
-  "stop",
-  {},
-  () =>
-    Effect.gen(function* () {
-      const orch = yield* GatewayOrchestrator;
-      const result = yield* orch.stop();
-      if (result.stoppedCount === 0) {
-        yield* Console.log("No running services found.");
-      } else {
-        yield* Console.log(`✅ Stopped ${result.stoppedCount} service(s)`);
-      }
-    }),
+const stopCommand = Command.make("stop", {}, () =>
+  Effect.gen(function* () {
+    const orch = yield* GatewayOrchestrator;
+    const result = yield* orch.stop();
+    if (result.stoppedCount === 0) {
+      yield* Console.log("No running services found.");
+    } else {
+      yield* Console.log(`✅ Stopped ${result.stoppedCount} service(s)`);
+    }
+  }),
 ).pipe(Command.withDescription("Stop all NeuraTrade services"));
 
-const statusCommand = Command.make(
-  "status",
-  {},
-  () =>
-    Effect.gen(function* () {
-      const orch = yield* GatewayOrchestrator;
-      const result = yield* orch.status();
-      yield* Console.log("📊 NeuraTrade Service Status");
-      yield* Console.log("============================");
-      yield* Console.log(`Runtime Mode: ${result.mode.toUpperCase()}`);
-      yield* Console.log(`Supervised: ${result.supervised}`);
-      if (result.updatedAt) {
-        yield* Console.log(`Last Update: ${result.updatedAt}`);
-      }
-      yield* Console.log("");
-      for (const [name, svc] of Object.entries(result.services)) {
-        yield* Console.log(
-          `  ${name}: ${svc.status}${svc.detail ? ` — ${svc.detail}` : ""}`,
-        );
-      }
-      yield* Console.log("");
+const statusCommand = Command.make("status", {}, () =>
+  Effect.gen(function* () {
+    const orch = yield* GatewayOrchestrator;
+    const result = yield* orch.status();
+    yield* Console.log("📊 NeuraTrade Service Status");
+    yield* Console.log("============================");
+    yield* Console.log(`Runtime Mode: ${result.mode.toUpperCase()}`);
+    yield* Console.log(`Supervised: ${result.supervised}`);
+    if (result.updatedAt) {
+      yield* Console.log(`Last Update: ${result.updatedAt}`);
+    }
+    yield* Console.log("");
+    for (const [name, svc] of Object.entries(result.services)) {
       yield* Console.log(
-        result.backendHealth.healthy
-          ? `✅ Backend Health: ${result.backendHealth.detail}`
-          : `⚠️  Backend Health: ${result.backendHealth.detail}`,
+        `  ${name}: ${svc.status}${svc.detail ? ` — ${svc.detail}` : ""}`,
       );
-    }),
+    }
+    yield* Console.log("");
+    yield* Console.log(
+      result.backendHealth.healthy
+        ? `✅ Backend Health: ${result.backendHealth.detail}`
+        : `⚠️  Backend Health: ${result.backendHealth.detail}`,
+    );
+  }),
 ).pipe(Command.withDescription("Show service status"));
 
-export const gatewayCommand = Command.make(
-  "gateway",
-  {},
-  () =>
-    Console.log(
-      "Use 'gateway start', 'gateway stop', or 'gateway status'.",
-    ),
+export const gatewayCommand = Command.make("gateway", {}, () =>
+  Console.log("Use 'gateway start', 'gateway stop', or 'gateway status'."),
 ).pipe(
   Command.withDescription("Manage NeuraTrade gateway (start/stop/status)"),
   Command.withSubcommands([startCommand, stopCommand, statusCommand]),

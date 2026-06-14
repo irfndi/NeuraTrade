@@ -44,7 +44,7 @@ describe("getEnvOrRuntimeString", () => {
   test("returns env var when set (even if whitespace-padded)", () => {
     setEnv("TEST_STR", "  from-env  ");
     const result = Effect.runSync(
-      getEnvOrRuntimeString("TEST_STR", "from-runtime", "fallback")
+      getEnvOrRuntimeString("TEST_STR", "from-runtime", "fallback"),
     );
     expect(result).toBe("from-env");
   });
@@ -52,7 +52,7 @@ describe("getEnvOrRuntimeString", () => {
   test("returns runtime value when env is empty", () => {
     clearEnv("TEST_STR");
     const result = Effect.runSync(
-      getEnvOrRuntimeString("TEST_STR", "from-runtime", "fallback")
+      getEnvOrRuntimeString("TEST_STR", "from-runtime", "fallback"),
     );
     expect(result).toBe("from-runtime");
   });
@@ -60,7 +60,7 @@ describe("getEnvOrRuntimeString", () => {
   test("returns fallback when env and runtime are empty", () => {
     clearEnv("TEST_STR");
     const result = Effect.runSync(
-      getEnvOrRuntimeString("TEST_STR", "", "fallback-value")
+      getEnvOrRuntimeString("TEST_STR", "", "fallback-value"),
     );
     expect(result).toBe("fallback-value");
   });
@@ -68,7 +68,7 @@ describe("getEnvOrRuntimeString", () => {
   test("returns fallback when env is empty and runtime is whitespace-only", () => {
     clearEnv("TEST_STR");
     const result = Effect.runSync(
-      getEnvOrRuntimeString("TEST_STR", "   ", "fb")
+      getEnvOrRuntimeString("TEST_STR", "   ", "fb"),
     );
     expect(result).toBe("fb");
   });
@@ -76,7 +76,7 @@ describe("getEnvOrRuntimeString", () => {
   test("env takes precedence over both runtime and fallback", () => {
     setEnv("TEST_STR", "env-wins");
     const result = Effect.runSync(
-      getEnvOrRuntimeString("TEST_STR", "runtime", "fallback")
+      getEnvOrRuntimeString("TEST_STR", "runtime", "fallback"),
     );
     expect(result).toBe("env-wins");
   });
@@ -89,7 +89,7 @@ describe("getEnvOrRuntimePort", () => {
   test("returns env port when set", () => {
     setEnv("TEST_PORT", "9090");
     const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 3001, "8080")
+      getEnvOrRuntimePort("TEST_PORT", 3001, "8080"),
     );
     expect(result).toBe("9090");
   });
@@ -97,47 +97,41 @@ describe("getEnvOrRuntimePort", () => {
   test("returns runtime port when env is absent", () => {
     clearEnv("TEST_PORT");
     const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 3001, "8080")
+      getEnvOrRuntimePort("TEST_PORT", 3001, "8080"),
     );
     expect(result).toBe("3001");
   });
 
   test("returns fallback when env is absent and runtime is 0", () => {
     clearEnv("TEST_PORT");
-    const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 0, "8080")
-    );
+    const result = Effect.runSync(getEnvOrRuntimePort("TEST_PORT", 0, "8080"));
     expect(result).toBe("8080");
   });
 
   test("returns fallback when runtime port is out of range (65536)", () => {
     clearEnv("TEST_PORT");
     const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 65536, "8080")
+      getEnvOrRuntimePort("TEST_PORT", 65536, "8080"),
     );
     expect(result).toBe("8080");
   });
 
   test("returns fallback when runtime port is negative", () => {
     clearEnv("TEST_PORT");
-    const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", -1, "8080")
-    );
+    const result = Effect.runSync(getEnvOrRuntimePort("TEST_PORT", -1, "8080"));
     expect(result).toBe("8080");
   });
 
   test("accepts port 1 as valid runtime port", () => {
     clearEnv("TEST_PORT");
-    const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 1, "8080")
-    );
+    const result = Effect.runSync(getEnvOrRuntimePort("TEST_PORT", 1, "8080"));
     expect(result).toBe("1");
   });
 
   test("accepts port 65535 as valid runtime port", () => {
     clearEnv("TEST_PORT");
     const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 65535, "8080")
+      getEnvOrRuntimePort("TEST_PORT", 65535, "8080"),
     );
     expect(result).toBe("65535");
   });
@@ -145,7 +139,7 @@ describe("getEnvOrRuntimePort", () => {
   test("trims whitespace from env port value", () => {
     setEnv("TEST_PORT", "  4000  ");
     const result = Effect.runSync(
-      getEnvOrRuntimePort("TEST_PORT", 3001, "8080")
+      getEnvOrRuntimePort("TEST_PORT", 3001, "8080"),
     );
     expect(result).toBe("4000");
   });
@@ -158,39 +152,35 @@ describe("getEnvOrRuntimeBool", () => {
   test("returns true when env is 'true'", () => {
     setEnv("TEST_BOOL", "true");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, true)
+      getEnvOrRuntimeBool("TEST_BOOL", false, true),
     );
     expect(result).toBe(true);
   });
 
   test("returns false when env is 'false'", () => {
     setEnv("TEST_BOOL", "false");
-    const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", true, true)
-    );
+    const result = Effect.runSync(getEnvOrRuntimeBool("TEST_BOOL", true, true));
     expect(result).toBe(false);
   });
 
   test("returns true when env is '1'", () => {
     setEnv("TEST_BOOL", "1");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, false)
+      getEnvOrRuntimeBool("TEST_BOOL", false, false),
     );
     expect(result).toBe(true);
   });
 
   test("returns false when env is '0'", () => {
     setEnv("TEST_BOOL", "0");
-    const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", true, true)
-    );
+    const result = Effect.runSync(getEnvOrRuntimeBool("TEST_BOOL", true, true));
     expect(result).toBe(false);
   });
 
   test("returns runtime value when env is absent", () => {
     clearEnv("TEST_BOOL");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", true, false)
+      getEnvOrRuntimeBool("TEST_BOOL", true, false),
     );
     expect(result).toBe(true);
   });
@@ -198,7 +188,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("returns runtime value even when it is false", () => {
     clearEnv("TEST_BOOL");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, true)
+      getEnvOrRuntimeBool("TEST_BOOL", false, true),
     );
     // runtimeValue is explicitly provided (not undefined), so it wins
     expect(result).toBe(false);
@@ -207,7 +197,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("returns fallback when runtime value is undefined", () => {
     clearEnv("TEST_BOOL");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", undefined, true)
+      getEnvOrRuntimeBool("TEST_BOOL", undefined, true),
     );
     expect(result).toBe(true);
   });
@@ -215,7 +205,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("returns fallback when env value is unparseable", () => {
     setEnv("TEST_BOOL", "not-a-bool");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, true)
+      getEnvOrRuntimeBool("TEST_BOOL", false, true),
     );
     expect(result).toBe(true);
   });
@@ -223,7 +213,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("handles 'yes' as true", () => {
     setEnv("TEST_BOOL", "yes");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, false)
+      getEnvOrRuntimeBool("TEST_BOOL", false, false),
     );
     expect(result).toBe(true);
   });
@@ -231,7 +221,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("handles 'no' as false", () => {
     setEnv("TEST_BOOL", "no");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", true, false)
+      getEnvOrRuntimeBool("TEST_BOOL", true, false),
     );
     expect(result).toBe(false);
   });
@@ -239,7 +229,7 @@ describe("getEnvOrRuntimeBool", () => {
   test("trims whitespace from env value before parsing", () => {
     setEnv("TEST_BOOL", "  true  ");
     const result = Effect.runSync(
-      getEnvOrRuntimeBool("TEST_BOOL", false, false)
+      getEnvOrRuntimeBool("TEST_BOOL", false, false),
     );
     expect(result).toBe(true);
   });
@@ -252,7 +242,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns env seconds when set and valid", () => {
     setEnv("TEST_DUR", "30");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(30);
   });
@@ -260,7 +250,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns runtime seconds when env is absent", () => {
     clearEnv("TEST_DUR");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(60);
   });
@@ -268,7 +258,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns fallback when env is absent and runtime is 0", () => {
     clearEnv("TEST_DUR");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 0, 15)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 0, 15),
     );
     expect(result).toBe(15);
   });
@@ -276,7 +266,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns fallback when env value is not a number", () => {
     setEnv("TEST_DUR", "abc");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(10);
   });
@@ -284,7 +274,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns fallback when env value is negative", () => {
     setEnv("TEST_DUR", "-5");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(10);
   });
@@ -292,7 +282,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("returns fallback when env value is zero", () => {
     setEnv("TEST_DUR", "0");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(10);
   });
@@ -300,7 +290,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("trims whitespace from env value", () => {
     setEnv("TEST_DUR", "  45  ");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(45);
   });
@@ -308,7 +298,7 @@ describe("getEnvOrRuntimeDurationSeconds", () => {
   test("accepts large valid seconds value", () => {
     setEnv("TEST_DUR", "86400");
     const result = Effect.runSync(
-      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10)
+      getEnvOrRuntimeDurationSeconds("TEST_DUR", 60, 10),
     );
     expect(result).toBe(86400);
   });

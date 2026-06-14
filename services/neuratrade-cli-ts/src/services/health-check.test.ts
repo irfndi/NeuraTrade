@@ -7,7 +7,9 @@ import { HealthCheck, HealthCheckLive } from "./health-check.ts";
 // ---------------------------------------------------------------------------
 
 /** Start a tiny HTTP server, return { url, stop }. */
-function startTestServer(handler: (req: Request) => Response | Promise<Response>) {
+function startTestServer(
+  handler: (req: Request) => Response | Promise<Response>,
+) {
   const server = Bun.serve({
     port: 0,
     fetch: handler,
@@ -50,8 +52,8 @@ describe("HealthCheck service", () => {
     it("returns healthy=true for a 500 response (Go behavior: <500 is healthy, 500 included)", async () => {
       // The Go code treats status >= 200 && < 500 as healthy.
       // Status 500 itself is NOT healthy in Go.
-      const server = startTestServer(() =>
-        new Response("Internal Server Error", { status: 500 }),
+      const server = startTestServer(
+        () => new Response("Internal Server Error", { status: 500 }),
       );
       try {
         const program = Effect.gen(function* () {
@@ -71,7 +73,9 @@ describe("HealthCheck service", () => {
     });
 
     it("returns healthy=true for a 404 response", async () => {
-      const server = startTestServer(() => new Response("Not Found", { status: 404 }));
+      const server = startTestServer(
+        () => new Response("Not Found", { status: 404 }),
+      );
       try {
         const program = Effect.gen(function* () {
           const hc = yield* HealthCheck;
@@ -90,8 +94,8 @@ describe("HealthCheck service", () => {
     });
 
     it("returns healthy=true for a 201 response", async () => {
-      const server = startTestServer(() =>
-        new Response("Created", { status: 201 }),
+      const server = startTestServer(
+        () => new Response("Created", { status: 201 }),
       );
       try {
         const program = Effect.gen(function* () {
@@ -223,8 +227,8 @@ describe("HealthCheck service", () => {
     });
 
     it("returns healthy=false when timeout is exceeded", async () => {
-      const server = startTestServer(() =>
-        new Response("Not Ready", { status: 503 }),
+      const server = startTestServer(
+        () => new Response("Not Ready", { status: 503 }),
       );
 
       try {
@@ -349,8 +353,16 @@ describe("HealthCheck service", () => {
         return yield* hc.probeProcess(pattern);
       });
 
-      const proc1 = Bun.spawn(["node", "-e", `setTimeout(()=>{}, 30000); /* ${pattern} */`]);
-      const proc2 = Bun.spawn(["node", "-e", `setTimeout(()=>{}, 30000); /* ${pattern} */`]);
+      const proc1 = Bun.spawn([
+        "node",
+        "-e",
+        `setTimeout(()=>{}, 30000); /* ${pattern} */`,
+      ]);
+      const proc2 = Bun.spawn([
+        "node",
+        "-e",
+        `setTimeout(()=>{}, 30000); /* ${pattern} */`,
+      ]);
 
       try {
         const result = await Effect.runPromise(

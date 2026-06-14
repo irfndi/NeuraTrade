@@ -10,7 +10,7 @@ import { Context, Data, Effect, Layer } from "effect";
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 30000;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -37,7 +37,11 @@ export class JsonParseError extends Data.TaggedError("JsonParseError")<{
   readonly endpoint: string;
 }> {}
 
-export type ApiClientError = HttpError | NetworkError | TimeoutError | JsonParseError;
+export type ApiClientError =
+  | HttpError
+  | NetworkError
+  | TimeoutError
+  | JsonParseError;
 
 // ---------------------------------------------------------------------------
 // Request / Response types (mirror Go structs)
@@ -101,6 +105,40 @@ export interface BacktestRequest {
   readonly exchange?: string;
   readonly initial_capital?: string;
   readonly mode?: string;
+  readonly summary_only?: boolean;
+}
+
+export interface BacktestSignal {
+  readonly signal_id?: string;
+  readonly timestamp: string;
+  readonly symbol: string;
+  readonly exchange: string;
+  readonly funnel_stage: string;
+  readonly rejection_reason?: string;
+  readonly hints?: {
+    readonly suggested_action?: string;
+    readonly confidence_hint?: number;
+    readonly candidate_score?: number;
+  };
+}
+
+export interface BacktestTrade {
+  readonly trade_id?: string;
+  readonly signal_id?: string;
+  readonly symbol: string;
+  readonly exchange: string;
+  readonly side: string;
+  readonly size: string;
+  readonly notional: string;
+  readonly entry_price: string;
+  readonly exit_price: string;
+  readonly entry_timestamp: string;
+  readonly exit_timestamp: string;
+  readonly pnl: string;
+  readonly pnl_pct: string;
+  readonly fees: string;
+  readonly outcome: string;
+  readonly exit_reason: string;
 }
 
 export interface BacktestResponse {
@@ -109,6 +147,8 @@ export interface BacktestResponse {
   readonly mode: string;
   readonly summary: Record<string, unknown>;
   readonly gate_summary: ReadonlyArray<unknown>;
+  readonly signals?: ReadonlyArray<BacktestSignal>;
+  readonly trades?: ReadonlyArray<BacktestTrade>;
 }
 
 export interface HealthResponse {
@@ -132,15 +172,13 @@ export interface ApiClientImpl {
   readonly getAIModels: (
     provider?: string,
   ) => Effect.Effect<AIModelsResponse, ApiClientError>;
-  readonly getPortfolio: () => Effect.Effect<
-    PortfolioResponse,
-    ApiClientError
-  >;
+  readonly getPortfolio: () => Effect.Effect<PortfolioResponse, ApiClientError>;
   readonly getBalance: (
     chatId: string,
   ) => Effect.Effect<BalanceResponse, ApiClientError>;
   readonly runScalpingBacktest: (
     request: BacktestRequest,
+    timeoutMs?: number,
   ) => Effect.Effect<BacktestResponse, ApiClientError>;
   readonly health: () => Effect.Effect<HealthResponse, ApiClientError>;
 }
@@ -317,13 +355,13 @@ export const ApiClientLive = (
       );
     },
 
-    runScalpingBacktest: (request) =>
+    runScalpingBacktest: (request, requestTimeoutMs) =>
       apiRequest(
         baseUrl,
         apiKey,
         "POST",
         "/api/v1/backtest/scalping/run",
-        timeoutMs,
+        requestTimeoutMs ?? timeoutMs,
         request,
       ).pipe(
         Effect.flatMap((res) =>

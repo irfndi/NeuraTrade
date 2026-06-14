@@ -11,6 +11,14 @@ import { GatewayStateLive } from "./src/services/gateway-state.ts";
 import { ProcessManagerLive } from "./src/services/process-manager.ts";
 import { GatewayOrchestratorLive } from "./src/services/gateway-orchestrator.ts";
 import { ApiClientLive } from "./src/services/api-client.ts";
+import { SqliteClientLive } from "./src/services/sqlite.ts";
+import { MarketRepositoryLive } from "./src/services/market-repository.ts";
+import { RateLimiterLive } from "./src/services/rate-limiter.ts";
+import { BinanceClientLive } from "./src/services/binance-client.ts";
+import { BitgetConfigLive } from "./src/services/bitget-config.ts";
+import { BitgetClientLiveConfig } from "./src/services/bitget-client.ts";
+import { PaperRepositoryLive } from "./src/services/paper-repository.ts";
+import { PaperTradingEngineLive } from "./src/services/paper-trading-engine.ts";
 
 const cli = Command.run(rootCommand, {
   name: "NeuraTrade CLI",
@@ -41,6 +49,16 @@ function buildRootLayer() {
   const gwState = Layer.provide(GatewayStateLive, base);
   const health = HealthCheckLive;
   const apiClient = buildApiClientLayer();
+  const sqlite = Layer.provide(SqliteClientLive, Layer.merge(base, config));
+  const marketRepository = Layer.provide(MarketRepositoryLive, sqlite);
+  const paperRepository = Layer.provide(PaperRepositoryLive, sqlite);
+  const rateLimiter = RateLimiterLive();
+  const binanceClient = Layer.provide(BinanceClientLive(), rateLimiter);
+  const bitgetConfig = BitgetConfigLive;
+  const bitgetClient = Layer.provide(
+    BitgetClientLiveConfig,
+    Layer.merge(rateLimiter, bitgetConfig),
+  );
 
   const serviceLayers = Layer.mergeAll(
     config,
@@ -49,6 +67,14 @@ function buildRootLayer() {
     gwState,
     health,
     apiClient,
+    sqlite,
+    marketRepository,
+    paperRepository,
+    rateLimiter,
+    binanceClient,
+    bitgetConfig,
+    bitgetClient,
+    PaperTradingEngineLive,
   );
   const orch = Layer.provide(GatewayOrchestratorLive, serviceLayers);
   const allServices = Layer.mergeAll(serviceLayers, orch);
