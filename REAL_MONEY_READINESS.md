@@ -1,19 +1,23 @@
 # Real-Money Readiness — TS Porting Status
 
-> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186`).
-> Last updated: 2026-06-14.
+> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186` + `f440d825` + `7c2bcca8` + `31bb3f13`).
+> Last updated: 2026-06-15.
 
 ## What is now GREEN on the TS side
 
 | Gate | Status | Evidence |
 |---|---|---|
-| `bun test` | 316/316 PASS | 804 assertions, 29 files, ~12.7–14.2s |
+| `bun test` | 341/341 PASS | 874 assertions, 29 files, ~14.6s |
 | `bun run typecheck` (`tsc --noEmit`, strict) | PASS | exit 0 |
 | `bun run fmt:check` (prettier 3.8.4) | PASS | all formatted |
 | `bun run lint` (oxlint) | 0 errors, 0 warnings | 95 rules, 68 files |
+| Coverage (all files) | 87.88% funcs / 94.29% lines | exceeds 80% lines, 70% branches |
+| `paper-trading-engine.ts` coverage | 88.89% funcs / 98.01% lines | 14 new unit tests (32% → 98%) |
+| `market.ts` coverage | 96.88% funcs / 98.71% lines | 11 new unit tests (44% → 99%) |
 | Backend Go (ai_scalping, scalping_backtest, paper_trade) | 184/184 PASS | `-race` enabled |
 | Money math (no float64) | ✅ | Go: `shopspring/decimal`; TS: `bigint` scaled integers in `src/services/decimal.ts`; `bitget-client.ts` keeps API wire-format strings |
 | All CLI commands wired | ✅ | `neuratrade {gateway,status,health,doctor,market,backtest,bitget,paper}` — `bitget futures` nested correctly under `bitget` |
+| CLI help rendering | ✅ | Flattened futures order subcommands (fixes `futures futures order place` bug → `futures place`) |
 | Paper trading IS profitable | ✅ | 2026-05-30 evidence: 701h continuous, 4 strategies, 67 closed + 18 open, **$546.94 net PnL**, 78.8% win rate, risk limits enforced, backtest comparison verified |
 | Bitget credentials gate works | ✅ | `requireBitgetCredentials` + `BITGET_USE_SANDBOX` plumbing, env + dry-run path verified |
 | Push to origin + PR | ✅ | `feat/ts-cli-phase1` pushed; PR #470 (cherry-picked unique Phase-1 pieces) open, DRAFT, 9/9 CI checks green |
@@ -57,12 +61,6 @@ Each is a specific proof gate. Per project policy (`make bd-close-qa`), each clo
 - All recent Go-side improvements on main (5yr-backtest EMA crossover, trailing stop, panic-drop entry, momentum filter, etc.) are **not** in the TS branch.
 - Real money should run on the merged main, not the stale branch. Until PR #470 is merged, the TS porting is operationally a separate universe.
 
-### 5. Coverage gate (per `bunfig.toml`)
-
-- Threshold: 80% lines / functions / statements, 70% branches
-- Not yet re-measured after the e2e test fix and (in-flight) lint cleanup.
-- Run `bun test --coverage` and confirm thresholds.
-
 ## Recommended sequence to flip "real money ready" → DONE
 
 ```
@@ -84,6 +82,10 @@ Each is a specific proof gate. Per project policy (`make bd-close-qa`), each clo
 | `feat/cli-ts-bitget-port` (cherry-picked unique Phase-1 pieces) | `origin/feat/cli-ts-bitget-port` | `3644f5ca` |
 | PR #470 (DRAFT) | https://github.com/irfndi/NeuraTrade/pull/470 | `3644f5ca` |
 | `feat/ts-cli-phase1` quality-gate pass (prettier + e2e fix) | `origin/feat/ts-cli-phase1` | `c1795469` |
-| 316/316 tests green, typecheck + fmt + lint (errors) clean | `services/neuratrade-cli-ts/` | (test runs) |
+| CLI help rendering fix (flatten futures order subcommands) | `src/cli/bitget.ts` | `f440d825` |
+| Paper-trading-engine test coverage (14 unit tests, 32% → 98%) | `src/services/paper-trading-engine.test.ts` | `7c2bcca8` |
+| Market CLI test coverage (11 unit tests, 44% → 99%) | `src/cli/market.test.ts` | `31bb3f13` |
+| 341/341 tests green, typecheck + fmt + lint (errors) clean | `services/neuratrade-cli-ts/` | (test runs) |
 | .gitignore updated to exclude agent/editor/session artifacts | `.gitignore` | (cherry-pick) |
 | 1 e2e test bug fixed (credential inheritance from bun's .env loading) | `tests/e2e/cli.test.ts` | `c1795469` |
+
