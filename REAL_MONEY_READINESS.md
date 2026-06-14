@@ -1,6 +1,6 @@
 # Real-Money Readiness — TS Porting Status
 
-> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186` + `37ef2378` + `f440d825` + `7c2bcca8` + `31bb3f13` + `edb77ce6`).
+> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186` + `37ef2378` + `f440d825` + `7c2bcca8` + `31bb3f13` + `edb77ce6` + `651689c3`).
 > Last updated: 2026-06-15.
 
 ## What is now GREEN on the TS side
