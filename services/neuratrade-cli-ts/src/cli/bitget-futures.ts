@@ -20,10 +20,7 @@ import {
   requireBitgetCredentials,
 } from "../services/bitget-config.ts";
 import { validateFuturesOrder } from "../services/bitget-futures-guards.ts";
-import {
-  BitgetFuturesSafetyError,
-  validateLiveOrderSafety,
-} from "../services/bitget-futures-safety.ts";
+import { validateLiveOrderSafety } from "../services/bitget-futures-safety.ts";
 
 // ---------------------------------------------------------------------------
 // Options

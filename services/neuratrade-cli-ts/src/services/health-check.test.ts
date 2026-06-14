@@ -1,5 +1,5 @@
-import { describe, expect, it, afterAll, beforeAll } from "bun:test";
-import { Effect, Schedule } from "effect";
+import { describe, expect, it } from "bun:test";
+import { Effect } from "effect";
 import { HealthCheck, HealthCheckLive } from "./health-check.ts";
 
 // ---------------------------------------------------------------------------

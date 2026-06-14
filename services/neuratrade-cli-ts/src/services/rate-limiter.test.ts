@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it } from "bun:test";
 import { Effect, Fiber, TestClock, TestContext } from "effect";
 import { RateLimiter, RateLimiterLive } from "./rate-limiter.ts";
 

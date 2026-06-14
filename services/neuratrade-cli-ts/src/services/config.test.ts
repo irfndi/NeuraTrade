@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as nodePath from "path";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   LocalConfig,

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { PaperRepository, PaperRepositoryLive } from "./paper-repository.ts";
 import { SqliteClientLive } from "./sqlite.ts";
-import { Path, PathLive } from "./path.ts";
+import { PathLive } from "./path.ts";
 import { RuntimeConfig } from "./config.ts";
 
 function makeTestLayer(home: string) {

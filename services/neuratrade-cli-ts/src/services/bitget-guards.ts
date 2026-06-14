@@ -222,7 +222,7 @@ function checkNotionalAndLimits(
 function checkBalance(
   ctx: BitgetGuardContext,
   order: BitgetOrderRequest,
-  referencePrice: string,
+  _referencePrice: string,
 ): Effect.Effect<void, BitgetGuardError> {
   return Effect.gen(function* () {
     const feeRate = ctx.feeRate ?? "0.001";

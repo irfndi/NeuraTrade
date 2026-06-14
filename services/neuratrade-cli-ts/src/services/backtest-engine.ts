@@ -104,13 +104,8 @@ interface OpenTrade {
 // Decimal helpers
 // ---------------------------------------------------------------------------
 
-const d = (n: number): string => String(n);
 const zero = "0";
 const hundred = "100";
-
-function toPctDecimal(pct: number): string {
-  return String(pct / 100);
-}
 
 // ---------------------------------------------------------------------------
 // Technical indicators

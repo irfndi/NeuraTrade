@@ -483,8 +483,8 @@ function applyRuntimeOverrides(
 
 function applyEnvOverrides(
   base: ResolvedConfig,
-  local: LocalConfigData,
-  home: string,
+  _local: LocalConfigData,
+  _home: string,
 ): ResolvedConfig {
   let result = { ...base };
 

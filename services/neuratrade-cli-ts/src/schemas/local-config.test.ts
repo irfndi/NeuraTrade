@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Either, pipe } from "effect";
-import {
-  LocalConfigSchema,
-  decodeLocalConfigEither,
-  type LocalConfig,
-} from "./local-config";
+import { Either } from "effect";
+import { decodeLocalConfigEither, type LocalConfig } from "./local-config";
 
 describe("LocalConfigSchema", () => {
   // --- Valid JSON decoding ---

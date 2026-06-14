@@ -1,17 +1,7 @@
 import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
-import { Console, Effect, Layer } from "effect";
-import { PathLive } from "../services/path.ts";
-import { ConfigLive, resolvedConfigEffect } from "../services/config.ts";
-import { LoggerLive } from "../services/logger.ts";
-import { PidFileLive } from "../services/pid.ts";
-import { HealthCheckLive } from "../services/health-check.ts";
-import { GatewayStateLive } from "../services/gateway-state.ts";
-import { ProcessManagerLive } from "../services/process-manager.ts";
-import {
-  GatewayOrchestrator,
-  GatewayOrchestratorLive,
-} from "../services/gateway-orchestrator.ts";
+import { Console, Effect } from "effect";
+import { resolvedConfigEffect } from "../services/config.ts";
+import { GatewayOrchestrator } from "../services/gateway-orchestrator.ts";
 
 const supervisedFlag = Options.boolean("supervised").pipe(
   Options.withAlias("s"),
@@ -20,18 +10,6 @@ const supervisedFlag = Options.boolean("supervised").pipe(
   ),
   Options.withDefault(false),
 );
-
-function makeLayer(home?: string) {
-  const base = Layer.mergeAll(BunContext.layer, PathLive(home), LoggerLive);
-  const config = Layer.provide(ConfigLive(home), base);
-  const pidFile = Layer.provide(PidFileLive, base);
-  const health = HealthCheckLive;
-  const gwState = Layer.provide(GatewayStateLive, base);
-  const pm = Layer.provide(ProcessManagerLive, Layer.merge(pidFile, base));
-  const deps = Layer.mergeAll(config, pidFile, health, gwState, pm);
-  const orch = Layer.provide(GatewayOrchestratorLive, deps);
-  return Layer.provide(Layer.merge(orch, deps), base);
-}
 
 const startCommand = Command.make(
   "start",

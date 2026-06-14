@@ -7,11 +7,7 @@
  */
 import { Command, Options } from "@effect/cli";
 import { Console, Effect } from "effect";
-import {
-  BitgetClient,
-  BitgetClientError,
-  toBitgetSymbol,
-} from "../services/bitget-client.ts";
+import { BitgetClient, toBitgetSymbol } from "../services/bitget-client.ts";
 import {
   BitgetConfig,
   requireBitgetCredentials,
@@ -65,18 +61,6 @@ const dryRunOption = Options.boolean("dry-run").pipe(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function catchBitget<A>(
-  program: Effect.Effect<A, BitgetClientError, BitgetClient>,
-): Effect.Effect<void, never, BitgetClient> {
-  return program.pipe(
-    Effect.tap((value) => Console.log(JSON.stringify(value, null, 2))),
-    Effect.catchAll((err) =>
-      Console.log(`❌ Bitget API error: ${err._tag}: ${JSON.stringify(err)}`),
-    ),
-    Effect.map(() => undefined),
-  );
-}
 
 function requireOneOf(
   orderId: string,

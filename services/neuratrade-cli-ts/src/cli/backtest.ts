@@ -10,7 +10,7 @@ import {
   runLocalBacktest,
   type LocalBacktestConfig,
 } from "../services/backtest-engine.ts";
-import { add, compare, subtract } from "../services/decimal.ts";
+import { add, compare } from "../services/decimal.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers

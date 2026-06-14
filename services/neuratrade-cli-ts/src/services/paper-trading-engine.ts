@@ -15,7 +15,6 @@ import { ApiClient, type BacktestSignal } from "./api-client.ts";
 import { BinanceClient, type RawCandle } from "./binance-client.ts";
 import { PaperRepository, type PaperTrade } from "./paper-repository.ts";
 import {
-  abs,
   add,
   compare,
   divide,

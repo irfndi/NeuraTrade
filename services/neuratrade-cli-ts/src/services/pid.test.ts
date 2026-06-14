@@ -4,7 +4,7 @@ import * as os from "os";
 import * as nodePath from "path";
 import { Effect, Layer } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
-import { Path, PathLive } from "./path.ts";
+import { PathLive } from "./path.ts";
 import { PidFile, PidFileLive } from "./pid.ts";
 
 // ---------------------------------------------------------------------------
