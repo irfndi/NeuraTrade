@@ -49,12 +49,16 @@ const modeOption = Options.text("mode").pipe(
 );
 
 const leverageOption = Options.integer("leverage").pipe(
-  Options.withDescription("Futures leverage multiplier (default: 1 = no leverage)"),
+  Options.withDescription(
+    "Futures leverage multiplier (default: 1 = no leverage)",
+  ),
   Options.withDefault(1),
 );
 
 const riskPctOption = Options.text("risk-pct").pipe(
-  Options.withDescription("Capital risked per trade as a decimal, e.g. 0.01 = 1%"),
+  Options.withDescription(
+    "Capital risked per trade as a decimal, e.g. 0.01 = 1%",
+  ),
   Options.withDefault("0.01"),
 );
 
@@ -64,7 +68,9 @@ const stopLossPctOption = Options.text("stop-loss-pct").pipe(
 );
 
 const takeProfitPctOption = Options.text("take-profit-pct").pipe(
-  Options.withDescription("Take-profit distance as a decimal, e.g. 0.015 = 1.5%"),
+  Options.withDescription(
+    "Take-profit distance as a decimal, e.g. 0.015 = 1.5%",
+  ),
   Options.withDefault("0.015"),
 );
 
@@ -81,7 +87,9 @@ const maxHoldHoursOption = Options.integer("max-hold-hours").pipe(
 );
 
 const dryRunOption = Options.boolean("dry-run").pipe(
-  Options.withDescription("Simulate the trade but do not write to the database"),
+  Options.withDescription(
+    "Simulate the trade but do not write to the database",
+  ),
   Options.withDefault(false),
 );
 
@@ -362,14 +370,19 @@ interface ReadinessMetrics {
 }
 
 function computeReadinessMetrics(
-  closed: ReadonlyArray<{ readonly pnl: string | null; readonly entry_at: string; readonly exit_at: string | null }>,
+  closed: ReadonlyArray<{
+    readonly pnl: string | null;
+    readonly entry_at: string;
+    readonly exit_at: string | null;
+  }>,
 ): ReadinessMetrics {
   const trades = closed
     .filter((t) => t.pnl !== null && t.exit_at !== null)
     .map((t) => ({
       pnl: t.pnl as string,
       holdHours:
-        (new Date(t.exit_at as string).getTime() - new Date(t.entry_at).getTime()) /
+        (new Date(t.exit_at as string).getTime() -
+          new Date(t.entry_at).getTime()) /
         3_600_000,
     }));
 
@@ -394,10 +407,7 @@ function computeReadinessMetrics(
   );
 
   const grossProfit = wins.reduce((sum, t) => add(sum, t.pnl), "0");
-  const grossLoss = losses.reduce(
-    (sum, t) => add(sum, abs(t.pnl)),
-    "0",
-  );
+  const grossLoss = losses.reduce((sum, t) => add(sum, abs(t.pnl)), "0");
   const profitFactor =
     compare(grossLoss, "0") === 0
       ? compare(grossProfit, "0") === 0

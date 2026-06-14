@@ -116,7 +116,10 @@ function toPctDecimal(pct: number): string {
 // Technical indicators
 // ---------------------------------------------------------------------------
 
-function ema(values: ReadonlyArray<number>, period: number): Array<number | null> {
+function ema(
+  values: ReadonlyArray<number>,
+  period: number,
+): Array<number | null> {
   const out: Array<number | null> = [];
   if (period <= 0 || values.length < period) {
     for (let i = 0; i < values.length; i++) out.push(null);
@@ -141,7 +144,10 @@ function ema(values: ReadonlyArray<number>, period: number): Array<number | null
   return out;
 }
 
-function sma(values: ReadonlyArray<number>, period: number): Array<number | null> {
+function sma(
+  values: ReadonlyArray<number>,
+  period: number,
+): Array<number | null> {
   const out: Array<number | null> = [];
   let sum = 0;
   for (let i = 0; i < values.length; i++) {
@@ -153,7 +159,10 @@ function sma(values: ReadonlyArray<number>, period: number): Array<number | null
   return out;
 }
 
-function rsi(closes: ReadonlyArray<number>, period: number): Array<number | null> {
+function rsi(
+  closes: ReadonlyArray<number>,
+  period: number,
+): Array<number | null> {
   const out: Array<number | null> = [];
   let avgGain = 0;
   let avgLoss = 0;
@@ -264,7 +273,10 @@ function adx(
 
     const diPlus = prevTr === 0 ? 0 : (100 * prevDmPlus) / prevTr;
     const diMinus = prevTr === 0 ? 0 : (100 * prevDmMinus) / prevTr;
-    const dx = diPlus + diMinus === 0 ? 0 : (100 * Math.abs(diPlus - diMinus)) / (diPlus + diMinus);
+    const dx =
+      diPlus + diMinus === 0
+        ? 0
+        : (100 * Math.abs(diPlus - diMinus)) / (diPlus + diMinus);
 
     if (prevAdx === null) {
       prevAdx = dx;
@@ -314,8 +326,7 @@ function generateSignal(
   // Volatility breakout: close above/below the recent N-candle range.
   const brokeHigh =
     prevSnapshot !== null && snapshot.close > snapshot.highestHigh;
-  const brokeLow =
-    prevSnapshot !== null && snapshot.close < snapshot.lowestLow;
+  const brokeLow = prevSnapshot !== null && snapshot.close < snapshot.lowestLow;
 
   if (inUptrend && brokeHigh) {
     return "long";
@@ -331,13 +342,21 @@ function generateSignal(
 // Trade math
 // ---------------------------------------------------------------------------
 
-function stopLossPrice(entry: string, side: "long" | "short", slPct: string): string {
+function stopLossPrice(
+  entry: string,
+  side: "long" | "short",
+  slPct: string,
+): string {
   return side === "long"
     ? multiply(entry, subtract("1", slPct))
     : multiply(entry, add("1", slPct));
 }
 
-function takeProfitPrice(entry: string, side: "long" | "short", tpPct: string): string {
+function takeProfitPrice(
+  entry: string,
+  side: "long" | "short",
+  tpPct: string,
+): string {
   return side === "long"
     ? multiply(entry, add("1", tpPct))
     : multiply(entry, subtract("1", tpPct));
@@ -402,10 +421,7 @@ function closePnl(
   return { pnl, pnlPct, fees };
 }
 
-function updateTrailingStop(
-  trade: OpenTrade,
-  candle: Candle,
-): OpenTrade {
+function updateTrailingStop(trade: OpenTrade, candle: Candle): OpenTrade {
   if (compare(trade.trailingStop, zero) === 0) return trade;
   if (trade.side === "long") {
     const trail = multiply(candle.high, subtract("1", trade.trailingStop));
@@ -518,16 +534,10 @@ function runSymbolBacktest(
       // threshold and (100 - rsiExitLevel) as the short oversold threshold.
       // When rsiExitLevel >= 100 the exit is effectively disabled.
       const shortRsiExitLevel = 100 - config.rsiExitLevel;
-      if (
-        openTrade.side === "long" &&
-        rsiVal >= config.rsiExitLevel
-      ) {
+      if (openTrade.side === "long" && rsiVal >= config.rsiExitLevel) {
         exitPrice = candle.close;
         exitReason = "rsi_exit";
-      } else if (
-        openTrade.side === "short" &&
-        rsiVal <= shortRsiExitLevel
-      ) {
+      } else if (openTrade.side === "short" && rsiVal <= shortRsiExitLevel) {
         exitPrice = candle.close;
         exitReason = "rsi_exit";
       }
@@ -644,8 +654,14 @@ function runSymbolBacktest(
     // Enter at the breakout level rather than the candle close for a tighter,
     // more realistic fill price. Adverse slippage is applied to the fill price.
     const rawEntryPrice =
-      signal === "long" ? String(snapshot.highestHigh) : String(snapshot.lowestLow);
-    const entryPrice = applyEntrySlippage(rawEntryPrice, signal, config.slippagePct);
+      signal === "long"
+        ? String(snapshot.highestHigh)
+        : String(snapshot.lowestLow);
+    const entryPrice = applyEntrySlippage(
+      rawEntryPrice,
+      signal,
+      config.slippagePct,
+    );
     const { size, notional } = positionSize(
       riskCapital,
       config.riskPct,
@@ -751,21 +767,32 @@ export function runLocalBacktest(
         ? zero
         : multiply(divide(totalPnl, config.initialCapital), hundred);
 
-    const winningTrades = allTrades.filter((t) => compare(t.pnl, zero) > 0).length;
-    const losingTrades = allTrades.filter((t) => compare(t.pnl, zero) < 0).length;
+    const winningTrades = allTrades.filter(
+      (t) => compare(t.pnl, zero) > 0,
+    ).length;
+    const losingTrades = allTrades.filter(
+      (t) => compare(t.pnl, zero) < 0,
+    ).length;
     const winRate =
       allTrades.length === 0
         ? zero
-        : multiply(divide(String(winningTrades), String(allTrades.length)), hundred);
+        : multiply(
+            divide(String(winningTrades), String(allTrades.length)),
+            hundred,
+          );
 
     const grossProfit = allTrades
       .filter((t) => compare(t.pnl, zero) > 0)
       .reduce((sum, t) => add(sum, t.pnl), zero);
     const grossLoss = abs(
-      allTrades.filter((t) => compare(t.pnl, zero) < 0).reduce((sum, t) => add(sum, t.pnl), zero),
+      allTrades
+        .filter((t) => compare(t.pnl, zero) < 0)
+        .reduce((sum, t) => add(sum, t.pnl), zero),
     );
     const profitFactor =
-      compare(grossLoss, zero) === 0 ? grossProfit : divide(grossProfit, grossLoss);
+      compare(grossLoss, zero) === 0
+        ? grossProfit
+        : divide(grossProfit, grossLoss);
 
     // Max drawdown from trade-by-trade equity curve.
     let peak = config.initialCapital;
@@ -776,7 +803,9 @@ export function runLocalBacktest(
       if (compare(runningCapital, peak) > 0) peak = runningCapital;
       const drawdown = subtract(peak, runningCapital);
       const drawdownPct =
-        compare(peak, zero) === 0 ? zero : multiply(divide(drawdown, peak), hundred);
+        compare(peak, zero) === 0
+          ? zero
+          : multiply(divide(drawdown, peak), hundred);
       if (compare(drawdownPct, maxDrawdown) > 0) maxDrawdown = drawdownPct;
     }
 

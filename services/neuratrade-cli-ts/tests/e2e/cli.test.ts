@@ -125,7 +125,12 @@ describe("CLI e2e", () => {
         "0.001",
         "--dry-run",
       ],
-      { NEURATRADE_HOME: home },
+      {
+        NEURATRADE_HOME: home,
+        BITGET_API_KEY: "",
+        BITGET_API_SECRET: "",
+        BITGET_PASSPHRASE: "",
+      },
     );
     expect(exitCode).toBe(1);
     expect(stdout + stderr).toContain("Bitget credentials missing");

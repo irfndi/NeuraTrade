@@ -40,7 +40,10 @@ const basePosition = (
 function run(
   order: BitgetFuturesOrderRequest,
   positions: ReadonlyArray<BitgetFuturesPosition> = [],
-  leverageInfo: ReadonlyArray<{ marginMode: "isolated" | "crossed"; leverage: string }> = [],
+  leverageInfo: ReadonlyArray<{
+    marginMode: "isolated" | "crossed";
+    leverage: string;
+  }> = [],
   intendedLeverage?: string,
 ) {
   return Effect.runPromise(
@@ -72,10 +75,9 @@ describe("BitgetFuturesSafety", () => {
   });
 
   it("rejects reduce-only buy without a short position", async () => {
-    const result = await run(
-      baseOrder({ side: "buy", reduceOnly: true }),
-      [basePosition({ holdSide: "long" })],
-    );
+    const result = await run(baseOrder({ side: "buy", reduceOnly: true }), [
+      basePosition({ holdSide: "long" }),
+    ]);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toContain("no short position to reduce");
@@ -100,20 +102,18 @@ describe("BitgetFuturesSafety", () => {
   });
 
   it("rejects margin-mode mismatch with existing same-side position", async () => {
-    const result = await run(
-      baseOrder({ marginMode: "isolated" }),
-      [basePosition({ holdSide: "long", marginMode: "crossed" })],
-    );
+    const result = await run(baseOrder({ marginMode: "isolated" }), [
+      basePosition({ holdSide: "long", marginMode: "crossed" }),
+    ]);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toContain("marginMode isolated conflicts");
   });
 
   it("accepts matching margin-mode with existing same-side position", async () => {
-    const result = await run(
-      baseOrder({ marginMode: "crossed" }),
-      [basePosition({ holdSide: "long", marginMode: "crossed" })],
-    );
+    const result = await run(baseOrder({ marginMode: "crossed" }), [
+      basePosition({ holdSide: "long", marginMode: "crossed" }),
+    ]);
     expect(result.ok).toBe(true);
   });
 

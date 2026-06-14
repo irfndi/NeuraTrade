@@ -1,8 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { Effect, Layer } from "effect";
-import { runLocalBacktest, type LocalBacktestConfig } from "./backtest-engine.ts";
-import { MarketRepository, MarketRepositoryLive, type Candle } from "./market-repository.ts";
+import {
+  runLocalBacktest,
+  type LocalBacktestConfig,
+} from "./backtest-engine.ts";
+import {
+  MarketRepository,
+  MarketRepositoryLive,
+  type Candle,
+} from "./market-repository.ts";
 import { SqliteClient, type SqliteClientImpl } from "./sqlite.ts";
 
 // ---------------------------------------------------------------------------
@@ -147,11 +154,7 @@ function baseConfig(): LocalBacktestConfig {
   };
 }
 
-function makeFlatCandle(
-  timestamp: Date,
-  price: number,
-  volume = 1,
-): Candle {
+function makeFlatCandle(timestamp: Date, price: number, volume = 1): Candle {
   return {
     exchangeId: 1,
     pairId: 1,
@@ -188,10 +191,20 @@ describe("runLocalBacktest", () => {
       // Breakout close above prior 5-candle high.
       candles[25] = { ...candles[25], high: "100", close: "101" };
       // Next candle hits TP at 101.
-      candles[26] = { ...candles[26], high: "102", low: "100.5", close: "101.5" };
+      candles[26] = {
+        ...candles[26],
+        high: "102",
+        low: "100.5",
+        close: "101.5",
+      };
       // Fill rest flat.
       for (let i = 27; i < 30; i++) {
-        candles[i] = { ...candles[i], high: "101.5", low: "101.5", close: "101.5" };
+        candles[i] = {
+          ...candles[i],
+          high: "101.5",
+          low: "101.5",
+          close: "101.5",
+        };
       }
 
       yield* repo.insertCandles(candles);
@@ -292,9 +305,19 @@ describe("runLocalBacktest", () => {
         });
       }
       candles[25] = { ...candles[25], high: "100", close: "101" };
-      candles[26] = { ...candles[26], high: "102", low: "100.5", close: "101.5" };
+      candles[26] = {
+        ...candles[26],
+        high: "102",
+        low: "100.5",
+        close: "101.5",
+      };
       for (let i = 27; i < 30; i++) {
-        candles[i] = { ...candles[i], high: "101.5", low: "101.5", close: "101.5" };
+        candles[i] = {
+          ...candles[i],
+          high: "101.5",
+          low: "101.5",
+          close: "101.5",
+        };
       }
 
       yield* repo.insertCandles(candles);
@@ -309,7 +332,9 @@ describe("runLocalBacktest", () => {
       });
 
       expect(withSlip.totalTrades).toBe(noSlip.totalTrades);
-      expect(Number(withSlip.finalCapital)).toBeLessThan(Number(noSlip.finalCapital));
+      expect(Number(withSlip.finalCapital)).toBeLessThan(
+        Number(noSlip.finalCapital),
+      );
     });
     await runBacktest(program);
   });
@@ -332,7 +357,12 @@ describe("runLocalBacktest", () => {
       candles[25] = { ...candles[25], high: "100", close: "101" };
       // Price stays inside SL/TP corridor for the next 24 candles.
       for (let i = 26; i < 50; i++) {
-        candles[i] = { ...candles[i], high: "100.8", low: "100.2", close: "100.5" };
+        candles[i] = {
+          ...candles[i],
+          high: "100.8",
+          low: "100.2",
+          close: "100.5",
+        };
       }
 
       yield* repo.insertCandles(candles);

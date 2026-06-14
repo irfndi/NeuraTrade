@@ -139,7 +139,9 @@ const leverageOption = Options.integer("leverage").pipe(
 );
 
 const riskPctOption = Options.text("risk-pct").pipe(
-  Options.withDescription("Capital risked per trade as decimal (default: 0.01)"),
+  Options.withDescription(
+    "Capital risked per trade as decimal (default: 0.01)",
+  ),
   Options.withDefault("0.01"),
 );
 
@@ -272,7 +274,6 @@ const perSymbolOption = Options.boolean("per-symbol").pipe(
   Options.withDefault(false),
 );
 
-
 // ---------------------------------------------------------------------------
 // Command
 // ---------------------------------------------------------------------------
@@ -368,7 +369,11 @@ const runCommand = Command.make(
         ),
       ),
     ),
-).pipe(Command.withDescription("Run a deterministic scalping backtest via the backend"));
+).pipe(
+  Command.withDescription(
+    "Run a deterministic scalping backtest via the backend",
+  ),
+);
 
 const localCommand = Command.make(
   "local",
@@ -473,7 +478,9 @@ const localCommand = Command.make(
       yield* Console.log("\nSummary:");
       yield* Console.log(`  initial_capital: ${result.initialCapital}`);
       yield* Console.log(`  final_capital:   ${result.finalCapital}`);
-      yield* Console.log(`  total_pnl:       ${result.totalPnl} (${result.totalPnlPct}%)`);
+      yield* Console.log(
+        `  total_pnl:       ${result.totalPnl} (${result.totalPnlPct}%)`,
+      );
       yield* Console.log(`  total_trades:    ${result.totalTrades}`);
       yield* Console.log(`  winning_trades:  ${result.winningTrades}`);
       yield* Console.log(`  losing_trades:   ${result.losingTrades}`);
@@ -483,7 +490,10 @@ const localCommand = Command.make(
       yield* Console.log(`  sharpe_ratio:    ${result.sharpeRatio}`);
 
       if (opts.perSymbol) {
-        const grouped = new Map<string, { wins: number; losses: number; pnl: string }>();
+        const grouped = new Map<
+          string,
+          { wins: number; losses: number; pnl: string }
+        >();
         for (const t of result.trades) {
           const g = grouped.get(t.symbol) ?? { wins: 0, losses: 0, pnl: "0" };
           grouped.set(t.symbol, {
@@ -510,7 +520,9 @@ const localCommand = Command.make(
           );
         }
         if (result.trades.length > 50) {
-          yield* Console.log(`  ... and ${result.trades.length - 50} more trades`);
+          yield* Console.log(
+            `  ... and ${result.trades.length - 50} more trades`,
+          );
         }
       }
     }).pipe(
@@ -520,7 +532,11 @@ const localCommand = Command.make(
         ),
       ),
     ),
-).pipe(Command.withDescription("Run a local deterministic scalping backtest on SQLite OHLCV data"));
+).pipe(
+  Command.withDescription(
+    "Run a local deterministic scalping backtest on SQLite OHLCV data",
+  ),
+);
 
 export const backtestCommand = Command.make("backtest", {}, () =>
   Console.log("Use 'backtest scalping run' or 'backtest scalping local'."),

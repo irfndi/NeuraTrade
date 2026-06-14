@@ -70,14 +70,24 @@ describe("PaperTradingEngine helpers", () => {
   });
 
   it("calculates long close PnL with leverage and two-sided fees", () => {
-    const trade = makeTrade({ side: "buy", entry_price: "100", size: "0.1", notional: "10" });
+    const trade = makeTrade({
+      side: "buy",
+      entry_price: "100",
+      size: "0.1",
+      notional: "10",
+    });
     const result = calculateClosePnl(trade, "102", 10, "0.001");
     expect(result.pnl).toBe("1.9798");
     expect(result.fees).toBe("0.0202");
   });
 
   it("calculates short close PnL with leverage and two-sided fees", () => {
-    const trade = makeTrade({ side: "sell", entry_price: "100", size: "0.1", notional: "10" });
+    const trade = makeTrade({
+      side: "sell",
+      entry_price: "100",
+      size: "0.1",
+      notional: "10",
+    });
     const result = calculateClosePnl(trade, "98", 10, "0.001");
     expect(result.pnl).toBe("1.9802");
     expect(result.fees).toBe("0.0198");
@@ -131,7 +141,13 @@ describe("PaperTradingEngine helpers", () => {
     const config = { ...baseConfig, trailingStopPct: "0.004" };
     const candles = [
       candle(new Date("2026-01-01T01:00:00Z"), "100", "103", "102", "102.5"),
-      candle(new Date("2026-01-01T02:00:00Z"), "102.5", "102.5", "101.8", "101.9"),
+      candle(
+        new Date("2026-01-01T02:00:00Z"),
+        "102.5",
+        "102.5",
+        "101.8",
+        "101.9",
+      ),
     ];
     const exit = checkExit(trade, candles, config);
     expect(exit).not.toBeNull();

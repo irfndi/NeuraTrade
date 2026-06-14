@@ -120,7 +120,7 @@ const verifyCommand = Command.make("verify", {}, () =>
     Effect.catchAll((err: unknown) => {
       const details =
         err && typeof err === "object"
-          ? `${("_tag" in err ? String(err._tag) : "")}: ${JSON.stringify(err)}`
+          ? `${"_tag" in err ? String(err._tag) : ""}: ${JSON.stringify(err)}`
           : String(err);
       return Console.log(`❌ verify failed: ${details}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(details))),

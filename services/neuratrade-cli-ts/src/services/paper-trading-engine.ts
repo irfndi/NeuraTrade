@@ -178,8 +178,7 @@ export function checkExit(
   // Time stop.
   const lastCandle = candles[candles.length - 1];
   const entryTime = new Date(trade.entry_at).getTime();
-  const holdHours =
-    (lastCandle.timestamp.getTime() - entryTime) / 3_600_000;
+  const holdHours = (lastCandle.timestamp.getTime() - entryTime) / 3_600_000;
   if (holdHours >= config.maxHoldHours) {
     return { exitPrice: lastCandle.close, exitReason: "time_stop" };
   }
@@ -193,7 +192,11 @@ export function calculatePositionSize(
   entryPrice: string,
   stopLossPct: string,
   leverage: number,
-): { readonly size: string; readonly notional: string; readonly margin: string } {
+): {
+  readonly size: string;
+  readonly notional: string;
+  readonly margin: string;
+} {
   const riskAmount = multiply(capital, riskPct);
   const slDistance = multiply(entryPrice, stopLossPct);
   const size = divide(riskAmount, slDistance);
@@ -294,7 +297,10 @@ export const PaperTradingEngineLiveImpl: PaperTradingEngineImpl = {
       );
 
       // 3. Manage any open position first (SL/TP/trailing/time stop).
-      const openTrade = yield* repo.getOpenTrade(config.symbol, config.exchange);
+      const openTrade = yield* repo.getOpenTrade(
+        config.symbol,
+        config.exchange,
+      );
       if (openTrade !== null) {
         const exit = checkExit(openTrade, candles, config);
         if (exit !== null) {
@@ -416,7 +422,11 @@ export const PaperTradingEngineLiveImpl: PaperTradingEngineImpl = {
       }
 
       // Reverse long -> short.
-      if (action === "sell" && openTrade !== null && positionSide(openTrade) === "long") {
+      if (
+        action === "sell" &&
+        openTrade !== null &&
+        positionSide(openTrade) === "long"
+      ) {
         const { pnl, pnlPct, fees } = calculateClosePnl(
           openTrade,
           entryPrice,
@@ -443,7 +453,11 @@ export const PaperTradingEngineLiveImpl: PaperTradingEngineImpl = {
       }
 
       // Reverse short -> long.
-      if (action === "buy" && openTrade !== null && positionSide(openTrade) === "short") {
+      if (
+        action === "buy" &&
+        openTrade !== null &&
+        positionSide(openTrade) === "short"
+      ) {
         const { pnl, pnlPct, fees } = calculateClosePnl(
           openTrade,
           entryPrice,
