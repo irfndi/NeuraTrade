@@ -83,18 +83,18 @@ func TestApplyScalpingPolicyConfigFromEnv_PreservesDefaultsWhenUnset(t *testing.
 
 func TestScalpingPolicyConfig_Normalized_ClampsAndFallsBack(t *testing.T) {
 	cfg := ScalpingPolicyConfig{
-		StrongImbalanceFloor:     1.5,
-		NeutralImbalanceFloor:    -0.5,
-		BuyRangeMax:              150.0,
-		SellRangeMin:             -10.0,
-		ContinuationRangeBuffer:  80.0,
-		BreakdownSellRangeMin:    -10.0,
-		ConfidenceBase:           1.5,
-		ConfidenceImbalanceW:     20.0,
-		ConfidenceLiquidityW:     -0.1,
-		ConfidenceRangeW:         20.0,
-		ConfidenceVolumeW:        -0.1,
-		ConfidenceVolumeLogBase:  500.0,
+		StrongImbalanceFloor:    1.5,
+		NeutralImbalanceFloor:   -0.5,
+		BuyRangeMax:             150.0,
+		SellRangeMin:            -10.0,
+		ContinuationRangeBuffer: 80.0,
+		BreakdownSellRangeMin:   -10.0,
+		ConfidenceBase:          1.5,
+		ConfidenceImbalanceW:    20.0,
+		ConfidenceLiquidityW:    -0.1,
+		ConfidenceRangeW:        20.0,
+		ConfidenceVolumeW:       -0.1,
+		ConfidenceVolumeLogBase: 500.0,
 	}
 	got := cfg.Normalized()
 
