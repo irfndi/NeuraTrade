@@ -515,27 +515,12 @@ const orderCancelCommand = Command.make(
 ).pipe(Command.withDescription("Cancel a Bitget futures order"));
 
 // ---------------------------------------------------------------------------
-// order namespace
-// ---------------------------------------------------------------------------
-
-const orderCommand = Command.make("order", {}, () =>
-  Console.log("Usage: neuratrade bitget futures order <place|status|cancel>"),
-).pipe(
-  Command.withDescription("Bitget futures order management"),
-  Command.withSubcommands([
-    orderPlaceCommand,
-    orderStatusCommand,
-    orderCancelCommand,
-  ]),
-);
-
-// ---------------------------------------------------------------------------
 // Public export
 // ---------------------------------------------------------------------------
 
 export const bitgetFuturesCommand = Command.make("futures", {}, () =>
   Console.log(
-    "Usage: neuratrade bitget futures <contracts|ticker|balance|positions|leverage|margin-mode|position-mode|order>",
+    "Usage: neuratrade bitget futures <contracts|ticker|balance|positions|leverage|margin-mode|position-mode|place|status|cancel>",
   ),
 ).pipe(
   Command.withDescription("Bitget futures (perpetual) operations"),
@@ -547,6 +532,8 @@ export const bitgetFuturesCommand = Command.make("futures", {}, () =>
     leverageCommand,
     marginModeCommand,
     positionModeCommand,
-    orderCommand,
+    orderPlaceCommand,
+    orderStatusCommand,
+    orderCancelCommand,
   ]),
 );

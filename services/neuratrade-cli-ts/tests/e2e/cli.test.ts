@@ -110,12 +110,11 @@ describe("CLI e2e", () => {
     expect(stdout).toContain("order place");
   });
 
-  it("bitget futures order place --dry-run fails gracefully without credentials", async () => {
+  it("bitget futures place --dry-run fails gracefully without credentials", async () => {
     const { exitCode, stdout, stderr } = await runCli(
       [
         "bitget",
         "futures",
-        "order",
         "place",
         "--symbol",
         "BTC/USDT:USDT",
