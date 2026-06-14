@@ -11,6 +11,7 @@ import {
   type LocalBacktestConfig,
 } from "../services/backtest-engine.ts";
 import { add, compare } from "../services/decimal.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -364,7 +365,7 @@ const runCommand = Command.make(
       yield* printSummaryField(result.summary, "max_drawdown_pct");
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ Backtest failed: ${err.message}`).pipe(
+        Console.log(`❌ Backtest failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),
@@ -527,7 +528,7 @@ const localCommand = Command.make(
       }
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ Local backtest failed: ${err.message}`).pipe(
+        Console.log(`❌ Local backtest failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),

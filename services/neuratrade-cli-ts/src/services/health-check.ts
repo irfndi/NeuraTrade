@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect";
+import { errorMessage } from "../utils/error-message.ts";
 
 export interface ProbeHTTPResult {
   readonly healthy: boolean;
@@ -51,11 +52,7 @@ function probeHTTPOnce(
             redirect: "follow",
           }),
         catch: (err) =>
-          new Error(
-            `HTTP probe failed for ${url}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          ),
+          new Error(`HTTP probe failed for ${url}: ${errorMessage(err)}`),
       }).pipe(
         Effect.catchAll((err) =>
           Effect.succeed({ _failed: true, error: err } as {
@@ -113,9 +110,7 @@ function probeProcessOnce(
       },
       catch: (err) =>
         new Error(
-          `pgrep failed for pattern "${pattern}": ${
-            err instanceof Error ? err.message : String(err)
-          }`,
+          `pgrep failed for pattern "${pattern}": ${errorMessage(err)}`,
         ),
     }).pipe(
       Effect.catchAll((err) =>

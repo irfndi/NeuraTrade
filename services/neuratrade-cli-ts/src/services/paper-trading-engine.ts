@@ -14,6 +14,7 @@ import { Context, Data, Effect, Layer } from "effect";
 import { ApiClient, type BacktestSignal } from "./api-client.ts";
 import { BinanceClient, type RawCandle } from "./binance-client.ts";
 import { PaperRepository, type PaperTrade } from "./paper-repository.ts";
+import { errorMessage } from "../utils/error-message.ts";
 import {
   add,
   compare,
@@ -490,7 +491,7 @@ export const PaperTradingEngineLiveImpl: PaperTradingEngineImpl = {
       Effect.catchAll((err) =>
         Effect.fail(
           new PaperTradingError({
-            reason: err instanceof Error ? err.message : String(err),
+            reason: errorMessage(err),
           }),
         ),
       ),

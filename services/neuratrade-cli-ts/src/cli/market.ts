@@ -10,6 +10,7 @@ import {
   type Candle,
   type CoverageGap,
 } from "../services/market-repository.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Option definitions
@@ -198,7 +199,7 @@ const fetchUniverseCommand = Command.make(
       yield* Console.log(`✅ Persisted ${selected.length} trading pairs`);
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ fetch-universe failed: ${err.message}`).pipe(
+        Console.log(`❌ fetch-universe failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),
@@ -305,7 +306,7 @@ const fetchCandlesCommand = Command.make(
       );
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ fetch-candles failed: ${err.message}`).pipe(
+        Console.log(`❌ fetch-candles failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),
@@ -376,7 +377,7 @@ const coverageCommand = Command.make(
       }
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ coverage failed: ${err.message}`).pipe(
+        Console.log(`❌ coverage failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),

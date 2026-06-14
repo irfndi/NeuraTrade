@@ -1,6 +1,7 @@
 import { Command } from "@effect/cli";
 import { Console, Effect } from "effect";
 import { ApiClient } from "../services/api-client.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 export const healthCommand = Command.make("health", {}, () =>
   Effect.gen(function* () {
@@ -32,7 +33,7 @@ export const healthCommand = Command.make("health", {}, () =>
     }
   }).pipe(
     Effect.catchAll((err) =>
-      Console.log(`❌ ${err.message}`).pipe(
+      Console.log(`❌ ${errorMessage(err)}`).pipe(
         Effect.flatMap(() => Effect.fail(err)),
       ),
     ),

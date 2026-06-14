@@ -8,6 +8,7 @@ import { Command, Options } from "@effect/cli";
 import { Console, Effect } from "effect";
 import { PaperRepository } from "../services/paper-repository.ts";
 import { PaperTradingEngine } from "../services/paper-trading-engine.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -164,7 +165,7 @@ const tradeCommand = Command.make(
       yield* runCycle();
     }).pipe(
       Effect.catchAll((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         return Console.log(`❌ paper trade failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
         );
@@ -224,7 +225,7 @@ const statusCommand = Command.make(
       }
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ paper status failed: ${err.message}`).pipe(
+        Console.log(`❌ paper status failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),
@@ -284,7 +285,7 @@ const closeCommand = Command.make(
       );
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ paper close failed: ${err.message}`).pipe(
+        Console.log(`❌ paper close failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),

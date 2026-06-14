@@ -13,6 +13,7 @@ import * as nodePath from "path";
 import * as crypto from "crypto";
 import { Context, Data, Effect, Layer } from "effect";
 import { Path } from "./path.ts";
+import { errorMessage } from "../utils/error-message.ts";
 import { ProcessManager } from "./process-manager.ts";
 import { HealthCheck } from "./health-check.ts";
 import { GatewayState, type GatewayStateService } from "./gateway-state.ts";
@@ -261,7 +262,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
             Effect.mapError(
               (err) =>
                 new GatewayOrchestratorError({
-                  message: `Failed to resolve backend binary: ${err.message}`,
+                  message: `Failed to resolve backend binary: ${errorMessage(err)}`,
                   cause: err,
                 }),
             ),
@@ -279,7 +280,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
             Effect.mapError(
               (err) =>
                 new GatewayOrchestratorError({
-                  message: `Failed to start backend: ${err.message}`,
+                  message: `Failed to start backend: ${errorMessage(err)}`,
                   cause: err,
                 }),
             ),
@@ -335,7 +336,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
               Effect.mapError(
                 (err) =>
                   new GatewayOrchestratorError({
-                    message: `Failed to resolve telegram binary: ${err.message}`,
+                    message: `Failed to resolve telegram binary: ${errorMessage(err)}`,
                     cause: err,
                   }),
               ),
@@ -362,7 +363,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
               Effect.mapError(
                 (err) =>
                   new GatewayOrchestratorError({
-                    message: `Failed to start telegram: ${err.message}`,
+                    message: `Failed to start telegram: ${errorMessage(err)}`,
                     cause: err,
                   }),
               ),

@@ -551,7 +551,10 @@ describe("PaperTradingEngineLiveImpl", () => {
       failure?: { _tag?: string; reason?: unknown };
     };
     expect(serialized.failure?._tag).toBe("PaperTradingError");
-    expect(typeof serialized.failure?.reason).toBe("string");
+    const reason = String(serialized.failure?.reason ?? "");
+    expect(reason).not.toBe("");
+    expect(reason).toContain("backend down");
+    expect(reason).toContain("/backtest");
   });
 
   it("uses the latest eligible signal, skipping a trailing rejected one", async () => {

@@ -5,6 +5,7 @@
  * Uses Effect-TS for typed errors and dependency injection.
  */
 import { Context, Data, Effect, Layer } from "effect";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -230,7 +231,7 @@ function apiRequest(
           return new TimeoutError({ endpoint, timeoutMs });
         }
         return new NetworkError({
-          cause: error instanceof Error ? error.message : String(error),
+          cause: errorMessage(error),
           endpoint,
         });
       },
@@ -259,7 +260,7 @@ function parseJson<T>(
     try: () => response.json() as Promise<T>,
     catch: (error): JsonParseError =>
       new JsonParseError({
-        cause: error instanceof Error ? error.message : String(error),
+        cause: errorMessage(error),
         endpoint,
       }),
   });

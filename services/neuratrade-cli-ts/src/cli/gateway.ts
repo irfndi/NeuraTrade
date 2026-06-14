@@ -2,6 +2,7 @@ import { Command, Options } from "@effect/cli";
 import { Console, Effect } from "effect";
 import { resolvedConfigEffect } from "../services/config.ts";
 import { GatewayOrchestrator } from "../services/gateway-orchestrator.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 const supervisedFlag = Options.boolean("supervised").pipe(
   Options.withAlias("s"),
@@ -36,7 +37,7 @@ const startCommand = Command.make(
       );
     }).pipe(
       Effect.catchAll((err) =>
-        Console.log(`❌ Gateway start failed: ${err.message}`).pipe(
+        Console.log(`❌ Gateway start failed: ${errorMessage(err)}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
       ),

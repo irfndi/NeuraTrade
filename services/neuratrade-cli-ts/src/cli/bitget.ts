@@ -14,6 +14,7 @@ import {
 } from "../services/bitget-config.ts";
 import { validateOrder } from "../services/bitget-guards.ts";
 import { bitgetFuturesCommand } from "./bitget-futures.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -131,7 +132,7 @@ const balanceCommand = Command.make("balance", {}, () =>
     }
   }).pipe(
     Effect.catchAll((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return Console.log(`❌ balance failed: ${message}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(message))),
       );
@@ -157,7 +158,7 @@ const tickerCommand = Command.make(
       yield* Console.log(`  vol24: ${ticker.volume24h}`);
     }).pipe(
       Effect.catchAll((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         return Console.log(`❌ ticker failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
         );
@@ -184,7 +185,7 @@ const instrumentsCommand = Command.make("instruments", {}, () =>
     }
   }).pipe(
     Effect.catchAll((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return Console.log(`❌ instruments failed: ${message}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(message))),
       );
@@ -273,7 +274,7 @@ const orderPlaceCommand = Command.make(
       yield* Console.log(`  status:    ${order.status}`);
     }).pipe(
       Effect.catchAll((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         return Console.log(`❌ place order failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
         );
@@ -311,7 +312,7 @@ const orderStatusCommand = Command.make(
       );
     }).pipe(
       Effect.catchAll((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         return Console.log(`❌ order status failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
         );
@@ -342,7 +343,7 @@ const orderCancelCommand = Command.make(
       yield* Console.log("✅ Order cancel request sent");
     }).pipe(
       Effect.catchAll((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         return Console.log(`❌ cancel order failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
         );

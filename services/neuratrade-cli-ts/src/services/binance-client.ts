@@ -6,6 +6,7 @@
  */
 import { Context, Data, Effect, Layer } from "effect";
 import { RateLimiter } from "./rate-limiter.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -154,7 +155,7 @@ function fetchBinance<T>(
           });
         }
         return new BinanceNetworkError({
-          cause: error instanceof Error ? error.message : String(error),
+          cause: errorMessage(error),
           endpoint,
         });
       },
@@ -185,7 +186,7 @@ function fetchBinance<T>(
       catch: (error): BinanceClientError =>
         new BinanceApiError({
           status: response.status,
-          body: error instanceof Error ? error.message : String(error),
+          body: errorMessage(error),
           endpoint,
         }),
     });

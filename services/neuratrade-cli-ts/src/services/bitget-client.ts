@@ -9,6 +9,7 @@ import { Context, Data, Effect, Layer } from "effect";
 import * as crypto from "crypto";
 import { RateLimiter } from "./rate-limiter.ts";
 import { BitgetConfig } from "./bitget-config.ts";
+import { errorMessage } from "../utils/error-message.ts";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -432,7 +433,7 @@ function fetchBitget<T>(
           });
         }
         return new BitgetNetworkError({
-          cause: error instanceof Error ? error.message : String(error),
+          cause: errorMessage(error),
           endpoint,
         });
       },
@@ -465,7 +466,7 @@ function fetchBitget<T>(
       catch: (error): BitgetClientError =>
         new BitgetApiError({
           status: response.status,
-          body: error instanceof Error ? error.message : String(error),
+          body: errorMessage(error),
           endpoint,
         }),
     });
