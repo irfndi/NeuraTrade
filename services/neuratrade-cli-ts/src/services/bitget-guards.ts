@@ -11,6 +11,7 @@ import type {
   BitgetInstrument,
   BitgetOrderRequest,
 } from "./bitget-client.ts";
+import { add } from "./decimal.ts";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -232,10 +233,7 @@ function checkBalance(
       // For a limit buy, required quote = size * price * (1 + fee).
       const price = order.orderType === "market" ? "1" : (order.price ?? "1");
       const grossQuote = multiply(order.size, price);
-      const requiredQuote = multiply(
-        grossQuote,
-        (1 + Number(feeRate)).toString(),
-      );
+      const requiredQuote = multiply(grossQuote, add("1", feeRate));
       const availableQuote = findBalance(
         ctx.balances,
         ctx.instrument.quoteCoin,

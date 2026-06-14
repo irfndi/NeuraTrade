@@ -1,22 +1,22 @@
 # Real-Money Readiness — TS Porting Status
 
-> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469`).
+> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186`).
 > Last updated: 2026-06-14.
 
 ## What is now GREEN on the TS side
 
 | Gate | Status | Evidence |
 |---|---|---|
-| `bun test` | 316/316 PASS | 804 assertions, 29 files, 12.7s |
+| `bun test` | 316/316 PASS | 804 assertions, 29 files, ~12.7–14.2s |
 | `bun run typecheck` (`tsc --noEmit`, strict) | PASS | exit 0 |
 | `bun run fmt:check` (prettier 3.8.4) | PASS | all formatted |
-| `bun run lint` (oxlint) | 0 errors, 0–33 warnings | warnings being cleaned (subagent in flight) |
+| `bun run lint` (oxlint) | 0 errors, 0 warnings | 95 rules, 68 files |
 | Backend Go (ai_scalping, scalping_backtest, paper_trade) | 184/184 PASS | `-race` enabled |
 | Money math (no float64) | ✅ | Go: `shopspring/decimal`; TS: `bigint` scaled integers in `src/services/decimal.ts`; `bitget-client.ts` keeps API wire-format strings |
 | All CLI commands wired | ✅ | `neuratrade {gateway,status,health,doctor,market,backtest,bitget,paper}` — `bitget futures` nested correctly under `bitget` |
 | Paper trading IS profitable | ✅ | 2026-05-30 evidence: 701h continuous, 4 strategies, 67 closed + 18 open, **$546.94 net PnL**, 78.8% win rate, risk limits enforced, backtest comparison verified |
 | Bitget credentials gate works | ✅ | `requireBitgetCredentials` + `BITGET_USE_SANDBOX` plumbing, env + dry-run path verified |
-| Push to origin + PR | ✅ | `feat/ts-cli-phase1` pushed; PR #470 (cherry-picked unique Phase-1 pieces) open with 9/10 CI checks green |
+| Push to origin + PR | ✅ | `feat/ts-cli-phase1` pushed; PR #470 (cherry-picked unique Phase-1 pieces) open, DRAFT, 9/9 CI checks green |
 
 ## What is NOT done (real-money blockers)
 
