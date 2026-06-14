@@ -1,14 +1,25 @@
 import { describe, expect, it } from "bun:test";
+import { Effect, Layer } from "effect";
 import type { RawCandle } from "./binance-client.ts";
 import type { PaperTrade } from "./paper-repository.ts";
 import {
   calculateClosePnl,
   calculatePositionSize,
   checkExit,
+  PaperTradingEngine,
+  PaperTradingEngineLiveImpl,
   stopLossPrice,
   takeProfitPrice,
 } from "./paper-trading-engine.ts";
 import type { PaperTradingConfig } from "./paper-trading-engine.ts";
+import {
+  ApiClient,
+  NetworkError,
+  type BacktestResponse,
+  type BacktestSignal,
+} from "./api-client.ts";
+import { BinanceClient } from "./binance-client.ts";
+import { PaperRepository } from "./paper-repository.ts";
 
 const baseConfig: PaperTradingConfig = {
   symbol: "BTC/USDT",
@@ -166,5 +177,425 @@ describe("PaperTradingEngine helpers", () => {
     expect(exit).not.toBeNull();
     expect(exit?.exitReason).toBe("time_stop");
     expect(exit?.exitPrice).toBe("100.2");
+  });
+});
+
+const baseCandles: ReadonlyArray<RawCandle> = [
+  {
+    timestamp: new Date("2026-01-01T00:00:00Z"),
+    open: "100",
+    high: "100",
+    low: "100",
+    close: "100",
+    volume: "1",
+  },
+];
+
+const engineLayer: Layer.Layer<PaperTradingEngine> = Layer.succeed(
+  PaperTradingEngine,
+  PaperTradingEngineLiveImpl,
+);
+
+function makeMockApiClient(backtest: BacktestResponse): Layer.Layer<ApiClient> {
+  return Layer.succeed(ApiClient, {
+    generateAuthCode: () => Effect.die("not used"),
+    getAIProviders: () => Effect.die("not used"),
+    getAIModels: () => Effect.die("not used"),
+    getPortfolio: () => Effect.die("not used"),
+    getBalance: () => Effect.die("not used"),
+    runScalpingBacktest: () => Effect.succeed(backtest),
+    health: () => Effect.die("not used"),
+  });
+}
+
+function makeMockBinanceClient(
+  candles: ReadonlyArray<RawCandle>,
+): Layer.Layer<BinanceClient> {
+  return Layer.succeed(BinanceClient, {
+    getExchangeInfo: () => Effect.die("not used"),
+    getKlines: () => Effect.succeed(candles),
+  });
+}
+
+function makeMockPaperRepo(overrides: {
+  readonly openTrade?: PaperTrade | null;
+  readonly onOpen?: () => number;
+  readonly onClose?: () => void;
+}): Layer.Layer<PaperRepository> {
+  return Layer.succeed(PaperRepository, {
+    openTrade: () =>
+      overrides.onOpen ? Effect.succeed(overrides.onOpen()) : Effect.succeed(1),
+    closeTrade: () =>
+      overrides.onClose ? Effect.sync(overrides.onClose) : Effect.void,
+    getOpenTrade: () => Effect.succeed(overrides.openTrade ?? null),
+    listOpenTrades: () => Effect.succeed([]),
+    listClosedTrades: () => Effect.succeed([]),
+    getStats: () =>
+      Effect.succeed({
+        open_count: 0,
+        closed_count: 0,
+        total_pnl: "0",
+        win_count: 0,
+        loss_count: 0,
+      }),
+  });
+}
+
+function runEngine(
+  config: PaperTradingConfig,
+  api: Layer.Layer<ApiClient>,
+  binance: Layer.Layer<BinanceClient>,
+  repo: Layer.Layer<PaperRepository>,
+) {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const engine = yield* PaperTradingEngine;
+      return yield* engine.evaluateAndTrade(config);
+    }).pipe(Effect.provide(Layer.mergeAll(api, binance, repo, engineLayer))),
+  );
+}
+
+function makeSignal(overrides: Partial<BacktestSignal>): BacktestSignal {
+  return {
+    signal_id: "sig-1",
+    timestamp: "2026-01-01T00:00:00Z",
+    symbol: "BTC/USDT",
+    exchange: "binance",
+    funnel_stage: "accepted",
+    ...overrides,
+  };
+}
+
+const baseBacktest: BacktestResponse = {
+  run_id: "r1",
+  status: "ok",
+  mode: "deterministic",
+  summary: {},
+  gate_summary: [],
+  signals: [],
+};
+
+describe("PaperTradingEngineLiveImpl", () => {
+  it("returns no_signal when Binance returns no candles", async () => {
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient(baseBacktest),
+      makeMockBinanceClient([]),
+      makeMockPaperRepo({}),
+    );
+    expect(result.action).toBe("no_signal");
+  });
+
+  it("returns no_signal when no accepted signal in window", async () => {
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [
+          makeSignal({ funnel_stage: "rejected", rejection_reason: "no edge" }),
+        ],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({}),
+    );
+    expect(result.action).toBe("no_signal");
+  });
+
+  it("returns no_signal when accepted signal has no actionable side", async () => {
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "hold" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({}),
+    );
+    expect(result.action).toBe("no_signal");
+  });
+
+  it("opens long on buy signal with no open position", async () => {
+    let openCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "buy" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        onOpen: () => {
+          openCalled = true;
+          return 42;
+        },
+      }),
+    );
+    expect(openCalled).toBe(true);
+    expect(result.action).toBe("open_long");
+    expect(result.tradeId).toBe(42);
+  });
+
+  it("opens short on sell signal with no open position", async () => {
+    let openCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "sell" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        onOpen: () => {
+          openCalled = true;
+          return 7;
+        },
+      }),
+    );
+    expect(openCalled).toBe(true);
+    expect(result.action).toBe("open_short");
+    expect(result.tradeId).toBe(7);
+  });
+
+  it("closes an open long when take-profit is hit", async () => {
+    const openLong = makeTrade({
+      side: "buy",
+      entry_price: "100",
+      entry_at: new Date("2026-01-01T00:00:00Z").toISOString(),
+    });
+    const tpCandles = [
+      candle(new Date("2026-01-01T01:00:00Z"), "100", "104", "100", "103"),
+    ];
+    let closeCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient(baseBacktest),
+      makeMockBinanceClient(tpCandles),
+      makeMockPaperRepo({
+        openTrade: openLong,
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(closeCalled).toBe(true);
+    expect(result.action).toBe("close_long");
+    expect(result.pnl).toBeDefined();
+  });
+
+  it("closes an open short when take-profit is hit", async () => {
+    const openShort = makeTrade({
+      side: "sell",
+      entry_price: "100",
+      entry_at: new Date("2026-01-01T00:00:00Z").toISOString(),
+    });
+    const tpCandles = [
+      candle(new Date("2026-01-01T01:00:00Z"), "100", "100", "96", "97"),
+    ];
+    let closeCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient(baseBacktest),
+      makeMockBinanceClient(tpCandles),
+      makeMockPaperRepo({
+        openTrade: openShort,
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(closeCalled).toBe(true);
+    expect(result.action).toBe("close_short");
+  });
+
+  it("reverses an open long to flat on sell signal", async () => {
+    const openLong = makeTrade({
+      side: "buy",
+      entry_price: "100",
+      entry_at: new Date("2026-01-01T00:00:00Z").toISOString(),
+    });
+    let closeCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "sell" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        openTrade: openLong,
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(closeCalled).toBe(true);
+    expect(result.action).toBe("close_long");
+    expect(result.message).toContain("reversed long");
+  });
+
+  it("reverses an open short to flat on buy signal", async () => {
+    const openShort = makeTrade({
+      side: "sell",
+      entry_price: "100",
+      entry_at: new Date("2026-01-01T00:00:00Z").toISOString(),
+    });
+    let closeCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "buy" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        openTrade: openShort,
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(closeCalled).toBe(true);
+    expect(result.action).toBe("close_short");
+    expect(result.message).toContain("reversed short");
+  });
+
+  it("returns hold when buy signal already long", async () => {
+    const openLong = makeTrade({
+      side: "buy",
+      entry_price: "100",
+      entry_at: new Date("2026-01-01T00:00:00Z").toISOString(),
+    });
+    let openCalled = false;
+    let closeCalled = false;
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "buy" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        openTrade: openLong,
+        onOpen: () => {
+          openCalled = true;
+          return 99;
+        },
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(openCalled).toBe(false);
+    expect(closeCalled).toBe(false);
+    expect(result.action).toBe("hold");
+  });
+
+  it("does not persist trades in dryRun mode", async () => {
+    let openCalled = false;
+    let closeCalled = false;
+    const result = await runEngine(
+      { ...baseConfig, dryRun: true },
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [makeSignal({ hints: { suggested_action: "buy" } })],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({
+        onOpen: () => {
+          openCalled = true;
+          return 1;
+        },
+        onClose: () => {
+          closeCalled = true;
+        },
+      }),
+    );
+    expect(openCalled).toBe(false);
+    expect(closeCalled).toBe(false);
+    expect(result.action).toBe("open_long");
+  });
+
+  it("wraps underlying errors in PaperTradingError", async () => {
+    const errorApiClient = Layer.succeed(ApiClient, {
+      generateAuthCode: () => Effect.die("not used"),
+      getAIProviders: () => Effect.die("not used"),
+      getAIModels: () => Effect.die("not used"),
+      getPortfolio: () => Effect.die("not used"),
+      getBalance: () => Effect.die("not used"),
+      runScalpingBacktest: () =>
+        Effect.fail(
+          new NetworkError({ cause: "backend down", endpoint: "/backtest" }),
+        ),
+      health: () => Effect.die("not used"),
+    });
+
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const engine = yield* PaperTradingEngine;
+        return yield* engine.evaluateAndTrade(baseConfig);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            errorApiClient,
+            makeMockBinanceClient(baseCandles),
+            makeMockPaperRepo({}),
+            engineLayer,
+          ),
+        ),
+      ),
+    );
+    if (exit._tag !== "Failure") {
+      throw new Error(`expected Failure exit, got ${exit._tag}`);
+    }
+    const serialized = JSON.parse(JSON.stringify(exit.cause)) as {
+      failure?: { _tag?: string; reason?: unknown };
+    };
+    expect(serialized.failure?._tag).toBe("PaperTradingError");
+    expect(typeof serialized.failure?.reason).toBe("string");
+  });
+
+  it("uses the latest eligible signal, skipping a trailing rejected one", async () => {
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [
+          makeSignal({
+            timestamp: "2026-01-01T00:00:00Z",
+            funnel_stage: "accepted",
+            hints: { suggested_action: "buy" },
+          }),
+          makeSignal({
+            signal_id: "sig-2",
+            timestamp: "2026-01-01T01:00:00Z",
+            funnel_stage: "rejected",
+            rejection_reason: "no edge",
+          }),
+        ],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({}),
+    );
+    expect(result.action).toBe("open_long");
+  });
+
+  it("returns no_signal when every signal is non-eligible", async () => {
+    const result = await runEngine(
+      baseConfig,
+      makeMockApiClient({
+        ...baseBacktest,
+        signals: [
+          makeSignal({ funnel_stage: "rejected", rejection_reason: "no edge" }),
+          makeSignal({
+            signal_id: "sig-2",
+            funnel_stage: "rejected",
+            rejection_reason: "wide spread",
+          }),
+        ],
+      }),
+      makeMockBinanceClient(baseCandles),
+      makeMockPaperRepo({}),
+    );
+    expect(result.action).toBe("no_signal");
   });
 });
