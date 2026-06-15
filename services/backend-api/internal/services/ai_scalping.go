@@ -140,6 +140,11 @@ var (
 	// risk-reward tuning. Tests reset it by reassigning a fresh sync.Once{} so
 	// each subtest gets a clean setup.
 	scalpingFallbackEnvOnce sync.Once
+
+	// scalpingFallbackTrendFilter toggles the trailing-momentum entry gate
+	// that runs alongside fallbackRiskRewardPct. The env override in
+	// applyScalpingFallbackRiskRewardFromEnv flips it to true.
+	scalpingFallbackTrendFilter = false
 )
 
 type DeterministicFallbackConfig struct {
@@ -4143,9 +4148,39 @@ func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal, fallback Determini
 }
 
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {
-	risk := decimal.Zero
-	reward := decimal.NewFromFloat(0.075)
-	return risk, reward
+	scalpingFallbackEnvOnce.Do(applyScalpingFallbackRiskRewardFromEnv)
+	reward := decimal.NewFromFloat(scalpingFallbackRewardPct)
+	spreadFloor := decimal.NewFromFloat(math.Max(signal.BidAskSpread, 0) * scalpingFallbackRiskSpreadMult)
+	minRisk := decimal.NewFromFloat(scalpingFallbackRiskFloorPct)
+	if spreadFloor.GreaterThan(minRisk) {
+		minRisk = spreadFloor
+	}
+	ceil := decimal.NewFromFloat(scalpingFallbackRiskCeilPct)
+	if minRisk.GreaterThan(ceil) {
+		minRisk = ceil
+	}
+	if minRisk.LessThan(decimal.Zero) {
+		minRisk = decimal.Zero
+	}
+	return minRisk, reward
+}
+
+func applyScalpingFallbackRiskRewardFromEnv() {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskFloorPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskCeilPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskSpreadMult = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRewardPct = v
+	}
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("NEURATRADE_SCALPING_FALLBACK TREND_FILTER"))); v == "true" || v == "1" || v == "yes" {
+		scalpingFallbackTrendFilter = true
+	}
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {
