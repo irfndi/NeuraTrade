@@ -123,16 +123,23 @@ const (
 	scalpingFeedbackTightenSizeFactor    = 0.50
 	scalpingFeedbackLoosenSizeStep       = 0.10
 	scalpingFeedbackConsecutiveThreshold = 3
+)
 
-	// Bollinger Band %B entry/exit thresholds: entries require %B below the
-	// buy ceiling (oversold) or above the sell floor (overbought).
-	scalpingBBEntryMaxPct = 0.20
-	scalpingBBExitMinPct  = 0.80
+// Fallback risk-reward range: when the deterministic composer can't find
+// strong order-book signals, it falls back to ATR-based stops/takes within
+// [Floor, Ceil] scaled by SpreadMult. Reward is the take-profit fraction.
+// These are vars (not consts) so tests can save/restore them around the
+// scenarios they exercise.
+var (
+	scalpingFallbackRiskFloorPct   = 0.015
+	scalpingFallbackRiskCeilPct    = 0.05
+	scalpingFallbackRiskSpreadMult = 2.0
+	scalpingFallbackRewardPct      = 0.075
 
-	// ADX regime filter: reject signals when ADX exceeds this threshold (trending market).
-	scalpingADXMaxPct = 25.0
-	// ATR volatility expansion filter: reject entries when ATR ratio (ATR(14)/SMA(ATR,20)) exceeds this threshold.
-	scalpingATRRatioMax = 1.5
+	// scalpingFallbackEnvOnce gates one-time env-var setup for the fallback
+	// risk-reward tuning. Tests reset it by reassigning a fresh sync.Once{} so
+	// each subtest gets a clean setup.
+	scalpingFallbackEnvOnce sync.Once
 )
 
 type DeterministicFallbackConfig struct {
@@ -187,6 +194,10 @@ type DeterministicFallbackConfig struct {
 	SellWindowMinTrendPct   float64
 	SellWindowMaxTrendPct   float64
 	NoRecentBuyMaxRangePct  float64
+
+	BacktestImbalanceFloor      float64
+	BacktestStrongImbalanceFloor float64
+	BacktestRangeBufferPct      float64
 }
 
 func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
@@ -237,6 +248,9 @@ func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 		SellWindowMinTrendPct:   0.0,
 		SellWindowMaxTrendPct:   0.50,
 		NoRecentBuyMaxRangePct:  20.0,
+		BacktestImbalanceFloor:      0.02,
+		BacktestStrongImbalanceFloor: 0.10,
+		BacktestRangeBufferPct:      12.0,
 	}
 }
 

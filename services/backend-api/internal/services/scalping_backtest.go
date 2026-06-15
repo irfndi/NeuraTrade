@@ -105,6 +105,20 @@ type ScalpingBacktestConfig struct {
 	// backtests are offline replays, so the AI mode is a "shadow" that
 	// records what hints the AI path would have consumed.
 	Mode string
+
+	// MaxLossPct caps per-trade loss as a percentage of entry notional.
+	// When non-zero the backtest engine force-closes any open position
+	// whose unrealized loss breaches this threshold.
+	MaxLossPct float64
+	// EnablePanicDropEntry toggles the panic-drop entry filter. When true,
+	// the engine considers entries triggered by sharp drawdowns.
+	EnablePanicDropEntry bool
+	// MinPanicDropPct is the minimum drawdown (in percent) required to
+	// qualify as a panic-drop signal when EnablePanicDropEntry is true.
+	MinPanicDropPct float64
+	// MinEntryMomentumPct is the minimum recent momentum (in percent)
+	// required to qualify an entry alongside trailing-stop support.
+	MinEntryMomentumPct float64
 }
 
 type ScalpingBacktestResult struct {
@@ -1697,7 +1711,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 				bbPctB = (point.close - bbLower[i]) / bbRange
 			}
 
-			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB))
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB, windowMetrics[i].Volume24h, 0))
 			prevClose = point.close
 		}
 	}
@@ -1780,7 +1794,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	return metrics
 }
 
-func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64) HistoricalSignal {
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64, volume24h float64, recentTrades int) HistoricalSignal {
 	imbalance := 0.0
 	if point.high > point.low {
 		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
