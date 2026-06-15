@@ -5278,15 +5278,6 @@ func asymmetricExitLevels(price float64, action string, leverage int, cfg Asymme
 	}
 }
 
-// defaultExitLevelsForService returns either the asymmetric levels (when
-// enabled in service config) or the legacy symmetric defaults.
-func (s *AIScalpingService) defaultExitLevelsForService(price float64, action string) (decimal.Decimal, decimal.Decimal) {
-	if s != nil && s.config.AsymmetricExit.UseAsymmetricExits {
-		return asymmetricExitLevels(price, action, s.config.Leverage, s.config.AsymmetricExit)
-	}
-	return defaultExitLevelsWithLeverage(price, action, 1)
-}
-
 func (s *AIScalpingService) refuseLiveTradeWithSyntheticSLTP(ctx context.Context, decision *AITradingDecision, defaultSL, defaultTP decimal.Decimal) error {
 	mode, ok := operationalModeFromContext(ctx)
 	if !ok || mode != OpModeLive {
