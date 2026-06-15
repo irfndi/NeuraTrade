@@ -6,6 +6,8 @@ import {
   BinanceClientLive,
   BinanceNetworkError,
   BinanceRateLimitError,
+  fromBinanceSymbol,
+  toBinanceSymbol,
 } from "./binance-client.ts";
 import { RateLimiterLive } from "./rate-limiter.ts";
 
@@ -194,5 +196,115 @@ describe("BinanceClient", () => {
       const err = await runFail(program, "http://localhost:1");
       expect(err).toBeInstanceOf(BinanceNetworkError);
     });
+  });
+});
+
+describe("symbol normalization", () => {
+  describe("toBinanceSymbol", () => {
+    it("strips slash and uppercases BTC/USDT", () => {
+      expect(toBinanceSymbol("BTC/USDT")).toBe("BTCUSDT");
+    });
+
+    it("uppercases already-joined symbols", () => {
+      expect(toBinanceSymbol("ethusdt")).toBe("ETHUSDT");
+    });
+
+    it("preserves already-uppercase slashed symbols", () => {
+      expect(toBinanceSymbol("SOL/USDT")).toBe("SOLUSDT");
+    });
+  });
+
+  describe("fromBinanceSymbol", () => {
+    it("returns already-slashed symbols unchanged (uppercased)", () => {
+      expect(fromBinanceSymbol("BTC/USDT")).toBe("BTC/USDT");
+      expect(fromBinanceSymbol("eth/usdt")).toBe("ETH/USDT");
+    });
+
+    it("splits USDT-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCUSDT")).toBe("BTC/USDT");
+      expect(fromBinanceSymbol("ETHUSDT")).toBe("ETH/USDT");
+      expect(fromBinanceSymbol("SOLUSDT")).toBe("SOL/USDT");
+    });
+
+    it("splits USDC-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCUSDC")).toBe("BTC/USDC");
+    });
+
+    it("splits BTC-quoted symbols (e.g., ETHBTC)", () => {
+      expect(fromBinanceSymbol("ETHBTC")).toBe("ETH/BTC");
+    });
+
+    it("splits ETH-quoted symbols", () => {
+      expect(fromBinanceSymbol("FOOETH")).toBe("FOO/ETH");
+    });
+
+    it("splits BNB-quoted symbols", () => {
+      expect(fromBinanceSymbol("FOOBNB")).toBe("FOO/BNB");
+    });
+
+    it("splits FDUSD-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCFDUSD")).toBe("BTC/FDUSD");
+    });
+
+    it("splits TUSD-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCTUSD")).toBe("BTC/TUSD");
+    });
+
+    it("splits BUSD-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCBUSD")).toBe("BTC/BUSD");
+    });
+
+    it("splits TRY-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCTRY")).toBe("BTC/TRY");
+    });
+
+    it("splits EUR-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCEUR")).toBe("BTC/EUR");
+    });
+
+    it("splits GBP-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCGBP")).toBe("BTC/GBP");
+    });
+
+    it("splits JPY-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCJPY")).toBe("BTC/JPY");
+    });
+
+    it("splits AUD-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCAUD")).toBe("BTC/AUD");
+    });
+
+    it("splits PAX-quoted symbols", () => {
+      expect(fromBinanceSymbol("BTCPAX")).toBe("BTC/PAX");
+    });
+
+    it("returns the symbol unchanged when no quote asset matches", () => {
+      expect(fromBinanceSymbol("UNKNOWN")).toBe("UNKNOWN");
+    });
+
+    it("lowercases input then uppercases for matching", () => {
+      expect(fromBinanceSymbol("ethusdt")).toBe("ETH/USDT");
+      expect(fromBinanceSymbol("btcusdc")).toBe("BTC/USDC");
+    });
+  });
+});
+
+describe("response parsing", () => {
+  it("returns BinanceApiError when response body is not valid JSON", async () => {
+    const mock = startMock(() => new Response("not json {{{", { status: 200 }));
+    try {
+      const program = Effect.gen(function* () {
+        const client = yield* BinanceClient;
+        return yield* client.getExchangeInfo();
+      });
+      const err = await runFail(program, mock.url);
+      expect(err).toBeInstanceOf(BinanceApiError);
+      const apiErr = err as InstanceType<typeof BinanceApiError>;
+      expect(apiErr.status).toBe(200);
+      expect(typeof apiErr.body).toBe("string");
+      expect(apiErr.body.length).toBeGreaterThan(0);
+    } finally {
+      mock.stop();
+    }
   });
 });
