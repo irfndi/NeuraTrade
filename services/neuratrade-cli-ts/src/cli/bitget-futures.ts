@@ -113,15 +113,27 @@ function parseProductType(raw: string): BitgetProductType {
   ) {
     return upper;
   }
-  return "USDT-FUTURES";
+  throw new Error(
+    `invalid product-type: ${raw} (expected USDT-FUTURES, COIN-FUTURES, or USDC-FUTURES)`,
+  );
 }
 
 function parseMarginMode(raw: string): BitgetMarginMode {
-  return raw.toLowerCase() === "isolated" ? "isolated" : "crossed";
+  const lower = raw.toLowerCase();
+  if (lower === "isolated" || lower === "crossed") {
+    return lower;
+  }
+  throw new Error(`invalid margin-mode: ${raw} (expected isolated or crossed)`);
 }
 
 function parsePositionMode(raw: string): BitgetPositionMode {
-  return raw.toLowerCase() === "hedge_mode" ? "hedge_mode" : "one_way";
+  const lower = raw.toLowerCase();
+  if (lower === "hedge_mode" || lower === "one_way") {
+    return lower;
+  }
+  throw new Error(
+    `invalid position-mode: ${raw} (expected hedge_mode or one_way)`,
+  );
 }
 
 export function handleErr(err: unknown): Effect.Effect<never, Error> {

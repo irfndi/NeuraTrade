@@ -101,14 +101,11 @@ function requireOneOf(
 const verifyCommand = Command.make("verify", {}, () =>
   Effect.gen(function* () {
     const config = yield* BitgetConfig;
-    const creds = yield* requireBitgetCredentials(config);
+    yield* requireBitgetCredentials(config);
     const client = yield* BitgetClient;
     const balances = yield* client.getBalances();
     const mode = config.useSandbox ? "demo (PAPTRADING)" : "live";
     yield* Console.log(`✅ Bitget ${mode} credentials verified`);
-    yield* Console.log(
-      `   key:      ${creds.apiKey.slice(0, 4)}...${creds.apiKey.slice(-4)}`,
-    );
     yield* Console.log(`   balances: ${balances.length} assets`);
     for (const b of balances.slice(0, 5)) {
       yield* Console.log(`     ${b.asset}: available=${b.available}`);
@@ -119,9 +116,13 @@ const verifyCommand = Command.make("verify", {}, () =>
   }).pipe(
     Effect.catchAll((err: unknown) => {
       const details =
-        err && typeof err === "object"
-          ? `${("_tag" in err ? String(err._tag) : "")}: ${JSON.stringify(err)}`
-          : String(err);
+        err instanceof Error
+          ? err.message
+          : err && typeof err === "object"
+            ? "_tag" in err
+              ? `${String(err._tag)}: ${JSON.stringify(err)}`
+              : JSON.stringify(err)
+            : String(err);
       return Console.log(`❌ verify failed: ${details}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(details))),
       );
@@ -250,23 +251,26 @@ const orderPlaceCommand = Command.make(
           clientOid: clientOid.trim() || undefined,
         };
 
-      if (dryRun) {
-        const [instruments, balances, ticker] = yield* Effect.all([
-          client.getInstruments(),
-          client.getBalances(),
-          client.getTicker(symbol),
-        ]);
-        const bsymbol = toBitgetSymbol(symbol);
-        const instrument = instruments.find((i) => i.symbol === bsymbol);
-        if (instrument === undefined) {
-          return yield* Effect.fail(
-            new Error(`symbol ${symbol} not found in Bitget instruments`),
-          );
-        }
-        const normalized = yield* validateOrder(
-          { order: orderInput, instrument, balances },
-          ticker.lastPrice,
+      // Pre-trade guards must run in both dry-run and live paths so a live
+      // order is never sent without size/instrument/notional/balance checks.
+      const [instruments, balances, ticker] = yield* Effect.all([
+        client.getInstruments(),
+        client.getBalances(),
+        client.getTicker(symbol),
+      ]);
+      const bsymbol = toBitgetSymbol(symbol);
+      const instrument = instruments.find((i) => i.symbol === bsymbol);
+      if (instrument === undefined) {
+        return yield* Effect.fail(
+          new Error(`symbol ${symbol} not found in Bitget instruments`),
         );
+      }
+      const normalized = yield* validateOrder(
+        { order: orderInput, instrument, balances },
+        ticker.lastPrice,
+      );
+
+      if (dryRun) {
         yield* Console.log("🔍 DRY RUN — order would be:");
         yield* Console.log(`  symbol:    ${normalized.symbol}`);
         yield* Console.log(`  side:      ${normalized.side}`);
@@ -281,7 +285,7 @@ const orderPlaceCommand = Command.make(
         return;
       }
 
-      const order = yield* client.placeOrder(orderInput);
+      const order = yield* client.placeOrder(normalized);
       yield* Console.log(`✅ Order placed: ${order.orderId}`);
       yield* Console.log(`  clientOid: ${order.clientOid}`);
       yield* Console.log(`  symbol:    ${order.symbol}`);
