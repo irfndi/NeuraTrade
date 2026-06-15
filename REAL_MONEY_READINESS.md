@@ -1,26 +1,27 @@
 # Real-Money Readiness — TS Porting Status
 
-> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186` + `37ef2378` + `f440d825` + `7c2bcca8` + `31bb3f13` + `edb77ce6` + `651689c3`).
+> Snapshot after quality-gate pass on `feat/ts-cli-phase1` (commits `151af4c6` + `c1795469` + `1ee99186` + `37ef2378` + `f440d825` + `7c2bcca8` + `31bb3f13` + `edb77ce6` + `651689c3` + `5c48e38b` + `5e7c9709`).
 > Last updated: 2026-06-15.
 
 ## What is now GREEN on the TS side
 
 | Gate | Status | Evidence |
 |---|---|---|
-| `bun test` | 341/341 PASS | 874 assertions, 29 files, ~14.6s |
+| `bun test` (unit) | 378/378 PASS | 930 assertions, 30 files, ~30s |
 | `bun run typecheck` (`tsc --noEmit`, strict) | PASS | exit 0 |
 | `bun run fmt:check` (prettier 3.8.4) | PASS | all formatted |
-| `bun run lint` (oxlint) | 0 errors, 0 warnings | 95 rules, 68 files |
-| Coverage (all files) | 87.88% funcs / 94.29% lines | exceeds 80% lines, 70% branches |
+| `bun run lint` (oxlint) | 0 errors, 0 warnings | 95 rules, 70 files |
+| Coverage (all files) | 88.62% funcs / 94.85% lines | exceeds 80% lines, 70% branches |
 | `paper-trading-engine.ts` coverage | 88.89% funcs / 98.01% lines | 14 new unit tests (32% → 98%) |
 | `market.ts` coverage | 96.88% funcs / 98.71% lines | 11 new unit tests (44% → 99%) |
+| `binance-client.ts` coverage | 85.00% funcs / 97.12% lines | 21 new unit tests (75% → 85% funcs, 76% → 97% lines) |
 | Backend Go (ai_scalping, scalping_backtest, paper_trade) | 184/184 PASS | `-race` enabled |
 | Money math (no float64) | ✅ | Go: `shopspring/decimal`; TS: `bigint` scaled integers in `src/services/decimal.ts`; `bitget-client.ts` keeps API wire-format strings |
 | All CLI commands wired | ✅ | `neuratrade {gateway,status,health,doctor,market,backtest,bitget,paper}` — `bitget futures` nested correctly under `bitget` |
 | CLI help rendering | ✅ | Flattened futures order subcommands (fixes `futures futures order place` bug → `futures place`) |
 | Paper trading IS profitable | ✅ | 2026-05-30 evidence: 701h continuous, 4 strategies, 67 closed + 18 open, **$546.94 net PnL**, 78.8% win rate, risk limits enforced, backtest comparison verified |
 | Bitget credentials gate works | ✅ | `requireBitgetCredentials` + `BITGET_USE_SANDBOX` plumbing, env + dry-run path verified |
-| Push to origin + PR | ✅ | `feat/ts-cli-phase1` pushed; PR #470 (cherry-picked unique Phase-1 pieces) open, DRAFT, 9/9 CI checks green |
+| Push to origin + PR | ✅ | `feat/ts-cli-phase1` pushed; PR #470 (cherry-picked unique Phase-1 pieces) open, DRAFT, **6 CI checks failing** (pre-existing Go build errors in `ai_scalping.go:1609` + `cmd/5yr-backtest/main.go` missing struct fields) |
 
 ## What is NOT done (real-money blockers)
 
@@ -46,8 +47,8 @@ Each is a specific proof gate. Per project policy (`make bd-close-qa`), each clo
 
 ### 3. Main integration (PR #470 still DRAFT)
 
-- `feat/cli-ts-bitget-port` (PR #470) cherry-picks the unique Phase-1 pieces onto a fresh branch from `main`. 9/10 CI checks green.
-- 1 CI check is still red. Inspect via `gh pr checks 470` before marking ready.
+- `feat/cli-ts-bitget-port` (PR #470) cherry-picks the unique Phase-1 pieces onto a fresh branch from `main`. **6 CI checks failing** (pre-existing Go build errors).
+- All 6 failing checks are pre-existing Go-side build errors (`ai_scalping.go:1609` missing `BuildCandidateFunnel` arg + `cmd/5yr-backtest/main.go` referencing struct fields that don't exist on `ScalpingBacktestConfig`). None are caused by the PR. Inspect via `gh pr checks 470` before marking ready.
 - The raw port has these known mismatches with main's structure (must be fixed before merge):
   1. `src/services/bitget-client.ts` does NOT implement main's `ExchangeAdapterService` interface (`src/exchange/adapter.ts` on main only). Architecturally incompatible: different number of methods (18 vs 4), different types (`string` vs `number`), different error class. **~100–200 lines of adapter work needed.**
   2. `src/services/bitget-{guards,futures-guards,futures-safety}.ts` need to be re-targeted to main's `RiskLimits` interface (`src/risk/guards.ts` on main only).
@@ -85,7 +86,9 @@ Each is a specific proof gate. Per project policy (`make bd-close-qa`), each clo
 | CLI help rendering fix (flatten futures order subcommands) | `src/cli/bitget.ts` | `f440d825` |
 | Paper-trading-engine test coverage (14 unit tests, 32% → 98%) | `src/services/paper-trading-engine.test.ts` | `7c2bcca8` |
 | Market CLI test coverage (11 unit tests, 44% → 99%) | `src/cli/market.test.ts` | `31bb3f13` |
-| 341/341 tests green, typecheck + fmt + lint (errors) clean | `services/neuratrade-cli-ts/` | (test runs) |
+| errorMessage() helper + 16 unit tests (Data.TaggedError context preservation) | `src/utils/error-message.ts` | `651689c3` |
+| binance-client.ts test coverage (21 unit tests, 75% → 85% funcs, 76% → 97% lines) | `src/services/binance-client.test.ts` | `5e7c9709` |
+| 378/378 unit tests green, typecheck + fmt + lint clean | `services/neuratrade-cli-ts/` | (test runs) |
 | .gitignore updated to exclude agent/editor/session artifacts | `.gitignore` | (cherry-pick) |
 | 1 e2e test bug fixed (credential inheritance from bun's .env loading) | `tests/e2e/cli.test.ts` | `c1795469` |
 
