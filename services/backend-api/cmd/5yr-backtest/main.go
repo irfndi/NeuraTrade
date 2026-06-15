@@ -25,16 +25,16 @@ func main() {
 
 func run() (err error) {
 	var (
-		startStr            = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
-		endStr              = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
-		symbols             = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
-		persist             = flag.Bool("persist", true, "Persist results to database")
-		minExpectancyN      = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
-		minExpectancyEdge   = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
-		holdPeriod          = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
-		bbEntryMaxPct       = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
-		minConfidence       = flag.Float64("min-confianza", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
-		maxSpreadPct        = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
+		startStr          = flag.String("start", "2021-06-01", "Start date (YYYY-MM-DD)")
+		endStr            = flag.String("end", "2026-06-01", "End date (YYYY-MM-DD)")
+		symbols           = flag.String("symbols", "BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT", "Comma-separated symbols")
+		persist           = flag.Bool("persist", true, "Persist results to database")
+		minExpectancyN    = flag.Int("min-expectancy-n", 0, "Min samples for expectancy gate (0 = default: 8)")
+		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
+		holdPeriod        = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
+		bbEntryMaxPct     = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
+		minConfidence     = flag.Float64("min-confianza", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
+		maxSpreadPct      = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
 	)
 	flag.Parse()
 
@@ -82,20 +82,20 @@ func run() (err error) {
 	initialCapital, _ := decimal.NewFromString("10000")
 
 	svcConfig := services.ScalpingBacktestConfig{
-		StartTime:              startTime,
-		EndTime:                endTime,
-		Symbols:                symbolList,
-		Exchange:               "binance",
-		InitialCapital:         initialCapital,
-		FeeRate:                decimal.NewFromFloat(0.0002),
-		MaxBidAskSpreadPct:     0.08,
-		MinConfidence:          0.60,
-		MinExpectancyN:         *minExpectancyN,
-		MinExpectancyEdge:      *minExpectancyEdge,
-		SpreadMultiplier:       8,
-		MaxCapitalPct:          25.0,
-		DefaultHoldPeriod:      *holdPeriod,
-		Mode:                   "deterministic",
+		StartTime:          startTime,
+		EndTime:            endTime,
+		Symbols:            symbolList,
+		Exchange:           "binance",
+		InitialCapital:     initialCapital,
+		FeeRate:            decimal.NewFromFloat(0.0002),
+		MaxBidAskSpreadPct: 0.08,
+		MinConfidence:      0.60,
+		MinExpectancyN:     *minExpectancyN,
+		MinExpectancyEdge:  *minExpectancyEdge,
+		SpreadMultiplier:   8,
+		MaxCapitalPct:      25.0,
+		DefaultHoldPeriod:  *holdPeriod,
+		Mode:               "deterministic",
 		DeterministicFallback: services.DeterministicFallbackConfig{
 			BBEntryMaxPct: *bbEntryMaxPct,
 		},
