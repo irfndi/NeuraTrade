@@ -1700,6 +1700,82 @@ func TestIsSQLiteTradingPairDB_HandlersAdapterRegression(t *testing.T) {
 		"shim whose IsSQLitePool()=false must not match")
 }
 
+func TestScalpingBacktestConfig_AsymmetricExit(t *testing.T) {
+	cfg := ScalpingBacktestConfig{
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  true,
+			StopLossPct:         0.005,
+			TakeProfitPct:       0.015,
+			BreakevenEnabled:    true,
+			TrailingStopEnabled: true,
+		},
+	}
+	require.True(t, cfg.AsymmetricExit.UseAsymmetricExits)
+	require.Equal(t, 0.005, cfg.AsymmetricExit.StopLossPct)
+	require.Equal(t, 0.015, cfg.AsymmetricExit.TakeProfitPct)
+	require.True(t, cfg.AsymmetricExit.BreakevenEnabled)
+	require.True(t, cfg.AsymmetricExit.TrailingStopEnabled)
+
+	engine := NewScalpingBacktestEngine(nil, cfg)
+	require.True(t, engine.config.AsymmetricExit.UseAsymmetricExits)
+	require.Equal(t, 0.005, engine.config.AsymmetricExit.StopLossPct)
+	require.Equal(t, 0.015, engine.config.AsymmetricExit.TakeProfitPct)
+}
+
+func TestBacktestExitLevels_Asymmetric(t *testing.T) {
+	price := 100.0
+	cfg := AsymmetricExitConfig{
+		UseAsymmetricExits: true,
+		StopLossPct:        0.005,
+		TakeProfitPct:      0.015,
+	}
+
+	t.Run("buy", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 10, cfg)
+		// SL = 100 * (1 - 0.005/10) = 100 * 0.9995 = 99.95
+		// TP = 100 * (1 + 0.015/10) = 100 * 1.0015 = 100.15
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.95)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(100.15)), "TP = %s", tp)
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "sell", 10, cfg)
+		// SL = 100 * (1 + 0.005/10) = 100 * 1.0005 = 100.05
+		// TP = 100 * (1 - 0.015/10) = 100 * 0.9985 = 99.85
+		require.True(t, sl.Equal(decimal.NewFromFloat(100.05)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(99.85)), "TP = %s", tp)
+	})
+
+	t.Run("no_leverage", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 0, cfg)
+		// leverage defaults to 1: SL = 99.5, TP = 101.5
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.5)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(101.5)), "TP = %s", tp)
+	})
+}
+
+func TestBacktestExitLevels_Symmetric(t *testing.T) {
+	price := 100.0
+	cfg := AsymmetricExitConfig{UseAsymmetricExits: false}
+
+	t.Run("buy", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 1, cfg)
+		// Default symmetric: 0.8% stop, 1.2% target
+		// SL = 100 * (1 - 0.008) = 99.2
+		// TP = 100 * (1 + 0.012) = 101.2
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.2)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(101.2)), "TP = %s", tp)
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "sell", 1, cfg)
+		// SL = 100 * (1 + 0.008) = 100.8
+		// TP = 100 * (1 - 0.012) = 98.8
+		require.True(t, sl.Equal(decimal.NewFromFloat(100.8)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(98.8)), "TP = %s", tp)
+	})
+}
+
 type markerSQLiteShim struct {
 	pool *database.SQLiteDB
 }

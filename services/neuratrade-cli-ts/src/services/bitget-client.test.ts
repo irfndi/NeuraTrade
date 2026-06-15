@@ -562,6 +562,50 @@ describe("BitgetClient", () => {
       }
     });
 
+    it("resolves marginCoin for COIN-FUTURES positions", async () => {
+      let capturedUrl = "";
+      const mock = startMock((req) => {
+        const url = new URL(req.url);
+        capturedUrl = req.url;
+        expect(url.pathname).toBe("/api/v2/mix/position/single-position");
+        expect(url.searchParams.get("productType")).toBe("COIN-FUTURES");
+        return json({
+          code: "00000",
+          data: [
+            {
+              positionId: "pos-coin-1",
+              symbol: "BTCUSD",
+              productType: "COIN-FUTURES",
+              marginMode: "crossed",
+              holdSide: "long",
+              openPrice: "60000",
+              total: "1",
+              available: "1",
+              leverage: "10",
+              unrealizedPL: "50",
+              liquidatedPrice: "54000",
+            },
+          ],
+        });
+      });
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getFuturesPositions(
+            "BTC/USD:BTC",
+            "COIN-FUTURES",
+          );
+        });
+        const result = await runOk(program, mock.url);
+        expect(result).toHaveLength(1);
+        expect(result[0].holdSide).toBe("long");
+        const finalUrl = new URL(capturedUrl);
+        expect(finalUrl.searchParams.get("marginCoin")).toBe("BTC");
+      } finally {
+        mock.stop();
+      }
+    });
+
     it("queries and cancels futures order", async () => {
       const mock = startMock(async (req) => {
         const url = new URL(req.url);
@@ -658,6 +702,28 @@ describe("BitgetClient", () => {
       });
       const err = await runFail(program, "http://localhost:1");
       expect(err).toBeInstanceOf(BitgetNetworkError);
+    });
+
+    it("returns BitgetApiError with non-JSON body on non-2xx response", async () => {
+      const mock = startMock(
+        () =>
+          new Response("Service Unavailable", {
+            status: 503,
+            headers: { "Content-Type": "text/plain" },
+          }),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getTicker("BTCUSDT");
+        });
+        const err = await runFail(program, mock.url);
+        expect(err).toBeInstanceOf(BitgetApiError);
+        expect((err as BitgetApiError).body).toBe("Service Unavailable");
+        expect((err as BitgetApiError).status).toBe(503);
+      } finally {
+        mock.stop();
+      }
     });
   });
 });

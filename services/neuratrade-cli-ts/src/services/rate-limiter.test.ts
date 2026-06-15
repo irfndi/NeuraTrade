@@ -55,4 +55,27 @@ describe("RateLimiter", () => {
     });
     await runWithTestClock(program);
   });
+
+  it("concurrent acquires do not double-spend refilled tokens", async () => {
+    const program = Effect.gen(function* () {
+      const rl = yield* RateLimiter;
+
+      yield* rl.acquire(10);
+
+      const fibers = yield* Effect.forEach(Array.from({ length: 5 }), () =>
+        Effect.fork(rl.acquire(1)),
+      );
+
+      yield* TestClock.adjust("100 millis");
+
+      const statuses = yield* Effect.forEach(fibers, (f) => Fiber.poll(f));
+      const completed = statuses.filter((s) => s._tag === "Some").length;
+
+      expect(completed).toBeLessThanOrEqual(1);
+
+      yield* TestClock.adjust("1000 millis");
+      yield* Effect.forEach(fibers, (f) => Fiber.join(f), { discard: true });
+    });
+    await runWithTestClock(program);
+  });
 });

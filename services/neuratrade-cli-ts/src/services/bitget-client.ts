@@ -445,10 +445,9 @@ function fetchBitget<T>(
       );
     }
 
-    const responseBody = yield* Effect.tryPromise({
-      try: () => response.text(),
-      catch: () => Effect.succeed(""),
-    }).pipe(Effect.catchAll(() => Effect.succeed("")));
+    const responseBody = yield* Effect.promise(() =>
+      response.text().catch(() => ""),
+    );
 
     if (!response.ok) {
       return yield* Effect.fail(
@@ -796,8 +795,11 @@ function makeBitgetClientImpl(
     symbol: string,
     productType: BitgetProductType = "USDT-FUTURES",
   ): Effect.Effect<ReadonlyArray<BitgetFuturesPosition>, BitgetClientError> => {
-    const marginCoin = marginCoinForProductType(productType, "");
-    const bsymbol = symbol.trim() !== "" ? toBitgetFuturesSymbol(symbol, productType).symbol : "";
+    const bsymbol =
+      symbol.trim() !== ""
+        ? toBitgetFuturesSymbol(symbol, productType).symbol
+        : "";
+    const marginCoin = marginCoinForProductType(productType, bsymbol);
     const endpoint =
       bsymbol !== ""
         ? `/api/v2/mix/position/single-position?symbol=${bsymbol}&productType=${productType}&marginCoin=${marginCoin}`

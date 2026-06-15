@@ -124,11 +124,15 @@ function parsePositionMode(raw: string): BitgetPositionMode {
   return raw.toLowerCase() === "hedge_mode" ? "hedge_mode" : "one_way";
 }
 
-function handleErr(err: unknown): Effect.Effect<never, Error> {
+export function handleErr(err: unknown): Effect.Effect<never, Error> {
   const details =
-    err && typeof err === "object"
-      ? `${("_tag" in err ? String(err._tag) : "")}: ${JSON.stringify(err)}`
-      : String(err);
+    err instanceof Error
+      ? err.message
+      : err && typeof err === "object"
+        ? "_tag" in err
+          ? `${String(err._tag)}: ${JSON.stringify(err)}`
+          : JSON.stringify(err)
+        : String(err);
   return Console.log(`❌ futures command failed: ${details}`).pipe(
     Effect.flatMap(() => Effect.fail(new Error(details))),
   );
@@ -377,8 +381,8 @@ const orderPlaceCommand = Command.make(
         reduceOnly: args.reduceOnly,
       };
 
-      const [contracts, balances, ticker, positions, leverageInfo] = yield*
-        Effect.all([
+      const [contracts, balances, ticker, positions, leverageInfo] =
+        yield* Effect.all([
           client.getContracts(pt),
           client.getFuturesBalances(pt),
           client.getFuturesTicker(args.symbol, pt),

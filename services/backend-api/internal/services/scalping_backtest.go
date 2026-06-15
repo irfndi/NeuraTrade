@@ -92,6 +92,11 @@ type ScalpingBacktestConfig struct {
 	DeterministicFallback DeterministicFallbackConfig
 	RegimeHighBand        float64
 	RegimeLowBand         float64
+	// AsymmetricExit configures asymmetric stop-loss / take-profit levels
+	// (and optional breakeven / trailing-stop behaviour) for the backtest.
+	// When UseAsymmetricExits is false, the legacy symmetric 0.8%/1.2%
+	// defaults are used — matching the pre-asymmetric live path.
+	AsymmetricExit AsymmetricExitConfig
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -607,6 +612,16 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	return eval, nil
 }
 
+// backtestExitLevels returns symmetric (0.8% / 1.2%) or asymmetric
+// stop-loss / take-profit levels depending on the config. It delegates to
+// the live-trading asymmetricExitLevels when UseAsymmetricExits is set.
+func backtestExitLevels(price float64, action string, leverage int, cfg AsymmetricExitConfig) (decimal.Decimal, decimal.Decimal) {
+	if cfg.UseAsymmetricExits {
+		return asymmetricExitLevels(price, action, leverage, cfg)
+	}
+	return defaultExitLevelsWithLeverage(price, action, leverage)
+}
+
 func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedPosition, error) {
 	_ = ctx
 	if decision == nil {
@@ -662,7 +677,7 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 	stopLoss := decision.StopLoss
 	takeProfit := decision.TakeProfit
 	if stopLoss == nil || takeProfit == nil {
-		sl, tp := defaultExitLevels(signal.Signal.Price, decision.Action)
+		sl, tp := backtestExitLevels(signal.Signal.Price, decision.Action, 1, e.config.AsymmetricExit)
 		if stopLoss == nil {
 			stopLoss = &sl
 		}
@@ -1103,6 +1118,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.Mode = "deterministic"
 	}
 	config.DeterministicFallback = config.DeterministicFallback.Normalized()
+	config.AsymmetricExit = config.AsymmetricExit.Normalized()
 	if len(config.Symbols) == 0 {
 		config.Symbols = defaultScalpingBacktestUniverse()
 	}

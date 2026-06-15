@@ -42,6 +42,11 @@ interface Bucket {
   readonly lastUpdated: number;
 }
 
+interface State {
+  readonly second: Bucket;
+  readonly minute: Bucket;
+}
+
 function refill(
   bucket: Bucket,
   now: number,
@@ -75,13 +80,9 @@ export const RateLimiterLive = (
     RateLimiter,
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const secondRef = yield* Ref.make<Bucket>({
-        tokens: config.perSecond,
-        lastUpdated: now,
-      });
-      const minuteRef = yield* Ref.make<Bucket>({
-        tokens: config.perMinute,
-        lastUpdated: now,
+      const stateRef = yield* Ref.make({
+        second: { tokens: config.perSecond, lastUpdated: now },
+        minute: { tokens: config.perMinute, lastUpdated: now },
       });
 
       const perSecondRate = config.perSecond / 1000;
@@ -91,50 +92,59 @@ export const RateLimiterLive = (
         Effect.gen(function* () {
           while (true) {
             const now = yield* Clock.currentTimeMillis;
-            const secondBucket = yield* Ref.get(secondRef);
-            const minuteBucket = yield* Ref.get(minuteRef);
+            const [acquired, waitMs] = yield* Ref.modify(
+              stateRef,
+              (state): readonly [readonly [boolean, number], State] => {
+                const secondRefilled = refill(
+                  state.second,
+                  now,
+                  config.perSecond,
+                  perSecondRate,
+                );
+                const minuteRefilled = refill(
+                  state.minute,
+                  now,
+                  config.perMinute,
+                  perMinuteRate,
+                );
 
-            const secondRefilled = refill(
-              secondBucket,
-              now,
-              config.perSecond,
-              perSecondRate,
-            );
-            const minuteRefilled = refill(
-              minuteBucket,
-              now,
-              config.perMinute,
-              perMinuteRate,
+                if (secondRefilled.tokens >= n && minuteRefilled.tokens >= n) {
+                  return [
+                    [true, 0],
+                    {
+                      second: {
+                        ...secondRefilled,
+                        tokens: secondRefilled.tokens - n,
+                      },
+                      minute: {
+                        ...minuteRefilled,
+                        tokens: minuteRefilled.tokens - n,
+                      },
+                    },
+                  ];
+                }
+
+                const waitSecond = waitTimeMs(
+                  secondRefilled,
+                  n,
+                  config.perSecond,
+                  perSecondRate,
+                );
+                const waitMinute = waitTimeMs(
+                  minuteRefilled,
+                  n,
+                  config.perMinute,
+                  perMinuteRate,
+                );
+                const wait = Math.max(waitSecond, waitMinute, 1);
+                return [
+                  [false, wait],
+                  { second: secondRefilled, minute: minuteRefilled },
+                ];
+              },
             );
 
-            yield* Ref.set(secondRef, secondRefilled);
-            yield* Ref.set(minuteRef, minuteRefilled);
-
-            if (secondRefilled.tokens >= n && minuteRefilled.tokens >= n) {
-              yield* Ref.set(secondRef, {
-                ...secondRefilled,
-                tokens: secondRefilled.tokens - n,
-              });
-              yield* Ref.set(minuteRef, {
-                ...minuteRefilled,
-                tokens: minuteRefilled.tokens - n,
-              });
-              return;
-            }
-
-            const waitSecond = waitTimeMs(
-              secondRefilled,
-              n,
-              config.perSecond,
-              perSecondRate,
-            );
-            const waitMinute = waitTimeMs(
-              minuteRefilled,
-              n,
-              config.perMinute,
-              perMinuteRate,
-            );
-            const waitMs = Math.max(waitSecond, waitMinute, 1);
+            if (acquired) return;
             yield* Effect.sleep(`${waitMs} millis`);
           }
         });
