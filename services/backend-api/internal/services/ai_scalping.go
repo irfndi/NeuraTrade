@@ -140,11 +140,6 @@ var (
 	// risk-reward tuning. Tests reset it by reassigning a fresh sync.Once{} so
 	// each subtest gets a clean setup.
 	scalpingFallbackEnvOnce sync.Once
-
-	// scalpingFallbackTrendFilter toggles the trailing-momentum entry gate
-	// that runs alongside fallbackRiskRewardPct. The env override in
-	// applyScalpingFallbackRiskRewardFromEnv flips it to true.
-	scalpingFallbackTrendFilter = false
 )
 
 type DeterministicFallbackConfig struct {
@@ -4177,9 +4172,6 @@ func applyScalpingFallbackRiskRewardFromEnv() {
 	}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
 		scalpingFallbackRewardPct = v
-	}
-	if v := strings.TrimSpace(strings.ToLower(os.Getenv("NEURATRADE_SCALPING_FALLBACK TREND_FILTER"))); v == "true" || v == "1" || v == "yes" {
-		scalpingFallbackTrendFilter = true
 	}
 }
 
