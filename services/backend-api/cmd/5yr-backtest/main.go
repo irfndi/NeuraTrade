@@ -33,7 +33,7 @@ func run() (err error) {
 		minExpectancyEdge = flag.Float64("min-expectancy-edge", 0, "Min edge for expectancy gate (0 = default: 0.001)")
 		holdPeriod        = flag.Duration("hold-period", 4*time.Hour, "Time-stop exit duration (e.g., 2h, 4h). Shorter = less drift but less TP reach.")
 		bbEntryMaxPct     = flag.Float64("bb-entry-max-pct", 0, "BB %%b entry threshold (0 = default 0.20; lower = stricter oversold, higher = more entries)")
-		minConfidence     = flag.Float64("min-confianza", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
+		minConfidence     = flag.Float64("min-confidence", 0, "Minimum signal confidence (0 = default 0.60; higher = stricter filtering)")
 		maxSpreadPct      = flag.Float64("max-spread-pct", 0, "Max bid-ask spread filter as decimal fraction (0 = default 0.08; lower = stricter spread filter)")
 	)
 	flag.Parse()
