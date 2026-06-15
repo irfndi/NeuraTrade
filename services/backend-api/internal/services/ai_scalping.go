@@ -1606,7 +1606,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
 	zaplogrus.Infof("[AI-SCALPING] Gathered %d market signals", len(signals))
-	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy)
+	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, appautonomy.DefaultScalpingPolicyConfig())
 
 	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
