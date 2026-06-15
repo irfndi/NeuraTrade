@@ -426,14 +426,17 @@ const orderPlaceCommand = Command.make(
         );
       }
 
+      // Pre-trade futures guards must run in both dry-run and live paths so a
+      // live futures order is never sent without notional/margin/contract checks.
+      const guard = yield* validateFuturesOrder({
+        order: orderInput,
+        contract,
+        balances,
+        lastPrice: ticker.lastPrice,
+        leverage: args.leverage.trim(),
+      });
+
       if (args.dryRun) {
-        const guard = yield* validateFuturesOrder({
-          order: orderInput,
-          contract,
-          balances,
-          lastPrice: ticker.lastPrice,
-          leverage: args.leverage.trim(),
-        });
         yield* Console.log("🔍 DRY RUN — futures order would be:");
         yield* Console.log(`  symbol:         ${bsymbol}`);
         yield* Console.log(`  productType:    ${orderInput.productType}`);
