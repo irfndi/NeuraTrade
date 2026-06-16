@@ -142,7 +142,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         const exitFee = exitPrice * position.size * (options.feePct / 100);
         const funding = chargeFunding(
           position,
-          lastFundingTime,
+          lastFundingTime!,
           current.timestamp,
           fundingRatePct,
           fundingIntervalMs,
@@ -150,9 +150,10 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding;
+        capital += pnl - exitFee - funding.funding;
         totalFeesPaid += exitFee;
-        totalFundingCost += funding;
+        totalFundingCost += funding.funding;
+        lastFundingTime = funding.newLastFundingTime;
         trades.push({
           id: `trade-${tradeId++}`,
           symbol: options.symbol,
@@ -188,7 +189,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         const exitFee = exitPrice * position.size * (options.feePct / 100);
         const funding = chargeFunding(
           position,
-          lastFundingTime,
+          lastFundingTime!,
           next.timestamp,
           fundingRatePct,
           fundingIntervalMs,
@@ -196,9 +197,10 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding;
+        capital += pnl - exitFee - funding.funding;
         totalFeesPaid += exitFee;
-        totalFundingCost += funding;
+        totalFundingCost += funding.funding;
+        lastFundingTime = funding.newLastFundingTime;
         trades.push({
           id: `trade-${tradeId++}`,
           symbol: options.symbol,
@@ -289,7 +291,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
     const exitFee = exitPrice * position.size * (options.feePct / 100);
     const funding = chargeFunding(
       position,
-      lastFundingTime,
+      lastFundingTime!,
       last.timestamp,
       fundingRatePct,
       fundingIntervalMs,
@@ -297,9 +299,10 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
     );
     const pnlPct =
       ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-    capital += pnl - exitFee - funding;
+    capital += pnl - exitFee - funding.funding;
     totalFeesPaid += exitFee;
-    totalFundingCost += funding;
+    totalFundingCost += funding.funding;
+    lastFundingTime = funding.newLastFundingTime;
     trades.push({
       id: `trade-${tradeId++}`,
       symbol: options.symbol,
@@ -447,19 +450,26 @@ function computeBenchmark(candles: readonly CandleLike[]): number {
 
 function chargeFunding(
   position: BacktestPosition,
-  lastFundingTime: Date | null,
+  lastFundingTime: Date,
   now: Date,
   fundingRatePct: number,
   fundingIntervalMs: number,
   isFutures: boolean,
-): number {
-  if (!isFutures || fundingRatePct === 0 || !lastFundingTime) return 0;
+): { funding: number; newLastFundingTime: Date } {
+  if (!isFutures || fundingRatePct === 0) {
+    return { funding: 0, newLastFundingTime: lastFundingTime };
+  }
   const elapsed = now.getTime() - lastFundingTime.getTime();
-  if (elapsed < fundingIntervalMs) return 0;
+  if (elapsed < fundingIntervalMs) {
+    return { funding: 0, newLastFundingTime: lastFundingTime };
+  }
   const intervals = Math.floor(elapsed / fundingIntervalMs);
   const notional = position.entryPrice * position.size;
-  // Longs pay on positive rate; shorts pay on negative rate (inverse).
   const effectiveRate =
     position.side === "long" ? fundingRatePct : -fundingRatePct;
-  return notional * (effectiveRate / 100) * intervals;
+  const funding = notional * (effectiveRate / 100) * intervals;
+  const newLastFundingTime = new Date(
+    lastFundingTime.getTime() + intervals * fundingIntervalMs,
+  );
+  return { funding, newLastFundingTime };
 }

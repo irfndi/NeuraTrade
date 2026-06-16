@@ -13,6 +13,7 @@ import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
 import { runBacktest, type BacktestResult } from "../scalping/backtest.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
+import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
@@ -1350,10 +1351,13 @@ export const paperTradeCommand = Command.make(
         db,
         circuitBreakerMaxLoss,
       );
+      const marketDataLayer = args.live
+        ? MarketDataGatewayLive
+        : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
         BunContext.layer,
         PathLive(process.env.NEURATRADE_HOME),
-        MarketDataGatewayLive,
+        marketDataLayer,
         repoLayer,
         paperRepoLayer,
         riskGuardLayer,
@@ -1738,10 +1742,13 @@ export const soakCommand = Command.make(
         db,
         circuitBreakerMaxLoss,
       );
+      const marketDataLayer = args.live
+        ? MarketDataGatewayLive
+        : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
         BunContext.layer,
         PathLive(process.env.NEURATRADE_HOME),
-        MarketDataGatewayLive,
+        marketDataLayer,
         repoLayer,
         paperRepoLayer,
         riskGuardLayer,

@@ -163,10 +163,15 @@ export function runFuturesPaperTradingIteration(
         });
 
         let exitPrice: number;
+        let closeFee: Decimal;
         if (fill) {
           exitPrice = fill.filledPrice;
+          closeFee = money(fill.fee);
         } else {
           exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
+          closeFee = money(exitPrice)
+            .times(position.size)
+            .times(options.feePct / 100);
         }
 
         const trade = yield* repo.closePosition(
@@ -176,10 +181,6 @@ export function runFuturesPaperTradingIteration(
           currentCandle.timestamp,
         );
 
-        const closeNotional = money(exitPrice).times(position.size);
-        const closeFee = closeNotional
-          .times(options.feePct / 100)
-          .plus(fill?.fee ?? 0);
         capital = capital.plus(money(trade.pnl)).minus(closeFee);
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
@@ -282,9 +283,7 @@ export function runFuturesPaperTradingIteration(
       });
 
       const filledPrice = money(fill.filledPrice);
-      const filledSize = money(fill.filledQty);
-      const openNotional = filledPrice.times(filledSize);
-      const openFee = openNotional.times(options.feePct / 100).plus(fill.fee);
+      const openFee = money(fill.fee);
       capital = capital.minus(openFee);
 
       const atr = options.useAtrStops ? calculateATR(candles, 14) : null;

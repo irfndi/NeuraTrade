@@ -49,5 +49,6 @@ describe("backtest funding cost integration", () => {
     expect(runB.totalTrades).toBeGreaterThan(0);
     expect(runB.totalFundingCost).toBeGreaterThan(0);
     expect(runB.totalReturnPct).toBeLessThan(runA.totalReturnPct);
+    expect(runB.totalFundingCost).toBeLessThan(20_000);
   });
 });
