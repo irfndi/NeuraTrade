@@ -210,17 +210,28 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     for (let i = 0; i < 20; i++) {
       const size = 0.01 + Math.random() * 0.09;
       const leverage = 1 + Math.floor(Math.random() * 20);
-      const initialBalance = await run(
+      const adapter = Effect.runSync(
+        makeSimulatedFuturesExchangeAdapterService(mockGateway, {
+          USDT: 10_000,
+        }),
+      );
+      const freshLayer = Layer.succeed(FuturesExchangeAdapter, adapter);
+      const runFresh = <T>(effect: Effect.Effect<T, unknown, unknown>) =>
+        Effect.runPromise(
+          effect.pipe(Effect.provide(freshLayer)) as Effect.Effect<T, unknown>,
+        );
+
+      const initialBalance = await runFresh(
         Effect.gen(function* () {
-          const adapter = yield* FuturesExchangeAdapter;
-          return yield* adapter.getBalance("USDT");
+          const a = yield* FuturesExchangeAdapter;
+          return yield* a.getBalance("USDT");
         }),
       );
 
-      await run(
+      await runFresh(
         Effect.gen(function* () {
-          const adapter = yield* FuturesExchangeAdapter;
-          yield* adapter.placeOrder({
+          const a = yield* FuturesExchangeAdapter;
+          yield* a.placeOrder({
             symbol: "BTC/USDT:USDT",
             side: "buy",
             type: "market",
@@ -229,7 +240,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             marginMode: "crossed",
             leverage,
           });
-          return yield* adapter.closePosition({
+          return yield* a.closePosition({
             symbol: "BTC/USDT:USDT",
             side: "sell",
             productType: "USDT-FUTURES",
@@ -240,17 +251,17 @@ describe("SimulatedFuturesExchangeAdapter", () => {
         }),
       );
 
-      const finalBalance = await run(
+      const finalBalance = await runFresh(
         Effect.gen(function* () {
-          const adapter = yield* FuturesExchangeAdapter;
-          return yield* adapter.getBalance("USDT");
+          const a = yield* FuturesExchangeAdapter;
+          return yield* a.getBalance("USDT");
         }),
       );
 
-      const position = await run(
+      const position = await runFresh(
         Effect.gen(function* () {
-          const adapter = yield* FuturesExchangeAdapter;
-          return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+          const a = yield* FuturesExchangeAdapter;
+          return yield* a.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
         }),
       );
 
