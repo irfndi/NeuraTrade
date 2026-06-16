@@ -37,7 +37,11 @@ describe("BitgetConfig", () => {
       );
       expect(config.useSandbox).toBe(true);
     } finally {
-      process.env.BITGET_USE_SANDBOX = original;
+      if (original === undefined) {
+        delete process.env.BITGET_USE_SANDBOX;
+      } else {
+        process.env.BITGET_USE_SANDBOX = original;
+      }
     }
   });
 

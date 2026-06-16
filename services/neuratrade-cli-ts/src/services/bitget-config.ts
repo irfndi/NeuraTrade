@@ -5,7 +5,15 @@
  * never live in config.json. The optional sandbox flag lets users point at
  * Bitget's demo trading environment when available.
  */
-import { Context, Data, Effect, Layer } from "effect";
+import {
+  Config,
+  ConfigError,
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Redacted,
+} from "effect";
 import type { BitgetCredentials } from "./bitget-client.ts";
 
 export class BitgetConfigError extends Data.TaggedError("BitgetConfigError")<{
@@ -22,29 +30,30 @@ export class BitgetConfig extends Context.Tag("BitgetConfig")<
   BitgetConfigData
 >() {}
 
-function envString(key: string): string | undefined {
-  const value = process.env[key];
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  return trimmed !== "" ? trimmed : undefined;
-}
-
-function envBool(key: string): boolean {
-  const value = envString(key);
-  if (value === undefined) return false;
-  const lower = value.toLowerCase();
-  return lower === "true" || lower === "1" || lower === "yes" || lower === "on";
-}
-
-export const BitgetConfigLive: Layer.Layer<BitgetConfig, never> = Layer.effect(
+export const BitgetConfigLive: Layer.Layer<
   BitgetConfig,
-  Effect.sync(() => {
-    const apiKey = envString("BITGET_API_KEY") ?? "";
-    const apiSecret = envString("BITGET_API_SECRET") ?? "";
-    const passphrase = envString("BITGET_PASSPHRASE") ?? "";
-    const useSandbox = envBool("BITGET_USE_SANDBOX");
+  ConfigError.ConfigError
+> = Layer.effect(
+  BitgetConfig,
+  Effect.gen(function* () {
+    const apiKey = yield* Config.redacted("BITGET_API_KEY").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const apiSecret = yield* Config.redacted("BITGET_API_SECRET").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const passphrase = yield* Config.redacted("BITGET_PASSPHRASE").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const useSandbox = yield* Config.boolean("BITGET_USE_SANDBOX").pipe(
+      Config.withDefault(false),
+    );
     return {
-      credentials: { apiKey, apiSecret, passphrase },
+      credentials: {
+        apiKey: Redacted.value(apiKey),
+        apiSecret: Redacted.value(apiSecret),
+        passphrase: Redacted.value(passphrase),
+      },
       useSandbox,
     };
   }),

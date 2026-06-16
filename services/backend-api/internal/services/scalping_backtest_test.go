@@ -1777,6 +1777,73 @@ func TestBacktestExitLevels_Symmetric(t *testing.T) {
 	})
 }
 
+func TestScalpingBacktestEngine_UpdateDynamicStop(t *testing.T) {
+	cfg := ScalpingBacktestConfig{
+		InitialCapital: decimal.NewFromInt(10000),
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  true,
+			StopLossPct:         0.01,
+			TakeProfitPct:       0.02,
+			BreakevenEnabled:    true,
+			BreakevenTriggerPct: 0.015,
+			BreakevenOffsetPct:  0.005,
+			TrailingStopEnabled: true,
+			TrailingStopPct:     0.01,
+		},
+	}
+	engine := NewScalpingBacktestEngine(nil, cfg)
+
+	pos := &SimulatedPosition{
+		Side:       "buy",
+		EntryPrice: decimal.NewFromFloat(100),
+		StopLoss:   decimal.NewFromFloat(99),
+		TakeProfit: decimal.NewFromFloat(102),
+		HighPrice:  decimal.NewFromFloat(100),
+		LowPrice:   decimal.NewFromFloat(100),
+	}
+
+	closeEnough := func(a, b decimal.Decimal) bool {
+		return a.Sub(b).Abs().LessThan(decimal.NewFromFloat(1e-9))
+	}
+
+	// Price moves to the breakeven trigger: stop should move to entry + offset.
+	// The observed high here is low enough that the trailing stop is below the
+	// breakeven level, so the stop lands at the breakeven price.
+	engine.updateDynamicStop(pos, HistoricalSignal{
+		Signal: MarketSignal{Price: 101.6, Low: 101.5, High: 101.0},
+	})
+	require.True(t, pos.BreakevenTriggered)
+	require.True(t, closeEnough(pos.StopLoss, decimal.NewFromFloat(100.5)), "breakeven stop = %s", pos.StopLoss)
+
+	// A later candle sets a new higher high; the trailing stop should tighten.
+	engine.updateDynamicStop(pos, HistoricalSignal{
+		Signal: MarketSignal{Price: 100.8, Low: 100.7, High: 101.7},
+	})
+	// Trailing stop = highest high (101.7) * (1 - 0.01) = 100.683
+	require.True(t, closeEnough(pos.StopLoss, decimal.NewFromFloat(100.683)), "trailing stop = %s", pos.StopLoss)
+
+	sellPos := &SimulatedPosition{
+		Side:       "sell",
+		EntryPrice: decimal.NewFromFloat(100),
+		StopLoss:   decimal.NewFromFloat(101),
+		TakeProfit: decimal.NewFromFloat(98),
+		HighPrice:  decimal.NewFromFloat(100),
+		LowPrice:   decimal.NewFromFloat(100),
+	}
+	engine.updateDynamicStop(sellPos, HistoricalSignal{
+		Signal: MarketSignal{Price: 98.4, Low: 99.0, High: 98.5},
+	})
+	require.True(t, sellPos.BreakevenTriggered)
+	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.5)), "sell breakeven stop = %s", sellPos.StopLoss)
+
+	// A later candle sets a new lower low; the trailing stop should tighten.
+	engine.updateDynamicStop(sellPos, HistoricalSignal{
+		Signal: MarketSignal{Price: 98.6, Low: 98.3, High: 98.7},
+	})
+	// Trailing stop = lowest low (98.3) * (1 + 0.01) = 99.283
+	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.283)), "sell trailing stop = %s", sellPos.StopLoss)
+}
+
 type markerSQLiteShim struct {
 	pool *database.SQLiteDB
 }

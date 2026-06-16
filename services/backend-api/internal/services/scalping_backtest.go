@@ -265,18 +265,21 @@ type SignalEvaluation struct {
 }
 
 type SimulatedPosition struct {
-	Symbol      string
-	Side        string
-	Size        decimal.Decimal
-	Notional    decimal.Decimal
-	EntryPrice  decimal.Decimal
-	EntryTime   time.Time
-	StopLoss    decimal.Decimal
-	TakeProfit  decimal.Decimal
-	RegimeEntry string
-	Signal      MarketSignal
-	Decision    *AITradingDecision
-	HoldCandles int
+	Symbol             string
+	Side               string
+	Size               decimal.Decimal
+	Notional           decimal.Decimal
+	EntryPrice         decimal.Decimal
+	EntryTime          time.Time
+	StopLoss           decimal.Decimal
+	TakeProfit         decimal.Decimal
+	RegimeEntry        string
+	Signal             MarketSignal
+	Decision           *AITradingDecision
+	HoldCandles        int
+	HighPrice          decimal.Decimal
+	LowPrice           decimal.Decimal
+	BreakevenTriggered bool
 }
 
 type SimulatedTrade struct {
@@ -386,6 +389,8 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			if !signal.Timestamp.Equal(position.EntryTime) {
 				position.HoldCandles++
 			}
+			e.updateDynamicStop(position, signal)
+
 			markPrice := decimal.NewFromFloat(signal.Signal.Price)
 			candleLow := decimal.NewFromFloat(signal.Signal.Low)
 			candleHigh := decimal.NewFromFloat(signal.Signal.High)
@@ -739,9 +744,84 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 		RegimeEntry: e.classifyRegime(signal.Signal),
 		Signal:      signal.Signal,
 		Decision:    decision,
+		HighPrice:   entryPrice,
+		LowPrice:    entryPrice,
 	}
 
 	return position, nil
+}
+
+// updateDynamicStop adjusts the simulated position's stop-loss according to
+// the configured breakeven and trailing-stop behaviour. It mirrors the live
+// asymmetric exit intent: once price moves favourably by the breakeven trigger,
+// the stop is moved to entry plus a small offset; after that, the stop trails
+// the favourable extreme by TrailingStopPct.
+func (e *ScalpingBacktestEngine) updateDynamicStop(
+	position *SimulatedPosition,
+	signal HistoricalSignal,
+) {
+	cfg := e.config.AsymmetricExit.Normalized()
+	if !cfg.UseAsymmetricExits {
+		return
+	}
+	if !cfg.BreakevenEnabled && !cfg.TrailingStopEnabled {
+		return
+	}
+
+	markPrice := decimal.NewFromFloat(signal.Signal.Price)
+	candleLow := decimal.NewFromFloat(signal.Signal.Low)
+	candleHigh := decimal.NewFromFloat(signal.Signal.High)
+	if candleHigh.GreaterThan(position.HighPrice) {
+		position.HighPrice = candleHigh
+	}
+	if position.LowPrice.IsZero() || candleLow.LessThan(position.LowPrice) {
+		position.LowPrice = candleLow
+	}
+
+	entry := position.EntryPrice
+	one := decimal.NewFromInt(1)
+	side := strings.ToLower(strings.TrimSpace(position.Side))
+
+	if cfg.BreakevenEnabled {
+		triggerPct := decimal.NewFromFloat(cfg.BreakevenTriggerPct)
+		offsetPct := decimal.NewFromFloat(cfg.BreakevenOffsetPct)
+		switch side {
+		case "buy":
+			triggerPrice := entry.Mul(one.Add(triggerPct))
+			if !position.BreakevenTriggered && markPrice.GreaterThanOrEqual(triggerPrice) {
+				newStop := entry.Mul(one.Add(offsetPct))
+				if newStop.GreaterThan(position.StopLoss) {
+					position.StopLoss = newStop
+				}
+				position.BreakevenTriggered = true
+			}
+		case "sell":
+			triggerPrice := entry.Mul(one.Sub(triggerPct))
+			if !position.BreakevenTriggered && markPrice.LessThanOrEqual(triggerPrice) {
+				newStop := entry.Mul(one.Sub(offsetPct))
+				if newStop.LessThan(position.StopLoss) || position.StopLoss.IsZero() {
+					position.StopLoss = newStop
+				}
+				position.BreakevenTriggered = true
+			}
+		}
+	}
+
+	if cfg.TrailingStopEnabled && position.BreakevenTriggered {
+		trailPct := decimal.NewFromFloat(cfg.TrailingStopPct)
+		switch side {
+		case "buy":
+			newStop := position.HighPrice.Mul(one.Sub(trailPct))
+			if newStop.GreaterThan(position.StopLoss) {
+				position.StopLoss = newStop
+			}
+		case "sell":
+			newStop := position.LowPrice.Mul(one.Add(trailPct))
+			if newStop.LessThan(position.StopLoss) || position.StopLoss.IsZero() {
+				position.StopLoss = newStop
+			}
+		}
+	}
 }
 
 func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal, position *SimulatedPosition) ScalpingBacktestTrade {
