@@ -693,7 +693,15 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 
 	stopLoss := decision.StopLoss
 	takeProfit := decision.TakeProfit
-	if stopLoss == nil || takeProfit == nil {
+	if e.config.AsymmetricExit.UseAsymmetricExits {
+		// When asymmetric exits are explicitly enabled, use them even if the
+		// decision path supplied its own SL/TP, so backtests honour the
+		// configured stop/target distances and optional breakeven/trailing
+		// behaviour rather than silently ignoring them.
+		sl, tp := backtestExitLevels(signal.Signal.Price, decision.Action, 1, e.config.AsymmetricExit)
+		stopLoss = &sl
+		takeProfit = &tp
+	} else if stopLoss == nil || takeProfit == nil {
 		sl, tp := backtestExitLevels(signal.Signal.Price, decision.Action, 1, e.config.AsymmetricExit)
 		if stopLoss == nil {
 			stopLoss = &sl
