@@ -28,7 +28,10 @@ function collectLogs(
     });
   });
 
-  const loggerLayer = EffectLogger.replace(EffectLogger.defaultLogger, collector);
+  const loggerLayer = EffectLogger.replace(
+    EffectLogger.defaultLogger,
+    collector,
+  );
   const minLevel = options?.minimumLogLevel ?? LogLevel.Trace;
 
   const runnable = program.pipe(

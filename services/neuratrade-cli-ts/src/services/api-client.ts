@@ -37,7 +37,11 @@ export class JsonParseError extends Data.TaggedError("JsonParseError")<{
   readonly endpoint: string;
 }> {}
 
-export type ApiClientError = HttpError | NetworkError | TimeoutError | JsonParseError;
+export type ApiClientError =
+  | HttpError
+  | NetworkError
+  | TimeoutError
+  | JsonParseError;
 
 // ---------------------------------------------------------------------------
 // Request / Response types (mirror Go structs)
@@ -132,10 +136,7 @@ export interface ApiClientImpl {
   readonly getAIModels: (
     provider?: string,
   ) => Effect.Effect<AIModelsResponse, ApiClientError>;
-  readonly getPortfolio: () => Effect.Effect<
-    PortfolioResponse,
-    ApiClientError
-  >;
+  readonly getPortfolio: () => Effect.Effect<PortfolioResponse, ApiClientError>;
   readonly getBalance: (
     chatId: string,
   ) => Effect.Effect<BalanceResponse, ApiClientError>;

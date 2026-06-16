@@ -1,0 +1,19 @@
+{
+  "code": "00000",
+  "msg": "success",
+  "requestTime": 1704067200000,
+  "data": [
+    {
+      "symbol": "BTCUSDT",
+      "baseCoin": "BTC",
+      "quoteCoin": "USDT",
+      "status": "online"
+    },
+    {
+      "symbol": "BROKENUSDT",
+      "baseCoin": "BROKEN",
+      "quoteCoin": "USDT",
+      "status": "offline"
+    }
+  ]
+}

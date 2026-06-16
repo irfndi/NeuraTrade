@@ -46,9 +46,14 @@ describe("SimulatedExchangeAdapter", () => {
     });
 
     const fill = await Effect.runPromise(
-      adapter.placeOrder({ symbol: "BTC/USDT", side: "buy", type: "market", quantity: 0.1 }).pipe(
-        Effect.provideService(MarketDataGateway, gateway),
-      ),
+      adapter
+        .placeOrder({
+          symbol: "BTC/USDT",
+          side: "buy",
+          type: "market",
+          quantity: 0.1,
+        })
+        .pipe(Effect.provideService(MarketDataGateway, gateway)),
     );
 
     expect(fill.symbol).toBe("BTC/USDT");
@@ -57,7 +62,9 @@ describe("SimulatedExchangeAdapter", () => {
     expect(fill.filledPrice).toBe(70_070);
 
     const position = await Effect.runPromise(
-      adapter.getPosition("BTC/USDT").pipe(Effect.provideService(MarketDataGateway, gateway)),
+      adapter
+        .getPosition("BTC/USDT")
+        .pipe(Effect.provideService(MarketDataGateway, gateway)),
     );
     expect(position).not.toBeNull();
     expect(position?.side).toBe("long");
@@ -84,20 +91,29 @@ describe("SimulatedExchangeAdapter", () => {
     });
 
     await Effect.runPromise(
-      adapter.placeOrder({ symbol: "BTC/USDT", side: "buy", type: "market", quantity: 0.1 }).pipe(
-        Effect.provideService(MarketDataGateway, gateway),
-      ),
+      adapter
+        .placeOrder({
+          symbol: "BTC/USDT",
+          side: "buy",
+          type: "market",
+          quantity: 0.1,
+        })
+        .pipe(Effect.provideService(MarketDataGateway, gateway)),
     );
 
     const fill = await Effect.runPromise(
-      adapter.closePosition("BTC/USDT").pipe(Effect.provideService(MarketDataGateway, gateway)),
+      adapter
+        .closePosition("BTC/USDT")
+        .pipe(Effect.provideService(MarketDataGateway, gateway)),
     );
 
     expect(fill).not.toBeNull();
     expect(fill?.side).toBe("sell");
 
     const position = await Effect.runPromise(
-      adapter.getPosition("BTC/USDT").pipe(Effect.provideService(MarketDataGateway, gateway)),
+      adapter
+        .getPosition("BTC/USDT")
+        .pipe(Effect.provideService(MarketDataGateway, gateway)),
     );
     expect(position).toBeNull();
   });

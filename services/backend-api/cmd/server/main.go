@@ -587,14 +587,16 @@ func run() error {
 		return fmt.Errorf("failed to setup routes: %w", err)
 	}
 	defer cleanupRoutes()
-	// Create HTTP server with security timeouts
+	// Create HTTP server with security timeouts. Timeouts can be overridden
+	// via environment variables to accommodate long-running research endpoints
+	// such as multi-year scalping backtests while keeping safe defaults.
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:           router,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       15 * time.Second,
+		ReadTimeout:       parseDurationEnv("NEURATRADE_HTTP_READ_TIMEOUT", 10*time.Second),
+		WriteTimeout:      parseDurationEnv("NEURATRADE_HTTP_WRITE_TIMEOUT", 10*time.Second),
+		ReadHeaderTimeout: parseDurationEnv("NEURATRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		IdleTimeout:       parseDurationEnv("NEURATRADE_HTTP_IDLE_TIMEOUT", 15*time.Second),
 	}
 
 	// Start server in a goroutine
@@ -711,6 +713,21 @@ func getEnvFloatWithDefault(key string, fallback float64) float64 {
 	}
 	parsed, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+// parseDurationEnv parses a duration from an environment variable.
+// It accepts Go duration strings (e.g. "30m", "2h") and falls back to the
+// provided default when the variable is missing or invalid.
+func parseDurationEnv(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 	return parsed

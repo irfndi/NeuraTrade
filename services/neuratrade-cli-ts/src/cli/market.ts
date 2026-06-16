@@ -34,7 +34,9 @@ const daysOption = Options.integer("days").pipe(
 
 const batchOption = Options.integer("batch").pipe(
   Options.withDefault(1000),
-  Options.withDescription("Candles per exchange request (max 1000 for Binance)"),
+  Options.withDescription(
+    "Candles per exchange request (max 1000 for Binance)",
+  ),
 );
 
 const topOption = Options.integer("top").pipe(
@@ -65,7 +67,11 @@ const STABLECOIN_BASES = new Set([
 ]);
 
 function makeLayer(home?: string) {
-  return Layer.mergeAll(BunContext.layer, PathLive(home), MarketDataGatewayLive);
+  return Layer.mergeAll(
+    BunContext.layer,
+    PathLive(home),
+    MarketDataGatewayLive,
+  );
 }
 
 export const fetchCandlesCommand = Command.make(
@@ -86,9 +92,17 @@ export const fetchCandlesCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* fetchCandlesProgram({ exchange, symbol, timeframe, days, batch }).pipe(
+      const result = yield* fetchCandlesProgram({
+        exchange,
+        symbol,
+        timeframe,
+        days,
+        batch,
+      }).pipe(
         Effect.provide(repoLayer),
-        Effect.tap((total) => Console.log(`Fetched and stored ${total} candles`)),
+        Effect.tap((total) =>
+          Console.log(`Fetched and stored ${total} candles`),
+        ),
         Effect.catchAll((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-candles failed: ${err.reason}`);
@@ -100,7 +114,9 @@ export const fetchCandlesCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Fetch historical OHLCV candles from an exchange"));
+).pipe(
+  Command.withDescription("Fetch historical OHLCV candles from an exchange"),
+);
 
 interface FetchCandlesArgs {
   readonly exchange: string;
@@ -136,7 +152,9 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
 
       if (candles.length === 0) break;
 
-      const filtered = candles.filter((c) => c.timestamp.getTime() >= startTime);
+      const filtered = candles.filter(
+        (c) => c.timestamp.getTime() >= startTime,
+      );
       if (filtered.length === 0) break;
 
       const saved = yield* repo.saveCandles(filtered);
@@ -200,7 +218,15 @@ export const fetchUniverseCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* fetchUniverseProgram({ exchange, timeframe, days, batch, top, quote, minVolume }).pipe(
+      const result = yield* fetchUniverseProgram({
+        exchange,
+        timeframe,
+        days,
+        batch,
+        top,
+        quote,
+        minVolume,
+      }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((summary) =>
           Console.log(
@@ -218,7 +244,11 @@ export const fetchUniverseCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Fetch historical candles for the top-volume symbol universe"));
+).pipe(
+  Command.withDescription(
+    "Fetch historical candles for the top-volume symbol universe",
+  ),
+);
 
 export function fetchUniverseProgram(args: FetchUniverseArgs) {
   return Effect.gen(function* () {
@@ -246,7 +276,9 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
       );
     }
 
-    yield* Console.log(`Loading 24h volumes to rank ${quoteSymbols.length} ${args.quote} symbols...`);
+    yield* Console.log(
+      `Loading 24h volumes to rank ${quoteSymbols.length} ${args.quote} symbols...`,
+    );
     const volumes = yield* gateway.fetch24hrVolumes(args.exchange);
 
     const ranked = quoteSymbols
@@ -259,7 +291,9 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
       .slice(0, args.top)
       .map((s) => s.symbol);
 
-    yield* Console.log(`Fetching ${ranked.length} symbols: ${ranked.join(", ")}`);
+    yield* Console.log(
+      `Fetching ${ranked.length} symbols: ${ranked.join(", ")}`,
+    );
 
     let totalCandles = 0;
     for (const symbol of ranked) {
@@ -279,7 +313,9 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
 }
 
 export const marketCommand = Command.make("market", {}, () =>
-  Console.log("Market data commands. Use 'market fetch-candles|fetch-universe --help' for details."),
+  Console.log(
+    "Market data commands. Use 'market fetch-candles|fetch-universe --help' for details.",
+  ),
 ).pipe(
   Command.withDescription("Market data operations"),
   Command.withSubcommands([fetchCandlesCommand, fetchUniverseCommand]),

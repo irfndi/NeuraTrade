@@ -36,6 +36,5 @@ export interface ExchangeAdapterService {
   ) => Effect.Effect<OrderFill | null, ExchangeError, MarketDataGatewayService>;
 }
 
-export const ExchangeAdapter = Context.GenericTag<ExchangeAdapterService>(
-  "ExchangeAdapter",
-);
+export const ExchangeAdapter =
+  Context.GenericTag<ExchangeAdapterService>("ExchangeAdapter");

@@ -24,7 +24,12 @@ describe("BinanceLiveExchangeAdapter", () => {
 
     const result = await Effect.runPromise(
       Effect.either(
-        adapter.placeOrder({ symbol: "BTC/USDT", side: "buy", type: "market", quantity: 0.001 }),
+        adapter.placeOrder({
+          symbol: "BTC/USDT",
+          side: "buy",
+          type: "market",
+          quantity: 0.001,
+        }),
       ).pipe(Effect.provideService(MarketDataGateway, dummyGateway)),
     );
 

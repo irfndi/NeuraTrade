@@ -44,6 +44,10 @@ type RunScalpingBacktestRequest struct {
 	// Mode selects the decision pipeline: "deterministic" (default) or
 	// "ai". See services.ScalpingBacktestConfig.Mode for semantics.
 	Mode *string `json:"mode"`
+	// SummaryOnly returns only the summary and gate_summary, omitting the
+	// per-signal and per-trade arrays. Useful for long date ranges and
+	// mixed ticker universes where the full response would be huge.
+	SummaryOnly bool `json:"summary_only"`
 }
 
 type RunScalpingBacktestResponse struct {
@@ -194,15 +198,18 @@ func (h *ScalpingBacktestHandler) RunScalpingBacktest(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, RunScalpingBacktestResponse{
+	resp := RunScalpingBacktestResponse{
 		RunID:       runID,
 		Status:      "completed",
 		Mode:        apiResult.Mode,
 		Summary:     apiResult.Summary,
-		Signals:     apiResult.Signals,
-		Trades:      apiResult.Trades,
 		GateSummary: apiResult.GateSummary,
-	})
+	}
+	if !req.SummaryOnly {
+		resp.Signals = apiResult.Signals
+		resp.Trades = apiResult.Trades
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *ScalpingBacktestHandler) GetScalpingBacktest(c *gin.Context) {

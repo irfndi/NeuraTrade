@@ -371,10 +371,7 @@ describe("GatewayOrchestrator service", () => {
 
       const state = readState(home);
       expect(state["mode"]).toBe("warming");
-      const services = state["services"] as Record<
-        string,
-        { status: string }
-      >;
+      const services = state["services"] as Record<string, { status: string }>;
       expect(services["backend"]["status"]).toBe("warming");
     });
 
@@ -397,10 +394,7 @@ describe("GatewayOrchestrator service", () => {
         );
         throw new Error("Expected failure");
       } catch (err) {
-        if (
-          err instanceof Error &&
-          err.message === "Expected failure"
-        ) {
+        if (err instanceof Error && err.message === "Expected failure") {
           throw err;
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -438,9 +432,7 @@ describe("GatewayOrchestrator service", () => {
         { status: string; detail?: string }
       >;
       expect(services["ccxt"]["status"]).toBe("external");
-      expect(services["ccxt"]["detail"]).toBe(
-        "external endpoint configured",
-      );
+      expect(services["ccxt"]["detail"]).toBe("external endpoint configured");
     });
 
     it("sets ccxt to external when CCXT_GRPC_ADDRESS is set", async () => {
@@ -556,10 +548,7 @@ describe("GatewayOrchestrator service", () => {
       expect(mockState.startCalls[1]["env"]["NODE_ENV"]).toBe("production");
 
       const state = readState(home);
-      const services = state["services"] as Record<
-        string,
-        { status: string }
-      >;
+      const services = state["services"] as Record<string, { status: string }>;
       expect(services["telegram"]["status"]).toBe("healthy");
     });
 
@@ -605,10 +594,7 @@ describe("GatewayOrchestrator service", () => {
 
       const state = readState(home);
       expect(state["mode"]).toBe("warming");
-      const services = state["services"] as Record<
-        string,
-        { status: string }
-      >;
+      const services = state["services"] as Record<string, { status: string }>;
       expect(services["backend"]["status"]).toBe("healthy");
       expect(services["telegram"]["status"]).toBe("warming");
     });
@@ -777,12 +763,14 @@ describe("GatewayOrchestrator service", () => {
             probedUrl = url;
             return { healthy: true, detail: "ok" };
           }),
-        waitForHealthy: () =>
-          Effect.succeed({ healthy: true, detail: "ok" }),
-        probeProcess: () =>
-          Effect.succeed({ running: true, detail: "ok" }),
+        waitForHealthy: () => Effect.succeed({ healthy: true, detail: "ok" }),
+        probeProcess: () => Effect.succeed({ running: true, detail: "ok" }),
         probeHealthJSON: (_url: string, _timeoutMs: number) =>
-          Effect.succeed({ ok: true, status: "healthy", services: { database: "healthy" } }),
+          Effect.succeed({
+            ok: true,
+            status: "healthy",
+            services: { database: "healthy" },
+          }),
       };
       const pm = createMockPM(mockProc, mockState);
 

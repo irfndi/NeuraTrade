@@ -160,8 +160,7 @@ function resolveJWTSecret(local: LocalConfigData): string {
 
 function resolveChatID(local: LocalConfigData): string {
   if (local.telegram?.chat_id) return local.telegram.chat_id;
-  if (local.services?.telegram?.chat_id)
-    return local.services.telegram.chat_id;
+  if (local.services?.telegram?.chat_id) return local.services.telegram.chat_id;
   if (local.telegram_test_chat_id) return local.telegram_test_chat_id;
   return "";
 }
@@ -491,7 +490,9 @@ function applyEnvOverrides(
 
   // Server port: env(SERVER_PORT | PORT | BACKEND_HOST_PORT) → current
   const portStr =
-    envString("SERVER_PORT") ?? envString("PORT") ?? envString("BACKEND_HOST_PORT");
+    envString("SERVER_PORT") ??
+    envString("PORT") ??
+    envString("BACKEND_HOST_PORT");
   if (portStr) {
     const port = parseInt(portStr, 10);
     if (port > 0 && port < 65536) {

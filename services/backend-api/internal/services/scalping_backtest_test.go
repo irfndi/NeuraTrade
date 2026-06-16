@@ -544,7 +544,7 @@ func TestMapPointToHistoricalSignal(t *testing.T) {
 	}
 	metrics := scalping24hWindowMetrics{High24h: 101, Low24h: 99, Volume24h: 2400}
 
-	signal := mapPointToHistoricalSignal(point, metrics, 1.25, DefaultScalpingBacktestSpreadMultiplier, 0, 0, 0, 0, 0, 0)
+	signal := mapPointToHistoricalSignal(point, metrics, 1.25, DefaultScalpingBacktestSpreadMultiplier, 0, 0, 0, 0)
 
 	assert.Equal(t, point.timestamp, signal.Timestamp)
 	assert.Equal(t, point.symbol, signal.Symbol)
@@ -798,7 +798,7 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksSellWhenBroadTrendIsPositive(
 	now := time.Date(2026, 5, 12, 2, 47, 30, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "ONDO/USDT",
 		Price:              0.3855,
 		High24h:            0.40,
@@ -819,7 +819,7 @@ func TestScalpingBacktestEngine_BuildDecisionRejectsObservedPullbackBuy(t *testi
 	now := time.Date(2026, 5, 12, 2, 47, 45, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "ONDO/USDT",
 		Price:              0.379,
 		High24h:            0.40,
@@ -840,7 +840,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 	now := time.Date(2026, 5, 12, 2, 47, 50, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "CHZ/USDT",
 		Price:              0.04983,
 		High24h:            0.05,
@@ -862,7 +862,7 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *te
 	now := time.Date(2026, 5, 20, 18, 2, 30, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "DASH/USDT",
 		Price:              123.9,
 		High24h:            124.2,
@@ -885,7 +885,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedReversalBuy(t *testi
 	engine.config.RequireRecentMomentum = true
 	engine.config.MinRecentMomentumPct = 0.05
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "REV/USDT",
 		Price:              100,
 		High24h:            115,
@@ -911,7 +911,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedSellWindow(t *testin
 	engine.config.MinRecentMomentumPct = 0.05
 	engine.config.MaxBidAskSpreadPct = 0.08
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "SW/USDT",
 		Price:              100,
 		High24h:            115,
@@ -1376,6 +1376,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 	engine := newRunSignalsTestEngine(now)
 	engine.config.RequireRecentMomentum = true
 	engine.config.MinRecentMomentumPct = 0.05
+	engine.config.EndTime = now.Add(5 * time.Minute)
 
 	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
 		Timestamp: now,
@@ -1698,6 +1699,149 @@ func TestIsSQLiteTradingPairDB_HandlersAdapterRegression(t *testing.T) {
 	require.False(t, isSQLiteTradingPairDB(nil))
 	require.False(t, isSQLiteTradingPairDB(markerNonSQLiteShim{}),
 		"shim whose IsSQLitePool()=false must not match")
+}
+
+func TestScalpingBacktestConfig_AsymmetricExit(t *testing.T) {
+	cfg := ScalpingBacktestConfig{
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  true,
+			StopLossPct:         0.005,
+			TakeProfitPct:       0.015,
+			BreakevenEnabled:    true,
+			TrailingStopEnabled: true,
+		},
+	}
+	require.True(t, cfg.AsymmetricExit.UseAsymmetricExits)
+	require.Equal(t, 0.005, cfg.AsymmetricExit.StopLossPct)
+	require.Equal(t, 0.015, cfg.AsymmetricExit.TakeProfitPct)
+	require.True(t, cfg.AsymmetricExit.BreakevenEnabled)
+	require.True(t, cfg.AsymmetricExit.TrailingStopEnabled)
+
+	engine := NewScalpingBacktestEngine(nil, cfg)
+	require.True(t, engine.config.AsymmetricExit.UseAsymmetricExits)
+	require.Equal(t, 0.005, engine.config.AsymmetricExit.StopLossPct)
+	require.Equal(t, 0.015, engine.config.AsymmetricExit.TakeProfitPct)
+}
+
+func TestBacktestExitLevels_Asymmetric(t *testing.T) {
+	price := 100.0
+	cfg := AsymmetricExitConfig{
+		UseAsymmetricExits: true,
+		StopLossPct:        0.005,
+		TakeProfitPct:      0.015,
+	}
+
+	t.Run("buy", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 10, cfg)
+		// SL = 100 * (1 - 0.005/10) = 100 * 0.9995 = 99.95
+		// TP = 100 * (1 + 0.015/10) = 100 * 1.0015 = 100.15
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.95)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(100.15)), "TP = %s", tp)
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "sell", 10, cfg)
+		// SL = 100 * (1 + 0.005/10) = 100 * 1.0005 = 100.05
+		// TP = 100 * (1 - 0.015/10) = 100 * 0.9985 = 99.85
+		require.True(t, sl.Equal(decimal.NewFromFloat(100.05)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(99.85)), "TP = %s", tp)
+	})
+
+	t.Run("no_leverage", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 0, cfg)
+		// leverage defaults to 1: SL = 99.5, TP = 101.5
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.5)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(101.5)), "TP = %s", tp)
+	})
+}
+
+func TestBacktestExitLevels_Symmetric(t *testing.T) {
+	price := 100.0
+	cfg := AsymmetricExitConfig{UseAsymmetricExits: false}
+
+	t.Run("buy", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "buy", 1, cfg)
+		// Default symmetric: 0.8% stop, 1.2% target
+		// SL = 100 * (1 - 0.008) = 99.2
+		// TP = 100 * (1 + 0.012) = 101.2
+		require.True(t, sl.Equal(decimal.NewFromFloat(99.2)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(101.2)), "TP = %s", tp)
+	})
+
+	t.Run("sell", func(t *testing.T) {
+		sl, tp := backtestExitLevels(price, "sell", 1, cfg)
+		// SL = 100 * (1 + 0.008) = 100.8
+		// TP = 100 * (1 - 0.012) = 98.8
+		require.True(t, sl.Equal(decimal.NewFromFloat(100.8)), "SL = %s", sl)
+		require.True(t, tp.Equal(decimal.NewFromFloat(98.8)), "TP = %s", tp)
+	})
+}
+
+func TestScalpingBacktestEngine_UpdateDynamicStop(t *testing.T) {
+	cfg := ScalpingBacktestConfig{
+		InitialCapital: decimal.NewFromInt(10000),
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  true,
+			StopLossPct:         0.01,
+			TakeProfitPct:       0.02,
+			BreakevenEnabled:    true,
+			BreakevenTriggerPct: 0.015,
+			BreakevenOffsetPct:  0.005,
+			TrailingStopEnabled: true,
+			TrailingStopPct:     0.01,
+		},
+	}
+	engine := NewScalpingBacktestEngine(nil, cfg)
+
+	pos := &SimulatedPosition{
+		Side:       "buy",
+		EntryPrice: decimal.NewFromFloat(100),
+		StopLoss:   decimal.NewFromFloat(99),
+		TakeProfit: decimal.NewFromFloat(102),
+		HighPrice:  decimal.NewFromFloat(100),
+		LowPrice:   decimal.NewFromFloat(100),
+	}
+
+	closeEnough := func(a, b decimal.Decimal) bool {
+		return a.Sub(b).Abs().LessThan(decimal.NewFromFloat(1e-9))
+	}
+
+	// Price moves to the breakeven trigger: stop should move to entry + offset.
+	// The observed high here is low enough that the trailing stop is below the
+	// breakeven level, so the stop lands at the breakeven price.
+	engine.updateDynamicStop(pos, HistoricalSignal{
+		Signal: MarketSignal{Price: 101.6, Low: 101.2, High: 101.3},
+	})
+	require.True(t, pos.BreakevenTriggered)
+	require.True(t, closeEnough(pos.StopLoss, decimal.NewFromFloat(100.5)), "breakeven stop = %s", pos.StopLoss)
+
+	// A later candle sets a new higher high; the trailing stop should tighten.
+	engine.updateDynamicStop(pos, HistoricalSignal{
+		Signal: MarketSignal{Price: 100.8, Low: 100.7, High: 101.7},
+	})
+	// Trailing stop = highest high (101.7) * (1 - 0.01) = 100.683
+	require.True(t, closeEnough(pos.StopLoss, decimal.NewFromFloat(100.683)), "trailing stop = %s", pos.StopLoss)
+
+	sellPos := &SimulatedPosition{
+		Side:       "sell",
+		EntryPrice: decimal.NewFromFloat(100),
+		StopLoss:   decimal.NewFromFloat(101),
+		TakeProfit: decimal.NewFromFloat(98),
+		HighPrice:  decimal.NewFromFloat(100),
+		LowPrice:   decimal.NewFromFloat(100),
+	}
+	engine.updateDynamicStop(sellPos, HistoricalSignal{
+		Signal: MarketSignal{Price: 98.4, Low: 98.3, High: 98.6},
+	})
+	require.True(t, sellPos.BreakevenTriggered)
+	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.5)), "sell breakeven stop = %s", sellPos.StopLoss)
+
+	// A later candle sets a new lower low; the trailing stop should tighten.
+	engine.updateDynamicStop(sellPos, HistoricalSignal{
+		Signal: MarketSignal{Price: 98.6, Low: 98.3, High: 98.6},
+	})
+	// Trailing stop = lowest low (98.3) * (1 + 0.01) = 99.283
+	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.283)), "sell trailing stop = %s", sellPos.StopLoss)
 }
 
 type markerSQLiteShim struct {

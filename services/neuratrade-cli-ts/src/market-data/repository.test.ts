@@ -52,7 +52,12 @@ describe("MarketDataRepositorySQLite", () => {
       )
       .all() as Array<{ name: string }>;
     const names = tables.map((t) => t.name).sort();
-    expect(names).toEqual(["exchanges", "market_data", "ohlcv_data", "trading_pairs"]);
+    expect(names).toEqual([
+      "exchanges",
+      "market_data",
+      "ohlcv_data",
+      "trading_pairs",
+    ]);
   });
 
   it("saves and retrieves a tick", async () => {
@@ -70,7 +75,9 @@ describe("MarketDataRepositorySQLite", () => {
 
     await Effect.runPromise(repo.saveTick(tick));
 
-    const latest = await Effect.runPromise(repo.getLatestTick("binance", "BTC/USDT"));
+    const latest = await Effect.runPromise(
+      repo.getLatestTick("binance", "BTC/USDT"),
+    );
     expect(latest).not.toBeNull();
     expect(latest?.price).toBe(67_000);
     expect(latest?.bid).toBe(66_990);
@@ -196,7 +203,9 @@ describe("MarketDataRepositorySQLite", () => {
     await Effect.runPromise(repo.saveCandles(btc));
     await Effect.runPromise(repo.saveCandles(eth));
 
-    const symbols = await Effect.runPromise(repo.listSymbols("binance", "1h", 3));
+    const symbols = await Effect.runPromise(
+      repo.listSymbols("binance", "1h", 3),
+    );
     expect(symbols).toEqual(["BTC/USDT"]);
   });
 });

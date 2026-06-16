@@ -11,6 +11,12 @@ import { GatewayStateLive } from "./src/services/gateway-state.ts";
 import { ProcessManagerLive } from "./src/services/process-manager.ts";
 import { GatewayOrchestratorLive } from "./src/services/gateway-orchestrator.ts";
 import { ApiClientLive } from "./src/services/api-client.ts";
+import {
+  BitgetClient,
+  BitgetClientLiveConfig,
+} from "./src/services/bitget-client.ts";
+import { BitgetConfigLive } from "./src/services/bitget-config.ts";
+import { RateLimiterLive } from "./src/services/rate-limiter.ts";
 
 const cli = Command.run(rootCommand, {
   name: "NeuraTrade CLI",
@@ -33,6 +39,7 @@ function buildRootLayer() {
     BunFileSystem.layer,
     PathLive(home),
     LoggerLive,
+    BitgetConfigLive,
   );
   const pidFile = Layer.provide(PidFileLive, base);
   const withPidFile = Layer.merge(base, pidFile);
@@ -41,6 +48,9 @@ function buildRootLayer() {
   const gwState = Layer.provide(GatewayStateLive, base);
   const health = HealthCheckLive;
   const apiClient = buildApiClientLayer();
+  const bitgetClient = BitgetClientLiveConfig.pipe(
+    Layer.provide(RateLimiterLive()),
+  );
 
   const serviceLayers = Layer.mergeAll(
     config,
@@ -49,6 +59,7 @@ function buildRootLayer() {
     gwState,
     health,
     apiClient,
+    bitgetClient,
   );
   const orch = Layer.provide(GatewayOrchestratorLive, serviceLayers);
   const allServices = Layer.mergeAll(serviceLayers, orch);

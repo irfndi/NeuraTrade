@@ -39,6 +39,12 @@ type TradeDetails struct {
 	IntentID             string // idempotency cross-reference
 	ClientOrderID        string // idempotency key for the exchange
 	PreTradeSafetyStatus string // JSON snapshot of pre-trade safety check
+
+	// Asymmetric exit controls passed to execution for post-fill monitoring.
+	BreakevenEnabled    bool
+	BreakevenTriggerPct float64
+	TrailingStopEnabled bool
+	TrailingStopPct     float64
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service
@@ -208,6 +214,12 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 				slPercent = d.StopLoss.Sub(*d.EntryPrice).Div(*d.EntryPrice).Mul(decimal.NewFromInt(100)).InexactFloat64()
 			}
 			lines = append(lines, fmt.Sprintf("   🔴 SL: %s (%.1f%%)", formatPrice(*d.StopLoss), slPercent))
+		}
+		if d.BreakevenEnabled {
+			lines = append(lines, fmt.Sprintf("   ⏺️ Breakeven @ %.1f%%", d.BreakevenTriggerPct*100))
+		}
+		if d.TrailingStopEnabled {
+			lines = append(lines, fmt.Sprintf("   📉 Trailing stop @ %.1f%%", d.TrailingStopPct*100))
 		}
 		lines = append(lines, "")
 	}

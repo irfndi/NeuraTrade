@@ -1,20 +1,42 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
-import { MarketDataGateway, type MarketDataGatewayService } from "../market-data/gateway.js";
+import {
+  MarketDataGateway,
+  type MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
-import { ExchangeAdapter, type ExchangeAdapterService } from "../exchange/adapter.js";
+import {
+  ExchangeAdapter,
+  type ExchangeAdapterService,
+} from "../exchange/adapter.js";
 import { makeSimulatedExchangeAdapter } from "../exchange/adapters/simulated.js";
-import { RiskGuard, type RiskGuardService, makeRiskGuard } from "../risk/guards.js";
+import {
+  RiskGuard,
+  type RiskGuardService,
+  makeRiskGuard,
+} from "../risk/guards.js";
+import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
 import {
   PaperTradingRepository,
   type PaperTradingRepositoryService,
 } from "./repository.js";
 import type { PaperPosition, PaperTrade } from "./types.js";
-import { runPaperTradingIteration, type PaperTradingOptions } from "./engine.js";
+import {
+  runPaperTradingIteration,
+  type PaperTradingOptions,
+} from "./engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
 
-function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "flat" = "flat"): Candle[] {
+function makeCandles(
+  count: number,
+  baseClose = 100,
+  trend: "up" | "down" | "flat" = "flat",
+): Candle[] {
   const candles: Candle[] = [];
   let close = baseClose;
   for (let i = 0; i < count; i++) {
@@ -68,10 +90,17 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
-  closePosition(position: PaperPosition, exitPrice: number, exitReason: PaperTrade["exitReason"], closedAt: Date) {
+  closePosition(
+    position: PaperPosition,
+    exitPrice: number,
+    exitReason: PaperTrade["exitReason"],
+    closedAt: Date,
+  ) {
     return Effect.sync(() => {
       const priceDiff =
-        position.side === "long" ? exitPrice - position.entryPrice : position.entryPrice - exitPrice;
+        position.side === "long"
+          ? exitPrice - position.entryPrice
+          : position.entryPrice - exitPrice;
       const pnl = priceDiff * position.size;
       const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
       const trade: PaperTrade = {
@@ -96,7 +125,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getPortfolio() {
-    return Effect.succeed({ capital: this.capital, peakCapital: this.peakCapital });
+    return Effect.succeed({
+      capital: this.capital,
+      peakCapital: this.peakCapital,
+    });
   }
 
   setPortfolio(capital: number, peakCapital: number) {
@@ -117,6 +149,58 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   getTodayRealizedPnl() {
     return Effect.succeed(this.trades.reduce((sum, t) => sum + t.pnl, 0));
   }
+
+  getStartOfDayCapital(_date: Date, currentCapital: number) {
+    return Effect.succeed(currentCapital);
+  }
+}
+
+class InMemoryKillSwitch implements KillSwitchService {
+  private engaged = false;
+
+  engage(reason: string) {
+    return Effect.sync(() => {
+      this.engaged = true;
+    });
+  }
+
+  disengage() {
+    return Effect.sync(() => {
+      this.engaged = false;
+    });
+  }
+
+  isEngaged() {
+    return Effect.succeed(this.engaged);
+  }
+
+  getReason() {
+    return Effect.succeed("");
+  }
+}
+
+class InMemoryCircuitBreaker implements CircuitBreakerService {
+  constructor(private openState = false) {}
+
+  recordTradeResult(_realizedPnl: number) {
+    return Effect.void;
+  }
+
+  isOpen() {
+    return Effect.succeed(this.openState);
+  }
+
+  currentDailyLossPct() {
+    return Effect.succeed(0);
+  }
+
+  reset() {
+    return Effect.void;
+  }
+
+  getReason() {
+    return Effect.succeed("");
+  }
 }
 
 function makeGateway(price: number): MarketDataGatewayService {
@@ -131,7 +215,9 @@ function makeGateway(price: number): MarketDataGatewayService {
   };
 }
 
-function makeOptions(composerConfig: ComposerConfig = defaultComposerConfig): PaperTradingOptions {
+function makeOptions(
+  composerConfig: ComposerConfig = defaultComposerConfig,
+): PaperTradingOptions {
   return {
     exchange: "binance",
     symbol: "BTC/USDT",
@@ -169,6 +255,8 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(MarketDataGateway, gateway),
         Effect.provideService(ExchangeAdapter, adapter),
         Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
       ),
     );
 
@@ -197,11 +285,73 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(MarketDataGateway, gateway),
         Effect.provideService(ExchangeAdapter, adapter),
         Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
       ),
     );
 
     expect(result.action).toBe("hold");
     expect(result.note).toContain("RISK BLOCKED");
+    expect(result.position).toBeNull();
+  });
+
+  it("blocks entry when kill switch is engaged", async () => {
+    const repo = new InMemoryPaperRepository();
+    const gateway = makeGateway(100);
+    const adapter = makeSimulatedExchangeAdapter({ USDT: 10_000 });
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+    const killSwitch = new InMemoryKillSwitch();
+    Effect.runSync(killSwitch.engage("test"));
+
+    const result = await Effect.runPromise(
+      runPaperTradingIteration(makeOptions()).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(ExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, killSwitch),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("KILL SWITCH ENGAGED");
+    expect(result.position).toBeNull();
+  });
+
+  it("blocks entry when circuit breaker is open", async () => {
+    const repo = new InMemoryPaperRepository();
+    const gateway = makeGateway(100);
+    const adapter = makeSimulatedExchangeAdapter({ USDT: 10_000 });
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runPaperTradingIteration(makeOptions()).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(ExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("CIRCUIT BREAKER OPEN");
     expect(result.position).toBeNull();
   });
 });

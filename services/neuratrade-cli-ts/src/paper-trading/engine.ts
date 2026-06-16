@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
@@ -15,11 +15,17 @@ import {
   ExchangeError,
   type ExchangeAdapterService,
 } from "../exchange/adapter.js";
+import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import {
-  RiskError,
-  RiskGuard,
-  type RiskGuardService,
-} from "../risk/guards.js";
+  KillSwitch,
+  KillSwitchError,
+  type KillSwitchService,
+} from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerError,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -62,22 +68,39 @@ export function runPaperTradingIteration(
   options: PaperTradingOptions,
 ): Effect.Effect<
   PaperTradingIterationResult,
-  MarketDataError | PaperTradingRepositoryError | ExchangeError | RiskError,
-  MarketDataGatewayService | PaperTradingRepositoryService | ExchangeAdapterService | RiskGuardService
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | ExchangeError
+  | RiskError
+  | KillSwitchError
+  | CircuitBreakerError,
+  | MarketDataGatewayService
+  | PaperTradingRepositoryService
+  | ExchangeAdapterService
+  | RiskGuardService
+  | KillSwitchService
+  | CircuitBreakerService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
     const gateway = yield* MarketDataGateway;
     const adapter = yield* ExchangeAdapter;
+    const killSwitch = yield* KillSwitch;
+    const circuitBreaker = yield* CircuitBreaker;
 
     yield* repo.ensureTables();
 
     const portfolio = yield* repo.getPortfolio();
     let capital =
-      portfolio.capital <= 0 ? money(options.initialCapital) : money(portfolio.capital);
+      portfolio.capital <= 0
+        ? money(options.initialCapital)
+        : money(portfolio.capital);
     let peakCapital = Decimal.max(money(portfolio.peakCapital), capital);
 
-    let position = yield* repo.getOpenPosition(options.exchange, options.symbol);
+    let position = yield* repo.getOpenPosition(
+      options.exchange,
+      options.symbol,
+    );
 
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
@@ -85,7 +108,11 @@ export function runPaperTradingIteration(
       options.timeframe,
       100,
     );
-    const orderBook = yield* gateway.fetchOrderBook(options.exchange, options.symbol, 20);
+    const orderBook = yield* gateway.fetchOrderBook(
+      options.exchange,
+      options.symbol,
+      20,
+    );
 
     if (candles.length < 30) {
       return {
@@ -110,26 +137,46 @@ export function runPaperTradingIteration(
       options.composerConfig,
     );
 
+    const todayPnl = yield* repo.getTodayRealizedPnl();
+    const startOfDayCapital = yield* repo.getStartOfDayCapital(
+      new Date(),
+      toNumber(capital),
+    );
+
     // Exit existing position first.
     if (position) {
-      const exitReason = checkExitReason(position, currentCandle, signal, options);
+      const exitReason = checkExitReason(
+        position,
+        currentCandle,
+        signal,
+        options,
+      );
       if (exitReason) {
         const fill = yield* adapter.closePosition(options.symbol);
 
         let exitPrice: number;
+        let exitFee: Decimal;
         if (fill) {
           exitPrice = fill.filledPrice;
-          capital = capital.minus(money(fill.fee));
+          exitFee = money(fill.fee);
         } else {
           exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
+          exitFee = money(exitPrice)
+            .times(position.size)
+            .times(options.feePct / 100);
         }
 
-        const trade = yield* repo.closePosition(position, exitPrice, exitReason, currentCandle.timestamp);
-        const entryCost = money(position.entryPrice).times(position.size);
-        const exitFee = entryCost.times(options.feePct / 100);
+        const trade = yield* repo.closePosition(
+          position,
+          exitPrice,
+          exitReason,
+          currentCandle.timestamp,
+        );
         capital = capital.plus(money(trade.pnl)).minus(exitFee);
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+
+        yield* circuitBreaker.recordTradeResult(trade.pnl, startOfDayCapital);
 
         return {
           action: "closed" as const,
@@ -138,6 +185,26 @@ export function runPaperTradingIteration(
           note: `${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
         };
       }
+    }
+
+    if (yield* killSwitch.isEngaged()) {
+      const reason = yield* killSwitch.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `KILL SWITCH ENGAGED: ${reason}`,
+      };
+    }
+
+    if (yield* circuitBreaker.isOpen()) {
+      const reason = yield* circuitBreaker.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `CIRCUIT BREAKER OPEN: ${reason}`,
+      };
     }
 
     // Open new position if signal is strong enough and no position.
@@ -151,16 +218,14 @@ export function runPaperTradingIteration(
       const size = positionValue.div(entryPrice);
 
       // Pre-trade risk gate.
-      const todayPnl = yield* repo.getTodayRealizedPnl();
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const startOfDayCapital = capital.minus(money(todayPnl));
       const riskGuard = yield* RiskGuard;
       const riskCheck = yield* riskGuard
         .check({
           isLive: options.isLive,
           capital: toNumber(capital),
           peakCapital: toNumber(peakCapital),
-          startOfDayCapital: toNumber(startOfDayCapital),
+          startOfDayCapital,
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
           positionValue: toNumber(positionValue),
@@ -187,8 +252,7 @@ export function runPaperTradingIteration(
       });
 
       const filledPrice = money(fill.filledPrice);
-      const filledSize = money(fill.filledQty);
-      const entryFee = filledPrice.times(filledSize).times(options.feePct / 100).plus(fill.fee);
+      const entryFee = money(fill.fee);
       capital = capital.minus(entryFee);
 
       const atr = options.useAtrStops ? calculateATR(candles, 14) : null;
@@ -205,7 +269,9 @@ export function runPaperTradingIteration(
         takeProfit =
           side === "long"
             ? filledPrice.plus(atrValue.times(options.atrTakeProfitMultiplier))
-            : filledPrice.minus(atrValue.times(options.atrTakeProfitMultiplier));
+            : filledPrice.minus(
+                atrValue.times(options.atrTakeProfitMultiplier),
+              );
       } else {
         stopLoss =
           side === "long" ? filledPrice.times(0.985) : filledPrice.times(1.015);
@@ -243,7 +309,9 @@ export function runPaperTradingIteration(
       action: "hold" as const,
       position,
       capital: toNumber(capital),
-      note: signal ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})` : "no signal",
+      note: signal
+        ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})`
+        : "no signal",
     };
   });
 }
@@ -262,7 +330,11 @@ function checkExitReason(
     if (candle.low <= position.takeProfit) return "take_profit";
   }
 
-  if (!options.holdUntilStop && signal && shouldExitPosition(position, signal)) {
+  if (
+    !options.holdUntilStop &&
+    signal &&
+    shouldExitPosition(position, signal)
+  ) {
     return "signal";
   }
 
@@ -297,7 +369,10 @@ function shouldExitPosition(
   );
 }
 
-function isEntrySignal(signal: NonNullable<ReturnType<typeof composeSignal>>, minConfidence: number): boolean {
+function isEntrySignal(
+  signal: NonNullable<ReturnType<typeof composeSignal>>,
+  minConfidence: number,
+): boolean {
   return signal.direction !== "hold" && signal.confidence >= minConfidence;
 }
 

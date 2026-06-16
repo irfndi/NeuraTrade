@@ -13,9 +13,7 @@ export class PidFile extends Context.Tag("PidFile")<
   PidFile,
   {
     /** Read the PID stored for `service`, or `null` if missing/invalid. */
-    readonly read: (
-      service: string,
-    ) => Effect.Effect<number | null, never>;
+    readonly read: (service: string) => Effect.Effect<number | null, never>;
 
     /** Write `pid` to the PID file for `service`. */
     readonly write: (
@@ -24,14 +22,10 @@ export class PidFile extends Context.Tag("PidFile")<
     ) => Effect.Effect<void, never>;
 
     /** Remove the PID file for `service` (no-op if absent). */
-    readonly remove: (
-      service: string,
-    ) => Effect.Effect<void, never>;
+    readonly remove: (service: string) => Effect.Effect<void, never>;
 
     /** Check whether a process with the given PID is alive (signal 0 probe). */
-    readonly isRunning: (
-      pid: number,
-    ) => Effect.Effect<boolean, never>;
+    readonly isRunning: (pid: number) => Effect.Effect<boolean, never>;
 
     /**
      * Run `ps -p <pid> -o command=` and check whether the output contains
@@ -87,89 +81,92 @@ function psCommand(pid: number): Effect.Effect<string, never> {
 }
 
 /** Live PidFile layer backed by the real filesystem and process signals. */
-export const PidFileLive: Layer.Layer<PidFile, never, Path | FileSystem.FileSystem> =
-  Layer.effect(
-    PidFile,
-    Effect.gen(function* () {
-      const path = yield* Path;
-      const fs = yield* FileSystem.FileSystem;
+export const PidFileLive: Layer.Layer<
+  PidFile,
+  never,
+  Path | FileSystem.FileSystem
+> = Layer.effect(
+  PidFile,
+  Effect.gen(function* () {
+    const path = yield* Path;
+    const fs = yield* FileSystem.FileSystem;
 
-      /** Resolve the PID file path for a service. */
-      const pidPath = (service: string): string =>
-        path.pidFilePath(service);
+    /** Resolve the PID file path for a service. */
+    const pidPath = (service: string): string => path.pidFilePath(service);
 
-      const read = (service: string): Effect.Effect<number | null, never> =>
-        Effect.gen(function* () {
-          const filePath = pidPath(service);
-          const exists = yield* fs.exists(filePath);
-          if (!exists) return null;
+    const read = (service: string): Effect.Effect<number | null, never> =>
+      Effect.gen(function* () {
+        const filePath = pidPath(service);
+        const exists = yield* fs.exists(filePath);
+        if (!exists) return null;
 
-          const content = yield* fs.readFileString(filePath);
-          const trimmed = content.trim();
-          const parsed = Number(trimmed);
-          if (!Number.isFinite(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
-            return null;
+        const content = yield* fs.readFileString(filePath);
+        const trimmed = content.trim();
+        const parsed = Number(trimmed);
+        if (
+          !Number.isFinite(parsed) ||
+          parsed <= 0 ||
+          !Number.isInteger(parsed)
+        ) {
+          return null;
+        }
+        return parsed;
+      }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+
+    const write = (service: string, pid: number): Effect.Effect<void, never> =>
+      Effect.gen(function* () {
+        const filePath = pidPath(service);
+        yield* fs.writeFileString(filePath, String(pid));
+      }).pipe(Effect.catchAll(() => Effect.void));
+
+    const remove = (service: string): Effect.Effect<void, never> =>
+      Effect.gen(function* () {
+        const filePath = pidPath(service);
+        const exists = yield* fs.exists(filePath);
+        if (exists) {
+          yield* fs.remove(filePath);
+        }
+      }).pipe(Effect.catchAll(() => Effect.void));
+
+    const isRunning = (pid: number): Effect.Effect<boolean, never> =>
+      Effect.sync(() => isProcessAlive(pid));
+
+    const processMatchesPattern = (
+      pid: number,
+      patterns: ReadonlyArray<string>,
+    ): Effect.Effect<boolean, never> =>
+      Effect.gen(function* () {
+        const command = yield* psCommand(pid);
+        for (const pattern of patterns) {
+          if (command.includes(pattern.toLowerCase())) {
+            return true;
           }
-          return parsed;
-        }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+        }
+        return false;
+      });
 
-      const write = (
-        service: string,
-        pid: number,
-      ): Effect.Effect<void, never> =>
-        Effect.gen(function* () {
-          const filePath = pidPath(service);
-          yield* fs.writeFileString(filePath, String(pid));
-        }).pipe(Effect.catchAll(() => Effect.void));
+    const cleanupStale = (
+      services: ReadonlyArray<string>,
+    ): Effect.Effect<void, never> =>
+      Effect.gen(function* () {
+        for (const service of services) {
+          const pid = yield* read(service);
+          if (pid === null) continue;
 
-      const remove = (service: string): Effect.Effect<void, never> =>
-        Effect.gen(function* () {
-          const filePath = pidPath(service);
-          const exists = yield* fs.exists(filePath);
-          if (exists) {
-            yield* fs.remove(filePath);
+          const alive = yield* isRunning(pid);
+          if (!alive) {
+            yield* remove(service);
           }
-        }).pipe(Effect.catchAll(() => Effect.void));
+        }
+      });
 
-      const isRunning = (pid: number): Effect.Effect<boolean, never> =>
-        Effect.sync(() => isProcessAlive(pid));
-
-      const processMatchesPattern = (
-        pid: number,
-        patterns: ReadonlyArray<string>,
-      ): Effect.Effect<boolean, never> =>
-        Effect.gen(function* () {
-          const command = yield* psCommand(pid);
-          for (const pattern of patterns) {
-            if (command.includes(pattern.toLowerCase())) {
-              return true;
-            }
-          }
-          return false;
-        });
-
-      const cleanupStale = (
-        services: ReadonlyArray<string>,
-      ): Effect.Effect<void, never> =>
-        Effect.gen(function* () {
-          for (const service of services) {
-            const pid = yield* read(service);
-            if (pid === null) continue;
-
-            const alive = yield* isRunning(pid);
-            if (!alive) {
-              yield* remove(service);
-            }
-          }
-        });
-
-      return {
-        read,
-        write,
-        remove,
-        isRunning,
-        processMatchesPattern,
-        cleanupStale,
-      };
-    }),
-  );
+    return {
+      read,
+      write,
+      remove,
+      isRunning,
+      processMatchesPattern,
+      cleanupStale,
+    };
+  }),
+);

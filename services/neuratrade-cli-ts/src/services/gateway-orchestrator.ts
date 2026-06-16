@@ -63,12 +63,23 @@ export interface StatusResult {
   readonly updatedAt: string;
   readonly services: Record<
     string,
-    { readonly status: string; readonly detail?: string; readonly endpoint?: string }
+    {
+      readonly status: string;
+      readonly detail?: string;
+      readonly endpoint?: string;
+    }
   >;
-  readonly backendHealth: { readonly healthy: boolean; readonly detail: string };
+  readonly backendHealth: {
+    readonly healthy: boolean;
+    readonly detail: string;
+  };
   readonly processes: Record<
     string,
-    { readonly running: boolean; readonly pid?: number; readonly detail?: string }
+    {
+      readonly running: boolean;
+      readonly pid?: number;
+      readonly detail?: string;
+    }
   >;
   readonly backendServices?: Record<string, string>;
 }
@@ -305,11 +316,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
           );
           yield* gwState.writeMode("warming", "backend warming up");
         } else {
-          yield* pm.signalAndWait(
-            backendProc,
-            "SIGTERM",
-            signalTimeoutMs,
-          );
+          yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
           yield* gwState.writeServiceState(
             "backend",
             "down",
@@ -326,7 +333,9 @@ export const GatewayOrchestratorLive: Layer.Layer<
 
         // Telegram
         let telegramPid: number | undefined;
-        let telegramProbe: { readonly healthy: boolean; readonly detail: string } | undefined;
+        let telegramProbe:
+          | { readonly healthy: boolean; readonly detail: string }
+          | undefined;
         if (telegramEnabled) {
           yield* logger.info("Starting Telegram Service");
           const telegramBinary = yield* pm
@@ -391,16 +400,8 @@ export const GatewayOrchestratorLive: Layer.Layer<
             );
             yield* gwState.writeMode("warming", "telegram warming up");
           } else {
-            yield* pm.signalAndWait(
-              telegramProc,
-              "SIGTERM",
-              signalTimeoutMs,
-            );
-            yield* pm.signalAndWait(
-              backendProc,
-              "SIGTERM",
-              signalTimeoutMs,
-            );
+            yield* pm.signalAndWait(telegramProc, "SIGTERM", signalTimeoutMs);
+            yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
             yield* gwState.writeServiceState(
               "telegram",
               "down",
@@ -440,7 +441,10 @@ export const GatewayOrchestratorLive: Layer.Layer<
         // Final mode
         const anyWarming =
           (!backendProbe.healthy && (supervised || telegramEnabled)) ||
-          (telegramEnabled && telegramProbe && !telegramProbe.healthy && supervised);
+          (telegramEnabled &&
+            telegramProbe &&
+            !telegramProbe.healthy &&
+            supervised);
         const initialMode = anyWarming ? "warming" : "healthy";
         yield* gwState.writeMode(initialMode, "services started");
 

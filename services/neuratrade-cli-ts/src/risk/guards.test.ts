@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { Effect } from "effect";
-import { defaultRiskLimits, makeRiskGuard, type RiskContext } from "./guards.js";
+import {
+  defaultRiskLimits,
+  makeRiskGuard,
+  type RiskContext,
+} from "./guards.js";
 
 function baseContext(overrides: Partial<RiskContext> = {}): RiskContext {
   return {
@@ -31,7 +35,9 @@ describe("makeRiskGuard", () => {
     const error = await Effect.runPromise(
       guard.check(baseContext({ isLive: true })).pipe(Effect.flip),
     );
-    expect(error.violations.some((v) => v.includes("live trading is disabled"))).toBe(true);
+    expect(
+      error.violations.some((v) => v.includes("live trading is disabled")),
+    ).toBe(true);
   });
 
   it("blocks when capital is below the minimum", async () => {
@@ -45,9 +51,11 @@ describe("makeRiskGuard", () => {
   it("blocks when drawdown exceeds the max", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const error = await Effect.runPromise(
-      guard.check(
-        baseContext({ isLive: true, capital: 9_400, peakCapital: 10_000 }),
-      ).pipe(Effect.flip),
+      guard
+        .check(
+          baseContext({ isLive: true, capital: 9_400, peakCapital: 10_000 }),
+        )
+        .pipe(Effect.flip),
     );
     expect(error.violations.some((v) => v.includes("drawdown"))).toBe(true);
   });
@@ -55,13 +63,15 @@ describe("makeRiskGuard", () => {
   it("blocks when daily loss exceeds the max", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const error = await Effect.runPromise(
-      guard.check(
-        baseContext({
-          isLive: true,
-          dailyRealizedPnl: -300,
-          startOfDayCapital: 10_000,
-        }),
-      ).pipe(Effect.flip),
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            dailyRealizedPnl: -300,
+            startOfDayCapital: 10_000,
+          }),
+        )
+        .pipe(Effect.flip),
     );
     expect(error.violations.some((v) => v.includes("daily loss"))).toBe(true);
   });
@@ -69,15 +79,21 @@ describe("makeRiskGuard", () => {
   it("blocks when position size exceeds the max", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const error = await Effect.runPromise(
-      guard.check(baseContext({ isLive: true, positionValue: 2_000 })).pipe(Effect.flip),
+      guard
+        .check(baseContext({ isLive: true, positionValue: 2_000 }))
+        .pipe(Effect.flip),
     );
-    expect(error.violations.some((v) => v.includes("position size"))).toBe(true);
+    expect(error.violations.some((v) => v.includes("position size"))).toBe(
+      true,
+    );
   });
 
   it("blocks when daily trade limit is reached", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const error = await Effect.runPromise(
-      guard.check(baseContext({ isLive: true, tradesTodayCount: 10 })).pipe(Effect.flip),
+      guard
+        .check(baseContext({ isLive: true, tradesTodayCount: 10 }))
+        .pipe(Effect.flip),
     );
     expect(error.violations.some((v) => v.includes("trades today"))).toBe(true);
   });
@@ -96,15 +112,48 @@ describe("makeRiskGuard", () => {
   it("aggregates multiple violations", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const error = await Effect.runPromise(
-      guard.check(
-        baseContext({
-          isLive: true,
-          capital: 50,
-          positionValue: 5_000,
-          tradesTodayCount: 15,
-        }),
-      ).pipe(Effect.flip),
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            capital: 50,
+            positionValue: 5_000,
+            tradesTodayCount: 15,
+          }),
+        )
+        .pipe(Effect.flip),
     );
     expect(error.violations.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("blocks leverage above the maximum", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(true),
+      maxLeverage: 5,
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(baseContext({ isLive: true, leverage: 10 }))
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("leverage"))).toBe(true);
+  });
+
+  it("blocks disallowed futures product types", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(true),
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            productType: "COIN-FUTURES",
+          }),
+        )
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("product type"))).toBe(true);
   });
 });

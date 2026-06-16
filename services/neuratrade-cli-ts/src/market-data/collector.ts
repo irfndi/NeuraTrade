@@ -45,26 +45,24 @@ export const collectOnce = (
 
     let collected = 0;
     for (const config of enabled) {
-      yield* gateway
-        .fetchTick(config.exchange, config.symbol)
-        .pipe(
-          Effect.tap((tick) => repo.saveTick(tick)),
-          Effect.tap(() => {
-            collected += 1;
+      yield* gateway.fetchTick(config.exchange, config.symbol).pipe(
+        Effect.tap((tick) => repo.saveTick(tick)),
+        Effect.tap(() => {
+          collected += 1;
+        }),
+        Effect.timeout(options.fetchTimeoutMs ?? 30000),
+        Effect.catchAll((err) =>
+          Effect.sync(() => {
+            // TODO: wire to Logger service instead of console
+            // eslint-disable-next-line no-console
+            console.error(
+              `collectOnce: ${config.exchange}:${config.symbol} failed — ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
           }),
-          Effect.timeout(options.fetchTimeoutMs ?? 30000),
-          Effect.catchAll((err) =>
-            Effect.sync(() => {
-              // TODO: wire to Logger service instead of console
-              // eslint-disable-next-line no-console
-              console.error(
-                `collectOnce: ${config.exchange}:${config.symbol} failed — ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }),
-          ),
-        );
+        ),
+      );
     }
 
     return collected;

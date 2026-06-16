@@ -9,7 +9,10 @@ function binanceSymbol(symbol: string): string {
   return symbol.replace("/", "").toUpperCase();
 }
 
-function getJSON<T>(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Effect.Effect<T, MarketDataError, never> {
+function getJSON<T>(
+  path: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Effect.Effect<T, MarketDataError, never> {
   return Effect.gen(function* () {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -26,9 +29,7 @@ function getJSON<T>(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Effect.Effect
           `Binance network error for ${path}: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
-    }).pipe(
-      Effect.tap(() => Effect.sync(() => clearTimeout(timer))),
-    );
+    }).pipe(Effect.tap(() => Effect.sync(() => clearTimeout(timer))));
 
     if (!response.ok) {
       return yield* Effect.fail(
@@ -47,7 +48,9 @@ function getJSON<T>(path: string, timeoutMs = DEFAULT_TIMEOUT_MS): Effect.Effect
   });
 }
 
-export function fetchTick(symbol: string): Effect.Effect<Tick, MarketDataError, never> {
+export function fetchTick(
+  symbol: string,
+): Effect.Effect<Tick, MarketDataError, never> {
   const bSymbol = binanceSymbol(symbol);
   return Effect.gen(function* () {
     const data = yield* getJSON<{
@@ -89,8 +92,25 @@ export function fetchOHLCV(
   const startParam = startTime ? `&startTime=${startTime.getTime()}` : "";
   return Effect.gen(function* () {
     const data = yield* getJSON<
-      Array<[number, string, string, string, string, string, number, string, number, string, string, string]>
-    >(`/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`);
+      Array<
+        [
+          number,
+          string,
+          string,
+          string,
+          string,
+          string,
+          number,
+          string,
+          number,
+          string,
+          string,
+          string,
+        ]
+      >
+    >(
+      `/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`,
+    );
 
     return data.map(
       (c): Candle => ({
@@ -123,18 +143,33 @@ export function fetchOrderBook(
     return {
       exchange: "binance",
       symbol,
-      bids: data.bids.map(([price, volume]) => ({ price: Number(price), volume: Number(volume) })),
-      asks: data.asks.map(([price, volume]) => ({ price: Number(price), volume: Number(volume) })),
+      bids: data.bids.map(([price, volume]) => ({
+        price: Number(price),
+        volume: Number(volume),
+      })),
+      asks: data.asks.map(([price, volume]) => ({
+        price: Number(price),
+        volume: Number(volume),
+      })),
       timestamp: new Date(),
     };
   });
 }
 
-export function fetchSymbols(): Effect.Effect<readonly string[], MarketDataError, never> {
+export function fetchSymbols(): Effect.Effect<
+  readonly string[],
+  MarketDataError,
+  never
+> {
   return Effect.gen(function* () {
-    const data = yield* getJSON<{ symbols: Array<{ symbol: string; status: string; baseAsset: string; quoteAsset: string }> }>(
-      "/api/v3/exchangeInfo",
-    );
+    const data = yield* getJSON<{
+      symbols: Array<{
+        symbol: string;
+        status: string;
+        baseAsset: string;
+        quoteAsset: string;
+      }>;
+    }>("/api/v3/exchangeInfo");
 
     return data.symbols
       .filter((s) => s.status === "TRADING")
@@ -142,7 +177,11 @@ export function fetchSymbols(): Effect.Effect<readonly string[], MarketDataError
   });
 }
 
-export function fetch24hrVolumes(): Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never> {
+export function fetch24hrVolumes(): Effect.Effect<
+  Readonly<Record<string, number>>,
+  MarketDataError,
+  never
+> {
   return Effect.gen(function* () {
     const data = yield* getJSON<
       Array<{ symbol: string; volume: string; quoteVolume: string }>

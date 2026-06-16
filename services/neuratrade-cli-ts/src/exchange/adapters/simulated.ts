@@ -1,7 +1,11 @@
 import { Effect, Layer } from "effect";
 import { randomUUID } from "node:crypto";
-import { ExchangeAdapter, ExchangeError, type ExchangeAdapterService } from "../adapter.js";
-import type { Balance, OrderFill, OrderRequest, Position } from "../types.js";
+import {
+  ExchangeAdapter,
+  ExchangeError,
+  type ExchangeAdapterService,
+} from "../adapter.js";
+import type { OrderFill, OrderRequest, Position } from "../types.js";
 import { MarketDataGateway } from "../../market-data/gateway.js";
 
 interface SimulatedState {
@@ -16,7 +20,9 @@ interface SimulatedState {
  * intended for paper-trading and unit tests. It is deterministic given the
  * same order-book snapshot.
  */
-export function makeSimulatedExchangeAdapter(initialBalances: Record<string, number> = {}): ExchangeAdapterService {
+export function makeSimulatedExchangeAdapter(
+  initialBalances: Record<string, number> = {},
+): ExchangeAdapterService {
   const state: SimulatedState = {
     balances: { USDT: 10_000, ...initialBalances },
     positions: {},
@@ -39,8 +45,8 @@ export function makeSimulatedExchangeAdapter(initialBalances: Record<string, num
             ? request.side === "buy"
               ? ob.asks[0].price
               : ob.bids[0].price
-            : request.price ??
-              (request.side === "buy" ? ob.asks[0].price : ob.bids[0].price);
+            : (request.price ??
+              (request.side === "buy" ? ob.asks[0].price : ob.bids[0].price));
 
         const fee = filledPrice * request.quantity * 0.001;
         const fillId = randomUUID();
@@ -58,7 +64,9 @@ export function makeSimulatedExchangeAdapter(initialBalances: Record<string, num
           if (existing.side === (request.side === "buy" ? "long" : "short")) {
             const totalQty = existing.quantity + request.quantity;
             const avgEntry =
-              (existing.entryPrice * existing.quantity + filledPrice * request.quantity) / totalQty;
+              (existing.entryPrice * existing.quantity +
+                filledPrice * request.quantity) /
+              totalQty;
             state.positions[request.symbol] = {
               ...existing,
               quantity: totalQty,
@@ -95,7 +103,10 @@ export function makeSimulatedExchangeAdapter(initialBalances: Record<string, num
           Effect.fail(
             err instanceof ExchangeError
               ? err
-              : new ExchangeError(`Exchange fetch failed: ${"reason" in err ? err.reason : String(err)}`, err),
+              : new ExchangeError(
+                  `Exchange fetch failed: ${"reason" in err ? err.reason : String(err)}`,
+                  err,
+                ),
           ),
         ),
       ),
@@ -129,8 +140,7 @@ export function makeSimulatedExchangeAdapter(initialBalances: Record<string, num
   return adapter;
 }
 
-export const SimulatedExchangeAdapterLive = (initialBalances?: Record<string, number>) =>
-  Layer.succeed(
-    ExchangeAdapter,
-    makeSimulatedExchangeAdapter(initialBalances),
-  );
+export const SimulatedExchangeAdapterLive = (
+  initialBalances?: Record<string, number>,
+) =>
+  Layer.succeed(ExchangeAdapter, makeSimulatedExchangeAdapter(initialBalances));

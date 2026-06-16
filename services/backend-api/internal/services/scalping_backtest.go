@@ -24,6 +24,25 @@ const (
 	DefaultScalpingBacktestHoldPeriod       = 4 * time.Hour
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
+	// DefaultScalpingBacktestImbalanceFloor is the minimum absolute order-book
+	// imbalance required by the backtest signal gate when not overridden by
+	// configuration.
+	DefaultScalpingBacktestImbalanceFloor = 0.05
+	// DefaultScalpingBacktestMinRecentMomentumPct is the fallback floor for
+	// the recent-momentum filter when RequireRecentMomentum is true but no
+	// explicit MinRecentMomentumPct is configured.
+	DefaultScalpingBacktestMinRecentMomentumPct = 0.05
+	// DefaultScalpingBacktestTrendImbalanceFloor is the imbalance threshold
+	// used in regime classification to label a market as "trend".
+	DefaultScalpingBacktestTrendImbalanceFloor = 0.25
+	// DefaultScalpingBacktestChopImbalanceCeiling is the maximum imbalance
+	// below which a market is classified as "chop".
+	DefaultScalpingBacktestChopImbalanceCeiling = 0.10
+	// DefaultScalpingBacktestRegimeRangeBufferPct is the buffer (in percent of
+	// the 24h range) kept away from the high/low bands when classifying a
+	// trending regime.
+	DefaultScalpingBacktestRegimeRangeBufferPct = 5.0
+
 	// maxProfitFactorNoLosses represents an effectively unbounded profit
 	// factor when a report has winning trades and no losing trades.
 	maxProfitFactorNoLosses = 999
@@ -70,36 +89,33 @@ type ScalpingCyclePolicy = appautonomy.ScalpingCyclePolicy
 type MarketSignal = aiMarketSignal
 
 type ScalpingBacktestConfig struct {
-	StartTime              time.Time
-	EndTime                time.Time
-	Symbols                []string
-	Exchange               string
-	InitialCapital         decimal.Decimal
-	FeeRate                decimal.Decimal
-	SlippagePct            decimal.Decimal
-	NoisePct               float64
-	MaxBidAskSpreadPct     float64
-	MinConfidence          float64
-	MinExpectancyN         int
-	MinExpectancyEdge      float64
-	MaxCapitalPct          float64
-	DefaultHoldPeriod      time.Duration
-	MaxHoldCandles         int
-	EntryCutoffTime        time.Time
-	RequireRecentMomentum  bool
-	MinRecentMomentumPct   float64
-	SpreadMultiplier       float64
-	DeterministicFallback  DeterministicFallbackConfig
-	RegimeHighBand         float64
-	RegimeLowBand          float64
-	MaxLossPct             float64
-	TrailingStopPct        float64
-	MinEntryMomentumPct    float64
-	EnableTrendFilter      bool
-	EnablePanicDropEntry   bool
-	MinPanicDropPct        float64
-	EnableTrendFollowEntry bool
-	TrendFollowMinMomentum float64
+	StartTime             time.Time
+	EndTime               time.Time
+	Symbols               []string
+	Exchange              string
+	InitialCapital        decimal.Decimal
+	FeeRate               decimal.Decimal
+	SlippagePct           decimal.Decimal
+	NoisePct              float64
+	MaxBidAskSpreadPct    float64
+	MinConfidence         float64
+	MinExpectancyN        int
+	MinExpectancyEdge     float64
+	MaxCapitalPct         float64
+	DefaultHoldPeriod     time.Duration
+	MaxHoldCandles        int
+	EntryCutoffTime       time.Time
+	RequireRecentMomentum bool
+	MinRecentMomentumPct  float64
+	SpreadMultiplier      float64
+	DeterministicFallback DeterministicFallbackConfig
+	RegimeHighBand        float64
+	RegimeLowBand         float64
+	// AsymmetricExit configures asymmetric stop-loss / take-profit levels
+	// (and optional breakeven / trailing-stop behaviour) for the backtest.
+	// When UseAsymmetricExits is false, the legacy symmetric 0.8%/1.2%
+	// defaults are used — matching the pre-asymmetric live path.
+	AsymmetricExit AsymmetricExitConfig
 	// Mode selects the decision pipeline used during the backtest. The
 	// default "deterministic" runs buildDecisionFromSignal alone. The "ai"
 	// mode additionally computes SuggestedAction/ConfidenceHint/CandidateScore
@@ -108,6 +124,20 @@ type ScalpingBacktestConfig struct {
 	// backtests are offline replays, so the AI mode is a "shadow" that
 	// records what hints the AI path would have consumed.
 	Mode string
+
+	// MaxLossPct caps per-trade loss as a percentage of entry notional.
+	// When non-zero the backtest engine force-closes any open position
+	// whose unrealized loss breaches this threshold.
+	MaxLossPct float64
+	// EnablePanicDropEntry toggles the panic-drop entry filter. When true,
+	// the engine considers entries triggered by sharp drawdowns.
+	EnablePanicDropEntry bool
+	// MinPanicDropPct is the minimum drawdown (in percent) required to
+	// qualify as a panic-drop signal when EnablePanicDropEntry is true.
+	MinPanicDropPct float64
+	// MinEntryMomentumPct is the minimum recent momentum (in percent)
+	// required to qualify an entry alongside trailing-stop support.
+	MinEntryMomentumPct float64
 }
 
 type ScalpingBacktestResult struct {
@@ -254,19 +284,21 @@ type SignalEvaluation struct {
 }
 
 type SimulatedPosition struct {
-	Symbol        string
-	Side          string
-	Size          decimal.Decimal
-	Notional      decimal.Decimal
-	EntryPrice    decimal.Decimal
-	EntryTime     time.Time
-	StopLoss      decimal.Decimal
-	TakeProfit    decimal.Decimal
-	RegimeEntry   string
-	Signal        MarketSignal
-	Decision      *AITradingDecision
-	HoldCandles   int
-	HighWaterMark decimal.Decimal
+	Symbol             string
+	Side               string
+	Size               decimal.Decimal
+	Notional           decimal.Decimal
+	EntryPrice         decimal.Decimal
+	EntryTime          time.Time
+	StopLoss           decimal.Decimal
+	TakeProfit         decimal.Decimal
+	RegimeEntry        string
+	Signal             MarketSignal
+	Decision           *AITradingDecision
+	HoldCandles        int
+	HighPrice          decimal.Decimal
+	LowPrice           decimal.Decimal
+	BreakevenTriggered bool
 }
 
 type SimulatedTrade struct {
@@ -376,56 +408,38 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			if !signal.Timestamp.Equal(position.EntryTime) {
 				position.HoldCandles++
 			}
+
 			markPrice := decimal.NewFromFloat(signal.Signal.Price)
 			candleLow := decimal.NewFromFloat(signal.Signal.Low)
 			candleHigh := decimal.NewFromFloat(signal.Signal.High)
 
-			if position.HighWaterMark.IsZero() {
-				position.HighWaterMark = position.EntryPrice
-			}
-			if strings.EqualFold(position.Side, "buy") && candleHigh.GreaterThan(position.HighWaterMark) {
-				position.HighWaterMark = candleHigh
-			} else if strings.EqualFold(position.Side, "sell") && (position.HighWaterMark.IsZero() || candleLow.LessThan(position.HighWaterMark)) {
-				position.HighWaterMark = candleLow
-			}
-
+			// Evaluate the configured stop/target against this candle using the
+			// stop as it existed at the start of the candle. Dynamic-stop updates
+			// are applied afterwards so a candle that both hits the original stop
+			// and reaches the breakeven/trailing trigger cannot retroactively
+			// improve the exit price.
 			slTPExit := false
 			switch strings.ToLower(strings.TrimSpace(position.Side)) {
 			case "buy":
 				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.TakeProfit) {
 					slTPExit = true
-				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
 					slTPExit = true
 				}
 			case "sell":
 				if position.TakeProfit.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.TakeProfit) {
 					slTPExit = true
-				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+				} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
 					slTPExit = true
 				}
 			}
-			trailStopExit := false
-			if !slTPExit && e.config.TrailingStopPct > 0 && !position.HighWaterMark.IsZero() {
-				trailPct := decimal.NewFromFloat(e.config.TrailingStopPct)
-				one := decimal.NewFromInt(1)
-				switch strings.ToLower(strings.TrimSpace(position.Side)) {
-				case "buy":
-					trailStopPrice := position.HighWaterMark.Mul(one.Sub(trailPct))
-					if (candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(trailStopPrice)) || markPrice.LessThanOrEqual(trailStopPrice) {
-						trailStopExit = true
-					}
-				case "sell":
-					trailStopPrice := position.HighWaterMark.Mul(one.Add(trailPct))
-					if (candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(trailStopPrice)) || markPrice.GreaterThanOrEqual(trailStopPrice) {
-						trailStopExit = true
-					}
-				}
-			}
-			if slTPExit || trailStopExit || e.positionCanCloseAt(signal.Timestamp, position) {
+			if slTPExit || e.positionCanCloseAt(signal.Timestamp, position) {
 				trade := e.closeSimulatedPosition(signal, position)
 				e.tradeHistory = append(e.tradeHistory, trade)
 				e.capital = e.capital.Add(trade.PnL)
 				delete(e.positions, positionKey)
+			} else {
+				e.updateDynamicStop(position, signal)
 			}
 		}
 
@@ -444,26 +458,6 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			evaluation.Decision = nil
 			evaluation.FunnelStage = "entry_close_unobserved"
 			evaluation.RejectionReason = "entry_without_close_signal"
-		}
-		if evaluation.Allowed && evaluation.Decision != nil && e.config.MinEntryMomentumPct > 0 {
-			lastPrice := lastPriceBySymbol[signal.Symbol]
-			if lastPrice > 0 {
-				momentumPct := e.config.MinEntryMomentumPct
-				priceChange := (signal.Signal.Price - lastPrice) / lastPrice
-				momentumAligned := false
-				switch strings.ToLower(strings.TrimSpace(evaluation.Decision.Action)) {
-				case "buy":
-					momentumAligned = priceChange >= momentumPct
-				case "sell":
-					momentumAligned = priceChange <= -momentumPct
-				}
-				if !momentumAligned {
-					evaluation.Allowed = false
-					evaluation.Decision = nil
-					evaluation.FunnelStage = "entry_momentum"
-					evaluation.RejectionReason = "entry_momentum_misaligned"
-				}
-			}
 		}
 
 		recorded := ScalpingBacktestSignal{
@@ -600,7 +594,7 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 		RangePosition24h:   signal.Signal.RangePosition24h,
 		PriceChange24hPct:  signal.Signal.PriceChange24h,
 	}
-	funnel := appautonomy.BuildCandidateFunnel([]appautonomy.CandidateSignal{candidate}, e.policy, appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig()))
+	funnel := appautonomy.BuildCandidateFunnel([]appautonomy.CandidateSignal{candidate}, e.policy, appautonomy.DefaultScalpingPolicyConfig())
 
 	eval := &SignalEvaluation{
 		Signal:      signal,
@@ -620,15 +614,14 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 		return eval, nil
 	}
 
-	decision, deterministicRejection := e.buildDecisionFromSignalWithReason(ctx, signal.Signal)
+	decision, reason := e.buildDecisionFromSignal(ctx, signal.Signal)
 	if decision == nil || decision.Action == "hold" {
 		eval.Allowed = false
 		eval.FunnelStage = "deterministic_hold"
-		if deterministicRejection != "" {
-			eval.RejectionReason = deterministicRejection
-		} else {
-			eval.RejectionReason = "no_directional_edge"
+		if reason == "" {
+			reason = "no_directional_edge"
 		}
+		eval.RejectionReason = reason
 		return eval, nil
 	}
 
@@ -656,13 +649,24 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 	}
 
 	eval.Allowed = eval.RejectionReason == ""
-	if eval.Allowed && e.config.Mode == "ai" {
-		eval.Hints = e.computeSignalHints(signal.Signal, decision)
-	}
 	if eval.Allowed {
+		// Hints are computed deterministically from the same fallback config
+		// the AI path uses; no LLM is invoked. Exposing them for both modes
+		// lets CLI paper-trading loops read the action side directly.
+		eval.Hints = e.computeSignalHints(signal.Signal, decision)
 		eval.FunnelStage = "eligible"
 	}
 	return eval, nil
+}
+
+// backtestExitLevels returns symmetric (0.8% / 1.2%) or asymmetric
+// stop-loss / take-profit levels depending on the config. It delegates to
+// the live-trading asymmetricExitLevels when UseAsymmetricExits is set.
+func backtestExitLevels(price float64, action string, leverage int, cfg AsymmetricExitConfig) (decimal.Decimal, decimal.Decimal) {
+	if cfg.UseAsymmetricExits {
+		return asymmetricExitLevels(price, action, leverage, cfg)
+	}
+	return defaultExitLevelsWithLeverage(price, action, leverage)
 }
 
 func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, signal HistoricalSignal, decision *AITradingDecision) (*SimulatedPosition, error) {
@@ -719,8 +723,16 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 
 	stopLoss := decision.StopLoss
 	takeProfit := decision.TakeProfit
-	if stopLoss == nil || takeProfit == nil {
-		sl, tp := defaultExitLevels(signal.Signal.Price, decision.Action)
+	if e.config.AsymmetricExit.UseAsymmetricExits {
+		// When asymmetric exits are explicitly enabled, use them even if the
+		// decision path supplied its own SL/TP, so backtests honour the
+		// configured stop/target distances and optional breakeven/trailing
+		// behaviour rather than silently ignoring them.
+		sl, tp := backtestExitLevels(signal.Signal.Price, decision.Action, 1, e.config.AsymmetricExit)
+		stopLoss = &sl
+		takeProfit = &tp
+	} else if stopLoss == nil || takeProfit == nil {
+		sl, tp := backtestExitLevels(signal.Signal.Price, decision.Action, 1, e.config.AsymmetricExit)
 		if stopLoss == nil {
 			stopLoss = &sl
 		}
@@ -746,21 +758,100 @@ func (e *ScalpingBacktestEngine) openSimulatedPosition(ctx context.Context, sign
 	}
 
 	position := &SimulatedPosition{
-		Symbol:        signal.Symbol,
-		Side:          decision.Action,
-		Size:          quantity,
-		Notional:      notional,
-		EntryPrice:    entryPrice,
-		EntryTime:     signal.Timestamp,
-		StopLoss:      *stopLoss,
-		TakeProfit:    *takeProfit,
-		RegimeEntry:   e.classifyRegime(signal.Signal),
-		Signal:        signal.Signal,
-		Decision:      decision,
-		HighWaterMark: entryPrice,
+		Symbol:      signal.Symbol,
+		Side:        decision.Action,
+		Size:        quantity,
+		Notional:    notional,
+		EntryPrice:  entryPrice,
+		EntryTime:   signal.Timestamp,
+		StopLoss:    *stopLoss,
+		TakeProfit:  *takeProfit,
+		RegimeEntry: e.classifyRegime(signal.Signal),
+		Signal:      signal.Signal,
+		Decision:    decision,
+		HighPrice:   entryPrice,
+		LowPrice:    entryPrice,
 	}
 
 	return position, nil
+}
+
+// updateDynamicStop adjusts the simulated position's stop-loss according to
+// the configured breakeven and trailing-stop behaviour. It mirrors the live
+// asymmetric exit intent: once price moves favourably by the breakeven trigger,
+// the stop is moved to entry plus a small offset; after that, the stop trails
+// the favourable extreme by TrailingStopPct.
+func (e *ScalpingBacktestEngine) updateDynamicStop(
+	position *SimulatedPosition,
+	signal HistoricalSignal,
+) {
+	cfg := e.config.AsymmetricExit.Normalized()
+	if !cfg.UseAsymmetricExits {
+		return
+	}
+	if !cfg.BreakevenEnabled && !cfg.TrailingStopEnabled {
+		return
+	}
+
+	markPrice := decimal.NewFromFloat(signal.Signal.Price)
+	candleLow := decimal.NewFromFloat(signal.Signal.Low)
+	candleHigh := decimal.NewFromFloat(signal.Signal.High)
+	if candleHigh.GreaterThan(position.HighPrice) {
+		position.HighPrice = candleHigh
+	}
+	if position.LowPrice.IsZero() || candleLow.LessThan(position.LowPrice) {
+		position.LowPrice = candleLow
+	}
+
+	entry := position.EntryPrice
+	one := decimal.NewFromInt(1)
+	side := strings.ToLower(strings.TrimSpace(position.Side))
+
+	wasBreakevenTriggered := position.BreakevenTriggered
+	if cfg.BreakevenEnabled {
+		triggerPct := decimal.NewFromFloat(cfg.BreakevenTriggerPct)
+		offsetPct := decimal.NewFromFloat(cfg.BreakevenOffsetPct)
+		switch side {
+		case "buy":
+			triggerPrice := entry.Mul(one.Add(triggerPct))
+			if !position.BreakevenTriggered && markPrice.GreaterThanOrEqual(triggerPrice) {
+				newStop := entry.Mul(one.Add(offsetPct))
+				if newStop.GreaterThan(position.StopLoss) {
+					position.StopLoss = newStop
+				}
+				position.BreakevenTriggered = true
+			}
+		case "sell":
+			triggerPrice := entry.Mul(one.Sub(triggerPct))
+			if !position.BreakevenTriggered && markPrice.LessThanOrEqual(triggerPrice) {
+				newStop := entry.Mul(one.Sub(offsetPct))
+				if newStop.LessThan(position.StopLoss) || position.StopLoss.IsZero() {
+					position.StopLoss = newStop
+				}
+				position.BreakevenTriggered = true
+			}
+		}
+	}
+
+	// Only trail on signals *after* the breakeven trigger fired. This prevents
+	// the same candle that triggers breakeven from also tightening the stop to
+	// the current extreme, matching how live trailing stops react to subsequent
+	// ticks.
+	if cfg.TrailingStopEnabled && wasBreakevenTriggered {
+		trailPct := decimal.NewFromFloat(cfg.TrailingStopPct)
+		switch side {
+		case "buy":
+			newStop := position.HighPrice.Mul(one.Sub(trailPct))
+			if newStop.GreaterThan(position.StopLoss) {
+				position.StopLoss = newStop
+			}
+		case "sell":
+			newStop := position.LowPrice.Mul(one.Add(trailPct))
+			if newStop.LessThan(position.StopLoss) || position.StopLoss.IsZero() {
+				position.StopLoss = newStop
+			}
+		}
+	}
 }
 
 func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal, position *SimulatedPosition) ScalpingBacktestTrade {
@@ -791,30 +882,27 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	}
 
 	if exitReason == "mark_to_market" {
-		maxLossPct := decimal.NewFromFloat(e.config.MaxLossPct)
+		maxLossPct := decimal.NewFromFloat(0.015)
+		if e.config.MaxLossPct > 0 {
+			maxLossPct = decimal.NewFromFloat(e.config.MaxLossPct)
+		}
 		switch side {
 		case "buy":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Sub(maxLossPct))
-			candleLowHit := candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice)
-			markHit := markPrice.LessThanOrEqual(maxLossPrice)
-			if candleLowHit || markHit {
-				if markPrice.LessThan(maxLossPrice) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = maxLossPrice
-				}
+			if markPrice.LessThanOrEqual(maxLossPrice) {
+				exitPrice = markPrice
+				exitReason = "max_loss"
+			} else if candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice) {
+				exitPrice = maxLossPrice
 				exitReason = "max_loss"
 			}
 		case "sell":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Add(maxLossPct))
-			candleHighHit := candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice)
-			markHit := markPrice.GreaterThanOrEqual(maxLossPrice)
-			if candleHighHit || markHit {
-				if markPrice.GreaterThan(maxLossPrice) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = maxLossPrice
-				}
+			if markPrice.GreaterThanOrEqual(maxLossPrice) {
+				exitPrice = markPrice
+				exitReason = "max_loss"
+			} else if candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice) {
+				exitPrice = maxLossPrice
 				exitReason = "max_loss"
 			}
 		}
@@ -823,57 +911,20 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	if exitReason == "mark_to_market" {
 		switch side {
 		case "buy":
-			candleLowHit := position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss)
-			markHit := position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss)
-			if candleLowHit || markHit {
-				if markPrice.LessThan(position.StopLoss) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = position.StopLoss
-				}
+			if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss) {
+				exitPrice = markPrice
+				exitReason = "stop_loss"
+			} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+				exitPrice = position.StopLoss
 				exitReason = "stop_loss"
 			}
 		case "sell":
-			candleHighHit := position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss)
-			markHit := position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss)
-			if candleHighHit || markHit {
-				if markPrice.GreaterThan(position.StopLoss) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = position.StopLoss
-				}
+			if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss) {
+				exitPrice = markPrice
 				exitReason = "stop_loss"
-			}
-		}
-	}
-
-	if exitReason == "mark_to_market" && e.config.TrailingStopPct > 0 && !position.HighWaterMark.IsZero() {
-		trailPct := decimal.NewFromFloat(e.config.TrailingStopPct)
-		one := decimal.NewFromInt(1)
-		switch side {
-		case "buy":
-			trailStopPrice := position.HighWaterMark.Mul(one.Sub(trailPct))
-			candleLowHit := candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(trailStopPrice)
-			markHit := markPrice.LessThanOrEqual(trailStopPrice)
-			if candleLowHit || markHit {
-				if markPrice.LessThan(trailStopPrice) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = trailStopPrice
-				}
-				exitReason = "trailing_stop"
-			}
-		case "sell":
-			trailStopPrice := position.HighWaterMark.Mul(one.Add(trailPct))
-			candleHighHit := candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(trailStopPrice)
-			markHit := markPrice.GreaterThanOrEqual(trailStopPrice)
-			if candleHighHit || markHit {
-				if markPrice.GreaterThan(trailStopPrice) {
-					exitPrice = markPrice
-				} else {
-					exitPrice = trailStopPrice
-				}
-				exitReason = "trailing_stop"
+			} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+				exitPrice = position.StopLoss
+				exitReason = "stop_loss"
 			}
 		}
 	}
@@ -949,10 +1000,12 @@ func (e *ScalpingBacktestEngine) classifyRegime(signal MarketSignal) string {
 		return "illiquid"
 	}
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if imbalance >= 0.25 && signal.RangePosition24h > e.configRegimeLowBand()+5 && signal.RangePosition24h < e.configRegimeHighBand()-5 {
+	if imbalance >= DefaultScalpingBacktestTrendImbalanceFloor &&
+		signal.RangePosition24h > e.configRegimeLowBand()+DefaultScalpingBacktestRegimeRangeBufferPct &&
+		signal.RangePosition24h < e.configRegimeHighBand()-DefaultScalpingBacktestRegimeRangeBufferPct {
 		return "trend"
 	}
-	if imbalance < 0.10 {
+	if imbalance < DefaultScalpingBacktestChopImbalanceCeiling {
 		return "chop"
 	}
 	return "neutral"
@@ -978,7 +1031,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			scalpingSellWindowCandidate(signal, fallback))
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
-	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.05
+	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= DefaultScalpingBacktestImbalanceFloor
 	results["imbalance"] = GateResult{Allowed: imbalanceAllowed, Reason: gateReason(imbalanceAllowed, "imbalance_too_weak")}
 
 	confidenceAllowed := decision != nil && decision.Confidence >= e.config.MinConfidence
@@ -1189,15 +1242,6 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 	if config.FeeRate.LessThanOrEqual(decimal.Zero) {
 		config.FeeRate = decimal.NewFromFloat(defaultFallbackRoundTripFeePct).Div(decimal.NewFromInt(200))
 	}
-	if config.MaxLossPct <= 0 {
-		config.MaxLossPct = 0.015
-	}
-	if config.MinPanicDropPct <= 0 {
-		config.MinPanicDropPct = 0.02
-	}
-	if config.TrendFollowMinMomentum <= 0 {
-		config.TrendFollowMinMomentum = 0.001
-	}
 	if config.SlippagePct.LessThanOrEqual(decimal.Zero) {
 		config.SlippagePct = decimal.NewFromFloat(DefaultScalpingBacktestSlippage)
 	}
@@ -1226,6 +1270,7 @@ func normalizeScalpingBacktestConfig(config ScalpingBacktestConfig) ScalpingBack
 		config.Mode = "deterministic"
 	}
 	config.DeterministicFallback = config.DeterministicFallback.Normalized()
+	config.AsymmetricExit = config.AsymmetricExit.Normalized()
 	if len(config.Symbols) == 0 {
 		config.Symbols = defaultScalpingBacktestUniverse()
 	}
@@ -1309,12 +1354,7 @@ func scalpingBacktestBuyRejectionReason(signal MarketSignal) string {
 	}
 }
 
-func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) *AITradingDecision {
-	decision, _ := e.buildDecisionFromSignalWithReason(ctx, signal)
-	return decision
-}
-
-func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.Context, signal MarketSignal) (decision *AITradingDecision, rejectionReason string) {
+func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) (decision *AITradingDecision, rejectionReason string) {
 	defer func() {
 		if decision == nil {
 			zaplogrus.Infof("[SCALPING-BACKTEST] reject %s on %s (spread=%.4f%%, imbalance=%.4f, ADX=%.1f, ATR=%.2f, BB%%b=%.4f, range=%.1f%%, trend_24h=%.4f%%, recent=%.4f%%)",
@@ -1343,7 +1383,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 		rejectionReason = "atr_too_high"
 		return nil, rejectionReason
 	}
-	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
+	effectiveMinImbalance := math.Min(fallback.MinImbalance, fallback.BacktestStrongImbalanceFloor)
 	if e.config.RequireRecentMomentum {
 		effectiveMinImbalance = fallback.MinImbalance
 	}
@@ -1363,7 +1403,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 		momentumPct = signal.RecentPriceChange
 		minRecentMomentum := e.config.MinRecentMomentumPct
 		if minRecentMomentum <= 0 {
-			minRecentMomentum = 0.05
+			minRecentMomentum = DefaultScalpingBacktestMinRecentMomentumPct
 		}
 		buyMomentumMin = math.Max(buyMomentumMin, minRecentMomentum)
 		sellMomentumMax = math.Min(sellMomentumMax, -minRecentMomentum)
@@ -1372,14 +1412,6 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 	rangeAlignment := 0.0
 	momentumAligned := false
 	switch {
-	case e.config.EnablePanicDropEntry && signal.RecentChangeKnown && signal.RecentPriceChange < -e.config.MinPanicDropPct && imbalance > fallback.BacktestImbalanceFloor && signal.RangePosition24h <= fallback.BuyRangeMax+fallback.BacktestRangeBufferPct:
-		action = "buy"
-		momentumAligned = true
-		rangeAlignment = clampFloat((fallback.BuyRangeMax+fallback.BacktestRangeBufferPct-signal.RangePosition24h)/math.Max(fallback.BuyRangeMax+fallback.BacktestRangeBufferPct, 1), 0, 1)
-	case e.config.EnableTrendFollowEntry && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 && signal.TrendEMA20 > signal.TrendEMA50 && signal.RecentChangeKnown && signal.RecentPriceChange > e.config.TrendFollowMinMomentum && imbalance > fallback.BacktestImbalanceFloor:
-		action = "buy"
-		momentumAligned = true
-		rangeAlignment = 0.5
 	case reversalBuy:
 		action = "buy"
 		momentumAligned = true
@@ -1425,19 +1457,18 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignalWithReason(ctx context.C
 		return nil, rejectionReason
 	}
 
+	if action == "buy" && e.config.MinEntryMomentumPct > 0 {
+		buyMomentumMin = math.Max(buyMomentumMin, e.config.MinEntryMomentumPct)
+		if momentumPct < buyMomentumMin {
+			rejectionReason = "entry_momentum_misaligned"
+			return nil, rejectionReason
+		}
+		momentumAligned = true
+	}
+
 	if !momentumAligned {
 		rejectionReason = "momentum_not_aligned"
 		return nil, rejectionReason
-	}
-	if e.config.EnableTrendFilter && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 {
-		if action == "buy" && signal.TrendEMA20 <= signal.TrendEMA50 {
-			rejectionReason = "trend_filter_buy_bearish"
-			return nil, rejectionReason
-		}
-		if action == "sell" && signal.TrendEMA20 >= signal.TrendEMA50 {
-			rejectionReason = "trend_filter_sell_bullish"
-			return nil, rejectionReason
-		}
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.BidAskSpread > fallback.RecentBuyMaxSpreadPct {
 		rejectionReason = "recent_buy_spread_too_wide"
@@ -1807,8 +1838,6 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 		atrValues := computeATR(series, 14)
 		atrSMA := computeSMA(atrValues, 20)
 		bbUpper, _, bbLower := computeBollingerBands(series, 20, 2.0)
-		ema20 := computeEMA(series, 80)
-		ema50 := computeEMA(series, 200)
 
 		var prevClose float64
 		for i, point := range series {
@@ -1828,7 +1857,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 				bbPctB = (point.close - bbLower[i]) / bbRange
 			}
 
-			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB, ema20[i], ema50[i]))
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB))
 			prevClose = point.close
 		}
 	}
@@ -1911,7 +1940,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	return metrics
 }
 
-func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64, trendEMA20 float64, trendEMA50 float64) HistoricalSignal {
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64) HistoricalSignal {
 	imbalance := 0.0
 	if point.high > point.low {
 		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)
@@ -1950,8 +1979,6 @@ func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWin
 			BBPercentB:         bbPctB,
 			Low:                point.low,
 			High:               point.high,
-			TrendEMA20:         trendEMA20,
-			TrendEMA50:         trendEMA50,
 		},
 	}
 }
@@ -2014,27 +2041,6 @@ func computeSMA(values []float64, period int) []float64 {
 		result[i] = sum / float64(period)
 	}
 
-	return result
-}
-
-func computeEMA(series []scalpingOHLCVPoint, period int) []float64 {
-	n := len(series)
-	result := make([]float64, n)
-	if n == 0 || period <= 0 {
-		return result
-	}
-	if n < period {
-		return result
-	}
-	k := 2.0 / float64(period+1)
-	var seed float64
-	for i := 0; i < period; i++ {
-		seed += series[i].close
-	}
-	result[period-1] = seed / float64(period)
-	for i := period; i < n; i++ {
-		result[i] = series[i].close*k + result[i-1]*(1-k)
-	}
 	return result
 }
 

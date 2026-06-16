@@ -32,4 +32,5 @@ export type GatewayState = typeof GatewayStateSchema.Type;
 export const decodeGatewayState = S.decodeUnknown(GatewayStateSchema);
 
 /** Decode an unknown JSON value, returning Either. */
-export const decodeGatewayStateEither = S.decodeUnknownEither(GatewayStateSchema);
+export const decodeGatewayStateEither =
+  S.decodeUnknownEither(GatewayStateSchema);

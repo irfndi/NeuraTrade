@@ -9,7 +9,7 @@ import { Effect } from "effect";
 export function getEnvOrRuntimeString(
   name: string,
   runtimeValue: string,
-  fallback: string
+  fallback: string,
 ): Effect.Effect<string, never, never> {
   return Effect.sync(() => {
     const envVal = process.env[name];
@@ -32,7 +32,7 @@ export function getEnvOrRuntimeString(
 export function getEnvOrRuntimePort(
   name: string,
   runtimePort: number,
-  fallback: string
+  fallback: string,
 ): Effect.Effect<string, never, never> {
   return Effect.sync(() => {
     const envVal = process.env[name];
@@ -40,7 +40,11 @@ export function getEnvOrRuntimePort(
       const trimmed = envVal.trim();
       if (trimmed !== "") return trimmed;
     }
-    if (Number.isInteger(runtimePort) && runtimePort >= 1 && runtimePort <= 65535) {
+    if (
+      Number.isInteger(runtimePort) &&
+      runtimePort >= 1 &&
+      runtimePort <= 65535
+    ) {
       return String(runtimePort);
     }
     return fallback;
@@ -58,16 +62,26 @@ export function getEnvOrRuntimePort(
 export function getEnvOrRuntimeBool(
   name: string,
   runtimeValue: boolean | undefined,
-  fallback: boolean
+  fallback: boolean,
 ): Effect.Effect<boolean, never, never> {
   return Effect.sync(() => {
     const envVal = process.env[name];
     if (envVal !== undefined) {
       const trimmed = envVal.trim().toLowerCase();
-      if (trimmed === "true" || trimmed === "1" || trimmed === "yes" || trimmed === "on") {
+      if (
+        trimmed === "true" ||
+        trimmed === "1" ||
+        trimmed === "yes" ||
+        trimmed === "on"
+      ) {
         return true;
       }
-      if (trimmed === "false" || trimmed === "0" || trimmed === "no" || trimmed === "off") {
+      if (
+        trimmed === "false" ||
+        trimmed === "0" ||
+        trimmed === "no" ||
+        trimmed === "off"
+      ) {
         return false;
       }
       return fallback;
@@ -86,7 +100,7 @@ export function getEnvOrRuntimeBool(
 export function getEnvOrRuntimeDurationSeconds(
   name: string,
   runtimeSeconds: number,
-  fallback: number
+  fallback: number,
 ): Effect.Effect<number, never, never> {
   return Effect.sync(() => {
     const envVal = process.env[name];

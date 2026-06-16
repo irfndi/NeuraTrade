@@ -49,12 +49,19 @@ export const exchangeTestCommand = Command.make(
       });
       const layers = Layer.mergeAll(makeLayer(), adapterLayer);
 
-      const exitCode = yield* runTest(apiKey, apiSecret, args.symbol, args.quantity).pipe(
+      const exitCode = yield* runTest(
+        apiKey,
+        apiSecret,
+        args.symbol,
+        args.quantity,
+      ).pipe(
         Effect.provide(layers),
         Effect.tap((report) => Console.log(report)),
         Effect.catchAll((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`exchange test failed: ${"reason" in err ? err.reason : String(err)}`);
+            yield* Console.error(
+              `exchange test failed: ${"reason" in err ? err.reason : String(err)}`,
+            );
             return 1;
           }),
         ),
@@ -62,12 +69,23 @@ export const exchangeTestCommand = Command.make(
 
       return exitCode;
     }),
-).pipe(Command.withDescription("Validate live Binance adapter with a testnet order round-trip"));
+).pipe(
+  Command.withDescription(
+    "Validate live Binance adapter with a testnet order round-trip",
+  ),
+);
 
-export function runTest(apiKey: string, apiSecret: string, symbol: string, quantity: number) {
+export function runTest(
+  apiKey: string,
+  apiSecret: string,
+  symbol: string,
+  quantity: number,
+) {
   return Effect.gen(function* () {
     if (!apiKey || !apiSecret) {
-      yield* Console.error("Binance API key and secret are required (testnet default).");
+      yield* Console.error(
+        "Binance API key and secret are required (testnet default).",
+      );
       return 1;
     }
 
@@ -75,7 +93,9 @@ export function runTest(apiKey: string, apiSecret: string, symbol: string, quant
 
     yield* Console.log("Loading testnet account balance...");
     const usdtBefore = yield* adapter.getBalance("USDT");
-    yield* Console.log(`USDT balance: free=${usdtBefore.free.toFixed(2)} locked=${usdtBefore.locked.toFixed(2)}`);
+    yield* Console.log(
+      `USDT balance: free=${usdtBefore.free.toFixed(2)} locked=${usdtBefore.locked.toFixed(2)}`,
+    );
 
     yield* Console.log(`Buying ${quantity} ${symbol} on testnet...`);
     const buyFill = yield* adapter.placeOrder({
@@ -100,7 +120,9 @@ export function runTest(apiKey: string, apiSecret: string, symbol: string, quant
     );
 
     const usdtAfter = yield* adapter.getBalance("USDT");
-    yield* Console.log(`USDT balance after: free=${usdtAfter.free.toFixed(2)} locked=${usdtAfter.locked.toFixed(2)}`);
+    yield* Console.log(
+      `USDT balance after: free=${usdtAfter.free.toFixed(2)} locked=${usdtAfter.locked.toFixed(2)}`,
+    );
 
     return `Testnet round-trip complete for ${symbol}.`;
   });

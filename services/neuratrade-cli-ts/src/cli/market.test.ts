@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { Effect } from "effect";
 import { Database } from "bun:sqlite";
-import { MarketDataGateway, type MarketDataGatewayService } from "../market-data/gateway.js";
+import {
+  MarketDataGateway,
+  type MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import { MarketDataRepositorySQLiteLive } from "../market-data/repository.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { fetchUniverseProgram } from "./market.js";
@@ -34,12 +37,7 @@ function makeGateway(): MarketDataGatewayService {
         timestamp: new Date(),
       }),
     fetchSymbols: () =>
-      Effect.succeed([
-        "BTC/USDT",
-        "ETH/USDT",
-        "SOL/USDT",
-        "DOGE/BTC",
-      ]),
+      Effect.succeed(["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/BTC"]),
     fetch24hrVolumes: () =>
       Effect.succeed({
         BTCUSDT: 1_000_000,

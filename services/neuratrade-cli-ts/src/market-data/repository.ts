@@ -29,7 +29,9 @@ export interface CandleQuery {
  * Port for persisting and retrieving market data.
  */
 export interface MarketDataRepositoryService {
-  readonly saveTick: (tick: Tick) => Effect.Effect<void, MarketDataRepositoryError, never>;
+  readonly saveTick: (
+    tick: Tick,
+  ) => Effect.Effect<void, MarketDataRepositoryError, never>;
 
   readonly saveCandles: (
     candles: readonly Candle[],
@@ -50,12 +52,15 @@ export interface MarketDataRepositoryService {
     minCandles?: number,
   ) => Effect.Effect<readonly string[], MarketDataRepositoryError, never>;
 
-  readonly ensureTables: () => Effect.Effect<void, MarketDataRepositoryError, never>;
+  readonly ensureTables: () => Effect.Effect<
+    void,
+    MarketDataRepositoryError,
+    never
+  >;
 }
 
-export const MarketDataRepository = Context.GenericTag<MarketDataRepositoryService>(
-  "MarketDataRepository",
-);
+export const MarketDataRepository =
+  Context.GenericTag<MarketDataRepositoryService>("MarketDataRepository");
 
 // ---------------------------------------------------------------------------
 // SQLite implementation
@@ -246,7 +251,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
       const sql = `SELECT open_price, high_price, low_price, close_price, volume, timestamp
                    FROM ohlcv_data
                    WHERE ${conditions.join(" AND ")}
-                   ORDER BY timestamp ASC
+                   ORDER BY timestamp DESC
                    ${query.limit ? "LIMIT ?" : ""}`;
       if (query.limit) params.push(query.limit);
 
@@ -261,19 +266,22 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
             timestamp: string;
           }>;
 
-          return rows.map(
-            (r): Candle => ({
-              exchange: query.exchange,
-              symbol: query.symbol,
-              timeframe: query.timeframe,
-              open: r.open_price,
-              high: r.high_price,
-              low: r.low_price,
-              close: r.close_price,
-              volume: r.volume,
-              timestamp: new Date(r.timestamp),
-            }),
-          );
+          return rows
+            .slice()
+            .reverse()
+            .map(
+              (r): Candle => ({
+                exchange: query.exchange,
+                symbol: query.symbol,
+                timeframe: query.timeframe,
+                open: r.open_price,
+                high: r.high_price,
+                low: r.low_price,
+                close: r.close_price,
+                volume: r.volume,
+                timestamp: new Date(r.timestamp),
+              }),
+            );
         },
         catch: (err) =>
           new MarketDataRepositoryError(
@@ -359,7 +367,10 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
                HAVING candle_count >= ?
                ORDER BY candle_count DESC`,
             )
-            .all(exchangeId, timeframe, minCandles) as Array<{ symbol: string; candle_count: number }>;
+            .all(exchangeId, timeframe, minCandles) as Array<{
+            symbol: string;
+            candle_count: number;
+          }>;
 
           return rows.map((r) => r.symbol);
         },
@@ -379,9 +390,9 @@ function getOrCreateExchange(
 ): Effect.Effect<number, MarketDataRepositoryError, never> {
   return Effect.try({
     try: () => {
-      const existing = db.query("SELECT id FROM exchanges WHERE name = ?").get(name) as
-        | { id: number }
-        | undefined;
+      const existing = db
+        .query("SELECT id FROM exchanges WHERE name = ?")
+        .get(name) as { id: number } | undefined;
       if (existing) return existing.id;
 
       const result = db
@@ -403,9 +414,10 @@ function getOrCreateTradingPair(
 ): Effect.Effect<number, MarketDataRepositoryError, never> {
   return Effect.gen(function* () {
     const existing = yield* Effect.try({
-      try: () => db.query("SELECT id FROM trading_pairs WHERE symbol = ?").get(symbol) as
-        | { id: number }
-        | undefined,
+      try: () =>
+        db
+          .query("SELECT id FROM trading_pairs WHERE symbol = ?")
+          .get(symbol) as { id: number } | undefined,
       catch: (err) =>
         new MarketDataRepositoryError(
           `Trading pair lookup failed for ${symbol}: ${
@@ -423,7 +435,9 @@ function getOrCreateTradingPair(
     return yield* Effect.try({
       try: () => {
         const result = db
-          .query("INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)")
+          .query(
+            "INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)",
+          )
           .run(symbol, base, quote);
         return Number(result.lastInsertRowid);
       },

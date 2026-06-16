@@ -67,6 +67,10 @@ type AIScalpingConfig struct {
 	RegimeChopConfidence  float64
 	ShadowMirrorTimeout   time.Duration
 	DeterministicFallback DeterministicFallbackConfig
+	// AsymmetricExit overrides the default symmetric stop-loss/take-profit
+	// levels with a tighter stop / wider target and optional breakeven/trailing
+	// stop. Controlled via NEURATRADE_SCALPING_ASYMMETRIC_* env vars.
+	AsymmetricExit AsymmetricExitConfig
 }
 
 const (
@@ -119,16 +123,23 @@ const (
 	scalpingFeedbackTightenSizeFactor    = 0.50
 	scalpingFeedbackLoosenSizeStep       = 0.10
 	scalpingFeedbackConsecutiveThreshold = 3
+)
 
-	// Bollinger Band %B entry/exit thresholds: entries require %B below the
-	// buy ceiling (oversold) or above the sell floor (overbought).
-	scalpingBBEntryMaxPct = 0.20
-	scalpingBBExitMinPct  = 0.80
+// Fallback risk-reward range: when the deterministic composer can't find
+// strong order-book signals, it falls back to ATR-based stops/takes within
+// [Floor, Ceil] scaled by SpreadMult. Reward is the take-profit fraction.
+// These are vars (not consts) so tests can save/restore them around the
+// scenarios they exercise.
+var (
+	scalpingFallbackRiskFloorPct   = 0.015
+	scalpingFallbackRiskCeilPct    = 0.05
+	scalpingFallbackRiskSpreadMult = 2.0
+	scalpingFallbackRewardPct      = 0.075
 
-	// ADX regime filter: reject signals when ADX exceeds this threshold (trending market).
-	scalpingADXMaxPct = 25.0
-	// ATR volatility expansion filter: reject entries when ATR ratio (ATR(14)/SMA(ATR,20)) exceeds this threshold.
-	scalpingATRRatioMax = 1.5
+	// scalpingFallbackEnvOnce gates one-time env-var setup for the fallback
+	// risk-reward tuning. Tests reset it by reassigning a fresh sync.Once{} so
+	// each subtest gets a clean setup.
+	scalpingFallbackEnvOnce sync.Once
 )
 
 type DeterministicFallbackConfig struct {
@@ -237,9 +248,9 @@ func DefaultDeterministicFallbackConfig() DeterministicFallbackConfig {
 		SellWindowMinTrendPct:        0.0,
 		SellWindowMaxTrendPct:        0.50,
 		NoRecentBuyMaxRangePct:       20.0,
-		BacktestImbalanceFloor:       0.05,
-		BacktestStrongImbalanceFloor: 0.20,
-		BacktestRangeBufferPct:       5.0,
+		BacktestImbalanceFloor:       0.02,
+		BacktestStrongImbalanceFloor: 0.10,
+		BacktestRangeBufferPct:       12.0,
 	}
 }
 
@@ -412,16 +423,56 @@ func (cfg DeterministicFallbackConfig) Normalized() DeterministicFallbackConfig 
 	if cfg.NoRecentBuyMaxRangePct > 0 {
 		normalized.NoRecentBuyMaxRangePct = clampFloat(cfg.NoRecentBuyMaxRangePct, 1, 100)
 	}
-	if cfg.BacktestImbalanceFloor > 0 {
-		normalized.BacktestImbalanceFloor = clampFloat(cfg.BacktestImbalanceFloor, 0.0001, 1)
-	}
-	if cfg.BacktestStrongImbalanceFloor > 0 {
-		normalized.BacktestStrongImbalanceFloor = clampFloat(cfg.BacktestStrongImbalanceFloor, 0.0001, 1)
-	}
-	if cfg.BacktestRangeBufferPct > 0 {
-		normalized.BacktestRangeBufferPct = clampFloat(cfg.BacktestRangeBufferPct, 0, 50)
-	}
 
+	return normalized
+}
+
+// AsymmetricExitConfig configures tighter stops / wider targets and optional
+// breakeven/trailing behaviour for the scalping strategy. When enabled, the
+// engine replaces the symmetric 0.8%/1.2% default with a configurable R:R,
+// moves the stop to breakeven once a trigger profit is reached, and trails the
+// stop by TrailingStopPct once breakeven is active.
+type AsymmetricExitConfig struct {
+	UseAsymmetricExits  bool
+	StopLossPct         float64
+	TakeProfitPct       float64
+	BreakevenEnabled    bool
+	BreakevenTriggerPct float64
+	BreakevenOffsetPct  float64
+	TrailingStopEnabled bool
+	TrailingStopPct     float64
+}
+
+// Normalized fills sensible defaults and clamps bounds for asymmetric exits.
+func (cfg AsymmetricExitConfig) Normalized() AsymmetricExitConfig {
+	if !cfg.UseAsymmetricExits {
+		return cfg
+	}
+	normalized := cfg
+	if normalized.StopLossPct <= 0 {
+		normalized.StopLossPct = 0.005
+	}
+	if normalized.TakeProfitPct <= 0 {
+		normalized.TakeProfitPct = 0.015
+	}
+	if normalized.BreakevenEnabled {
+		if normalized.BreakevenTriggerPct <= 0 {
+			normalized.BreakevenTriggerPct = normalized.StopLossPct
+		}
+		if normalized.BreakevenOffsetPct < 0 {
+			normalized.BreakevenOffsetPct = 0
+		}
+	}
+	if normalized.TrailingStopEnabled {
+		if normalized.TrailingStopPct <= 0 {
+			normalized.TrailingStopPct = normalized.StopLossPct
+		}
+	}
+	normalized.StopLossPct = clampFloat(normalized.StopLossPct, 0.0001, 0.50)
+	normalized.TakeProfitPct = clampFloat(normalized.TakeProfitPct, 0.0001, 1.0)
+	normalized.BreakevenTriggerPct = clampFloat(normalized.BreakevenTriggerPct, 0.0001, 0.50)
+	normalized.BreakevenOffsetPct = clampFloat(normalized.BreakevenOffsetPct, 0, 0.05)
+	normalized.TrailingStopPct = clampFloat(normalized.TrailingStopPct, 0.0001, 0.50)
 	return normalized
 }
 
@@ -469,6 +520,16 @@ func DefaultAIScalpingConfig() AIScalpingConfig {
 		RegimeChopConfidence:  0.65,
 		ShadowMirrorTimeout:   10 * time.Second,
 		DeterministicFallback: DefaultDeterministicFallbackConfig(),
+		AsymmetricExit: AsymmetricExitConfig{
+			UseAsymmetricExits:  false,
+			StopLossPct:         0.005,
+			TakeProfitPct:       0.015,
+			BreakevenEnabled:    true,
+			BreakevenTriggerPct: 0.006,
+			BreakevenOffsetPct:  0.0005,
+			TrailingStopEnabled: true,
+			TrailingStopPct:     0.004,
+		},
 	}
 }
 
@@ -595,10 +656,37 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.RegimeLowBand = 15
 		cfg.RegimeHighBand = 85
 	}
+
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_USE"); ok {
+		cfg.AsymmetricExit.UseAsymmetricExits = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_SL_PCT"); ok {
+		cfg.AsymmetricExit.StopLossPct = clampFloat(value, 0.0001, 0.50)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_TP_PCT"); ok {
+		cfg.AsymmetricExit.TakeProfitPct = clampFloat(value, 0.0001, 1.0)
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN"); ok {
+		cfg.AsymmetricExit.BreakevenEnabled = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN_TRIGGER_PCT"); ok {
+		cfg.AsymmetricExit.BreakevenTriggerPct = clampFloat(value, 0.0001, 0.50)
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_BREAKEVEN_OFFSET_PCT"); ok {
+		cfg.AsymmetricExit.BreakevenOffsetPct = clampFloat(value, 0, 0.05)
+	}
+	if value, ok := getEnvBool("NEURATRADE_SCALPING_ASYMMETRIC_TRAILING"); ok {
+		cfg.AsymmetricExit.TrailingStopEnabled = value
+	}
+	if value, ok := getEnvFloat("NEURATRADE_SCALPING_ASYMMETRIC_TRAILING_PCT"); ok {
+		cfg.AsymmetricExit.TrailingStopPct = clampFloat(value, 0.0001, 0.50)
+	}
+	cfg.AsymmetricExit = cfg.AsymmetricExit.Normalized()
+
 	cfg.DeterministicFallback = applyDeterministicFallbackConfigFromEnv(cfg.DeterministicFallback).Normalized()
 
 	zaplogrus.Infof(
-		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
+		"[AI-SCALPING] Runtime config: exchange=%s model=%s leverage=%d max_tokens=%d max_capital_pct=%.2f min_confidence=%.2f timeout=%s auto_execute=%t allow_spot_fallback=%t max_pairs=%d max_candidates=%d max_bid_ask_spread=%.4f orderbook_pairs=%d auto_expand_orderbooks=%t auto_expand_threshold=%d enforce_futures=%t symbol_cooldown=%s failure_budget=%d failure_window=%s structured_retries=%d loss_streak_budget=%d loss_cooldown=%s loss_window=%s pretrade_gate=%t min_expectancy_edge=%.4f min_expectancy_samples=%d regime_low=%.1f regime_high=%.1f regime_chop_confidence=%.2f asymmetric=%t asymmetric_sl_pct=%.4f asymmetric_tp_pct=%.4f breakeven=%t trailing=%t fallback_max_spread=%.4f fallback_min_imbalance=%.2f fallback_floor=%.2f fallback_size_fraction=%.2f",
 		cfg.Exchange,
 		cfg.Model,
 		cfg.Leverage,
@@ -628,6 +716,11 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.RegimeLowBand,
 		cfg.RegimeHighBand,
 		cfg.RegimeChopConfidence,
+		cfg.AsymmetricExit.UseAsymmetricExits,
+		cfg.AsymmetricExit.StopLossPct,
+		cfg.AsymmetricExit.TakeProfitPct,
+		cfg.AsymmetricExit.BreakevenEnabled,
+		cfg.AsymmetricExit.TrailingStopEnabled,
 		cfg.DeterministicFallback.MaxBidAskSpread,
 		cfg.DeterministicFallback.MinImbalance,
 		cfg.DeterministicFallback.ConfidenceFloor,
@@ -635,7 +728,7 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 	)
 
 	zaplogrus.Infof(
-		"[AI-SCALPING] DeterministicFallback: BBEntryMaxPct=%.4f BBExitMinPct=%.4f ADXMaxPct=%.2f ATRRatioMax=%.2f RecentBuyMaxSpreadPct=%.4f RecentBuyMinTrendPct=%.4f RecentBuyMaxRangePct=%.2f RecentSellMinRangePct=%.2f ReversalBuyMaxSpreadPct=%.4f ReversalBuyMaxRangePct=%.2f ReversalBuyMaxRecentPct=%.4f ReversalBuyMaxTrendPct=%.4f BlowoffSellRangeMin=%.2f BlowoffSellRangeMax=%.2f BlowoffSellTrendMinPct=%.4f BlowoffSellRecentMinPct=%.4f BlowoffSellMaxImbalance=%.4f SellWindowMinRangePct=%.2f SellWindowMaxRangePct=%.2f SellWindowMaxSpreadPct=%.4f SellWindowMaxImbalance=%.4f SellWindowMinRecentPct=%.4f SellWindowMaxRecentPct=%.4f SellWindowMinTrendPct=%.4f SellWindowMaxTrendPct=%.4f NoRecentBuyMaxRangePct=%.2f BacktestImbalanceFloor=%.4f BacktestStrongImbalanceFloor=%.4f BacktestRangeBufferPct=%.2f",
+		"[AI-SCALPING] DeterministicFallback: BBEntryMaxPct=%.4f BBExitMinPct=%.4f ADXMaxPct=%.2f ATRRatioMax=%.2f RecentBuyMaxSpreadPct=%.4f RecentBuyMinTrendPct=%.4f RecentBuyMaxRangePct=%.2f RecentSellMinRangePct=%.2f ReversalBuyMaxSpreadPct=%.4f ReversalBuyMaxRangePct=%.2f ReversalBuyMaxRecentPct=%.4f ReversalBuyMaxTrendPct=%.4f BlowoffSellRangeMin=%.2f BlowoffSellRangeMax=%.2f BlowoffSellTrendMinPct=%.4f BlowoffSellRecentMinPct=%.4f BlowoffSellMaxImbalance=%.4f SellWindowMinRangePct=%.2f SellWindowMaxRangePct=%.2f SellWindowMaxSpreadPct=%.4f SellWindowMaxImbalance=%.4f SellWindowMinRecentPct=%.4f SellWindowMaxRecentPct=%.4f SellWindowMinTrendPct=%.4f SellWindowMaxTrendPct=%.4f NoRecentBuyMaxRangePct=%.2f",
 		cfg.DeterministicFallback.BBEntryMaxPct,
 		cfg.DeterministicFallback.BBExitMinPct,
 		cfg.DeterministicFallback.ADXMaxPct,
@@ -662,26 +755,6 @@ func ResolveAIScalpingConfigFromEnv(base AIScalpingConfig) AIScalpingConfig {
 		cfg.DeterministicFallback.SellWindowMinTrendPct,
 		cfg.DeterministicFallback.SellWindowMaxTrendPct,
 		cfg.DeterministicFallback.NoRecentBuyMaxRangePct,
-		cfg.DeterministicFallback.BacktestImbalanceFloor,
-		cfg.DeterministicFallback.BacktestStrongImbalanceFloor,
-		cfg.DeterministicFallback.BacktestRangeBufferPct,
-	)
-
-	scalpingPolicy := appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig())
-	zaplogrus.Infof(
-		"[AI-SCALPING] ScalpingPolicy: StrongImbalanceFloor=%.4f NeutralImbalanceFloor=%.4f BuyRangeMax=%.2f SellRangeMin=%.2f ContinuationRangeBuffer=%.2f BreakdownSellRangeMin=%.2f ConfidenceBase=%.4f ConfidenceImbalanceW=%.4f ConfidenceLiquidityW=%.4f ConfidenceRangeW=%.4f ConfidenceVolumeW=%.4f ConfidenceVolumeLogBase=%.2f",
-		scalpingPolicy.StrongImbalanceFloor,
-		scalpingPolicy.NeutralImbalanceFloor,
-		scalpingPolicy.BuyRangeMax,
-		scalpingPolicy.SellRangeMin,
-		scalpingPolicy.ContinuationRangeBuffer,
-		scalpingPolicy.BreakdownSellRangeMin,
-		scalpingPolicy.ConfidenceBase,
-		scalpingPolicy.ConfidenceImbalanceW,
-		scalpingPolicy.ConfidenceLiquidityW,
-		scalpingPolicy.ConfidenceRangeW,
-		scalpingPolicy.ConfidenceVolumeW,
-		scalpingPolicy.ConfidenceVolumeLogBase,
 	)
 
 	return cfg
@@ -829,15 +902,6 @@ func applyDeterministicFallbackConfigFromEnv(base DeterministicFallbackConfig) D
 	}
 	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_NO_RECENT_BUY_MAX_RANGE_PCT"); ok {
 		cfg.NoRecentBuyMaxRangePct = value
-	}
-	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_IMBALANCE_FLOOR"); ok {
-		cfg.BacktestImbalanceFloor = value
-	}
-	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_STRONG_IMBALANCE_FLOOR"); ok {
-		cfg.BacktestStrongImbalanceFloor = value
-	}
-	if value, ok := getEnvFloat("NEURATRADE_SCALPING_FALLBACK_BT_RANGE_BUFFER_PCT"); ok {
-		cfg.BacktestRangeBufferPct = value
 	}
 
 	return cfg
@@ -1556,7 +1620,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
 	zaplogrus.Infof("[AI-SCALPING] Gathered %d market signals", len(signals))
-	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, appautonomy.ApplyScalpingPolicyConfigFromEnv(appautonomy.DefaultScalpingPolicyConfig()))
+	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, scalpingPolicyConfigFromEnv(s.maxBidAskSpreadPct()))
 
 	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
@@ -1869,8 +1933,6 @@ type aiMarketSignal struct {
 	RecentChangeKnown  bool    `json:"-"`
 	Low                float64 `json:"candle_low,omitempty"`
 	High               float64 `json:"candle_high,omitempty"`
-	TrendEMA20         float64 `json:"trend_ema_20,omitempty"`
-	TrendEMA50         float64 `json:"trend_ema_50,omitempty"`
 }
 
 func (s *AIScalpingService) discoverTradingPairs(ctx context.Context) ([]string, error) {
@@ -2630,24 +2692,29 @@ func (s *AIScalpingService) executeDecision(ctx context.Context, decision *AITra
 		time.Now().UnixNano(),
 	)
 
+	exitCfg := s.config.AsymmetricExit.Normalized()
 	details := TradeDetails{
-		Exchange:          exchange,
-		Symbol:            decision.Symbol,
-		Side:              decision.Action,
-		OrderType:         "market",
-		MarketType:        "futures",
-		AllowSpotFallback: s.config.AllowSpotFallback,
-		Leverage:          s.config.Leverage,
-		AmountUSDT:        amount,
-		WalletPercent:     decision.SizePercent,
-		TakeProfit:        decision.TakeProfit,
-		StopLoss:          decision.StopLoss,
-		TradeType:         "scalping",
-		Confidence:        decision.Confidence,
-		Reasoning:         decision.Reasoning,
-		EntryPrice:        decision.EntryPrice,
-		IsPaperTrade:      paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
-		IntentID:          intentID,
+		Exchange:            exchange,
+		Symbol:              decision.Symbol,
+		Side:                decision.Action,
+		OrderType:           "market",
+		MarketType:          "futures",
+		AllowSpotFallback:   s.config.AllowSpotFallback,
+		Leverage:            s.config.Leverage,
+		AmountUSDT:          amount,
+		WalletPercent:       decision.SizePercent,
+		TakeProfit:          decision.TakeProfit,
+		StopLoss:            decision.StopLoss,
+		TradeType:           "scalping",
+		Confidence:          decision.Confidence,
+		Reasoning:           decision.Reasoning,
+		EntryPrice:          decision.EntryPrice,
+		IsPaperTrade:        paperTradeFlagForContext(ctx, s.orderExecutor.IsPaperTrading()),
+		IntentID:            intentID,
+		BreakevenEnabled:    exitCfg.BreakevenEnabled,
+		BreakevenTriggerPct: exitCfg.BreakevenTriggerPct,
+		TrailingStopEnabled: exitCfg.TrailingStopEnabled,
+		TrailingStopPct:     exitCfg.TrailingStopPct,
 	}
 
 	// Use PlaceOrderWithDetails for rich notifications
@@ -3867,14 +3934,6 @@ func (s *AIScalpingService) deterministicFallbackCandidate(
 	if !momentumAligned {
 		return nil, 0, false
 	}
-	if s.scalpingFallbackTrendFilterEnabled() && signal.TrendEMA20 > 0 && signal.TrendEMA50 > 0 {
-		if action == "buy" && signal.TrendEMA20 <= signal.TrendEMA50 {
-			return nil, 0, false
-		}
-		if action == "sell" && signal.TrendEMA20 >= signal.TrendEMA50 {
-			return nil, 0, false
-		}
-	}
 	if signal.RecentChangeKnown && action == "buy" && !reversalBuy && signal.BidAskSpread > scalpingRecentBuyMaxSpreadPct {
 		return nil, 0, false
 	}
@@ -4088,38 +4147,6 @@ func scalpingBlowoffSellTrendConfirmed(signal aiMarketSignal, fallback Determini
 		signal.OrderBookImbalance <= fallback.BlowoffSellMaxImbalance
 }
 
-var (
-	scalpingFallbackRiskFloorPct   float64 = 0.015
-	scalpingFallbackRiskCeilPct    float64 = 0.05
-	scalpingFallbackRiskSpreadMult float64 = 2.0
-	scalpingFallbackRewardPct      float64 = 0.075
-	scalpingFallbackTrendFilter    bool    = false
-	scalpingFallbackEnvOnce        sync.Once
-)
-
-func applyScalpingFallbackRiskRewardFromEnv() {
-	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT")), 64); err == nil && v > 0 {
-		scalpingFallbackRiskFloorPct = v
-	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT")), 64); err == nil && v > 0 {
-		scalpingFallbackRiskCeilPct = v
-	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT")), 64); err == nil && v > 0 {
-		scalpingFallbackRiskSpreadMult = v
-	}
-	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
-		scalpingFallbackRewardPct = v
-	}
-	if v := strings.TrimSpace(strings.ToLower(os.Getenv("NEURATRADE_SCALPING_FALLBACK_TREND_FILTER"))); v == "true" || v == "1" || v == "yes" {
-		scalpingFallbackTrendFilter = true
-	}
-}
-
-func (s *AIScalpingService) scalpingFallbackTrendFilterEnabled() bool {
-	scalpingFallbackEnvOnce.Do(applyScalpingFallbackRiskRewardFromEnv)
-	return scalpingFallbackTrendFilter
-}
-
 func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Decimal) {
 	scalpingFallbackEnvOnce.Do(applyScalpingFallbackRiskRewardFromEnv)
 	reward := decimal.NewFromFloat(scalpingFallbackRewardPct)
@@ -4136,6 +4163,21 @@ func fallbackRiskRewardPct(signal aiMarketSignal) (decimal.Decimal, decimal.Deci
 		minRisk = decimal.Zero
 	}
 	return minRisk, reward
+}
+
+func applyScalpingFallbackRiskRewardFromEnv() {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_FLOOR_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskFloorPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_CEIL_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskCeilPct = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_RISK_SPREAD_MULT")), 64); err == nil && v > 0 {
+		scalpingFallbackRiskSpreadMult = v
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("NEURATRADE_SCALPING_FALLBACK_REWARD_PCT")), 64); err == nil && v > 0 {
+		scalpingFallbackRewardPct = v
+	}
 }
 
 func fallbackProjectedNetEdgePct(spreadPct float64, rewardPct decimal.Decimal) decimal.Decimal {
@@ -5215,6 +5257,32 @@ func defaultExitLevelsWithLeverage(price float64, action string, leverage int) (
 	}
 }
 
+// asymmetricExitLevels computes stop-loss and take-profit using the configured
+// asymmetric percentages, divided by leverage to match how the exchange scales
+// liquidations/margin. The result is a tighter stop and wider target than the
+// legacy symmetric 0.8%/1.2% defaults.
+func asymmetricExitLevels(price float64, action string, leverage int, cfg AsymmetricExitConfig) (decimal.Decimal, decimal.Decimal) {
+	cfg = cfg.Normalized()
+	if leverage <= 0 {
+		leverage = 1
+	}
+	entry := decimal.NewFromFloat(price)
+	stopPct := decimal.NewFromFloat(cfg.StopLossPct).Div(decimal.NewFromInt(int64(leverage)))
+	takePct := decimal.NewFromFloat(cfg.TakeProfitPct).Div(decimal.NewFromInt(int64(leverage)))
+	one := decimal.NewFromInt(1)
+
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "sell":
+		stopLoss := entry.Mul(one.Add(stopPct))
+		takeProfit := entry.Mul(one.Sub(takePct))
+		return stopLoss, takeProfit
+	default:
+		stopLoss := entry.Mul(one.Sub(stopPct))
+		takeProfit := entry.Mul(one.Add(takePct))
+		return stopLoss, takeProfit
+	}
+}
+
 func (s *AIScalpingService) refuseLiveTradeWithSyntheticSLTP(ctx context.Context, decision *AITradingDecision, defaultSL, defaultTP decimal.Decimal) error {
 	mode, ok := operationalModeFromContext(ctx)
 	if !ok || mode != OpModeLive {
@@ -5780,7 +5848,7 @@ func getEnvFloat(key string) (float64, bool) {
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
+	if err != nil || isNonFiniteFloat(value) {
 		zaplogrus.Warnf("[AI-SCALPING] Invalid float %s=%q", key, raw)
 		return 0, false
 	}

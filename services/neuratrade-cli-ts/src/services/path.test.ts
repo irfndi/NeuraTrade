@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import * as os from "os";
 import * as path from "path";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { Path, PathLive } from "./path.ts";
 
 describe("Path service", () => {

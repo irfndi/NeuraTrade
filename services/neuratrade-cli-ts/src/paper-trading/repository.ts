@@ -15,7 +15,11 @@ export class PaperTradingRepositoryError {
 }
 
 export interface PaperTradingRepositoryService {
-  readonly ensureTables: () => Effect.Effect<void, PaperTradingRepositoryError, never>;
+  readonly ensureTables: () => Effect.Effect<
+    void,
+    PaperTradingRepositoryError,
+    never
+  >;
   readonly getOpenPosition: (
     exchange: string,
     symbol: string,
@@ -46,12 +50,20 @@ export interface PaperTradingRepositoryService {
     date: Date,
   ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
 
-  readonly getTodayRealizedPnl: () => Effect.Effect<number, PaperTradingRepositoryError, never>;
+  readonly getTodayRealizedPnl: () => Effect.Effect<
+    number,
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  readonly getStartOfDayCapital: (
+    date: Date,
+    currentCapital: number,
+  ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
 }
 
-export const PaperTradingRepository = Context.GenericTag<PaperTradingRepositoryService>(
-  "PaperTradingRepository",
-);
+export const PaperTradingRepository =
+  Context.GenericTag<PaperTradingRepositoryService>("PaperTradingRepository");
 
 const ensureTablesSQL = `
 CREATE TABLE IF NOT EXISTS paper_portfolio (
@@ -93,6 +105,12 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 
 CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_paper_trades_closed_at ON paper_trades(closed_at DESC);
+
+CREATE TABLE IF NOT EXISTS paper_start_of_day_capital (
+  date TEXT PRIMARY KEY,
+  start_capital REAL NOT NULL,
+  updated_at DATETIME NOT NULL
+);
 `;
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
@@ -124,18 +142,18 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
              WHERE exchange = ? AND symbol = ?`,
           )
           .get(exchange, symbol) as {
-            id: string;
-            exchange: string;
-            symbol: string;
-            timeframe: string;
-            side: string;
-            entry_price: number;
-            size: number;
-            stop_loss: number;
-            take_profit: number;
-            opened_at: string;
-            signal_id: string;
-          } | null;
+          id: string;
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          side: string;
+          entry_price: number;
+          size: number;
+          stop_loss: number;
+          take_profit: number;
+          opened_at: string;
+          signal_id: string;
+        } | null;
 
         if (!row) return null;
 
@@ -161,7 +179,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
-  saveOpenPosition(position: PaperPosition): Effect.Effect<void, PaperTradingRepositoryError, never> {
+  saveOpenPosition(
+    position: PaperPosition,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         this.db
@@ -208,10 +228,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             ? exitPriceDec.minus(entryPrice)
             : entryPrice.minus(exitPriceDec);
         const pnl = priceDiff.times(size);
-        const pnlPct = pnl
-          .div(entryPrice.times(size))
-          .times(100)
-          .toNumber();
+        const pnlPct = pnl.div(entryPrice.times(size)).times(100).toNumber();
         const pnlNum = pnl.toNumber();
         const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -272,10 +289,14 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     return Effect.try({
       try: () => {
         const row = this.db
-          .query("SELECT capital, peak_capital FROM paper_portfolio WHERE id = 1")
+          .query(
+            "SELECT capital, peak_capital FROM paper_portfolio WHERE id = 1",
+          )
           .get() as { capital: number; peak_capital: number } | null;
 
-        return row ? { capital: row.capital, peakCapital: row.peak_capital } : { capital: 10_000, peakCapital: 10_000 };
+        return row
+          ? { capital: row.capital, peakCapital: row.peak_capital }
+          : { capital: 10_000, peakCapital: 10_000 };
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -310,7 +331,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
-  listRecentTrades(limit: number): Effect.Effect<readonly PaperTrade[], PaperTradingRepositoryError, never> {
+  listRecentTrades(
+    limit: number,
+  ): Effect.Effect<readonly PaperTrade[], PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         const rows = this.db
@@ -321,20 +344,20 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
              LIMIT ?`,
           )
           .all(limit) as Array<{
-            id: string;
-            exchange: string;
-            symbol: string;
-            timeframe: string;
-            side: string;
-            entry_price: number;
-            exit_price: number;
-            size: number;
-            pnl: number;
-            pnl_pct: number;
-            exit_reason: string;
-            opened_at: string;
-            closed_at: string;
-          }>;
+          id: string;
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          side: string;
+          entry_price: number;
+          exit_price: number;
+          size: number;
+          pnl: number;
+          pnl_pct: number;
+          exit_reason: string;
+          opened_at: string;
+          closed_at: string;
+        }>;
 
         return rows.map((r) => ({
           id: r.id,
@@ -360,7 +383,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
-  countTradesForDate(date: Date): Effect.Effect<number, PaperTradingRepositoryError, never> {
+  countTradesForDate(
+    date: Date,
+  ): Effect.Effect<number, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         const row = this.db
@@ -380,7 +405,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
-  getTodayRealizedPnl(): Effect.Effect<number, PaperTradingRepositoryError, never> {
+  getTodayRealizedPnl(): Effect.Effect<
+    number,
+    PaperTradingRepositoryError,
+    never
+  > {
     return Effect.try({
       try: () => {
         const row = this.db
@@ -395,6 +424,40 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to load today PnL: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  getStartOfDayCapital(
+    date: Date,
+    currentCapital: number,
+  ): Effect.Effect<number, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const dateKey = date.toISOString().slice(0, 10);
+        const row = this.db
+          .query(
+            "SELECT start_capital FROM paper_start_of_day_capital WHERE date = ?",
+          )
+          .get(dateKey) as { start_capital: number } | null;
+        if (row) {
+          return row.start_capital;
+        }
+        this.db
+          .query(
+            `INSERT INTO paper_start_of_day_capital (date, start_capital, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(date) DO UPDATE SET
+               start_capital = excluded.start_capital,
+               updated_at = excluded.updated_at`,
+          )
+          .run(dateKey, currentCapital, new Date().toISOString());
+        return currentCapital;
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load start-of-day capital: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

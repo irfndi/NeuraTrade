@@ -1,0 +1,19 @@
+{
+  "code": "00000",
+  "msg": "success",
+  "requestTime": 1718275200000,
+  "data": [
+    {
+      "symbol": "BTCUSDT",
+      "baseCoin": "BTC",
+      "quoteCoin": "USDT",
+      "productType": "USDT-FUTURES",
+      "status": "online",
+      "pricePrecision": "2",
+      "quantityPrecision": "3",
+      "minTradeAmount": "5",
+      "maxLeverage": "125",
+      "minLeverage": "1"
+    }
+  ]
+}
