@@ -593,10 +593,10 @@ func run() error {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:           router,
-		ReadTimeout:       parseDurationEnv("HTTP_READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:      parseDurationEnv("HTTP_WRITE_TIMEOUT", 10*time.Second),
-		ReadHeaderTimeout: parseDurationEnv("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		IdleTimeout:       parseDurationEnv("HTTP_IDLE_TIMEOUT", 15*time.Second),
+		ReadTimeout:       parseDurationEnv("NEURATRADE_HTTP_READ_TIMEOUT", 10*time.Second),
+		WriteTimeout:      parseDurationEnv("NEURATRADE_HTTP_WRITE_TIMEOUT", 10*time.Second),
+		ReadHeaderTimeout: parseDurationEnv("NEURATRADE_HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		IdleTimeout:       parseDurationEnv("NEURATRADE_HTTP_IDLE_TIMEOUT", 15*time.Second),
 	}
 
 	// Start server in a goroutine
@@ -727,7 +727,7 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	parsed, err := time.ParseDuration(raw)
-	if err != nil {
+	if err != nil || parsed <= 0 {
 		return fallback
 	}
 	return parsed
