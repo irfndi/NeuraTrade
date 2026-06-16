@@ -462,8 +462,8 @@ function fetchBitget<T>(
       );
     }
 
-    return yield* Effect.tryPromise({
-      try: () => Promise.resolve(JSON.parse(responseBody) as T),
+    const parsed = yield* Effect.tryPromise({
+      try: () => Promise.resolve(JSON.parse(responseBody) as unknown),
       catch: (error): BitgetClientError =>
         new BitgetApiError({
           status: response.status,
@@ -471,6 +471,26 @@ function fetchBitget<T>(
           endpoint,
         }),
     });
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "code" in parsed &&
+      typeof parsed.code === "string" &&
+      parsed.code !== "00000"
+    ) {
+      const msg =
+        "msg" in parsed && typeof parsed.msg === "string" ? parsed.msg : "";
+      return yield* Effect.fail(
+        new BitgetApiError({
+          status: response.status,
+          body: `${parsed.code}: ${msg}`,
+          endpoint,
+        }),
+      );
+    }
+
+    return parsed as T;
   });
 }
 
@@ -678,13 +698,13 @@ function makeBitgetClientImpl(
     symbol: string,
   ): Effect.Effect<BitgetTicker, BitgetClientError> => {
     const bsymbol = toBitgetSymbol(symbol);
-    const endpoint = `/api/v2/spot/market/ticker?symbol=${bsymbol}`;
-    return fetchBitget<{ data: Record<string, unknown> }>(
+    const endpoint = `/api/v2/spot/market/tickers?symbol=${bsymbol}`;
+    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
       baseUrl,
       endpoint,
       {},
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseTicker(resp.data)));
+    ).pipe(Effect.map((resp) => parseTicker(resp.data[0] ?? {})));
   };
 
   const placeOrder = (

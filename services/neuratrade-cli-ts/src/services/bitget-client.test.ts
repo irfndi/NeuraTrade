@@ -155,19 +155,21 @@ describe("BitgetClient", () => {
     it("returns normalized ticker", async () => {
       const mock = startMock((req) => {
         const url = new URL(req.url);
-        expect(url.pathname).toBe("/api/v2/spot/market/ticker");
+        expect(url.pathname).toBe("/api/v2/spot/market/tickers");
         expect(url.searchParams.get("symbol")).toBe("BTCUSDT");
         return json({
           code: "00000",
-          data: {
-            symbol: "BTCUSDT",
-            lastPr: "65000.00",
-            bidPr: "64999.50",
-            askPr: "65000.50",
-            bidSz: "0.5",
-            askSz: "0.3",
-            baseVolume: "12000",
-          },
+          data: [
+            {
+              symbol: "BTCUSDT",
+              lastPr: "65000.00",
+              bidPr: "64999.50",
+              askPr: "65000.50",
+              bidSz: "0.5",
+              askSz: "0.3",
+              baseVolume: "12000",
+            },
+          ],
         });
       });
       try {
@@ -690,6 +692,23 @@ describe("BitgetClient", () => {
         });
         const err = await runFail(program, mock.url);
         expect(err).toBeInstanceOf(BitgetApiError);
+      } finally {
+        mock.stop();
+      }
+    });
+
+    it("returns BitgetApiError on HTTP 200 with non-success business code", async () => {
+      const mock = startMock(() =>
+        json({ code: "40015", msg: "Invalid API key", data: null }, 200),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getBalances();
+        });
+        const err = await runFail(program, mock.url);
+        expect(err).toBeInstanceOf(BitgetApiError);
+        expect((err as BitgetApiError).body).toContain("40015");
       } finally {
         mock.stop();
       }

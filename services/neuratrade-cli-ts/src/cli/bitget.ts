@@ -81,13 +81,13 @@ function catchBitget<A>(
 function requireOneOf(
   orderId: string,
   clientOid: string,
-): Effect.Effect<string, never> {
-  return Effect.sync(() => {
-    if (orderId.trim() === "" && clientOid.trim() === "") {
-      throw new Error("Specify --order-id or --client-oid");
-    }
-    return orderId.trim() !== "" ? orderId.trim() : clientOid.trim();
-  });
+): Effect.Effect<string, Error> {
+  const oid = orderId.trim();
+  const coid = clientOid.trim();
+  if (oid === "" && coid === "") {
+    return Effect.fail(new Error("Specify --order-id or --client-oid"));
+  }
+  return Effect.succeed(oid !== "" ? oid : coid);
 }
 
 // ---------------------------------------------------------------------------
