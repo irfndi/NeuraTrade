@@ -1620,7 +1620,7 @@ func (s *AIScalpingService) ExecuteTradingCycle(ctx context.Context, portfolio T
 		return nil, fmt.Errorf("failed to gather market signals: %w", err)
 	}
 	zaplogrus.Infof("[AI-SCALPING] Gathered %d market signals", len(signals))
-	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, appautonomy.DefaultScalpingPolicyConfig())
+	funnel = appautonomy.BuildCandidateFunnel(candidateSignalsFromMarketSignals(signals), policy, scalpingPolicyConfigFromEnv(s.maxBidAskSpreadPct()))
 
 	decision, err = s.getAIDecision(ctx, signals, portfolio)
 	if err != nil {
@@ -5843,7 +5843,7 @@ func getEnvFloat(key string) (float64, bool) {
 		return 0, false
 	}
 	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
+	if err != nil || isNonFiniteFloat(value) {
 		zaplogrus.Warnf("[AI-SCALPING] Invalid float %s=%q", key, raw)
 		return 0, false
 	}
