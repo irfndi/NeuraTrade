@@ -217,6 +217,18 @@ export function runFuturesPaperTradingIteration(
         };
       }
 
+      yield* adapter.setLeverage(
+        options.symbol,
+        options.productType,
+        options.marginMode,
+        options.leverage,
+      );
+      yield* adapter.setMarginMode(
+        options.symbol,
+        options.productType,
+        options.marginMode,
+      );
+
       const fill = yield* adapter.placeOrder({
         symbol: options.symbol,
         side: signal.direction as "buy" | "sell",
