@@ -1,7 +1,14 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
+import { Database } from "bun:sqlite";
+import { Effect } from "effect";
 import * as fs from "fs";
 import * as os from "os";
 import * as nodePath from "path";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLiteLive,
+} from "../../src/market-data/repository.js";
+import type { Candle } from "../../src/market-data/types.js";
 
 function tmpDir(): string {
   return fs.mkdtempSync(nodePath.join(os.tmpdir(), "kill-switch-e2e-"));
@@ -13,6 +20,44 @@ function rmDir(dir: string): void {
   } catch {
     // ignore
   }
+}
+
+function makeCandles(symbol: string, count: number): Candle[] {
+  const candles: Candle[] = [];
+  let close = 30_000;
+  for (let i = 0; i < count; i++) {
+    const open = close;
+    close *= 1.001;
+    const high = Math.max(open, close) * 1.002;
+    const low = Math.min(open, close) * 0.998;
+    candles.push({
+      exchange: "binance",
+      symbol,
+      timeframe: "1h",
+      open,
+      high,
+      low,
+      close,
+      volume: 1,
+      timestamp: new Date(Date.now() - (count - i) * 3_600_000),
+    });
+  }
+  return candles;
+}
+
+async function seedCandles(home: string, symbol: string): Promise<void> {
+  const dbPath = nodePath.join(home, "data", "neuratrade.db");
+  const db = new Database(dbPath);
+  db.exec("PRAGMA foreign_keys = ON;");
+  const repoLayer = MarketDataRepositorySQLiteLive(db);
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const repo = yield* MarketDataRepository;
+      yield* repo.ensureTables();
+      yield* repo.saveCandles(makeCandles(symbol, 100));
+    }).pipe(Effect.provide(repoLayer)),
+  );
+  db.close();
 }
 
 async function runCli(
@@ -47,9 +92,10 @@ const BASE_ARGS = [
 describe("kill switch e2e", () => {
   let home: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     home = tmpDir();
     fs.mkdirSync(nodePath.join(home, "data"), { recursive: true });
+    await seedCandles(home, "BTC/USDT");
   });
 
   afterAll(() => {
@@ -60,11 +106,9 @@ describe("kill switch e2e", () => {
     const engage = await runCli([...BASE_ARGS, "--kill-switch"], {
       NEURATRADE_HOME: home,
     });
-    console.log("engage:", engage);
     expect(engage.stdout).toContain("KILL SWITCH ENGAGED");
 
     const blocked = await runCli([...BASE_ARGS], { NEURATRADE_HOME: home });
-    console.log("blocked:", blocked);
     expect(blocked.stdout).toContain("KILL SWITCH ENGAGED");
   });
 
@@ -72,13 +116,11 @@ describe("kill switch e2e", () => {
     const engaged = await runCli([...BASE_ARGS, "--kill-switch"], {
       NEURATRADE_HOME: home,
     });
-    console.log("engaged:", engaged);
     expect(engaged.stdout).toContain("KILL SWITCH ENGAGED");
 
     const disengaged = await runCli([...BASE_ARGS, "--disengage"], {
       NEURATRADE_HOME: home,
     });
-    console.log("disengaged:", disengaged);
     expect(disengaged.stdout).not.toContain("KILL SWITCH ENGAGED");
   });
 });
