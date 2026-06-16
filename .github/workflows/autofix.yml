@@ -30,7 +30,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
         with:
-          bun-version: 1.4.0
+          bun-version: canary
 
       - name: Install Go dependencies
         run: |
