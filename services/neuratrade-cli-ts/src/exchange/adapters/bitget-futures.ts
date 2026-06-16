@@ -16,6 +16,7 @@ import {
   type BitgetProductType,
   toBitgetFuturesSymbol,
 } from "../../services/bitget-client.js";
+import { validateFuturesOrder } from "../../services/bitget-futures-guards.js";
 
 function toExchangeError(error: BitgetClientError): ExchangeError {
   switch (error._tag) {
@@ -53,6 +54,39 @@ export function makeBitgetFuturesAdapter(
   const withError = <A>(effect: Effect.Effect<A, BitgetClientError>) =>
     effect.pipe(Effect.mapError(toExchangeError));
 
+  const runPreTradeGuard = (order: BitgetFuturesOrderRequest) =>
+    Effect.gen(function* () {
+      const [contracts, balances, ticker] = yield* Effect.all([
+        withError(client.getContracts(order.productType)),
+        withError(client.getFuturesBalances(order.productType)),
+        withError(client.getFuturesTicker(order.symbol, order.productType)),
+      ]);
+      const { symbol: bsymbol } = toBitgetFuturesSymbol(
+        order.symbol,
+        order.productType,
+      );
+      const contract = contracts.find(
+        (c) => c.symbol.toUpperCase() === bsymbol.toUpperCase(),
+      );
+      if (contract === undefined) {
+        return yield* Effect.fail(
+          new ExchangeError(`contract ${bsymbol} not found`),
+        );
+      }
+      yield* validateFuturesOrder({
+        order,
+        contract,
+        balances,
+        lastPrice: ticker.lastPrice,
+        leverage: String(order.leverage ?? 1),
+      }).pipe(
+        Effect.mapError(
+          (err) =>
+            new ExchangeError(`futures guard rejected: ${err.reason}`, err),
+        ),
+      );
+    });
+
   const placeOrder = (request: FuturesOrderRequest) =>
     Effect.gen(function* () {
       const { symbol: bsymbol, productType } = toBitgetFuturesSymbol(
@@ -69,8 +103,28 @@ export function makeBitgetFuturesAdapter(
         clientOid: request.clientOid,
         reduceOnly: request.reduceOnly,
         price: request.price !== undefined ? String(request.price) : undefined,
+        leverage: request.leverage,
       };
-      const data = yield* withError(client.placeFuturesOrder(order));
+
+      // Pre-trade guards must run inside the adapter so both the direct CLI
+      // order path and the live paper-trading path reject unsafe orders before
+      // any signed request leaves the process.
+      yield* runPreTradeGuard(order);
+
+      const ack = yield* withError(client.placeFuturesOrder(order));
+
+      // Bitget's place-order response is an acknowledgement. Query the order
+      // detail endpoint to obtain the actual filled size, price and fee before
+      // the trading engine records the position.
+      const data = yield* withError(
+        client.getFuturesOrder({
+          symbol: order.symbol,
+          productType: order.productType,
+          orderId: ack.orderId || undefined,
+          clientOid: ack.clientOid || undefined,
+        }),
+      );
+
       const fill: FuturesOrderFill = {
         orderId: data.orderId,
         clientOid: data.clientOid,
@@ -93,7 +147,11 @@ export function makeBitgetFuturesAdapter(
       const positions = yield* withError(
         client.getFuturesPositions(request.symbol, request.productType),
       );
-      const existing = positions[0];
+      // In hedge mode there can be both a long and a short for the same
+      // symbol. Close the leg that opposes the requested side: a sell close
+      // reduces a long, a buy close reduces a short.
+      const neededSide = request.side === "sell" ? "long" : "short";
+      const existing = positions.find((p) => p.holdSide === neededSide);
       if (!existing) {
         return null;
       }
@@ -101,10 +159,9 @@ export function makeBitgetFuturesAdapter(
       if (closeSize <= 0) {
         return null;
       }
-      const closeSide = existing.holdSide === "long" ? "sell" : "buy";
       return yield* placeOrder({
         symbol: request.symbol,
-        side: closeSide,
+        side: request.side,
         type: request.price ? "limit" : "market",
         size: closeSize,
         price: request.price,

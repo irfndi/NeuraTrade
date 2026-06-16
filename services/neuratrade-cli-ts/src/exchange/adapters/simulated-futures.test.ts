@@ -152,8 +152,11 @@ describe("SimulatedFuturesExchangeAdapter", () => {
       }),
     );
 
-    // Margin should be released on close (fees remain debited from both sides).
+    // Margin is released and PnL is realized. The close balance recovers the
+    // locked margin plus PnL (minus fees), so it is higher than the post-open
+    // balance but still below the initial 10,000 due to fees and slippage.
     expect(closeBalance.available).toBeGreaterThan(openBalance.available);
+    expect(closeBalance.available).toBeGreaterThan(9_980);
   });
 
   it("rejects reduce-only buy without a short position", async () => {

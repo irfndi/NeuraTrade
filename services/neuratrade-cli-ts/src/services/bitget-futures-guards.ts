@@ -146,6 +146,13 @@ export function validateFuturesOrder(
         ? ctx.order.price
         : ctx.lastPrice;
     const notional = multiply(ctx.order.size, price);
+
+    // Reduce-only closes only need the contract/leverage checks above; they do
+    // not consume new margin or require a fresh balance allocation.
+    if (ctx.order.reduceOnly) {
+      return { ok: true as const, notional, marginRequired: "0" };
+    }
+
     const isUsdtMargined =
       ctx.contract.productType === "USDT-FUTURES" ||
       ctx.contract.productType === "USDC-FUTURES";

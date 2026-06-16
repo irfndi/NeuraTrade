@@ -1473,12 +1473,18 @@ function paperTradeProgram(args: PaperTradeArgs) {
 
     const marginMode = parseMarginMode(args.marginMode);
     const productType = parseProductType(args.productType);
+    // Futures data and execution both live on Bitget in this port; default the
+    // market-data exchange to bitget-futures unless the operator overrides it.
+    const defaultFuturesExchange =
+      args.futures && args.exchange === "binance"
+        ? "bitget-futures"
+        : args.exchange;
     const makeFuturesOptions = (
       symbol: string,
-      exchange: string,
+      exchangeOverride: string,
       overrides?: Partial<FuturesPaperTradingOptions>,
     ): FuturesPaperTradingOptions => ({
-      exchange,
+      exchange: exchangeOverride ?? defaultFuturesExchange,
       symbol,
       timeframe: args.timeframe,
       composerConfig,
@@ -1807,10 +1813,12 @@ export const soakCommand = Command.make(
       ): Effect.Effect<IterationResult, unknown, never> => {
         const entry = soakWatchlist.find((e) => e.symbol === symbol);
         const useFutures = entry?.productType !== undefined || args.futures;
+        const futuresExchange =
+          useFutures && exchange === "binance" ? "bitget-futures" : exchange;
 
         if (useFutures) {
           const opts: FuturesPaperTradingOptions = {
-            exchange,
+            exchange: futuresExchange,
             symbol,
             timeframe: args.timeframe,
             composerConfig,

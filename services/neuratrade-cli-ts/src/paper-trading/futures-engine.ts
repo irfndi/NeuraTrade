@@ -243,9 +243,7 @@ export function runFuturesPaperTradingIteration(
           startOfDayCapital,
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
-          positionValue: toNumber(
-            entryPrice.times(toNumber(size, 8)).div(money(options.leverage)),
-          ),
+          positionValue: toNumber(entryPrice.times(toNumber(size, 8))),
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
           leverage: options.leverage,

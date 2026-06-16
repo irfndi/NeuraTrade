@@ -246,7 +246,7 @@ describe("runFuturesPaperTradingIteration", () => {
     const adapter = makeFuturesAdapter();
     const riskGuard = makeRiskGuard({
       liveTradingEnabled: false,
-      maxPositionSizePct: 100,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
       maxDailyLossPct: 100,
       maxDrawdownPct: 100,
       minCapital: 0,
@@ -312,7 +312,7 @@ describe("runFuturesPaperTradingIteration", () => {
     const adapter = makeFuturesAdapter();
     const riskGuard = makeRiskGuard({
       liveTradingEnabled: false,
-      maxPositionSizePct: 100,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
       maxDailyLossPct: 100,
       maxDrawdownPct: 100,
       minCapital: 0,
@@ -381,7 +381,7 @@ describe("runFuturesPaperTradingIteration", () => {
     const adapter = makeFuturesAdapter();
     const riskGuard = makeRiskGuard({
       liveTradingEnabled: false,
-      maxPositionSizePct: 100,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
       maxDailyLossPct: 100,
       maxDrawdownPct: 100,
       minCapital: 0,
@@ -440,7 +440,7 @@ describe("runFuturesPaperTradingIteration", () => {
       );
       const riskGuard = makeRiskGuard({
         liveTradingEnabled: false,
-        maxPositionSizePct: 100,
+        maxPositionSizePct: Number.MAX_SAFE_INTEGER,
         maxDailyLossPct: 100,
         maxDrawdownPct: 100,
         minCapital: 0,

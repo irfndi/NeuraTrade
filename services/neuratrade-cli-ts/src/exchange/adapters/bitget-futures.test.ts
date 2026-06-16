@@ -56,7 +56,26 @@ function makeStubClient(): BitgetClientImpl {
         fee: "4.2",
       }),
     cancelOrder: () => Effect.void,
-    getContracts: () => Effect.succeed([]),
+    getContracts: () =>
+      Effect.succeed([
+        {
+          symbol: "BTCUSDT",
+          baseCoin: "BTC",
+          quoteCoin: "USDT",
+          productType: "USDT-FUTURES" as const,
+          status: "online",
+          symbolStatus: "online",
+          pricePrecision: "2",
+          quantityPrecision: "4",
+          minTradeAmount: "5",
+          minTradeNum: "0.0001",
+          minTradeUSDT: "5",
+          maxLeverage: "125",
+          minLeverage: "1",
+          takerFeeRate: "0.0006",
+          makerFeeRate: "0.0002",
+        },
+      ]),
     getFuturesTicker: () =>
       Effect.succeed({
         symbol: "BTCUSDT",

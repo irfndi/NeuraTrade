@@ -155,7 +155,19 @@ export function makeSimulatedFuturesExchangeAdapterService(
 
           const fee = notional.times(0.0006);
           const balanceAfterFill = request.reduceOnly
-            ? balance.plus(marginRequired).minus(fee)
+            ? balance
+                .plus(
+                  money(existing.entryPrice)
+                    .times(request.size)
+                    .div(money(request.leverage)),
+                )
+                .plus(
+                  money(price)
+                    .minus(money(existing.entryPrice))
+                    .times(request.size)
+                    .times(existing.side === "long" ? 1 : -1),
+                )
+                .minus(fee)
             : balance.minus(marginRequired).minus(fee);
           yield* setBalance(marginCoin, balanceAfterFill);
 

@@ -194,6 +194,7 @@ export interface BitgetFuturesOrderRequest {
   readonly marginMode?: BitgetMarginMode;
   readonly clientOid?: string;
   readonly reduceOnly?: boolean;
+  readonly leverage?: number;
 }
 
 export interface BitgetFuturesOrder {
@@ -565,7 +566,7 @@ function parseContract(data: Record<string, unknown>): BitgetContract {
     symbolStatus: String(data.symbolStatus ?? data.status ?? ""),
     pricePrecision: String(data.pricePrecision ?? "0"),
     quantityPrecision: String(data.quantityPrecision ?? "0"),
-    minTradeAmount: String(data.minTradeAmount ?? data.minTradeNum ?? "0"),
+    minTradeAmount: String(data.minTradeAmount ?? "0"),
     minTradeNum: String(data.minTradeNum ?? data.minTradeAmount ?? "0"),
     minTradeUSDT: String(data.minTradeUSDT ?? "0"),
     maxLeverage: String(data.maxLever ?? data.maxLeverage ?? "0"),
@@ -618,7 +619,9 @@ function parseFuturesPosition(
     ) as BitgetProductType,
     marginMode: String(data.marginMode ?? "crossed") as BitgetMarginMode,
     holdSide: String(data.holdSide ?? "long") as "long" | "short",
-    openPrice: String(data.openPrice ?? data.openAvgPrice ?? "0"),
+    openPrice: String(
+      data.openPrice ?? data.openPriceAvg ?? data.openAvgPrice ?? "0",
+    ),
     total: String(data.total ?? "0"),
     available: String(data.available ?? "0"),
     leverage: String(data.leverage ?? "0"),

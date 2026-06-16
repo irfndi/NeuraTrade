@@ -75,7 +75,7 @@ export function defaultRiskLimits(isLive: boolean): RiskLimits {
 
   return {
     liveTradingEnabled: false,
-    maxPositionSizePct: 100,
+    maxPositionSizePct: Number.MAX_SAFE_INTEGER,
     maxDailyLossPct: 100,
     maxDrawdownPct: 100,
     minCapital: 0,
