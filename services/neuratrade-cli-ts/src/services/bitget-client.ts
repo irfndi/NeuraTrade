@@ -719,15 +719,17 @@ function makeBitgetClientImpl(
   const placeOrder = (
     order: BitgetOrderRequest,
   ): Effect.Effect<BitgetOrder, BitgetClientError> => {
-    const endpoint = "/api/v2/spot/trade/placeOrder";
+    const endpoint = "/api/v2/spot/trade/place-order";
     const bsymbol = toBitgetSymbol(order.symbol);
     const bodyObj: Record<string, unknown> = {
       symbol: bsymbol,
       side: order.side,
       orderType: order.orderType,
-      force: "gtc",
       size: order.size,
     };
+    if (order.orderType === "limit") {
+      bodyObj.force = "gtc";
+    }
     if (order.price !== undefined && order.price !== "") {
       bodyObj.price = order.price;
     }
@@ -772,7 +774,7 @@ function makeBitgetClientImpl(
     const bodyObj: Record<string, unknown> = { symbol: bsymbol };
     if (args.orderId) bodyObj.orderId = args.orderId;
     if (args.clientOid) bodyObj.clientOid = args.clientOid;
-    const endpoint = "/api/v2/spot/trade/cancelOrder";
+    const endpoint = "/api/v2/spot/trade/cancel-order";
     const body = JSON.stringify(bodyObj);
     const headers = authHeaders(credentials, "POST", endpoint, body, isDemo);
     return fetchBitget<unknown>(

@@ -193,12 +193,13 @@ describe("BitgetClient", () => {
       const mock = startMock(async (req) => {
         expect(req.method).toBe("POST");
         const url = new URL(req.url);
-        expect(url.pathname).toBe("/api/v2/spot/trade/placeOrder");
+        expect(url.pathname).toBe("/api/v2/spot/trade/place-order");
         const body = await req.json();
         expect(body.symbol).toBe("BTCUSDT");
         expect(body.side).toBe("buy");
         expect(body.orderType).toBe("market");
         expect(body.size).toBe("0.001");
+        expect(body.force).toBeUndefined();
         expect(req.headers.get("ACCESS-KEY")).toBe("test-key");
         return json({
           code: "00000",
@@ -228,6 +229,45 @@ describe("BitgetClient", () => {
         const result = await runOk(program, mock.url);
         expect(result.orderId).toBe("12345");
         expect(result.clientOid).toBe("client-oid-1");
+      } finally {
+        mock.stop();
+      }
+    });
+
+    it("includes force=gtc for limit orders", async () => {
+      const mock = startMock(async (req) => {
+        const body = await req.json();
+        expect(body.orderType).toBe("limit");
+        expect(body.force).toBe("gtc");
+        expect(body.price).toBe("65000");
+        return json({
+          code: "00000",
+          data: {
+            orderId: "12346",
+            clientOid: body.clientOid ?? "",
+            symbol: "BTCUSDT",
+            side: "buy",
+            orderType: "limit",
+            status: "live",
+            size: "0.001",
+            price: "65000",
+          },
+        });
+      });
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.placeOrder({
+            symbol: "BTC/USDT",
+            side: "buy",
+            orderType: "limit",
+            size: "0.001",
+            price: "65000",
+            clientOid: "client-oid-2",
+          });
+        });
+        const result = await runOk(program, mock.url);
+        expect(result.orderId).toBe("12346");
       } finally {
         mock.stop();
       }
