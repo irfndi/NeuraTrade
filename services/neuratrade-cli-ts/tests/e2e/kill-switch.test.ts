@@ -60,9 +60,11 @@ describe("kill switch e2e", () => {
     const engage = await runCli([...BASE_ARGS, "--kill-switch"], {
       NEURATRADE_HOME: home,
     });
+    console.log("engage:", engage);
     expect(engage.stdout).toContain("KILL SWITCH ENGAGED");
 
     const blocked = await runCli([...BASE_ARGS], { NEURATRADE_HOME: home });
+    console.log("blocked:", blocked);
     expect(blocked.stdout).toContain("KILL SWITCH ENGAGED");
   });
 
@@ -70,11 +72,13 @@ describe("kill switch e2e", () => {
     const engaged = await runCli([...BASE_ARGS, "--kill-switch"], {
       NEURATRADE_HOME: home,
     });
+    console.log("engaged:", engaged);
     expect(engaged.stdout).toContain("KILL SWITCH ENGAGED");
 
     const disengaged = await runCli([...BASE_ARGS, "--disengage"], {
       NEURATRADE_HOME: home,
     });
+    console.log("disengaged:", disengaged);
     expect(disengaged.stdout).not.toContain("KILL SWITCH ENGAGED");
   });
 });

@@ -184,10 +184,7 @@ export function runFuturesPaperTradingIteration(
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
-        yield* circuitBreaker.recordTradeResult(
-          trade.pnl,
-          startOfDayCapital,
-        );
+        yield* circuitBreaker.recordTradeResult(trade.pnl, startOfDayCapital);
 
         return {
           action: "closed" as const,
