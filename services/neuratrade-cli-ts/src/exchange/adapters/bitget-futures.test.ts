@@ -140,6 +140,7 @@ function makeStubClient(): BitgetClientImpl {
           status: "filled",
           size: order.size,
           price: order.price ?? "70000",
+          priceAvg: order.price ?? "70000",
           filledSize: order.size,
           filledAmount: String(
             Number(order.size) * Number(order.price ?? "70000"),
@@ -159,6 +160,7 @@ function makeStubClient(): BitgetClientImpl {
         status: "filled",
         size: "0.1",
         price: "70000",
+        priceAvg: "70000",
         filledSize: "0.1",
         filledAmount: "7000",
         fee: "1",

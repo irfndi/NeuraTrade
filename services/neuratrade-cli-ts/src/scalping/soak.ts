@@ -132,17 +132,17 @@ function computePerSymbolMetrics(
   actions: readonly ("opened" | "closed" | "hold")[],
   notes: readonly string[],
 ): PerSymbolResult {
+  const startCapital =
+    capitalSnapshots.length > 0 ? capitalSnapshots[0] : initialCapital;
   const finalCapital =
     capitalSnapshots.length > 0
       ? capitalSnapshots[capitalSnapshots.length - 1]
-      : initialCapital;
+      : startCapital;
 
   const totalReturnPct =
-    initialCapital > 0
-      ? ((finalCapital - initialCapital) / initialCapital) * 100
-      : 0;
+    startCapital > 0 ? ((finalCapital - startCapital) / startCapital) * 100 : 0;
 
-  let peak = initialCapital;
+  let peak = startCapital;
   let maxDrawdownPct = 0;
   for (const cap of capitalSnapshots) {
     peak = Math.max(peak, cap);

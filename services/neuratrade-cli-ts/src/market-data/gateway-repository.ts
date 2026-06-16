@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Ref } from "effect";
 import { MarketDataError, MarketDataGateway } from "./gateway.js";
 import { MarketDataRepository } from "./repository.js";
 import type { Candle, OrderBook, Tick } from "./types.js";
@@ -19,6 +19,7 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
   MarketDataGateway,
   Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
+    const lastTimeframeRef = yield* Ref.make<string>("1h");
 
     const latestCandle = (
       exchange: string,
@@ -49,7 +50,8 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       symbol: string,
     ): Effect.Effect<Tick, MarketDataError, never> =>
       Effect.gen(function* () {
-        const candle = yield* latestCandle(exchange, symbol, "1h");
+        const timeframe = yield* Ref.get(lastTimeframeRef);
+        const candle = yield* latestCandle(exchange, symbol, timeframe);
         return {
           exchange,
           symbol,
@@ -81,6 +83,7 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
             ),
           );
         }
+        yield* Ref.set(lastTimeframeRef, timeframe);
         return candles;
       });
 
@@ -90,7 +93,8 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       limit: number,
     ): Effect.Effect<OrderBook, MarketDataError, never> =>
       Effect.gen(function* () {
-        const candle = yield* latestCandle(exchange, symbol, "1h");
+        const timeframe = yield* Ref.get(lastTimeframeRef);
+        const candle = yield* latestCandle(exchange, symbol, timeframe);
         const spread = candle.high - candle.low;
         const mid = candle.close;
         const halfSpread = spread > 0 ? spread / 2 : mid * 0.0005;

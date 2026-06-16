@@ -207,6 +207,7 @@ export interface BitgetFuturesOrder {
   readonly status: string;
   readonly size: string;
   readonly price: string;
+  readonly priceAvg: string;
   readonly filledSize: string;
   readonly filledAmount: string;
   readonly fee: string;
@@ -643,8 +644,13 @@ function parseFuturesOrder(data: Record<string, unknown>): BitgetFuturesOrder {
     status: String(data.state ?? data.status ?? ""),
     size: String(data.size ?? "0"),
     price: String(data.price ?? "0"),
+    priceAvg: String(data.priceAvg ?? data.fillPrice ?? data.price ?? "0"),
     filledSize: String(
-      data.filledQty ?? data.accBaseVolume ?? data.filledSize ?? "0",
+      data.filledQty ??
+        data.accBaseVolume ??
+        data.baseVolume ??
+        data.filledSize ??
+        "0",
     ),
     filledAmount: String(
       data.filledAmount ?? data.accQuoteVolume ?? data.quoteVolume ?? "0",

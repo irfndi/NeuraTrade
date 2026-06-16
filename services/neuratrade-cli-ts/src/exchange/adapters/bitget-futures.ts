@@ -125,6 +125,16 @@ export function makeBitgetFuturesAdapter(
         }),
       );
 
+      const filledQty = Number(data.filledSize);
+      const filledPrice = Number(data.priceAvg);
+      if (filledQty <= 0 || filledPrice <= 0) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty}, filledPrice=${filledPrice})`,
+          ),
+        );
+      }
+
       const fill: FuturesOrderFill = {
         orderId: data.orderId,
         clientOid: data.clientOid,
@@ -132,8 +142,8 @@ export function makeBitgetFuturesAdapter(
         side: data.side,
         productType: data.productType,
         marginMode: data.marginMode,
-        filledQty: Number(data.filledSize) || Number(data.size),
-        filledPrice: Number(data.price),
+        filledQty,
+        filledPrice,
         fee: Number(data.fee),
         timestamp: new Date(),
       };
