@@ -1403,7 +1403,12 @@ export const paperTradeCommand = Command.make(
 );
 
 function parseMarginMode(value: string): FuturesMarginMode {
-  return value === "isolated" ? "isolated" : "crossed";
+  if (value === "isolated" || value === "crossed") {
+    return value;
+  }
+  throw new Error(
+    `invalid margin-mode: ${value} (expected "crossed" or "isolated")`,
+  );
 }
 
 function parseProductType(value: string): BitgetProductType {
@@ -1414,7 +1419,9 @@ function parseProductType(value: string): BitgetProductType {
   ) {
     return value;
   }
-  return "USDT-FUTURES";
+  throw new Error(
+    `invalid product-type: ${value} (expected USDT-FUTURES, COIN-FUTURES, or USDC-FUTURES)`,
+  );
 }
 
 function paperTradeProgram(args: PaperTradeArgs) {

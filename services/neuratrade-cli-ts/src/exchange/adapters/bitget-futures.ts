@@ -68,6 +68,7 @@ export function makeBitgetFuturesAdapter(
         marginMode: request.marginMode,
         clientOid: request.clientOid,
         reduceOnly: request.reduceOnly,
+        price: request.price !== undefined ? String(request.price) : undefined,
       };
       const data = yield* withError(client.placeFuturesOrder(order));
       const fill: FuturesOrderFill = {
