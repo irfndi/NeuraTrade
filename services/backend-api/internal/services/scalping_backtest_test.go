@@ -544,7 +544,7 @@ func TestMapPointToHistoricalSignal(t *testing.T) {
 	}
 	metrics := scalping24hWindowMetrics{High24h: 101, Low24h: 99, Volume24h: 2400}
 
-	signal := mapPointToHistoricalSignal(point, metrics, 1.25, DefaultScalpingBacktestSpreadMultiplier, 0, 0, 0, 0, 0, 0)
+	signal := mapPointToHistoricalSignal(point, metrics, 1.25, DefaultScalpingBacktestSpreadMultiplier, 0, 0, 0, 0)
 
 	assert.Equal(t, point.timestamp, signal.Timestamp)
 	assert.Equal(t, point.symbol, signal.Symbol)

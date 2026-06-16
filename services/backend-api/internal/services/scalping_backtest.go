@@ -1737,7 +1737,7 @@ func buildHistoricalSignalsFromOHLCV(points []scalpingOHLCVPoint, spreadMultipli
 				bbPctB = (point.close - bbLower[i]) / bbRange
 			}
 
-			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB, windowMetrics[i].Volume24h, 0))
+			signals = append(signals, mapPointToHistoricalSignal(point, windowMetrics[i], priceChange24h, multiplier, prevClose, adxValues[i], atrRatio, bbPctB))
 			prevClose = point.close
 		}
 	}
@@ -1820,7 +1820,7 @@ func compute24hWindowMetrics(series []scalpingOHLCVPoint) []scalping24hWindowMet
 	return metrics
 }
 
-func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64, volume24h float64, recentTrades int) HistoricalSignal {
+func mapPointToHistoricalSignal(point scalpingOHLCVPoint, metrics scalping24hWindowMetrics, priceChange24h float64, spreadMultiplier float64, prevClose float64, adx float64, atrRatio float64, bbPctB float64) HistoricalSignal {
 	imbalance := 0.0
 	if point.high > point.low {
 		imbalance = clampFloat((point.close-point.open)/(point.high-point.low), -1, 1)

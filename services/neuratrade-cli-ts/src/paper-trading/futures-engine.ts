@@ -202,6 +202,8 @@ export function runFuturesPaperTradingIteration(
           ),
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
+          leverage: options.leverage,
+          productType: options.productType,
         })
         .pipe(Effect.either);
 

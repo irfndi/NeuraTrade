@@ -145,10 +145,15 @@ export function makeBitgetFuturesAdapter(
         return position;
       }),
 
-    getBalance: (marginCoin) =>
+    getBalance: (marginCoin, productType) =>
       Effect.gen(function* () {
+        const inferredProductType =
+          productType ??
+          (marginCoin.toUpperCase() === "USDC"
+            ? "USDC-FUTURES"
+            : "USDT-FUTURES");
         const balances = yield* withError(
-          client.getFuturesBalances("USDT-FUTURES"),
+          client.getFuturesBalances(inferredProductType),
         );
         const match = balances.find(
           (b) => b.marginCoin.toUpperCase() === marginCoin.toUpperCase(),

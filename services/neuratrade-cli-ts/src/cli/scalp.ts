@@ -717,21 +717,17 @@ export const scanCommand = Command.make(
 export function scanProgram(args: ScanArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
+    const exchanges = args.exchange
+      .split(",")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
 
-    const symbols = yield* repo.listSymbols(
-      args.exchange,
-      args.timeframe,
-      args.minCandles,
-    );
-    if (symbols.length === 0) {
+    if (exchanges.length === 0) {
       return yield* Effect.fail(
-        new MarketDataRepositoryError(
-          `No symbols found for ${args.exchange}:${args.timeframe} with >= ${args.minCandles} candles.`,
-        ),
+        new MarketDataRepositoryError("No exchanges provided to scan."),
       );
     }
 
-    const selected = args.top > 0 ? symbols.slice(0, args.top) : symbols;
     const composerConfig = buildBacktestComposerConfig(
       args.priceOnly,
       args.noRsi,
@@ -741,45 +737,21 @@ export function scanProgram(args: ScanArgs) {
 
     const results: Array<ScanResult> = [];
 
-    for (const symbol of selected) {
-      const candles = yield* repo.getCandles({
-        exchange: args.exchange,
-        symbol,
-        timeframe: args.timeframe,
-      });
-
-      if (candles.length < 50) continue;
-
-      const result = args.optimize
-        ? optimizeForSymbol(symbol, candles, args, composerConfig)
-        : runBacktestWithParams(symbol, candles, args, composerConfig, {
-            atrStopMultiplier: args.atrStopMultiplier,
-            atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-            minConfidence: args.minConfidence,
-          });
-
-      if (
-        Option.isSome(args.minReturnPct) &&
-        result.totalReturnPct < args.minReturnPct.value
-      ) {
-        continue;
-      }
-
-      results.push({
-        symbol,
-        totalTrades: result.totalTrades,
-        winRate: result.winRate,
-        totalReturnPct: result.totalReturnPct,
-        maxDrawdownPct: result.maxDrawdownPct,
-        sharpeRatio: result.sharpeRatio,
-        bestParams: result.bestParams,
-      });
+    for (const exchange of exchanges) {
+      const exchangeResults = yield* scanSingleExchange(
+        repo,
+        exchange,
+        args,
+        composerConfig,
+      );
+      results.push(...exchangeResults);
     }
 
     if (args.watchlistPath && results.length > 0) {
       const payload = JSON.stringify(
         results.map((r) => ({
           symbol: r.symbol,
+          exchange: r.exchange,
           returnPct: r.totalReturnPct,
           sharpe: r.sharpeRatio,
           bestParams: r.bestParams,
@@ -802,8 +774,78 @@ export function scanProgram(args: ScanArgs) {
   });
 }
 
+function scanSingleExchange(
+  repo: import("../market-data/repository.js").MarketDataRepositoryService,
+  exchange: string,
+  args: ScanArgs,
+  composerConfig: ComposerConfig,
+) {
+  return Effect.gen(function* () {
+    const symbols = yield* repo.listSymbols(
+      exchange,
+      args.timeframe,
+      args.minCandles,
+    );
+    if (symbols.length === 0) {
+      yield* Console.warn(
+        `No symbols found for ${exchange}:${args.timeframe} with >= ${args.minCandles} candles.`,
+      );
+      return [];
+    }
+
+    const selected = args.top > 0 ? symbols.slice(0, args.top) : symbols;
+    const results: Array<ScanResult> = [];
+
+    for (const symbol of selected) {
+      const candles = yield* repo.getCandles({
+        exchange,
+        symbol,
+        timeframe: args.timeframe,
+      });
+
+      if (candles.length < 50) continue;
+
+      const result = args.optimize
+        ? optimizeForSymbol(symbol, candles, args, exchange, composerConfig)
+        : runBacktestWithParams(
+            symbol,
+            candles,
+            args,
+            exchange,
+            composerConfig,
+            {
+              atrStopMultiplier: args.atrStopMultiplier,
+              atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+              minConfidence: args.minConfidence,
+            },
+          );
+
+      if (
+        Option.isSome(args.minReturnPct) &&
+        result.totalReturnPct < args.minReturnPct.value
+      ) {
+        continue;
+      }
+
+      results.push({
+        symbol,
+        exchange,
+        totalTrades: result.totalTrades,
+        winRate: result.winRate,
+        totalReturnPct: result.totalReturnPct,
+        maxDrawdownPct: result.maxDrawdownPct,
+        sharpeRatio: result.sharpeRatio,
+        bestParams: result.bestParams,
+      });
+    }
+
+    return results;
+  });
+}
+
 interface ScanResult {
   readonly symbol: string;
+  readonly exchange: string;
   readonly totalTrades: number;
   readonly winRate: number;
   readonly totalReturnPct: number;
@@ -820,6 +862,7 @@ function runBacktestWithParams(
   symbol: string,
   candles: readonly import("../scalping/types.js").CandleLike[],
   args: ScanArgs,
+  exchange: string,
   composerConfig: ComposerConfig,
   params: {
     readonly atrStopMultiplier: number;
@@ -829,7 +872,7 @@ function runBacktestWithParams(
 ): BacktestResult & { readonly bestParams?: undefined } {
   return runBacktest({
     symbol,
-    exchange: args.exchange,
+    exchange,
     timeframe: args.timeframe,
     candles,
     composerConfig,
@@ -854,6 +897,7 @@ function optimizeForSymbol(
   symbol: string,
   candles: readonly import("../scalping/types.js").CandleLike[],
   args: ScanArgs,
+  exchange: string,
   composerConfig: ComposerConfig,
 ): BacktestResult & {
   readonly bestParams: {
@@ -876,6 +920,7 @@ function optimizeForSymbol(
           symbol,
           candles,
           args,
+          exchange,
           composerConfig,
           {
             atrStopMultiplier: stopMult,
@@ -919,22 +964,31 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
       return;
     }
 
+    const multiExchange = new Set(results.map((r) => r.exchange)).size > 1;
+
     yield* Console.log("\n🔎 Multi-ticker backtest scan");
     yield* Console.log(
-      "Symbol        Trades  Win%    Return   Drawdown  Sharpe",
+      multiExchange
+        ? "Exchange   Symbol        Trades  Win%    Return   Drawdown  Sharpe"
+        : "Symbol        Trades  Win%    Return   Drawdown  Sharpe",
     );
     yield* Console.log(
-      "---------------------------------------------------------",
+      "--------------------------------------------------------------------",
     );
 
     for (const r of results) {
-      yield* Console.log(
-        `${r.symbol.padEnd(13)} ${String(r.totalTrades).padStart(6)}  ` +
+      const row = multiExchange
+        ? `${r.exchange.padEnd(10)} ${r.symbol.padEnd(13)} ${String(r.totalTrades).padStart(6)}  ` +
           `${(r.winRate * 100).toFixed(1).padStart(5)}%  ` +
           `${r.totalReturnPct.toFixed(2).padStart(6)}%  ` +
           `${r.maxDrawdownPct.toFixed(2).padStart(7)}%   ` +
-          `${r.sharpeRatio.toFixed(3)}`,
-      );
+          `${r.sharpeRatio.toFixed(3)}`
+        : `${r.symbol.padEnd(13)} ${String(r.totalTrades).padStart(6)}  ` +
+          `${(r.winRate * 100).toFixed(1).padStart(5)}%  ` +
+          `${r.totalReturnPct.toFixed(2).padStart(6)}%  ` +
+          `${r.maxDrawdownPct.toFixed(2).padStart(7)}%   ` +
+          `${r.sharpeRatio.toFixed(3)}`;
+      yield* Console.log(row);
     }
 
     const profitable = results.filter((r) => r.totalReturnPct > 0);
@@ -947,8 +1001,9 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
       yield* Console.log("\nBest params per symbol");
       for (const r of results) {
         if (r.bestParams) {
+          const prefix = multiExchange ? `${r.exchange}:${r.symbol}` : r.symbol;
           yield* Console.log(
-            `  ${r.symbol.padEnd(13)} stop=${r.bestParams.atrStopMultiplier.toFixed(1)} ` +
+            `  ${prefix.padEnd(25)} stop=${r.bestParams.atrStopMultiplier.toFixed(1)} ` +
               `tp=${r.bestParams.atrTakeProfitMultiplier.toFixed(1)} ` +
               `conf=${r.bestParams.minConfidence.toFixed(1)}`,
           );
@@ -963,6 +1018,47 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
     );
     yield* Console.log(`  Avg return:     ${avgReturn.toFixed(2)}%`);
     yield* Console.log(`  Avg Sharpe:     ${avgSharpe.toFixed(3)}`);
+
+    if (multiExchange) {
+      const byExchange = new Map<string, ScanResult[]>();
+      for (const r of results) {
+        const list = byExchange.get(r.exchange) ?? [];
+        list.push(r);
+        byExchange.set(r.exchange, list);
+      }
+
+      yield* Console.log("\nPer-exchange averages");
+      for (const [exchange, list] of byExchange) {
+        const avg =
+          list.reduce((sum, r) => sum + r.totalReturnPct, 0) / list.length;
+        const sharpe =
+          list.reduce((sum, r) => sum + r.sharpeRatio, 0) / list.length;
+        yield* Console.log(
+          `  ${exchange.padEnd(10)} n=${String(list.length).padStart(3)} avgReturn=${avg.toFixed(2)}% avgSharpe=${sharpe.toFixed(3)}`,
+        );
+      }
+
+      const bySymbol = new Map<string, ScanResult[]>();
+      for (const r of results) {
+        const list = bySymbol.get(r.symbol) ?? [];
+        list.push(r);
+        bySymbol.set(r.symbol, list);
+      }
+      const consistent = [...bySymbol.entries()]
+        .filter(([, list]) => list.every((r) => r.totalReturnPct > 0))
+        .sort((a, b) => b[1].length - a[1].length);
+
+      if (consistent.length > 0) {
+        yield* Console.log("\nCross-exchange consistent symbols");
+        for (const [symbol, list] of consistent.slice(0, 10)) {
+          const avg =
+            list.reduce((sum, r) => sum + r.totalReturnPct, 0) / list.length;
+          yield* Console.log(
+            `  ${symbol.padEnd(13)} profitable on ${list.length} exchange(s) avgReturn=${avg.toFixed(2)}%`,
+          );
+        }
+      }
+    }
   });
 }
 
@@ -1057,6 +1153,7 @@ const watchlistOption = Options.text("watchlist").pipe(
 
 interface WatchlistEntry {
   readonly symbol: string;
+  readonly exchange?: string;
   readonly returnPct: number;
   readonly sharpe: number;
   readonly bestParams?: {
@@ -1259,9 +1356,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
 
     const makeSpotOptions = (
       symbol: string,
+      exchange: string,
       overrides?: Partial<PaperTradingOptions>,
     ): PaperTradingOptions => ({
-      exchange: args.exchange,
+      exchange,
       symbol,
       timeframe: args.timeframe,
       composerConfig,
@@ -1281,9 +1379,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
     const productType = parseProductType(args.productType);
     const makeFuturesOptions = (
       symbol: string,
+      exchange: string,
       overrides?: Partial<FuturesPaperTradingOptions>,
     ): FuturesPaperTradingOptions => ({
-      exchange: args.exchange,
+      exchange,
       symbol,
       timeframe: args.timeframe,
       composerConfig,
@@ -1353,9 +1452,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
       if (entries) {
         for (const entry of entries) {
           if (remaining === 0) break;
+          const entryExchange = entry.exchange ?? args.exchange;
           const result = args.futures
             ? yield* runFuturesIteration(
-                makeFuturesOptions(entry.symbol, {
+                makeFuturesOptions(entry.symbol, entryExchange, {
                   minConfidence: entry.bestParams?.minConfidence,
                   atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
                   atrTakeProfitMultiplier:
@@ -1363,7 +1463,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                 }),
               )
             : yield* runSpotIteration(
-                makeSpotOptions(entry.symbol, {
+                makeSpotOptions(entry.symbol, entryExchange, {
                   minConfidence: entry.bestParams?.minConfidence,
                   atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
                   atrTakeProfitMultiplier:
@@ -1371,7 +1471,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                 }),
               );
           yield* Console.log(
-            `[${new Date().toISOString()}] ${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
+            `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
           );
 
           if (remaining > 0) {
@@ -1384,8 +1484,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
         }
       } else {
         const result = args.futures
-          ? yield* runFuturesIteration(makeFuturesOptions(args.symbol))
-          : yield* runSpotIteration(makeSpotOptions(args.symbol));
+          ? yield* runFuturesIteration(
+              makeFuturesOptions(args.symbol, args.exchange),
+            )
+          : yield* runSpotIteration(
+              makeSpotOptions(args.symbol, args.exchange),
+            );
         yield* Console.log(
           `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
         );

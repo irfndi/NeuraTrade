@@ -125,4 +125,35 @@ describe("makeRiskGuard", () => {
     );
     expect(error.violations.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("blocks leverage above the maximum", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(true),
+      maxLeverage: 5,
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(baseContext({ isLive: true, leverage: 10 }))
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("leverage"))).toBe(true);
+  });
+
+  it("blocks disallowed futures product types", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(true),
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            productType: "COIN-FUTURES",
+          }),
+        )
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("product type"))).toBe(true);
+  });
 });

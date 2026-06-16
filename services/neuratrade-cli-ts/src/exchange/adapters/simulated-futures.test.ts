@@ -110,7 +110,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
   });
 
   it("closes a long position with reduce-only", async () => {
-    await run(
+    const openBalance = await run(
       Effect.gen(function* () {
         const adapter = yield* FuturesExchangeAdapter;
         yield* adapter.placeOrder({
@@ -122,6 +122,13 @@ describe("SimulatedFuturesExchangeAdapter", () => {
           marginMode: "crossed",
           leverage: 10,
         });
+        return yield* adapter.getBalance("USDT");
+      }),
+    );
+
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
         return yield* adapter.closePosition({
           symbol: "BTC/USDT:USDT",
           side: "sell",
@@ -141,6 +148,16 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     );
 
     expect(position).toBeNull();
+
+    const closeBalance = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getBalance("USDT");
+      }),
+    );
+
+    // Margin should be released on close (fees remain debited from both sides).
+    expect(closeBalance.available).toBeGreaterThan(openBalance.available);
   });
 
   it("rejects reduce-only buy without a short position", async () => {
@@ -191,5 +208,64 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     );
 
     expect(position?.side).toBe("short");
+  });
+
+  it("releases margin on reduce-only close for random sizes", async () => {
+    for (let i = 0; i < 20; i++) {
+      const size = 0.01 + Math.random() * 0.09;
+      const leverage = 1 + Math.floor(Math.random() * 20);
+      const initialBalance = await run(
+        Effect.gen(function* () {
+          const adapter = yield* FuturesExchangeAdapter;
+          return yield* adapter.getBalance("USDT");
+        }),
+      );
+
+      await run(
+        Effect.gen(function* () {
+          const adapter = yield* FuturesExchangeAdapter;
+          yield* adapter.placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "market",
+            size,
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage,
+          });
+          return yield* adapter.closePosition({
+            symbol: "BTC/USDT:USDT",
+            side: "sell",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage,
+            size,
+          });
+        }),
+      );
+
+      const finalBalance = await run(
+        Effect.gen(function* () {
+          const adapter = yield* FuturesExchangeAdapter;
+          return yield* adapter.getBalance("USDT");
+        }),
+      );
+
+      const position = await run(
+        Effect.gen(function* () {
+          const adapter = yield* FuturesExchangeAdapter;
+          return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+        }),
+      );
+
+      expect(position).toBeNull();
+      // Margin released, only fees (both sides) reduce balance.
+      expect(finalBalance.available).toBeLessThanOrEqual(
+        initialBalance.available,
+      );
+      expect(finalBalance.available).toBeGreaterThan(
+        initialBalance.available * 0.99,
+      );
+    }
   });
 });

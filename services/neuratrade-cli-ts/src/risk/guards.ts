@@ -23,7 +23,9 @@ export interface RiskLimits {
   readonly maxDrawdownPct: number;
   readonly minCapital: number;
   readonly maxTradesPerDay: number;
+  readonly maxLeverage?: number;
   readonly allowedSymbols?: readonly string[];
+  readonly allowedProductTypes?: readonly string[];
 }
 
 /**
@@ -39,6 +41,8 @@ export interface RiskContext {
   readonly positionValue: number;
   readonly symbol: string;
   readonly side: "buy" | "sell";
+  readonly leverage?: number;
+  readonly productType?: string;
 }
 
 /**
@@ -64,6 +68,8 @@ export function defaultRiskLimits(isLive: boolean): RiskLimits {
       maxDrawdownPct: 5,
       minCapital: 100,
       maxTradesPerDay: 10,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
     };
   }
 
@@ -140,6 +146,25 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
         ) {
           violations.push(
             `symbol ${context.symbol} is not in the allowed list`,
+          );
+        }
+
+        if (
+          limits.allowedProductTypes &&
+          limits.allowedProductTypes.length > 0 &&
+          context.productType &&
+          !limits.allowedProductTypes.includes(context.productType)
+        ) {
+          violations.push(`product type ${context.productType} is not allowed`);
+        }
+
+        if (
+          typeof limits.maxLeverage === "number" &&
+          typeof context.leverage === "number" &&
+          context.leverage > limits.maxLeverage
+        ) {
+          violations.push(
+            `leverage ${context.leverage}x exceeds max ${limits.maxLeverage}x`,
           );
         }
 

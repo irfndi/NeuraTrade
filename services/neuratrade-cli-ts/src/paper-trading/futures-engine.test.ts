@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Layer } from "effect";
+import { Effect, Either, Layer } from "effect";
 import {
   MarketDataGateway,
   type MarketDataGatewayService,
@@ -247,5 +247,68 @@ describe("runFuturesPaperTradingIteration", () => {
     expect(result.action).toBe("hold");
     expect(result.note).toContain("RISK BLOCKED");
     expect(result.position).toBeNull();
+  });
+
+  it("survives random volatile candle sequences without crashing", async () => {
+    for (let i = 0; i < 15; i++) {
+      const repo = new InMemoryPaperRepository();
+      const basePrice = 50 + Math.random() * 950;
+      const candles = makeCandles(
+        100,
+        basePrice,
+        Math.random() > 0.5 ? "up" : "down",
+      );
+      // Inject random volatility.
+      for (let j = 1; j < candles.length; j++) {
+        if (Math.random() < 0.3) {
+          const factor = 1 + (Math.random() - 0.5) * 0.05;
+          candles[j] = {
+            ...candles[j],
+            close: candles[j].close * factor,
+            high: candles[j].high * factor,
+            low: candles[j].low * factor,
+          };
+        }
+      }
+      const gateway: MarketDataGatewayService = {
+        fetchTick: () => Effect.fail({ reason: "not used" } as never),
+        fetchOHLCV: () => Effect.succeed(candles),
+        fetchOrderBook: () => Effect.succeed(makeOrderBook(basePrice)),
+        fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+        fetch24hrVolumes: () => Effect.succeed({}),
+      };
+      const adapter = Effect.runSync(
+        makeSimulatedFuturesExchangeAdapterService(gateway, { USDT: 10_000 }),
+      );
+      const riskGuard = makeRiskGuard({
+        liveTradingEnabled: false,
+        maxPositionSizePct: 100,
+        maxDailyLossPct: 100,
+        maxDrawdownPct: 100,
+        minCapital: 0,
+        maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      });
+
+      const outcome = await Effect.runPromise(
+        runFuturesPaperTradingIteration(makeOptions()).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+          Effect.provideService(FuturesExchangeAdapter, adapter),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.either,
+        ) as Effect.Effect<
+          Either.Either<
+            import("./futures-engine.js").FuturesPaperTradingIterationResult,
+            unknown
+          >,
+          never
+        >,
+      );
+
+      expect(outcome._tag).toBe("Right");
+      if (outcome._tag === "Right") {
+        expect(outcome.right.capital).toBeGreaterThanOrEqual(0);
+      }
+    }
   });
 });

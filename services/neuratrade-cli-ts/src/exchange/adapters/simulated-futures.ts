@@ -157,10 +157,10 @@ export function makeSimulatedFuturesExchangeAdapterService(
           }
 
           const fee = notional.times(0.0006);
-          yield* setBalance(
-            marginCoin,
-            balance.minus(marginRequired).minus(fee),
-          );
+          const balanceAfterFill = request.reduceOnly
+            ? balance.plus(marginRequired).minus(fee)
+            : balance.minus(marginRequired).minus(fee);
+          yield* setBalance(marginCoin, balanceAfterFill);
 
           const fill: FuturesOrderFill = {
             orderId: randomUUID(),
@@ -261,7 +261,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
       getPosition: (symbol, productType) =>
         Effect.map(getPositionInternal(symbol, productType), (p) => p ?? null),
 
-      getBalance: (marginCoin) =>
+      getBalance: (marginCoin, _productType) =>
         Effect.gen(function* () {
           const amount = yield* getBalanceInternal(marginCoin);
           return {

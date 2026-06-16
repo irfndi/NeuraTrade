@@ -91,6 +91,7 @@ export interface FuturesExchangeAdapterService {
 
   readonly getBalance: (
     marginCoin: string,
+    productType?: FuturesProductType,
   ) => Effect.Effect<FuturesBalance, ExchangeError>;
 
   readonly setLeverage: (
