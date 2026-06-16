@@ -108,7 +108,11 @@ export function validateFuturesOrder(
       );
     }
     const contractStatus = ctx.contract.symbolStatus || ctx.contract.status;
-    if (contractStatus !== "online" && contractStatus !== "") {
+    if (
+      contractStatus !== "online" &&
+      contractStatus !== "normal" &&
+      contractStatus !== ""
+    ) {
       return yield* Effect.fail(
         new BitgetFuturesGuardError({
           reason: `contract ${ctx.contract.symbol} is not tradable`,
