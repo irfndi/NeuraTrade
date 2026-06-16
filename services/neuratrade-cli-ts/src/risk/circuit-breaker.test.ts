@@ -20,7 +20,7 @@ describe("CircuitBreakerService", () => {
   it("stays closed below threshold", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-1.5));
+    await Effect.runPromise(cb.recordTradeResult(-1.5, 100));
     const open = await Effect.runPromise(cb.isOpen());
     expect(open).toBe(false);
   });
@@ -28,7 +28,7 @@ describe("CircuitBreakerService", () => {
   it("opens at threshold", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-2));
+    await Effect.runPromise(cb.recordTradeResult(-2, 100));
     const open = await Effect.runPromise(cb.isOpen());
     expect(open).toBe(true);
   });
@@ -36,7 +36,7 @@ describe("CircuitBreakerService", () => {
   it("opens above threshold", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-5));
+    await Effect.runPromise(cb.recordTradeResult(-5, 100));
     const open = await Effect.runPromise(cb.isOpen());
     expect(open).toBe(true);
   });
@@ -44,9 +44,9 @@ describe("CircuitBreakerService", () => {
   it("tracks cumulative daily PnL", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-0.5));
-    await Effect.runPromise(cb.recordTradeResult(-0.5));
-    await Effect.runPromise(cb.recordTradeResult(-0.5));
+    await Effect.runPromise(cb.recordTradeResult(-0.5, 100));
+    await Effect.runPromise(cb.recordTradeResult(-0.5, 100));
+    await Effect.runPromise(cb.recordTradeResult(-0.5, 100));
     const loss = await Effect.runPromise(cb.currentDailyLossPct());
     expect(loss).toBe(1.5);
   });
@@ -54,8 +54,8 @@ describe("CircuitBreakerService", () => {
   it("opens when cumulative losses hit threshold", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-1));
-    await Effect.runPromise(cb.recordTradeResult(-1));
+    await Effect.runPromise(cb.recordTradeResult(-1, 100));
+    await Effect.runPromise(cb.recordTradeResult(-1, 100));
     const open = await Effect.runPromise(cb.isOpen());
     expect(open).toBe(true);
   });
@@ -63,7 +63,7 @@ describe("CircuitBreakerService", () => {
   it("reset clears today state", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-3));
+    await Effect.runPromise(cb.recordTradeResult(-3, 100));
     await Effect.runPromise(cb.reset());
     const open = await Effect.runPromise(cb.isOpen());
     const loss = await Effect.runPromise(cb.currentDailyLossPct());
@@ -102,7 +102,7 @@ describe("CircuitBreakerService", () => {
   it("state survives reload on same db", async () => {
     const db = freshDb();
     const cb1 = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb1.recordTradeResult(-3));
+    await Effect.runPromise(cb1.recordTradeResult(-3, 100));
     const cb2 = makeCircuitBreakerService(db, 2);
     const open = await Effect.runPromise(cb2.isOpen());
     expect(open).toBe(true);
@@ -111,8 +111,8 @@ describe("CircuitBreakerService", () => {
   it("wins recover daily PnL", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
-    await Effect.runPromise(cb.recordTradeResult(-1.5));
-    await Effect.runPromise(cb.recordTradeResult(0.5));
+    await Effect.runPromise(cb.recordTradeResult(-1.5, 100));
+    await Effect.runPromise(cb.recordTradeResult(0.5, 100));
     const loss = await Effect.runPromise(cb.currentDailyLossPct());
     expect(loss).toBe(1);
   });

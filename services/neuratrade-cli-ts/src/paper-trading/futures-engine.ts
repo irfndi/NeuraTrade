@@ -141,6 +141,9 @@ export function runFuturesPaperTradingIteration(
       options.composerConfig,
     );
 
+    const todayPnl = yield* repo.getTodayRealizedPnl();
+    const startOfDayCapital = toNumber(capital.minus(money(todayPnl)));
+
     // Exit existing position first.
     if (position) {
       const exitReason = checkExitReason(
@@ -181,7 +184,10 @@ export function runFuturesPaperTradingIteration(
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
-        yield* circuitBreaker.recordTradeResult(trade.pnl);
+        yield* circuitBreaker.recordTradeResult(
+          trade.pnl,
+          startOfDayCapital,
+        );
 
         return {
           action: "closed" as const,
@@ -206,16 +212,14 @@ export function runFuturesPaperTradingIteration(
       const feePerContract = entryPrice.times(options.feePct / 100);
       const size = allocatedMargin.div(marginPerContract.plus(feePerContract));
 
-      const todayPnl = yield* repo.getTodayRealizedPnl();
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const startOfDayCapital = capital.minus(money(todayPnl));
       const riskGuard = yield* RiskGuard;
       const riskCheck = yield* riskGuard
         .check({
           isLive: options.isLive,
           capital: toNumber(capital),
           peakCapital: toNumber(peakCapital),
-          startOfDayCapital: toNumber(startOfDayCapital),
+          startOfDayCapital,
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
           positionValue: toNumber(

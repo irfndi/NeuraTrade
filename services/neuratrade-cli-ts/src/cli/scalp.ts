@@ -19,13 +19,8 @@ import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simula
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
-import {
-  KillSwitch,
-  KillSwitchSQLiteLive,
-} from "../risk/kill-switch.js";
-import {
-  CircuitBreakerSQLiteLive,
-} from "../risk/circuit-breaker.js";
+import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
+import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,

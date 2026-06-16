@@ -36,8 +36,6 @@ export interface SoakOptions {
   readonly leverage: number;
   readonly marginMode: FuturesMarginMode;
   readonly productType: FuturesProductType;
-  readonly killSwitch?: import("../risk/kill-switch.js").KillSwitchService;
-  readonly circuitBreaker?: import("../risk/circuit-breaker.js").CircuitBreakerService;
 }
 
 export interface IterationResult {

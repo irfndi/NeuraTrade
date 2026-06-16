@@ -354,12 +354,12 @@ describe("HealthCheck service", () => {
       });
 
       const proc1 = Bun.spawn([
-        "node",
+        "bun",
         "-e",
         `setTimeout(()=>{}, 30000); /* ${pattern} */`,
       ]);
       const proc2 = Bun.spawn([
-        "node",
+        "bun",
         "-e",
         `setTimeout(()=>{}, 30000); /* ${pattern} */`,
       ]);

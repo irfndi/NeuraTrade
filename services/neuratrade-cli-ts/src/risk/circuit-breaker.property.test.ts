@@ -12,19 +12,21 @@ describe("CircuitBreaker property invariants", () => {
   it("cumulative losses >= threshold opens the breaker", () => {
     fc.assert(
       fc.property(
+        fc.float({ min: 100, max: 100_000, noNaN: true }),
         fc.array(
           fc.float({ min: -500, max: Math.fround(-0.01), noNaN: true }),
           { minLength: 1, maxLength: 20 },
         ),
-        (losses) => {
+        (capital, losses) => {
           const threshold = 2;
           const db = freshDb();
           const cb = makeCircuitBreakerService(db, threshold);
           for (const loss of losses) {
-            Effect.runSync(cb.recordTradeResult(loss));
+            Effect.runSync(cb.recordTradeResult(loss, capital));
           }
-          const sum = losses.reduce((a, b) => a + b, 0);
-          if (sum <= -threshold) {
+          const totalLossPct =
+            (losses.reduce((a, b) => a + b, 0) / capital) * 100;
+          if (totalLossPct <= -threshold) {
             return Effect.runSync(cb.isOpen()) === true;
           }
           return true;
@@ -37,15 +39,16 @@ describe("CircuitBreaker property invariants", () => {
   it("only wins never opens the breaker", () => {
     fc.assert(
       fc.property(
+        fc.float({ min: 100, max: 100_000, noNaN: true }),
         fc.array(fc.float({ min: Math.fround(0.01), max: 1000, noNaN: true }), {
           minLength: 1,
           maxLength: 30,
         }),
-        (wins) => {
+        (capital, wins) => {
           const db = freshDb();
           const cb = makeCircuitBreakerService(db, 2);
           for (const win of wins) {
-            Effect.runSync(cb.recordTradeResult(win));
+            Effect.runSync(cb.recordTradeResult(win, capital));
           }
           return Effect.runSync(cb.isOpen()) === false;
         },
@@ -57,15 +60,16 @@ describe("CircuitBreaker property invariants", () => {
   it("reset() always results in isOpen false and currentDailyLossPct 0", () => {
     fc.assert(
       fc.property(
+        fc.float({ min: 100, max: 100_000, noNaN: true }),
         fc.array(fc.float({ min: -1000, max: 1000, noNaN: true }), {
           minLength: 0,
           maxLength: 20,
         }),
-        (pnls) => {
+        (capital, pnls) => {
           const db = freshDb();
           const cb = makeCircuitBreakerService(db, 2);
           for (const pnl of pnls) {
-            Effect.runSync(cb.recordTradeResult(pnl));
+            Effect.runSync(cb.recordTradeResult(pnl, capital));
           }
           Effect.runSync(cb.reset());
           const open = Effect.runSync(cb.isOpen());

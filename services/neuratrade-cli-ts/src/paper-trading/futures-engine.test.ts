@@ -7,10 +7,7 @@ import {
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
-import {
-  RiskGuard,
-  makeRiskGuard,
-} from "../risk/guards.js";
+import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
   CircuitBreaker,

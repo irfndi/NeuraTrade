@@ -13,6 +13,7 @@ export class CircuitBreakerError {
 export interface CircuitBreakerService {
   readonly recordTradeResult: (
     realizedPnl: number,
+    startOfDayCapital: number,
   ) => Effect.Effect<void, CircuitBreakerError, never>;
   readonly isOpen: () => Effect.Effect<boolean, CircuitBreakerError, never>;
   readonly getReason: () => Effect.Effect<string, CircuitBreakerError, never>;
@@ -87,12 +88,15 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
 
   recordTradeResult(
     realizedPnl: number,
+    startOfDayCapital: number,
   ): Effect.Effect<void, CircuitBreakerError, never> {
     return Effect.try({
       try: () => {
         const existing = this.readRow();
         const prevPnl = existing?.dailyPnl ?? 0;
-        const newPnl = new Decimal(prevPnl).plus(realizedPnl).toNumber();
+        const pnlPct =
+          startOfDayCapital > 0 ? (realizedPnl / startOfDayCapital) * 100 : 0;
+        const newPnl = new Decimal(prevPnl).plus(pnlPct).toNumber();
         const shouldOpen = newPnl <= -this.maxDailyLossPct;
         const wasOpen = existing?.open ?? false;
 
@@ -100,7 +104,7 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
           this.upsertRow(
             newPnl,
             true,
-            `Daily loss ${Math.abs(newPnl).toFixed(2)} reached threshold ${this.maxDailyLossPct}%`,
+            `Daily loss ${Math.abs(newPnl).toFixed(2)}% reached threshold ${this.maxDailyLossPct}%`,
           );
         } else if (wasOpen) {
           this.upsertRow(newPnl, true, existing!.reason);

@@ -102,26 +102,6 @@ export function runPaperTradingIteration(
       options.symbol,
     );
 
-    if (yield* killSwitch.isEngaged()) {
-      const reason = yield* killSwitch.getReason();
-      return {
-        action: "hold" as const,
-        position,
-        capital: toNumber(capital),
-        note: `KILL SWITCH ENGAGED: ${reason}`,
-      };
-    }
-
-    if (yield* circuitBreaker.isOpen()) {
-      const reason = yield* circuitBreaker.getReason();
-      return {
-        action: "hold" as const,
-        position,
-        capital: toNumber(capital),
-        note: `CIRCUIT BREAKER OPEN: ${reason}`,
-      };
-    }
-
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
       options.symbol,
@@ -157,6 +137,9 @@ export function runPaperTradingIteration(
       options.composerConfig,
     );
 
+    const todayPnl = yield* repo.getTodayRealizedPnl();
+    const startOfDayCapital = toNumber(capital.minus(money(todayPnl)));
+
     // Exit existing position first.
     if (position) {
       const exitReason = checkExitReason(
@@ -188,7 +171,7 @@ export function runPaperTradingIteration(
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
-        yield* circuitBreaker.recordTradeResult(trade.pnl);
+        yield* circuitBreaker.recordTradeResult(trade.pnl, startOfDayCapital);
 
         return {
           action: "closed" as const,
@@ -197,6 +180,26 @@ export function runPaperTradingIteration(
           note: `${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
         };
       }
+    }
+
+    if (yield* killSwitch.isEngaged()) {
+      const reason = yield* killSwitch.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `KILL SWITCH ENGAGED: ${reason}`,
+      };
+    }
+
+    if (yield* circuitBreaker.isOpen()) {
+      const reason = yield* circuitBreaker.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `CIRCUIT BREAKER OPEN: ${reason}`,
+      };
     }
 
     // Open new position if signal is strong enough and no position.
@@ -210,16 +213,14 @@ export function runPaperTradingIteration(
       const size = positionValue.div(entryPrice);
 
       // Pre-trade risk gate.
-      const todayPnl = yield* repo.getTodayRealizedPnl();
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const startOfDayCapital = capital.minus(money(todayPnl));
       const riskGuard = yield* RiskGuard;
       const riskCheck = yield* riskGuard
         .check({
           isLive: options.isLive,
           capital: toNumber(capital),
           peakCapital: toNumber(peakCapital),
-          startOfDayCapital: toNumber(startOfDayCapital),
+          startOfDayCapital,
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
           positionValue: toNumber(positionValue),
