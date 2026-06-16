@@ -149,6 +149,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   getTodayRealizedPnl() {
     return Effect.succeed(this.trades.reduce((sum, t) => sum + t.pnl, 0));
   }
+
+  getStartOfDayCapital(_date: Date, currentCapital: number) {
+    return Effect.succeed(currentCapital);
+  }
 }
 
 class InMemoryKillSwitch implements KillSwitchService {

@@ -142,7 +142,10 @@ export function runFuturesPaperTradingIteration(
     );
 
     const todayPnl = yield* repo.getTodayRealizedPnl();
-    const startOfDayCapital = toNumber(capital.minus(money(todayPnl)));
+    const startOfDayCapital = yield* repo.getStartOfDayCapital(
+      new Date(),
+      toNumber(capital),
+    );
 
     // Exit existing position first.
     if (position) {
@@ -210,6 +213,26 @@ export function runFuturesPaperTradingIteration(
       const feePerContract = entryPrice.times(options.feePct / 100);
       const size = allocatedMargin.div(marginPerContract.plus(feePerContract));
 
+      if (yield* killSwitch.isEngaged()) {
+        const reason = yield* killSwitch.getReason();
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: `KILL SWITCH ENGAGED: ${reason}`,
+        };
+      }
+
+      if (yield* circuitBreaker.isOpen()) {
+        const reason = yield* circuitBreaker.getReason();
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: `CIRCUIT BREAKER OPEN: ${reason}`,
+        };
+      }
+
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
       const riskGuard = yield* RiskGuard;
       const riskCheck = yield* riskGuard
@@ -237,26 +260,6 @@ export function runFuturesPaperTradingIteration(
           position,
           capital: toNumber(capital),
           note: `RISK BLOCKED: ${riskCheck.left.violations.join("; ")}`,
-        };
-      }
-
-      if (yield* killSwitch.isEngaged()) {
-        const reason = yield* killSwitch.getReason();
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `KILL SWITCH ENGAGED: ${reason}`,
-        };
-      }
-
-      if (yield* circuitBreaker.isOpen()) {
-        const reason = yield* circuitBreaker.getReason();
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `CIRCUIT BREAKER OPEN: ${reason}`,
         };
       }
 

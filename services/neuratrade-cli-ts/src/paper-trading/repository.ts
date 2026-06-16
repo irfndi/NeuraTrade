@@ -55,6 +55,11 @@ export interface PaperTradingRepositoryService {
     PaperTradingRepositoryError,
     never
   >;
+
+  readonly getStartOfDayCapital: (
+    date: Date,
+    currentCapital: number,
+  ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
 }
 
 export const PaperTradingRepository =
@@ -100,6 +105,12 @@ CREATE TABLE IF NOT EXISTS paper_trades (
 
 CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol ON paper_trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_paper_trades_closed_at ON paper_trades(closed_at DESC);
+
+CREATE TABLE IF NOT EXISTS paper_start_of_day_capital (
+  date TEXT PRIMARY KEY,
+  start_capital REAL NOT NULL,
+  updated_at DATETIME NOT NULL
+);
 `;
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
@@ -413,6 +424,40 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to load today PnL: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  getStartOfDayCapital(
+    date: Date,
+    currentCapital: number,
+  ): Effect.Effect<number, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const dateKey = date.toISOString().slice(0, 10);
+        const row = this.db
+          .query(
+            "SELECT start_capital FROM paper_start_of_day_capital WHERE date = ?",
+          )
+          .get(dateKey) as { start_capital: number } | null;
+        if (row) {
+          return row.start_capital;
+        }
+        this.db
+          .query(
+            `INSERT INTO paper_start_of_day_capital (date, start_capital, updated_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(date) DO UPDATE SET
+               start_capital = excluded.start_capital,
+               updated_at = excluded.updated_at`,
+          )
+          .run(dateKey, currentCapital, new Date().toISOString());
+        return currentCapital;
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load start-of-day capital: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

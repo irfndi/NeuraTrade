@@ -9,13 +9,16 @@ function freshDb(): Database {
 }
 
 describe("KillSwitch property invariants", () => {
-  it("engage() makes isEngaged() always true for any reason", () => {
+  it("engage() makes isEngaged() always true and preserves reason", () => {
     fc.assert(
       fc.property(fc.string(), (reason) => {
         const db = freshDb();
         const ks = makeKillSwitchService(db);
         Effect.runSync(ks.engage(reason));
-        return Effect.runSync(ks.isEngaged()) === true;
+        return (
+          Effect.runSync(ks.isEngaged()) === true &&
+          Effect.runSync(ks.getReason()) === reason
+        );
       }),
       { numRuns: 50 },
     );

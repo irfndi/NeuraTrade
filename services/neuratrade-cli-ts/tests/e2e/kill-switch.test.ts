@@ -102,19 +102,15 @@ describe("kill switch e2e", () => {
     rmDir(home);
   });
 
-  it(
-    "kill switch blocks paper-trade",
-    async () => {
-      const engage = await runCli([...BASE_ARGS, "--kill-switch"], {
-        NEURATRADE_HOME: home,
-      });
-      expect(engage.stdout).toContain("KILL SWITCH ENGAGED");
+  it("kill switch blocks paper-trade", async () => {
+    const engage = await runCli([...BASE_ARGS, "--kill-switch"], {
+      NEURATRADE_HOME: home,
+    });
+    expect(engage.stdout).toContain("KILL SWITCH ENGAGED");
 
-      const blocked = await runCli([...BASE_ARGS], { NEURATRADE_HOME: home });
-      expect(blocked.stdout).toContain("KILL SWITCH ENGAGED");
-    },
-    { timeout: 15000 },
-  );
+    const blocked = await runCli([...BASE_ARGS], { NEURATRADE_HOME: home });
+    expect(blocked.stdout).toContain("KILL SWITCH ENGAGED");
+  }, 15000);
 
   it("disengage allows paper-trade", async () => {
     const engaged = await runCli([...BASE_ARGS, "--kill-switch"], {
@@ -126,5 +122,5 @@ describe("kill switch e2e", () => {
       NEURATRADE_HOME: home,
     });
     expect(disengaged.stdout).not.toContain("KILL SWITCH ENGAGED");
-  });
+  }, 15000);
 });

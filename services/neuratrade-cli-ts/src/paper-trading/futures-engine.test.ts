@@ -142,6 +142,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   getTodayRealizedPnl() {
     return Effect.succeed(this.trades.reduce((sum, t) => sum + t.pnl, 0));
   }
+
+  getStartOfDayCapital(_date: Date, currentCapital: number) {
+    return Effect.succeed(currentCapital);
+  }
 }
 
 class InMemoryKillSwitch implements KillSwitchService {
@@ -333,6 +337,41 @@ describe("runFuturesPaperTradingIteration", () => {
 
     expect(result.action).toBe("hold");
     expect(result.note).toContain("KILL SWITCH ENGAGED");
+    expect(result.position).toBeNull();
+  });
+
+  it("prioritises kill switch over risk guard rejection", async () => {
+    const repo = new InMemoryPaperRepository();
+    const gateway = makeGateway(100);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 0,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+    const killSwitch = new InMemoryKillSwitch();
+    Effect.runSync(killSwitch.engage("test"));
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration(makeOptions()).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, killSwitch),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("KILL SWITCH ENGAGED");
+    expect(result.note).not.toContain("RISK BLOCKED");
     expect(result.position).toBeNull();
   });
 
