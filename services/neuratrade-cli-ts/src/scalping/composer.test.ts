@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { composeSignal, defaultComposerConfig, validateWeights } from "./composer.js";
+import {
+  composeSignal,
+  defaultComposerConfig,
+  validateWeights,
+} from "./composer.js";
 import type { CandleLike, OHLCVInput, OrderBookMetricsInput } from "./types.js";
 
 function makeCandles(
@@ -27,7 +31,9 @@ function makeCandles(
   return candles;
 }
 
-function makeOB(overrides: Partial<OrderBookMetricsInput> = {}): OrderBookMetricsInput {
+function makeOB(
+  overrides: Partial<OrderBookMetricsInput> = {},
+): OrderBookMetricsInput {
   return {
     exchange: "binance",
     symbol: "BTC/USDT",
@@ -100,7 +106,9 @@ describe("ScalpingSignalComposer", () => {
     const trendComponent = signal!.components.find((c) => c.name === "trend");
     expect(trendComponent?.signal).toBe("sell");
 
-    const imbalanceComponent = signal!.components.find((c) => c.name === "imbalance");
+    const imbalanceComponent = signal!.components.find(
+      (c) => c.name === "imbalance",
+    );
     expect(imbalanceComponent?.signal).toBe("sell");
   });
 
@@ -147,6 +155,8 @@ describe("validateWeights", () => {
   });
 
   it("rejects weights that do not sum to 1", () => {
-    expect(validateWeights({ ...defaultComposerConfig.weights, spread: 0.5 })).toBe(false);
+    expect(
+      validateWeights({ ...defaultComposerConfig.weights, spread: 0.5 }),
+    ).toBe(false);
   });
 });

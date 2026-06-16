@@ -90,6 +90,10 @@ export const RateLimiterLive = (
 
       const acquire = (n = 1): Effect.Effect<void, never> =>
         Effect.gen(function* () {
+          if (n <= 0) return;
+          const maxCost = Math.min(config.perSecond, config.perMinute);
+          const cost = Math.min(n, maxCost);
+
           while (true) {
             const now = yield* Clock.currentTimeMillis;
             const [acquired, waitMs] = yield* Ref.modify(
@@ -108,17 +112,20 @@ export const RateLimiterLive = (
                   perMinuteRate,
                 );
 
-                if (secondRefilled.tokens >= n && minuteRefilled.tokens >= n) {
+                if (
+                  secondRefilled.tokens >= cost &&
+                  minuteRefilled.tokens >= cost
+                ) {
                   return [
                     [true, 0],
                     {
                       second: {
                         ...secondRefilled,
-                        tokens: secondRefilled.tokens - n,
+                        tokens: secondRefilled.tokens - cost,
                       },
                       minute: {
                         ...minuteRefilled,
-                        tokens: minuteRefilled.tokens - n,
+                        tokens: minuteRefilled.tokens - cost,
                       },
                     },
                   ];
@@ -126,13 +133,13 @@ export const RateLimiterLive = (
 
                 const waitSecond = waitTimeMs(
                   secondRefilled,
-                  n,
+                  cost,
                   config.perSecond,
                   perSecondRate,
                 );
                 const waitMinute = waitTimeMs(
                   minuteRefilled,
-                  n,
+                  cost,
                   config.perMinute,
                   perMinuteRate,
                 );

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Option } from "effect";
 import { Database } from "bun:sqlite";
-import { MarketDataRepository, MarketDataRepositorySQLiteLive } from "../market-data/repository.js";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLiteLive,
+} from "../market-data/repository.js";
 import type { Candle } from "../market-data/types.js";
 import { scanProgram } from "./scalp.js";
 

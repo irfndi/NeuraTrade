@@ -1,20 +1,37 @@
 import { describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
-import { MarketDataGateway, type MarketDataGatewayService } from "../market-data/gateway.js";
+import {
+  MarketDataGateway,
+  type MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
-import { ExchangeAdapter, type ExchangeAdapterService } from "../exchange/adapter.js";
+import {
+  ExchangeAdapter,
+  type ExchangeAdapterService,
+} from "../exchange/adapter.js";
 import { makeSimulatedExchangeAdapter } from "../exchange/adapters/simulated.js";
-import { RiskGuard, type RiskGuardService, makeRiskGuard } from "../risk/guards.js";
+import {
+  RiskGuard,
+  type RiskGuardService,
+  makeRiskGuard,
+} from "../risk/guards.js";
 import {
   PaperTradingRepository,
   type PaperTradingRepositoryService,
 } from "./repository.js";
 import type { PaperPosition, PaperTrade } from "./types.js";
-import { runPaperTradingIteration, type PaperTradingOptions } from "./engine.js";
+import {
+  runPaperTradingIteration,
+  type PaperTradingOptions,
+} from "./engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
 import type { ComposerConfig } from "../scalping/types.js";
 
-function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "flat" = "flat"): Candle[] {
+function makeCandles(
+  count: number,
+  baseClose = 100,
+  trend: "up" | "down" | "flat" = "flat",
+): Candle[] {
   const candles: Candle[] = [];
   let close = baseClose;
   for (let i = 0; i < count; i++) {
@@ -68,10 +85,17 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
-  closePosition(position: PaperPosition, exitPrice: number, exitReason: PaperTrade["exitReason"], closedAt: Date) {
+  closePosition(
+    position: PaperPosition,
+    exitPrice: number,
+    exitReason: PaperTrade["exitReason"],
+    closedAt: Date,
+  ) {
     return Effect.sync(() => {
       const priceDiff =
-        position.side === "long" ? exitPrice - position.entryPrice : position.entryPrice - exitPrice;
+        position.side === "long"
+          ? exitPrice - position.entryPrice
+          : position.entryPrice - exitPrice;
       const pnl = priceDiff * position.size;
       const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
       const trade: PaperTrade = {
@@ -96,7 +120,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getPortfolio() {
-    return Effect.succeed({ capital: this.capital, peakCapital: this.peakCapital });
+    return Effect.succeed({
+      capital: this.capital,
+      peakCapital: this.peakCapital,
+    });
   }
 
   setPortfolio(capital: number, peakCapital: number) {
@@ -131,7 +158,9 @@ function makeGateway(price: number): MarketDataGatewayService {
   };
 }
 
-function makeOptions(composerConfig: ComposerConfig = defaultComposerConfig): PaperTradingOptions {
+function makeOptions(
+  composerConfig: ComposerConfig = defaultComposerConfig,
+): PaperTradingOptions {
   return {
     exchange: "binance",
     symbol: "BTC/USDT",

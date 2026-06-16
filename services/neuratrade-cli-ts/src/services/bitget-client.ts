@@ -138,9 +138,12 @@ export interface BitgetContract {
   readonly quoteCoin: string;
   readonly productType: BitgetProductType;
   readonly status: string;
+  readonly symbolStatus: string;
   readonly pricePrecision: string;
   readonly quantityPrecision: string;
   readonly minTradeAmount: string;
+  readonly minTradeNum: string;
+  readonly minTradeUSDT: string;
   readonly maxLeverage: string;
   readonly minLeverage: string;
   readonly takerFeeRate: string;
@@ -539,9 +542,12 @@ function parseContract(data: Record<string, unknown>): BitgetContract {
       data.productType ?? "USDT-FUTURES",
     ) as BitgetProductType,
     status: String(data.status ?? ""),
+    symbolStatus: String(data.symbolStatus ?? data.status ?? ""),
     pricePrecision: String(data.pricePrecision ?? "0"),
     quantityPrecision: String(data.quantityPrecision ?? "0"),
     minTradeAmount: String(data.minTradeAmount ?? data.minTradeNum ?? "0"),
+    minTradeNum: String(data.minTradeNum ?? data.minTradeAmount ?? "0"),
+    minTradeUSDT: String(data.minTradeUSDT ?? "0"),
     maxLeverage: String(data.maxLever ?? data.maxLeverage ?? "0"),
     minLeverage: String(data.minLever ?? data.minLeverage ?? "0"),
     takerFeeRate: String(data.takerFeeRate ?? "0"),

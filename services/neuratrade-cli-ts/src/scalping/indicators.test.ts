@@ -66,11 +66,46 @@ describe("indicators", () => {
 
   it("calculates ATR", () => {
     const candles: CandleLike[] = [
-      { open: 100, high: 105, low: 95, close: 100, volume: 1, timestamp: new Date() },
-      { open: 100, high: 110, low: 98, close: 105, volume: 1, timestamp: new Date() },
-      { open: 105, high: 108, low: 100, close: 102, volume: 1, timestamp: new Date() },
-      { open: 102, high: 115, low: 101, close: 110, volume: 1, timestamp: new Date() },
-      { open: 110, high: 112, low: 105, close: 108, volume: 1, timestamp: new Date() },
+      {
+        open: 100,
+        high: 105,
+        low: 95,
+        close: 100,
+        volume: 1,
+        timestamp: new Date(),
+      },
+      {
+        open: 100,
+        high: 110,
+        low: 98,
+        close: 105,
+        volume: 1,
+        timestamp: new Date(),
+      },
+      {
+        open: 105,
+        high: 108,
+        low: 100,
+        close: 102,
+        volume: 1,
+        timestamp: new Date(),
+      },
+      {
+        open: 102,
+        high: 115,
+        low: 101,
+        close: 110,
+        volume: 1,
+        timestamp: new Date(),
+      },
+      {
+        open: 110,
+        high: 112,
+        low: 105,
+        close: 108,
+        volume: 1,
+        timestamp: new Date(),
+      },
     ];
     const atr = calculateATR(candles, 3);
     expect(atr).not.toBeNull();
@@ -83,7 +118,14 @@ describe("indicators", () => {
     for (let i = 0; i < 50; i++) {
       const open = close;
       close *= 1.01;
-      candles.push({ open, high: close * 1.002, low: open * 0.998, close, volume: 1, timestamp: new Date() });
+      candles.push({
+        open,
+        high: close * 1.002,
+        low: open * 0.998,
+        close,
+        volume: 1,
+        timestamp: new Date(),
+      });
     }
     const adx = calculateADX(candles, 14);
     expect(adx.adx).not.toBeNull();

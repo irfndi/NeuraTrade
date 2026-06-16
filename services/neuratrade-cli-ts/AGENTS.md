@@ -27,23 +27,23 @@ services/neuratrade-cli-ts/
 
 ## WHERE TO LOOK
 
-| Task | Location | Notes |
-|------|----------|-------|
-| CLI command tree | `src/cli/index.ts` | Root command + subcommand wiring |
-| Gateway start/stop/status | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts` | Process lifecycle |
-| Config loading | `src/services/config.ts`, `src/schemas/*.ts` | env → runtime.json → config.json → defaults |
-| PID files | `src/services/pid.ts` | Read/write/liveness/pattern matching |
-| Process spawning | `src/services/process-manager.ts` | Bun.spawn, signals, cleanup |
-| API client | `src/services/api-client.ts` | HTTP client for backend endpoints |
-| Health checks | `src/services/health-check.ts` | HTTP probe + process probe |
-| Market data commands | `src/cli/market.ts` | fetch-candles, fetch-universe |
-| Market data gateway | `src/market-data/gateways/` | Binance REST adapter (ticks, candles, order book, symbols, 24h volumes) |
-| Market data persistence | `src/market-data/repository.ts` | SQLite candles/ticks repository |
-| Deterministic scalping | `src/scalping/composer.ts`, `src/scalping/backtest.ts` | Signal composition + backtest engine |
-| Exchange adapter port | `src/exchange/adapter.ts`, `src/exchange/adapters/` | Simulated + live Binance adapters |
-| Exchange testnet validation | `src/cli/exchange.ts` | `exchange test` round-trip command |
-| Paper/live trading | `src/paper-trading/engine.ts`, `src/paper-trading/repository.ts` | Iteration loop + persistence |
-| Pre-trade risk guards | `src/risk/guards.ts` | Drawdown, daily loss, position size limits |
+| Task                        | Location                                                         | Notes                                                                   |
+| --------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| CLI command tree            | `src/cli/index.ts`                                               | Root command + subcommand wiring                                        |
+| Gateway start/stop/status   | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts`     | Process lifecycle                                                       |
+| Config loading              | `src/services/config.ts`, `src/schemas/*.ts`                     | env → runtime.json → config.json → defaults                             |
+| PID files                   | `src/services/pid.ts`                                            | Read/write/liveness/pattern matching                                    |
+| Process spawning            | `src/services/process-manager.ts`                                | Bun.spawn, signals, cleanup                                             |
+| API client                  | `src/services/api-client.ts`                                     | HTTP client for backend endpoints                                       |
+| Health checks               | `src/services/health-check.ts`                                   | HTTP probe + process probe                                              |
+| Market data commands        | `src/cli/market.ts`                                              | fetch-candles, fetch-universe                                           |
+| Market data gateway         | `src/market-data/gateways/`                                      | Binance REST adapter (ticks, candles, order book, symbols, 24h volumes) |
+| Market data persistence     | `src/market-data/repository.ts`                                  | SQLite candles/ticks repository                                         |
+| Deterministic scalping      | `src/scalping/composer.ts`, `src/scalping/backtest.ts`           | Signal composition + backtest engine                                    |
+| Exchange adapter port       | `src/exchange/adapter.ts`, `src/exchange/adapters/`              | Simulated + live Binance adapters                                       |
+| Exchange testnet validation | `src/cli/exchange.ts`                                            | `exchange test` round-trip command                                      |
+| Paper/live trading          | `src/paper-trading/engine.ts`, `src/paper-trading/repository.ts` | Iteration loop + persistence                                            |
+| Pre-trade risk guards       | `src/risk/guards.ts`                                             | Drawdown, daily loss, position size limits                              |
 
 ## COMMANDS
 

@@ -1,6 +1,9 @@
 import type { CandleLike } from "./types.js";
 
-export function calculateEMA(values: readonly number[], period: number): number[] {
+export function calculateEMA(
+  values: readonly number[],
+  period: number,
+): number[] {
   if (values.length === 0 || period <= 0) return [];
 
   const multiplier = 2 / (period + 1);
@@ -28,7 +31,10 @@ export function calculateEMA(values: readonly number[], period: number): number[
   return result;
 }
 
-export function calculateRSI(candles: readonly CandleLike[], period = 14): number | null {
+export function calculateRSI(
+  candles: readonly CandleLike[],
+  period = 14,
+): number | null {
   if (candles.length < period + 1) return null;
 
   let avgGain = 0;
@@ -56,7 +62,9 @@ export function calculateRSI(candles: readonly CandleLike[], period = 14): numbe
   return 100 - 100 / (1 + rs);
 }
 
-export function calculateVolatility(candles: readonly CandleLike[]): number | null {
+export function calculateVolatility(
+  candles: readonly CandleLike[],
+): number | null {
   if (candles.length < 2) return null;
   const prev = candles[candles.length - 2].close;
   const curr = candles[candles.length - 1].close;
@@ -64,7 +72,10 @@ export function calculateVolatility(candles: readonly CandleLike[]): number | nu
   return Math.abs(curr - prev) / prev;
 }
 
-export function calculateATR(candles: readonly CandleLike[], period = 14): number | null {
+export function calculateATR(
+  candles: readonly CandleLike[],
+  period = 14,
+): number | null {
   if (candles.length < period + 1) return null;
 
   const trValues: number[] = [];
@@ -72,7 +83,11 @@ export function calculateATR(candles: readonly CandleLike[], period = 14): numbe
     const high = candles[i].high;
     const low = candles[i].low;
     const prevClose = candles[i - 1].close;
-    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose),
+    );
     trValues.push(tr);
   }
 
@@ -116,7 +131,11 @@ export function calculateADX(
     plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
     minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
 
-    const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+    const tr = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose),
+    );
     trValues.push(tr);
   }
 
@@ -135,16 +154,19 @@ export function calculateADX(
   const dxValues: number[] = [];
 
   for (let i = period; i < plusDM.length; i++) {
-    smoothedPlusDM = smoothedPlusDM * (period - 1) / period + plusDM[i];
-    smoothedMinusDM = smoothedMinusDM * (period - 1) / period + minusDM[i];
-    smoothedTR = smoothedTR * (period - 1) / period + trValues[i];
+    smoothedPlusDM = (smoothedPlusDM * (period - 1)) / period + plusDM[i];
+    smoothedMinusDM = (smoothedMinusDM * (period - 1)) / period + minusDM[i];
+    smoothedTR = (smoothedTR * (period - 1)) / period + trValues[i];
 
     const plusDI = smoothedTR === 0 ? 0 : (smoothedPlusDM / smoothedTR) * 100;
     const minusDI = smoothedTR === 0 ? 0 : (smoothedMinusDM / smoothedTR) * 100;
     plusDIValues.push(plusDI);
     minusDIValues.push(minusDI);
 
-    const dx = plusDI + minusDI === 0 ? 0 : (Math.abs(plusDI - minusDI) / (plusDI + minusDI)) * 100;
+    const dx =
+      plusDI + minusDI === 0
+        ? 0
+        : (Math.abs(plusDI - minusDI) / (plusDI + minusDI)) * 100;
     dxValues.push(dx);
   }
 
@@ -187,7 +209,8 @@ export function calculateBollingerBands(
   const sum = closes.reduce((a, b) => a + b, 0);
   const middle = sum / period;
 
-  const variance = closes.reduce((acc, c) => acc + (c - middle) ** 2, 0) / period;
+  const variance =
+    closes.reduce((acc, c) => acc + (c - middle) ** 2, 0) / period;
   const std = Math.sqrt(variance);
 
   const upper = middle + stdDev * std;

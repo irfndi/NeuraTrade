@@ -15,11 +15,7 @@ import {
   ExchangeError,
   type ExchangeAdapterService,
 } from "../exchange/adapter.js";
-import {
-  RiskError,
-  RiskGuard,
-  type RiskGuardService,
-} from "../risk/guards.js";
+import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -63,7 +59,10 @@ export function runPaperTradingIteration(
 ): Effect.Effect<
   PaperTradingIterationResult,
   MarketDataError | PaperTradingRepositoryError | ExchangeError | RiskError,
-  MarketDataGatewayService | PaperTradingRepositoryService | ExchangeAdapterService | RiskGuardService
+  | MarketDataGatewayService
+  | PaperTradingRepositoryService
+  | ExchangeAdapterService
+  | RiskGuardService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
@@ -74,10 +73,15 @@ export function runPaperTradingIteration(
 
     const portfolio = yield* repo.getPortfolio();
     let capital =
-      portfolio.capital <= 0 ? money(options.initialCapital) : money(portfolio.capital);
+      portfolio.capital <= 0
+        ? money(options.initialCapital)
+        : money(portfolio.capital);
     let peakCapital = Decimal.max(money(portfolio.peakCapital), capital);
 
-    let position = yield* repo.getOpenPosition(options.exchange, options.symbol);
+    let position = yield* repo.getOpenPosition(
+      options.exchange,
+      options.symbol,
+    );
 
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
@@ -85,7 +89,11 @@ export function runPaperTradingIteration(
       options.timeframe,
       100,
     );
-    const orderBook = yield* gateway.fetchOrderBook(options.exchange, options.symbol, 20);
+    const orderBook = yield* gateway.fetchOrderBook(
+      options.exchange,
+      options.symbol,
+      20,
+    );
 
     if (candles.length < 30) {
       return {
@@ -112,7 +120,12 @@ export function runPaperTradingIteration(
 
     // Exit existing position first.
     if (position) {
-      const exitReason = checkExitReason(position, currentCandle, signal, options);
+      const exitReason = checkExitReason(
+        position,
+        currentCandle,
+        signal,
+        options,
+      );
       if (exitReason) {
         const fill = yield* adapter.closePosition(options.symbol);
 
@@ -124,7 +137,12 @@ export function runPaperTradingIteration(
           exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
         }
 
-        const trade = yield* repo.closePosition(position, exitPrice, exitReason, currentCandle.timestamp);
+        const trade = yield* repo.closePosition(
+          position,
+          exitPrice,
+          exitReason,
+          currentCandle.timestamp,
+        );
         const entryCost = money(position.entryPrice).times(position.size);
         const exitFee = entryCost.times(options.feePct / 100);
         capital = capital.plus(money(trade.pnl)).minus(exitFee);
@@ -188,7 +206,10 @@ export function runPaperTradingIteration(
 
       const filledPrice = money(fill.filledPrice);
       const filledSize = money(fill.filledQty);
-      const entryFee = filledPrice.times(filledSize).times(options.feePct / 100).plus(fill.fee);
+      const entryFee = filledPrice
+        .times(filledSize)
+        .times(options.feePct / 100)
+        .plus(fill.fee);
       capital = capital.minus(entryFee);
 
       const atr = options.useAtrStops ? calculateATR(candles, 14) : null;
@@ -205,7 +226,9 @@ export function runPaperTradingIteration(
         takeProfit =
           side === "long"
             ? filledPrice.plus(atrValue.times(options.atrTakeProfitMultiplier))
-            : filledPrice.minus(atrValue.times(options.atrTakeProfitMultiplier));
+            : filledPrice.minus(
+                atrValue.times(options.atrTakeProfitMultiplier),
+              );
       } else {
         stopLoss =
           side === "long" ? filledPrice.times(0.985) : filledPrice.times(1.015);
@@ -243,7 +266,9 @@ export function runPaperTradingIteration(
       action: "hold" as const,
       position,
       capital: toNumber(capital),
-      note: signal ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})` : "no signal",
+      note: signal
+        ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})`
+        : "no signal",
     };
   });
 }
@@ -262,7 +287,11 @@ function checkExitReason(
     if (candle.low <= position.takeProfit) return "take_profit";
   }
 
-  if (!options.holdUntilStop && signal && shouldExitPosition(position, signal)) {
+  if (
+    !options.holdUntilStop &&
+    signal &&
+    shouldExitPosition(position, signal)
+  ) {
     return "signal";
   }
 
@@ -297,7 +326,10 @@ function shouldExitPosition(
   );
 }
 
-function isEntrySignal(signal: NonNullable<ReturnType<typeof composeSignal>>, minConfidence: number): boolean {
+function isEntrySignal(
+  signal: NonNullable<ReturnType<typeof composeSignal>>,
+  minConfidence: number,
+): boolean {
   return signal.direction !== "hold" && signal.confidence >= minConfidence;
 }
 

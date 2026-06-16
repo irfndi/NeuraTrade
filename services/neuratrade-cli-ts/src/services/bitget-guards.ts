@@ -192,12 +192,19 @@ function checkNotionalAndLimits(
     const minTrade = instrument.minTradeAmount;
     const maxTrade = instrument.maxTradeAmount;
 
-    // Notional guard: for market/limit orders we estimate notional using
-    // the reference price and reject if below the instrument minimum.
+    // Notional guard: estimate notional using the order limit price when
+    // available, otherwise the reference (mark/last) price. For market buys
+    // Bitget interprets size as quote quantity, so notional equals size.
+    const price =
+      order.orderType === "limit" &&
+      order.price &&
+      compare(order.price, "0") > 0
+        ? order.price
+        : referencePrice;
     const notional =
       order.side === "buy" && order.orderType === "market"
         ? order.size
-        : multiply(order.size, referencePrice);
+        : multiply(order.size, price);
 
     if (compare(notional, minTrade) < 0) {
       return yield* Effect.fail(

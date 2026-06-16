@@ -16,7 +16,10 @@ function resolveHome(explicitHome?: string): string {
   let raw: string;
   if (explicitHome && explicitHome.length > 0) {
     raw = explicitHome;
-  } else if (process.env.NEURATRADE_HOME && process.env.NEURATRADE_HOME.length > 0) {
+  } else if (
+    process.env.NEURATRADE_HOME &&
+    process.env.NEURATRADE_HOME.length > 0
+  ) {
     raw = process.env.NEURATRADE_HOME;
   } else {
     raw = "~/.neuratrade";

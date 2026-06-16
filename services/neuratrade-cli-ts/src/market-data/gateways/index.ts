@@ -11,29 +11,26 @@ import * as Binance from "./binance.js";
  *
  * Additional exchanges can be added here without changing consumers.
  */
-export const MarketDataGatewayLive = Layer.succeed(
-  MarketDataGateway,
-  {
-    fetchTick: (exchange, symbol) =>
-      dispatch(exchange, "fetchTick", () => Binance.fetchTick(symbol)),
+export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
+  fetchTick: (exchange, symbol) =>
+    dispatch(exchange, "fetchTick", () => Binance.fetchTick(symbol)),
 
-    fetchOHLCV: (exchange, symbol, timeframe, limit, startTime) =>
-      dispatch(exchange, "fetchOHLCV", () =>
-        Binance.fetchOHLCV(symbol, timeframe, limit, startTime),
-      ),
+  fetchOHLCV: (exchange, symbol, timeframe, limit, startTime) =>
+    dispatch(exchange, "fetchOHLCV", () =>
+      Binance.fetchOHLCV(symbol, timeframe, limit, startTime),
+    ),
 
-    fetchOrderBook: (exchange, symbol, limit) =>
-      dispatch(exchange, "fetchOrderBook", () =>
-        Binance.fetchOrderBook(symbol, limit),
-      ),
+  fetchOrderBook: (exchange, symbol, limit) =>
+    dispatch(exchange, "fetchOrderBook", () =>
+      Binance.fetchOrderBook(symbol, limit),
+    ),
 
-    fetchSymbols: (exchange) =>
-      dispatch(exchange, "fetchSymbols", () => Binance.fetchSymbols()),
+  fetchSymbols: (exchange) =>
+    dispatch(exchange, "fetchSymbols", () => Binance.fetchSymbols()),
 
-    fetch24hrVolumes: (exchange) =>
-      dispatch(exchange, "fetch24hrVolumes", () => Binance.fetch24hrVolumes()),
-  } satisfies MarketDataGatewayService,
-);
+  fetch24hrVolumes: (exchange) =>
+    dispatch(exchange, "fetch24hrVolumes", () => Binance.fetch24hrVolumes()),
+} satisfies MarketDataGatewayService);
 
 function dispatch<A>(
   exchange: string,

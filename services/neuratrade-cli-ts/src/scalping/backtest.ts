@@ -1,4 +1,10 @@
-import type { CandleLike, ComposerConfig, OHLCVInput, OrderBookMetricsInput, ScalpingSignal } from "./types.js";
+import type {
+  CandleLike,
+  ComposerConfig,
+  OHLCVInput,
+  OrderBookMetricsInput,
+  ScalpingSignal,
+} from "./types.js";
 import { composeSignal } from "./composer.js";
 import { calculateATR } from "./indicators.js";
 
@@ -125,7 +131,11 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       }
 
       // Exit on signal reversal unless holding until stop/take-profit.
-      if (!options.holdUntilStop && signal && shouldExitPosition(position, signal)) {
+      if (
+        !options.holdUntilStop &&
+        signal &&
+        shouldExitPosition(position, signal)
+      ) {
         const exitPrice = next.open;
         const pnl = calculatePnl(position, exitPrice);
         const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
@@ -162,9 +172,13 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       let takeProfit: number;
       if (useAtr) {
         stopLoss =
-          side === "long" ? entryPrice - atr * stopMult : entryPrice + atr * stopMult;
+          side === "long"
+            ? entryPrice - atr * stopMult
+            : entryPrice + atr * stopMult;
         takeProfit =
-          side === "long" ? entryPrice + atr * tpMult : entryPrice - atr * tpMult;
+          side === "long"
+            ? entryPrice + atr * tpMult
+            : entryPrice - atr * tpMult;
       } else {
         stopLoss =
           side === "long"
@@ -214,7 +228,8 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
 
   const winningTrades = trades.filter((t) => t.pnl > 0).length;
   const losingTrades = trades.filter((t) => t.pnl < 0).length;
-  const totalReturnPct = ((capital - options.initialCapital) / options.initialCapital) * 100;
+  const totalReturnPct =
+    ((capital - options.initialCapital) / options.initialCapital) * 100;
   const returns = trades.map((t) => t.pnlPct);
   const sharpe = calculateSharpe(returns);
 
@@ -250,9 +265,11 @@ function syntheticOrderBook(candle: CandleLike): OrderBookMetricsInput {
   const midPrice = candle.close;
   const spreadPercent = midPrice > 0 ? spread / midPrice : 0;
   const range = candle.high - candle.low;
-  const bidDepth = range > 0 ? (candle.close - candle.low) / range * 100 : 50;
-  const askDepth = range > 0 ? (candle.high - candle.close) / range * 100 : 50;
-  const imbalance = bidDepth + askDepth > 0 ? (bidDepth - askDepth) / (bidDepth + askDepth) : 0;
+  const bidDepth = range > 0 ? ((candle.close - candle.low) / range) * 100 : 50;
+  const askDepth =
+    range > 0 ? ((candle.high - candle.close) / range) * 100 : 50;
+  const imbalance =
+    bidDepth + askDepth > 0 ? (bidDepth - askDepth) / (bidDepth + askDepth) : 0;
 
   return {
     exchange: "synthetic",
@@ -283,7 +300,10 @@ function checkExitLevels(
   };
 }
 
-function shouldExitPosition(position: BacktestPosition, signal: ScalpingSignal): boolean {
+function shouldExitPosition(
+  position: BacktestPosition,
+  signal: ScalpingSignal,
+): boolean {
   return (
     (position.side === "long" && signal.direction === "sell") ||
     (position.side === "short" && signal.direction === "buy")
@@ -295,7 +315,10 @@ function isEntrySignal(signal: ScalpingSignal, minConfidence: number): boolean {
 }
 
 function calculatePnl(position: BacktestPosition, exitPrice: number): number {
-  const priceDiff = position.side === "long" ? exitPrice - position.entryPrice : position.entryPrice - exitPrice;
+  const priceDiff =
+    position.side === "long"
+      ? exitPrice - position.entryPrice
+      : position.entryPrice - exitPrice;
   return priceDiff * position.size;
 }
 

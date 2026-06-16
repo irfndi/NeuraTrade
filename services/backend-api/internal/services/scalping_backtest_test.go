@@ -798,7 +798,7 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksSellWhenBroadTrendIsPositive(
 	now := time.Date(2026, 5, 12, 2, 47, 30, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "ONDO/USDT",
 		Price:              0.3855,
 		High24h:            0.40,
@@ -819,7 +819,7 @@ func TestScalpingBacktestEngine_BuildDecisionRejectsObservedPullbackBuy(t *testi
 	now := time.Date(2026, 5, 12, 2, 47, 45, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "ONDO/USDT",
 		Price:              0.379,
 		High24h:            0.40,
@@ -840,7 +840,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsBlowoffReversalSell(t *testin
 	now := time.Date(2026, 5, 12, 2, 47, 50, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "CHZ/USDT",
 		Price:              0.04983,
 		High24h:            0.05,
@@ -862,7 +862,7 @@ func TestScalpingBacktestEngine_BuildDecisionBlocksWeakBlowoffSellPressure(t *te
 	now := time.Date(2026, 5, 20, 18, 2, 30, 0, time.UTC)
 	engine := newRunSignalsTestEngine(now)
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "DASH/USDT",
 		Price:              123.9,
 		High24h:            124.2,
@@ -885,7 +885,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedReversalBuy(t *testi
 	engine.config.RequireRecentMomentum = true
 	engine.config.MinRecentMomentumPct = 0.05
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "REV/USDT",
 		Price:              100,
 		High24h:            115,
@@ -911,7 +911,7 @@ func TestScalpingBacktestEngine_BuildDecisionAllowsValidatedSellWindow(t *testin
 	engine.config.MinRecentMomentumPct = 0.05
 	engine.config.MaxBidAskSpreadPct = 0.08
 
-	decision := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
+	decision, _ := engine.buildDecisionFromSignal(context.Background(), MarketSignal{
 		Symbol:             "SW/USDT",
 		Price:              100,
 		High24h:            115,
@@ -1376,6 +1376,7 @@ func TestScalpingBacktestEngine_RunSignalsCanRequireRecentMomentum(t *testing.T)
 	engine := newRunSignalsTestEngine(now)
 	engine.config.RequireRecentMomentum = true
 	engine.config.MinRecentMomentumPct = 0.05
+	engine.config.EndTime = now.Add(5 * time.Minute)
 
 	result, err := engine.RunSignals(context.Background(), []HistoricalSignal{{
 		Timestamp: now,

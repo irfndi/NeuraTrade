@@ -12,9 +12,10 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function startMock(
-  handler: (req: Request) => Response | Promise<Response>,
-): { stop: () => void; url: string } {
+function startMock(handler: (req: Request) => Response | Promise<Response>): {
+  stop: () => void;
+  url: string;
+} {
   const server = Bun.serve({ port: 0, fetch: handler });
   return { stop: () => server.stop(), url: `http://localhost:${server.port}` };
 }
@@ -30,7 +31,9 @@ async function runOk<A>(
   timeoutMs?: number,
 ): Promise<A> {
   return Effect.runPromise(
-    program.pipe(Effect.provide(ApiClientLive(url, apiKey, timeoutMs))) as Effect.Effect<A, never>,
+    program.pipe(
+      Effect.provide(ApiClientLive(url, apiKey, timeoutMs)),
+    ) as Effect.Effect<A, never>,
   );
 }
 
@@ -41,7 +44,9 @@ async function runFail<A>(
   timeoutMs?: number,
 ): Promise<unknown> {
   const exit = await Effect.runPromiseExit(
-    program.pipe(Effect.provide(ApiClientLive(url, apiKey, timeoutMs))) as Effect.Effect<A, unknown>,
+    program.pipe(
+      Effect.provide(ApiClientLive(url, apiKey, timeoutMs)),
+    ) as Effect.Effect<A, unknown>,
   );
   if (exit._tag === "Failure") {
     return Cause.squash(exit.cause);
@@ -118,7 +123,12 @@ describe("ApiClient", () => {
       const mock = startMock(() =>
         json({
           providers: [
-            { id: "deepseek", name: "DeepSeek", is_active: true, model_count: 3 },
+            {
+              id: "deepseek",
+              name: "DeepSeek",
+              is_active: true,
+              model_count: 3,
+            },
             { id: "openai", name: "OpenAI", is_active: false, model_count: 5 },
           ],
         }),
@@ -149,7 +159,14 @@ describe("ApiClient", () => {
         receivedPath = new URL(req.url).pathname;
         return json({
           models: [
-            { model_id: "gpt-4o", display_name: "GPT-4o", provider: "openai", cost: "0.01", supports_tools: true, supports_vision: false },
+            {
+              model_id: "gpt-4o",
+              display_name: "GPT-4o",
+              provider: "openai",
+              cost: "0.01",
+              supports_tools: true,
+              supports_vision: false,
+            },
           ],
         });
       });
@@ -310,7 +327,9 @@ describe("ApiClient", () => {
     });
 
     it("returns HttpError on 500 with body text", async () => {
-      const mock = startMock(() => new Response("internal server error", { status: 500 }));
+      const mock = startMock(
+        () => new Response("internal server error", { status: 500 }),
+      );
       try {
         const program = Effect.gen(function* () {
           const api = yield* ApiClient;

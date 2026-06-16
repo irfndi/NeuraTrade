@@ -107,7 +107,8 @@ export function validateFuturesOrder(
         }),
       );
     }
-    if (ctx.contract.status !== "online" && ctx.contract.status !== "") {
+    const contractStatus = ctx.contract.symbolStatus || ctx.contract.status;
+    if (contractStatus !== "online" && contractStatus !== "") {
       return yield* Effect.fail(
         new BitgetFuturesGuardError({
           reason: `contract ${ctx.contract.symbol} is not tradable`,
@@ -132,12 +133,28 @@ export function validateFuturesOrder(
       );
     }
 
-    // Notional and size
-    const notional = multiply(ctx.order.size, ctx.lastPrice);
-    if (compare(notional, ctx.contract.minTradeAmount) < 0) {
+    // Notional and size: use the order limit price when available; otherwise
+    // fall back to the last/mark price. USDT-margined contracts publish a
+    // USDT minimum notional (minTradeUSDT); coin-margined contracts publish a
+    // base-quantity minimum (minTradeNum). Keep minTradeAmount as a legacy fallback.
+    const price =
+      ctx.order.price && ctx.order.price.trim() !== ""
+        ? ctx.order.price
+        : ctx.lastPrice;
+    const notional = multiply(ctx.order.size, price);
+    const isUsdtMargined =
+      ctx.contract.productType === "USDT-FUTURES" ||
+      ctx.contract.productType === "USDC-FUTURES";
+    const minNotional =
+      isUsdtMargined && compare(ctx.contract.minTradeUSDT, "0") > 0
+        ? ctx.contract.minTradeUSDT
+        : compare(ctx.contract.minTradeAmount, "0") > 0
+          ? ctx.contract.minTradeAmount
+          : ctx.contract.minTradeNum;
+    if (compare(notional, minNotional) < 0) {
       return yield* Effect.fail(
         new BitgetFuturesGuardError({
-          reason: `notional ${notional} below min trade amount ${ctx.contract.minTradeAmount}`,
+          reason: `notional ${notional} below min trade amount ${minNotional} for ${ctx.contract.symbol}`,
         }),
       );
     }

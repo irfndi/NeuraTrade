@@ -14,7 +14,9 @@ export function money(value: number | string | Decimal): Money {
   return new Decimal(value);
 }
 
-export function moneyOrZero(value: number | string | Decimal | undefined | null): Money {
+export function moneyOrZero(
+  value: number | string | Decimal | undefined | null,
+): Money {
   if (value === undefined || value === null) return new Decimal(0);
   return new Decimal(value);
 }

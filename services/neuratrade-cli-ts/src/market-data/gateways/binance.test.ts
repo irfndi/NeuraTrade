@@ -46,10 +46,25 @@ describe("Binance gateway", () => {
 
   it("fetchOHLCV parses klines", async () => {
     mockFetch([
-      [1704067200000, "66000", "68000", "65000", "67000", "100", 1704067260000, "200", 100, "50", "100", "0"],
+      [
+        1704067200000,
+        "66000",
+        "68000",
+        "65000",
+        "67000",
+        "100",
+        1704067260000,
+        "200",
+        100,
+        "50",
+        "100",
+        "0",
+      ],
     ]);
 
-    const candles = await Effect.runPromise(Binance.fetchOHLCV("BTC/USDT", "1m", 1));
+    const candles = await Effect.runPromise(
+      Binance.fetchOHLCV("BTC/USDT", "1m", 1),
+    );
 
     expect(candles).toHaveLength(1);
     expect(candles[0].open).toBe(66000);
@@ -75,8 +90,18 @@ describe("Binance gateway", () => {
   it("fetchSymbols filters only TRADING pairs", async () => {
     mockFetch({
       symbols: [
-        { symbol: "BTCUSDT", status: "TRADING", baseAsset: "BTC", quoteAsset: "USDT" },
-        { symbol: "BROKENPAIR", status: "BREAK", baseAsset: "BROKEN", quoteAsset: "USDT" },
+        {
+          symbol: "BTCUSDT",
+          status: "TRADING",
+          baseAsset: "BTC",
+          quoteAsset: "USDT",
+        },
+        {
+          symbol: "BROKENPAIR",
+          status: "BREAK",
+          baseAsset: "BROKEN",
+          quoteAsset: "USDT",
+        },
       ],
     });
 

@@ -5,7 +5,7 @@
  * queries. All commands respect BITGET_USE_SANDBOX for demo trading.
  */
 import { Command, Options } from "@effect/cli";
-import { Console, Effect, Either } from "effect";
+import { Console, Effect, Either, Option } from "effect";
 import {
   BitgetClient,
   type BitgetMarginMode,
@@ -96,8 +96,10 @@ const reduceOnlyOption = Options.boolean("reduce-only").pipe(
 );
 
 const orderLeverageOption = Options.text("leverage").pipe(
-  Options.withDescription("Leverage for margin calculation in dry-run"),
-  Options.withDefault("10"),
+  Options.withDescription(
+    "Explicit leverage intent for margin/safety checks (defaults to account leverage)",
+  ),
+  Options.optional,
 );
 
 // ---------------------------------------------------------------------------
@@ -409,11 +411,17 @@ const orderPlaceCommand = Command.make(
         );
       }
 
+      const intendedLeverage = Option.getOrUndefined(args.leverage);
+      const accountLeverage = leverageInfo.find(
+        (l) => l.marginMode === orderInput.marginMode,
+      )?.leverage;
+      const effectiveLeverage = intendedLeverage ?? accountLeverage ?? "1";
+
       const safetyCheck = yield* validateLiveOrderSafety({
         order: orderInput,
         positions,
         leverageInfo,
-        intendedLeverage: args.leverage.trim(),
+        intendedLeverage,
       }).pipe(Effect.either);
       if (Either.isLeft(safetyCheck) && !args.force) {
         return yield* Effect.fail(
@@ -433,7 +441,7 @@ const orderPlaceCommand = Command.make(
         contract,
         balances,
         lastPrice: ticker.lastPrice,
-        leverage: args.leverage.trim(),
+        leverage: effectiveLeverage,
       });
 
       if (args.dryRun) {
@@ -447,7 +455,7 @@ const orderPlaceCommand = Command.make(
           yield* Console.log(`  price:          ${orderInput.price}`);
         }
         yield* Console.log(`  marginMode:     ${orderInput.marginMode}`);
-        yield* Console.log(`  leverage:       ${args.leverage}x`);
+        yield* Console.log(`  leverage:       ${effectiveLeverage}x`);
         yield* Console.log(`  notional:       ${guard.notional}`);
         yield* Console.log(`  marginRequired: ${guard.marginRequired}`);
         yield* Console.log(`  reduceOnly:     ${orderInput.reduceOnly}`);

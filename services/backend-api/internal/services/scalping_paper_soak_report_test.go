@@ -62,8 +62,11 @@ func TestPersistScalpingPaperBacktestSoakReportBuildsAcceptanceMetrics(t *testin
 	require.True(t, report.SignalQuality.Coverage.Equal(decimal.NewFromInt(1)))
 	require.True(t, report.TradeSummary.NetPnL.Round(8).Equal(result.Summary.TotalPnL.Round(8)))
 	require.True(t, report.TradeSummary.Fees.Round(8).Equal(fees.Round(8)))
-	require.True(t, report.TradeSummary.ProfitFactor.IsZero())
-	require.True(t, report.TradeSummary.ProfitFactorUnbounded)
+	resultUnbounded := result.Summary.ProfitFactor.Equal(decimal.NewFromInt(maxProfitFactorNoLosses))
+	require.Equal(t, resultUnbounded, report.TradeSummary.ProfitFactorUnbounded)
+	if !resultUnbounded {
+		require.True(t, report.TradeSummary.ProfitFactor.Round(8).Equal(result.Summary.ProfitFactor.Round(8)))
+	}
 	require.False(t, report.InsufficientTradeProof)
 	require.NotNil(t, report.BaselineComparison)
 

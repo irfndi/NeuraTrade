@@ -48,23 +48,29 @@ const RuntimeTelegramConfig = S.Struct({
 
 const RuntimeAIConfig = S.Struct({
   provider: S.optional(S.String).pipe(S.withDecodingDefault(() => "openai")),
-  model: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "gpt-4o-mini"),
-  ),
+  model: S.optional(S.String).pipe(S.withDecodingDefault(() => "gpt-4o-mini")),
   base_url: S.optional(S.String),
   temperature: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.7)),
   max_tokens: S.optional(S.Number).pipe(S.withDecodingDefault(() => 4096)),
   min_confidence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.7)),
   // Go uses decimal.Decimal which JSON-encodes as a string
   daily_budget: S.optional(S.String).pipe(S.withDecodingDefault(() => "10")),
-  routing_mode: S.optional(S.String).pipe(S.withDecodingDefault(() => "primary")),
+  routing_mode: S.optional(S.String).pipe(
+    S.withDecodingDefault(() => "primary"),
+  ),
 });
 
 const RuntimeFeaturesConfig = S.Struct({
   enable_ai: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  enable_ai_scalping: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  enable_ai_signals: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  enable_ai_arbitrage: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
+  enable_ai_scalping: S.optional(S.Boolean).pipe(
+    S.withDecodingDefault(() => true),
+  ),
+  enable_ai_signals: S.optional(S.Boolean).pipe(
+    S.withDecodingDefault(() => false),
+  ),
+  enable_ai_arbitrage: S.optional(S.Boolean).pipe(
+    S.withDecodingDefault(() => false),
+  ),
   paper_trading: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
   real_trading: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
 });
@@ -75,11 +81,19 @@ const RuntimeGatewayConfig = S.Struct({
   ),
   ccxt_port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 3001)),
   telegram_port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 3002)),
-  telegram_grpc_port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 50052)),
+  telegram_grpc_port: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 50052),
+  ),
   supervised: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  health_timeout_seconds: S.optional(S.Number).pipe(S.withDecodingDefault(() => 150)),
-  signal_timeout_seconds: S.optional(S.Number).pipe(S.withDecodingDefault(() => 5)),
-  graceful_timeout_seconds: S.optional(S.Number).pipe(S.withDecodingDefault(() => 10)),
+  health_timeout_seconds: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 150),
+  ),
+  signal_timeout_seconds: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 5),
+  ),
+  graceful_timeout_seconds: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 10),
+  ),
   skip_telegram: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
 });
 
@@ -164,4 +178,5 @@ export type RuntimeConfig = typeof RuntimeConfigSchema.Type;
 export const decodeRuntimeConfig = S.decodeUnknown(RuntimeConfigSchema);
 
 /** Decode an unknown JSON value, returning Either. */
-export const decodeRuntimeConfigEither = S.decodeUnknownEither(RuntimeConfigSchema);
+export const decodeRuntimeConfigEither =
+  S.decodeUnknownEither(RuntimeConfigSchema);

@@ -71,9 +71,10 @@ export function validateLiveOrderSafety(
     // If we already hold the same side, the margin mode must match or Bitget
     // will reject/behaviour will be surprising.
     if (order.marginMode) {
-      const sameSide = relevant.filter((p) =>
-        (p.holdSide === "long" && order.side === "buy") ||
-        (p.holdSide === "short" && order.side === "sell"),
+      const sameSide = relevant.filter(
+        (p) =>
+          (p.holdSide === "long" && order.side === "buy") ||
+          (p.holdSide === "short" && order.side === "sell"),
       );
       for (const pos of sameSide) {
         if (pos.marginMode !== order.marginMode) {
@@ -86,7 +87,9 @@ export function validateLiveOrderSafety(
 
     // Verify the account leverage matches the caller's intent.
     if (intendedLeverage && order.marginMode) {
-      const current = leverageInfo.find((l) => l.marginMode === order.marginMode);
+      const current = leverageInfo.find(
+        (l) => l.marginMode === order.marginMode,
+      );
       if (current && compare(current.leverage, intendedLeverage) !== 0) {
         return yield* safetyFail(
           `leverage mismatch for ${order.marginMode}: account ${current.leverage}x vs intended ${intendedLeverage}x (set leverage first)`,

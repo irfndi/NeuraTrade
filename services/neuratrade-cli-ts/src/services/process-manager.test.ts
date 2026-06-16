@@ -53,7 +53,10 @@ async function expectFail(
     await Effect.runPromise(effect.pipe(Effect.provide(testLayer(home))));
     throw new Error("Expected Effect to fail but it succeeded");
   } catch (err) {
-    if (err instanceof Error && err.message === "Expected Effect to fail but it succeeded") {
+    if (
+      err instanceof Error &&
+      err.message === "Expected Effect to fail but it succeeded"
+    ) {
       throw err;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -146,9 +149,7 @@ describe("ProcessManager service", () => {
       await expectFail(
         Effect.gen(function* () {
           const pm = yield* ProcessManager;
-          return yield* pm.resolveServiceBinary(
-            "sleep-not-a-real-binary-xyz",
-          );
+          return yield* pm.resolveServiceBinary("sleep-not-a-real-binary-xyz");
         }),
         home,
         (msg) => expect(msg).toContain("not allowlisted"),
@@ -285,7 +286,9 @@ describe("ProcessManager service", () => {
 
       expect(result).toBeGreaterThan(0);
 
-      const pidFiles = fs.readdirSync(pidsDir).filter((f) => f.endsWith(".pid"));
+      const pidFiles = fs
+        .readdirSync(pidsDir)
+        .filter((f) => f.endsWith(".pid"));
       expect(pidFiles.length).toBe(0);
 
       try {
@@ -333,7 +336,11 @@ describe("ProcessManager service", () => {
       await expectFail(
         Effect.gen(function* () {
           const pm = yield* ProcessManager;
-          return yield* pm.stopServiceByPIDFile("nonexistent", "nonexistent", []);
+          return yield* pm.stopServiceByPIDFile(
+            "nonexistent",
+            "nonexistent",
+            [],
+          );
         }),
         home,
         (msg) => expect(msg).toContain("not running"),
@@ -475,9 +482,9 @@ describe("ProcessManager service", () => {
         home,
       );
 
-      expect(
-        fs.existsSync(nodePath.join(pidsDir, "cleanup-dead.pid")),
-      ).toBe(false);
+      expect(fs.existsSync(nodePath.join(pidsDir, "cleanup-dead.pid"))).toBe(
+        false,
+      );
     });
 
     it("keeps PID files for running processes", async () => {
@@ -498,9 +505,9 @@ describe("ProcessManager service", () => {
           home,
         );
 
-        expect(
-          fs.existsSync(nodePath.join(pidsDir, "cleanup-live.pid")),
-        ).toBe(true);
+        expect(fs.existsSync(nodePath.join(pidsDir, "cleanup-live.pid"))).toBe(
+          true,
+        );
 
         const content = fs
           .readFileSync(nodePath.join(pidsDir, "cleanup-live.pid"), "utf-8")
@@ -549,12 +556,12 @@ describe("ProcessManager service", () => {
           home,
         );
 
-        expect(
-          fs.existsSync(nodePath.join(pidsDir, "multi-dead.pid")),
-        ).toBe(false);
-        expect(
-          fs.existsSync(nodePath.join(pidsDir, "multi-live.pid")),
-        ).toBe(true);
+        expect(fs.existsSync(nodePath.join(pidsDir, "multi-dead.pid"))).toBe(
+          false,
+        );
+        expect(fs.existsSync(nodePath.join(pidsDir, "multi-live.pid"))).toBe(
+          true,
+        );
       } finally {
         liveProc.kill("SIGKILL");
         await liveProc.exited;

@@ -147,7 +147,7 @@ function lookPath(name: string, execDir?: string): string | null {
   // Build the search PATH: execDir first, then system PATH
   const searchPath = execDir
     ? `${execDir}:${process.env.PATH ?? ""}`
-    : process.env.PATH ?? "";
+    : (process.env.PATH ?? "");
 
   // Use `which` to find the binary
   try {
@@ -187,16 +187,16 @@ export const ProcessManagerLive: Layer.Layer<
       Effect.gen(function* () {
         const trimmed = name.trim();
         if (trimmed === "") {
-          return yield* Effect.fail(
-            new ProcessError("binary path is empty"),
-          );
+          return yield* Effect.fail(new ProcessError("binary path is empty"));
         }
 
         const base = nodePath.basename(trimmed);
         const allowed = resolveAllowedBinaries();
         if (!allowed.has(base)) {
           return yield* Effect.fail(
-            new ProcessError(`binary ${JSON.stringify(base)} is not allowlisted`),
+            new ProcessError(
+              `binary ${JSON.stringify(base)} is not allowlisted`,
+            ),
           );
         }
 

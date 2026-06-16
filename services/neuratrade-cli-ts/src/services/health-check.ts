@@ -217,9 +217,7 @@ function probeHealthJSONOnce(
       const textResult = yield* Effect.tryPromise({
         try: () => outcome.text(),
         catch: () => new Error("Failed to read response body"),
-      }).pipe(
-        Effect.catchAll(() => Effect.succeed("")),
-      );
+      }).pipe(Effect.catchAll(() => Effect.succeed("")));
 
       let parsed: Record<string, unknown> = {};
       try {
@@ -228,9 +226,14 @@ function probeHealthJSONOnce(
         // ignore parse errors — fall back to empty object
       }
 
-      const status = typeof parsed.status === "string" ? parsed.status : "unknown";
+      const status =
+        typeof parsed.status === "string" ? parsed.status : "unknown";
       const services: Record<string, string> = {};
-      if (parsed.services && typeof parsed.services === "object" && !Array.isArray(parsed.services)) {
+      if (
+        parsed.services &&
+        typeof parsed.services === "object" &&
+        !Array.isArray(parsed.services)
+      ) {
         for (const [key, value] of Object.entries(parsed.services)) {
           services[key] = String(value);
         }

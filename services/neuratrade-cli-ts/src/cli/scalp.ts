@@ -79,17 +79,25 @@ const useAtrStopsOption = Options.boolean("use-atr-stops").pipe(
 
 const atrStopMultiplierOption = Options.float("atr-stop-multiplier").pipe(
   Options.withDefault(1.5),
-  Options.withDescription("ATR multiplier for stop loss when --use-atr-stops is set"),
+  Options.withDescription(
+    "ATR multiplier for stop loss when --use-atr-stops is set",
+  ),
 );
 
-const atrTakeProfitMultiplierOption = Options.float("atr-take-profit-multiplier").pipe(
+const atrTakeProfitMultiplierOption = Options.float(
+  "atr-take-profit-multiplier",
+).pipe(
   Options.withDefault(2.5),
-  Options.withDescription("ATR multiplier for take profit when --use-atr-stops is set"),
+  Options.withDescription(
+    "ATR multiplier for take profit when --use-atr-stops is set",
+  ),
 );
 
 const priceOnlyOption = Options.boolean("price-only").pipe(
   Options.withDefault(false),
-  Options.withDescription("Ignore synthetic order-book components in backtest (trend/volatility/RSI/regime only)"),
+  Options.withDescription(
+    "Ignore synthetic order-book components in backtest (trend/volatility/RSI/regime only)",
+  ),
 );
 
 const noRsiOption = Options.boolean("no-rsi").pipe(
@@ -99,7 +107,9 @@ const noRsiOption = Options.boolean("no-rsi").pipe(
 
 const holdUntilStopOption = Options.boolean("hold-until-stop").pipe(
   Options.withDefault(false),
-  Options.withDescription("Ignore opposite-signal exits and only exit on stop/take-profit"),
+  Options.withDescription(
+    "Ignore opposite-signal exits and only exit on stop/take-profit",
+  ),
 );
 
 const noTrendOption = Options.boolean("no-trend").pipe(
@@ -107,9 +117,14 @@ const noTrendOption = Options.boolean("no-trend").pipe(
   Options.withDescription("Disable trend-following EMA component in backtest"),
 );
 
-const regimeModeOption = Options.choice("regime-mode", ["trend", "reversion"] as const).pipe(
+const regimeModeOption = Options.choice("regime-mode", [
+  "trend",
+  "reversion",
+] as const).pipe(
   Options.withDefault("trend" as const),
-  Options.withDescription("Regime filter mode: trend-following or mean-reversion"),
+  Options.withDescription(
+    "Regime filter mode: trend-following or mean-reversion",
+  ),
 );
 
 function makeLayer(home?: string) {
@@ -160,7 +175,11 @@ export const backtestCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Backtest deterministic scalping strategy on historical candles"));
+).pipe(
+  Command.withDescription(
+    "Backtest deterministic scalping strategy on historical candles",
+  ),
+);
 
 interface BacktestArgs {
   readonly exchange: string;
@@ -188,7 +207,12 @@ function buildBacktestComposerConfig(
   noTrend: boolean,
   regimeMode: "trend" | "reversion" = "trend",
 ): ComposerConfig {
-  if (!priceOnly && !noRsi && !noTrend && regimeMode === defaultComposerConfig.thresholds.regimeMode) {
+  if (
+    !priceOnly &&
+    !noRsi &&
+    !noTrend &&
+    regimeMode === defaultComposerConfig.thresholds.regimeMode
+  ) {
     return defaultComposerConfig;
   }
 
@@ -242,7 +266,12 @@ function backtestProgram(args: BacktestArgs) {
       );
     }
 
-    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const composerConfig = buildBacktestComposerConfig(
+      args.priceOnly,
+      args.noRsi,
+      args.noTrend,
+      args.regimeMode,
+    );
 
     return runBacktest({
       symbol: args.symbol,
@@ -264,7 +293,9 @@ function backtestProgram(args: BacktestArgs) {
   });
 }
 
-function printBacktestResult(result: import("../scalping/backtest.js").BacktestResult) {
+function printBacktestResult(
+  result: import("../scalping/backtest.js").BacktestResult,
+) {
   return Effect.gen(function* () {
     yield* Console.log("\n📊 Backtest Results");
     yield* Console.log("===================");
@@ -286,7 +317,9 @@ function printBacktestResult(result: import("../scalping/backtest.js").BacktestR
   });
 }
 
-function emptyResult(symbol: string): import("../scalping/backtest.js").BacktestResult {
+function emptyResult(
+  symbol: string,
+): import("../scalping/backtest.js").BacktestResult {
   return {
     symbol,
     totalTrades: 0,
@@ -415,7 +448,11 @@ export const optimizeCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Grid-search ATR/confidence parameters over historical candles"));
+).pipe(
+  Command.withDescription(
+    "Grid-search ATR/confidence parameters over historical candles",
+  ),
+);
 
 function optimizeProgram(args: OptimizeArgs) {
   return Effect.gen(function* () {
@@ -435,7 +472,12 @@ function optimizeProgram(args: OptimizeArgs) {
       );
     }
 
-    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const composerConfig = buildBacktestComposerConfig(
+      args.priceOnly,
+      args.noRsi,
+      args.noTrend,
+      args.regimeMode,
+    );
     const results: Array<{
       readonly stopMult: number;
       readonly tpMult: number;
@@ -447,9 +489,21 @@ function optimizeProgram(args: OptimizeArgs) {
       readonly maxDrawdownPct: number;
     }> = [];
 
-    for (let stopMult = args.atrStopMin; stopMult <= args.atrStopMax + 1e-9; stopMult += args.atrStopStep) {
-      for (let tpMult = args.atrTpMin; tpMult <= args.atrTpMax + 1e-9; tpMult += args.atrTpStep) {
-        for (let conf = args.confMin; conf <= args.confMax + 1e-9; conf += args.confStep) {
+    for (
+      let stopMult = args.atrStopMin;
+      stopMult <= args.atrStopMax + 1e-9;
+      stopMult += args.atrStopStep
+    ) {
+      for (
+        let tpMult = args.atrTpMin;
+        tpMult <= args.atrTpMax + 1e-9;
+        tpMult += args.atrTpStep
+      ) {
+        for (
+          let conf = args.confMin;
+          conf <= args.confMax + 1e-9;
+          conf += args.confStep
+        ) {
           const result = runBacktest({
             symbol: args.symbol,
             exchange: args.exchange,
@@ -505,10 +559,16 @@ function printOptimizeResult(
       return;
     }
 
-    const byReturn = [...results].sort((a, b) => b.totalReturnPct - a.totalReturnPct).slice(0, 5);
-    const bySharpe = [...results].sort((a, b) => b.sharpeRatio - a.sharpeRatio).slice(0, 5);
+    const byReturn = [...results]
+      .sort((a, b) => b.totalReturnPct - a.totalReturnPct)
+      .slice(0, 5);
+    const bySharpe = [...results]
+      .sort((a, b) => b.sharpeRatio - a.sharpeRatio)
+      .slice(0, 5);
 
-    yield* Console.log(`\n🔬 Optimization results for ${symbol} ${timeframe} (${results.length} configs tested)`);
+    yield* Console.log(
+      `\n🔬 Optimization results for ${symbol} ${timeframe} (${results.length} configs tested)`,
+    );
     yield* Console.log("\nTop 5 by total return:");
     for (const r of byReturn) {
       yield* Console.log(
@@ -529,27 +589,37 @@ function printOptimizeResult(
 
 const minCandlesOption = Options.integer("min-candles").pipe(
   Options.withDefault(500),
-  Options.withDescription("Minimum candles required for a symbol to be included in scan"),
+  Options.withDescription(
+    "Minimum candles required for a symbol to be included in scan",
+  ),
 );
 
 const topOption = Options.integer("top").pipe(
   Options.withDefault(0),
-  Options.withDescription("Limit scan to top N symbols by candle count (0 = all)"),
+  Options.withDescription(
+    "Limit scan to top N symbols by candle count (0 = all)",
+  ),
 );
 
 const optimizeScanOption = Options.boolean("optimize").pipe(
   Options.withDefault(false),
-  Options.withDescription("Run a coarse per-symbol parameter grid search and report best params"),
+  Options.withDescription(
+    "Run a coarse per-symbol parameter grid search and report best params",
+  ),
 );
 
 const minReturnOption = Options.float("min-return-pct").pipe(
   Options.optional,
-  Options.withDescription("Skip symbols with total return below this threshold"),
+  Options.withDescription(
+    "Skip symbols with total return below this threshold",
+  ),
 );
 
 const saveWatchlistOption = Options.text("save-watchlist").pipe(
   Options.optional,
-  Options.withDescription("Write passing symbols to a JSON watchlist file in NEURATRADE_HOME/data"),
+  Options.withDescription(
+    "Write passing symbols to a JSON watchlist file in NEURATRADE_HOME/data",
+  ),
 );
 
 interface ScanArgs {
@@ -626,13 +696,21 @@ export const scanCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Backtest deterministic scalping across all stored symbols"));
+).pipe(
+  Command.withDescription(
+    "Backtest deterministic scalping across all stored symbols",
+  ),
+);
 
 export function scanProgram(args: ScanArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
 
-    const symbols = yield* repo.listSymbols(args.exchange, args.timeframe, args.minCandles);
+    const symbols = yield* repo.listSymbols(
+      args.exchange,
+      args.timeframe,
+      args.minCandles,
+    );
     if (symbols.length === 0) {
       return yield* Effect.fail(
         new MarketDataRepositoryError(
@@ -642,7 +720,12 @@ export function scanProgram(args: ScanArgs) {
     }
 
     const selected = args.top > 0 ? symbols.slice(0, args.top) : symbols;
-    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const composerConfig = buildBacktestComposerConfig(
+      args.priceOnly,
+      args.noRsi,
+      args.noTrend,
+      args.regimeMode,
+    );
 
     const results: Array<ScanResult> = [];
 
@@ -663,7 +746,10 @@ export function scanProgram(args: ScanArgs) {
             minConfidence: args.minConfidence,
           });
 
-      if (Option.isSome(args.minReturnPct) && result.totalReturnPct < args.minReturnPct.value) {
+      if (
+        Option.isSome(args.minReturnPct) &&
+        result.totalReturnPct < args.minReturnPct.value
+      ) {
         continue;
       }
 
@@ -723,7 +809,11 @@ function runBacktestWithParams(
   candles: readonly import("../scalping/types.js").CandleLike[],
   args: ScanArgs,
   composerConfig: ComposerConfig,
-  params: { readonly atrStopMultiplier: number; readonly atrTakeProfitMultiplier: number; readonly minConfidence: number },
+  params: {
+    readonly atrStopMultiplier: number;
+    readonly atrTakeProfitMultiplier: number;
+    readonly minConfidence: number;
+  },
 ): BacktestResult & { readonly bestParams?: undefined } {
   return runBacktest({
     symbol,
@@ -770,11 +860,17 @@ function optimizeForSymbol(
   for (const stopMult of SCAN_STOP_MULTS) {
     for (const tpMult of SCAN_TP_MULTS) {
       for (const conf of SCAN_CONFIDENCES) {
-        const result = runBacktestWithParams(symbol, candles, args, composerConfig, {
-          atrStopMultiplier: stopMult,
-          atrTakeProfitMultiplier: tpMult,
-          minConfidence: conf,
-        });
+        const result = runBacktestWithParams(
+          symbol,
+          candles,
+          args,
+          composerConfig,
+          {
+            atrStopMultiplier: stopMult,
+            atrTakeProfitMultiplier: tpMult,
+            minConfidence: conf,
+          },
+        );
         if (!best || result.totalReturnPct > best.totalReturnPct) {
           best = result;
           bestParams = {
@@ -804,9 +900,7 @@ function emptyScanResult(symbol: string): BacktestResult {
   };
 }
 
-function printScanResult(
-  results: ReadonlyArray<ScanResult>,
-) {
+function printScanResult(results: ReadonlyArray<ScanResult>) {
   return Effect.gen(function* () {
     if (results.length === 0) {
       yield* Console.log("No scan results.");
@@ -814,8 +908,12 @@ function printScanResult(
     }
 
     yield* Console.log("\n🔎 Multi-ticker backtest scan");
-    yield* Console.log("Symbol        Trades  Win%    Return   Drawdown  Sharpe");
-    yield* Console.log("---------------------------------------------------------");
+    yield* Console.log(
+      "Symbol        Trades  Win%    Return   Drawdown  Sharpe",
+    );
+    yield* Console.log(
+      "---------------------------------------------------------",
+    );
 
     for (const r of results) {
       yield* Console.log(
@@ -828,8 +926,10 @@ function printScanResult(
     }
 
     const profitable = results.filter((r) => r.totalReturnPct > 0);
-    const avgReturn = results.reduce((sum, r) => sum + r.totalReturnPct, 0) / results.length;
-    const avgSharpe = results.reduce((sum, r) => sum + r.sharpeRatio, 0) / results.length;
+    const avgReturn =
+      results.reduce((sum, r) => sum + r.totalReturnPct, 0) / results.length;
+    const avgSharpe =
+      results.reduce((sum, r) => sum + r.sharpeRatio, 0) / results.length;
 
     if (results.some((r) => r.bestParams)) {
       yield* Console.log("\nBest params per symbol");
@@ -846,7 +946,9 @@ function printScanResult(
 
     yield* Console.log("\nSummary");
     yield* Console.log(`  Symbols tested: ${results.length}`);
-    yield* Console.log(`  Profitable:     ${profitable.length} (${((profitable.length / results.length) * 100).toFixed(1)}%)`);
+    yield* Console.log(
+      `  Profitable:     ${profitable.length} (${((profitable.length / results.length) * 100).toFixed(1)}%)`,
+    );
     yield* Console.log(`  Avg return:     ${avgReturn.toFixed(2)}%`);
     yield* Console.log(`  Avg Sharpe:     ${avgSharpe.toFixed(3)}`);
   });
@@ -864,7 +966,9 @@ const iterationsOption = Options.integer("iterations").pipe(
 
 const liveOption = Options.boolean("live").pipe(
   Options.withDefault(false),
-  Options.withDescription("Use live Binance exchange adapter (requires API key/secret)"),
+  Options.withDescription(
+    "Use live Binance exchange adapter (requires API key/secret)",
+  ),
 );
 
 const apiKeyOption = Options.text("api-key").pipe(
@@ -879,17 +983,23 @@ const apiSecretOption = Options.text("api-secret").pipe(
 
 const maxDrawdownOption = Options.float("max-drawdown-pct").pipe(
   Options.optional,
-  Options.withDescription("Max drawdown % before blocking new trades (live default 5%)"),
+  Options.withDescription(
+    "Max drawdown % before blocking new trades (live default 5%)",
+  ),
 );
 
 const maxDailyLossOption = Options.float("max-daily-loss-pct").pipe(
   Options.optional,
-  Options.withDescription("Max daily loss % before blocking new trades (live default 2%)"),
+  Options.withDescription(
+    "Max daily loss % before blocking new trades (live default 2%)",
+  ),
 );
 
 const maxPositionSizeOption = Options.float("max-position-size-pct").pipe(
   Options.optional,
-  Options.withDescription("Max position size % of capital per trade (live default 10%)"),
+  Options.withDescription(
+    "Max position size % of capital per trade (live default 10%)",
+  ),
 );
 
 const maxTradesPerDayOption = Options.integer("max-trades-per-day").pipe(
@@ -899,12 +1009,16 @@ const maxTradesPerDayOption = Options.integer("max-trades-per-day").pipe(
 
 const minCapitalOption = Options.integer("min-capital").pipe(
   Options.optional,
-  Options.withDescription("Minimum capital required to trade (live default 100)"),
+  Options.withDescription(
+    "Minimum capital required to trade (live default 100)",
+  ),
 );
 
 const watchlistOption = Options.text("watchlist").pipe(
   Options.optional,
-  Options.withDescription("Path to a JSON watchlist in NEURATRADE_HOME/data (uses per-symbol best params)"),
+  Options.withDescription(
+    "Path to a JSON watchlist in NEURATRADE_HOME/data (uses per-symbol best params)",
+  ),
 );
 
 interface WatchlistEntry {
@@ -952,7 +1066,9 @@ type MutablePartialRiskLimits = {
   -readonly [K in keyof import("../risk/guards.js").RiskLimits]?: import("../risk/guards.js").RiskLimits[K];
 };
 
-function loadWatchlist(path: string): Effect.Effect<readonly WatchlistEntry[], MarketDataRepositoryError> {
+function loadWatchlist(
+  path: string,
+): Effect.Effect<readonly WatchlistEntry[], MarketDataRepositoryError> {
   return Effect.tryPromise({
     try: async () => {
       const file = Bun.file(path);
@@ -969,11 +1085,16 @@ function loadWatchlist(path: string): Effect.Effect<readonly WatchlistEntry[], M
 
 function buildRiskOverrides(args: PaperTradeArgs): MutablePartialRiskLimits {
   const overrides: MutablePartialRiskLimits = {};
-  if (Option.isSome(args.maxDrawdownPct)) overrides.maxDrawdownPct = args.maxDrawdownPct.value;
-  if (Option.isSome(args.maxDailyLossPct)) overrides.maxDailyLossPct = args.maxDailyLossPct.value;
-  if (Option.isSome(args.maxPositionSizePct)) overrides.maxPositionSizePct = args.maxPositionSizePct.value;
-  if (Option.isSome(args.maxTradesPerDay)) overrides.maxTradesPerDay = args.maxTradesPerDay.value;
-  if (Option.isSome(args.minCapital)) overrides.minCapital = args.minCapital.value;
+  if (Option.isSome(args.maxDrawdownPct))
+    overrides.maxDrawdownPct = args.maxDrawdownPct.value;
+  if (Option.isSome(args.maxDailyLossPct))
+    overrides.maxDailyLossPct = args.maxDailyLossPct.value;
+  if (Option.isSome(args.maxPositionSizePct))
+    overrides.maxPositionSizePct = args.maxPositionSizePct.value;
+  if (Option.isSome(args.maxTradesPerDay))
+    overrides.maxTradesPerDay = args.maxTradesPerDay.value;
+  if (Option.isSome(args.minCapital))
+    overrides.minCapital = args.minCapital.value;
   return overrides;
 }
 
@@ -1038,11 +1159,16 @@ export const paperTradeCommand = Command.make(
         riskGuardLayer,
       );
 
-      const result = yield* paperTradeProgram({ ...args, entries: watchlist }).pipe(
+      const result = yield* paperTradeProgram({
+        ...args,
+        entries: watchlist,
+      }).pipe(
         Effect.provide(layers),
         Effect.catchAll((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`paper-trade failed: ${"reason" in err ? err.reason : String(err)}`);
+            yield* Console.error(
+              `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
+            );
             return undefined;
           }),
         ),
@@ -1051,7 +1177,9 @@ export const paperTradeCommand = Command.make(
 
       return result;
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("Run deterministic scalping paper-trading loop"));
+).pipe(
+  Command.withDescription("Run deterministic scalping paper-trading loop"),
+);
 
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
@@ -1062,13 +1190,26 @@ function paperTradeProgram(args: PaperTradeArgs) {
     yield* paperRepo.ensureTables();
 
     const portfolio = yield* paperRepo.getPortfolio();
-    const startCapital = portfolio.capital <= 0 ? args.capital : portfolio.capital;
-    yield* paperRepo.setPortfolio(startCapital, Math.max(portfolio.peakCapital, startCapital));
+    const startCapital =
+      portfolio.capital <= 0 ? args.capital : portfolio.capital;
+    yield* paperRepo.setPortfolio(
+      startCapital,
+      Math.max(portfolio.peakCapital, startCapital),
+    );
 
-    const composerConfig = buildBacktestComposerConfig(args.priceOnly, args.noRsi, args.noTrend, args.regimeMode);
+    const composerConfig = buildBacktestComposerConfig(
+      args.priceOnly,
+      args.noRsi,
+      args.noTrend,
+      args.regimeMode,
+    );
 
-    const entries = args.entries && args.entries.length > 0 ? args.entries : undefined;
-    const makeOptions = (symbol: string, overrides?: Partial<PaperTradingOptions>): PaperTradingOptions => ({
+    const entries =
+      args.entries && args.entries.length > 0 ? args.entries : undefined;
+    const makeOptions = (
+      symbol: string,
+      overrides?: Partial<PaperTradingOptions>,
+    ): PaperTradingOptions => ({
       exchange: args.exchange,
       symbol,
       timeframe: args.timeframe,
@@ -1078,7 +1219,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
       minConfidence: overrides?.minConfidence ?? args.minConfidence,
       useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
       atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
-      atrTakeProfitMultiplier: overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+      atrTakeProfitMultiplier:
+        overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
       holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
       initialCapital: args.capital,
       isLive: args.live,
@@ -1137,8 +1279,15 @@ function paperTradeProgram(args: PaperTradeArgs) {
 }
 
 export const scalpCommand = Command.make("scalp", {}, () =>
-  Console.log("Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade --help' for details."),
+  Console.log(
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade --help' for details.",
+  ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
-  Command.withSubcommands([backtestCommand, optimizeCommand, scanCommand, paperTradeCommand]),
+  Command.withSubcommands([
+    backtestCommand,
+    optimizeCommand,
+    scanCommand,
+    paperTradeCommand,
+  ]),
 );

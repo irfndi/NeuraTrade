@@ -75,7 +75,10 @@ export function validateWeights(weights: ComposerWeights): boolean {
   return Math.abs(sum - 1.0) <= 0.001;
 }
 
-function isSyntheticInput(ohlcv: OHLCVInput, obMetrics: OrderBookMetricsInput): boolean {
+function isSyntheticInput(
+  ohlcv: OHLCVInput,
+  obMetrics: OrderBookMetricsInput,
+): boolean {
   // When backtesting from candles we derive synthetic order-book metrics.
   // Those metrics are noise, so we drop order-book weights automatically.
   return ohlcv.exchange === "synthetic" || obMetrics.exchange === "synthetic";
@@ -83,7 +86,8 @@ function isSyntheticInput(ohlcv: OHLCVInput, obMetrics: OrderBookMetricsInput): 
 
 function withoutOrderBookWeights(config: ComposerConfig): ComposerConfig {
   const weights = { ...config.weights, spread: 0, imbalance: 0, liquidity: 0 };
-  const activeSum = weights.volatility + weights.trend + weights.rsi + weights.regime;
+  const activeSum =
+    weights.volatility + weights.trend + weights.rsi + weights.regime;
   if (activeSum <= 0) return config;
 
   return {
@@ -120,25 +124,50 @@ export function composeSignal(
   const thresholds = effectiveConfig.thresholds;
   const components: SignalComponent[] = [];
 
-  const spreadComponent = buildSpreadComponent(obMetrics, weights.spread, thresholds);
+  const spreadComponent = buildSpreadComponent(
+    obMetrics,
+    weights.spread,
+    thresholds,
+  );
   if (spreadComponent) components.push(spreadComponent);
 
-  const imbalanceComponent = buildImbalanceComponent(obMetrics, weights.imbalance, thresholds);
+  const imbalanceComponent = buildImbalanceComponent(
+    obMetrics,
+    weights.imbalance,
+    thresholds,
+  );
   if (imbalanceComponent) components.push(imbalanceComponent);
 
-  const volatilityComponent = buildVolatilityComponent(candles, weights.volatility, thresholds);
+  const volatilityComponent = buildVolatilityComponent(
+    candles,
+    weights.volatility,
+    thresholds,
+  );
   if (volatilityComponent) components.push(volatilityComponent);
 
-  const trendComponent = buildTrendComponent(candles, weights.trend, thresholds);
+  const trendComponent = buildTrendComponent(
+    candles,
+    weights.trend,
+    thresholds,
+  );
   if (trendComponent) components.push(trendComponent);
 
-  const liquidityComponent = buildLiquidityComponent(obMetrics, weights.liquidity, thresholds);
+  const liquidityComponent = buildLiquidityComponent(
+    obMetrics,
+    weights.liquidity,
+    thresholds,
+  );
   if (liquidityComponent) components.push(liquidityComponent);
 
   const rsiComponent = buildRsiComponent(candles, weights.rsi, thresholds);
   if (rsiComponent) components.push(rsiComponent);
 
-  const regimeComponent = buildRegimeComponent(candles, obMetrics, weights.regime, thresholds);
+  const regimeComponent = buildRegimeComponent(
+    candles,
+    obMetrics,
+    weights.regime,
+    thresholds,
+  );
   if (regimeComponent) components.push(regimeComponent);
 
   if (components.length === 0) return null;
@@ -293,7 +322,8 @@ function buildTrendComponent(
 
   const lastFast = emaFast[emaFast.length - 1];
   const lastSlow = emaSlow[emaSlow.length - 1];
-  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0) return null;
+  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0)
+    return null;
 
   const diff = (lastFast - lastSlow) / lastSlow;
   let signal: Direction = "hold";
@@ -399,7 +429,13 @@ function buildRegimeComponent(
   const atr = calculateATR(candles, 14);
   const bb = calculateBollingerBands(candles, 20);
 
-  if (adx === null || plusDI === null || minusDI === null || atr === null || bb === null) {
+  if (
+    adx === null ||
+    plusDI === null ||
+    minusDI === null ||
+    atr === null ||
+    bb === null
+  ) {
     return null;
   }
 
@@ -445,10 +481,18 @@ function buildRegimeComponent(
     // Mean-reversion regime: only fade extremes in the direction of the
     // higher-timeframe trend. This avoids catching falling knives in a
     // sustained downtrend or shorting into a sustained uptrend.
-    if (bb.percentB <= thresholds.bollingerEntryMinPct && plusDI >= minusDI && allowLong) {
+    if (
+      bb.percentB <= thresholds.bollingerEntryMinPct &&
+      plusDI >= minusDI &&
+      allowLong
+    ) {
       signal = "buy";
       strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
-    } else if (bb.percentB >= thresholds.bollingerEntryMaxPct && minusDI >= plusDI && allowShort) {
+    } else if (
+      bb.percentB >= thresholds.bollingerEntryMaxPct &&
+      minusDI >= plusDI &&
+      allowShort
+    ) {
       signal = "sell";
       strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
     }
@@ -456,10 +500,18 @@ function buildRegimeComponent(
     // Trend-strength regime: require ADX, DI lines, Bollinger position, and
     // higher-timeframe trend alignment to agree before entering.
     if (adx > thresholds.adxWeakTrend) {
-      if (allowLong && plusDI > minusDI && bb.percentB >= thresholds.bollingerEntryMinPct) {
+      if (
+        allowLong &&
+        plusDI > minusDI &&
+        bb.percentB >= thresholds.bollingerEntryMinPct
+      ) {
         signal = "buy";
         strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
-      } else if (allowShort && minusDI > plusDI && bb.percentB <= thresholds.bollingerEntryMaxPct) {
+      } else if (
+        allowShort &&
+        minusDI > plusDI &&
+        bb.percentB <= thresholds.bollingerEntryMaxPct
+      ) {
         signal = "sell";
         strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
       }
@@ -492,7 +544,8 @@ function higherTimeframeTrend(
   const slowEMA = calculateEMA(closes, slowPeriod);
   const lastFast = fastEMA[fastEMA.length - 1];
   const lastSlow = slowEMA[slowEMA.length - 1];
-  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0) return null;
+  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0)
+    return null;
   return lastFast > lastSlow;
 }
 

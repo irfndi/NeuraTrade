@@ -1,6 +1,10 @@
 import { Effect, Layer } from "effect";
 import { createHmac } from "node:crypto";
-import { ExchangeAdapter, ExchangeError, type ExchangeAdapterService } from "../adapter.js";
+import {
+  ExchangeAdapter,
+  ExchangeError,
+  type ExchangeAdapterService,
+} from "../adapter.js";
 import type { Balance, OrderFill, OrderRequest, Position } from "../types.js";
 
 const TESTNET_BASE_URL = "https://testnet.binance.vision";
@@ -13,7 +17,9 @@ export interface BinanceLiveAdapterConfig {
   readonly live?: boolean;
 }
 
-export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): ExchangeAdapterService {
+export function makeBinanceLiveAdapter(
+  config: BinanceLiveAdapterConfig,
+): ExchangeAdapterService {
   const baseUrl = config.live ? LIVE_BASE_URL : TESTNET_BASE_URL;
 
   function signedRequest<T>(
@@ -24,9 +30,14 @@ export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): Exchan
     return Effect.gen(function* () {
       const timestamp = Date.now();
       const query = new URLSearchParams(
-        Object.entries({ ...params, timestamp }).map(([k, v]) => [k, String(v)]),
+        Object.entries({ ...params, timestamp }).map(([k, v]) => [
+          k,
+          String(v),
+        ]),
       ).toString();
-      const signature = createHmac("sha256", config.apiSecret).update(query).digest("hex");
+      const signature = createHmac("sha256", config.apiSecret)
+        .update(query)
+        .digest("hex");
       const url = `${baseUrl}${path}?${query}&signature=${signature}`;
 
       const controller = new AbortController();
@@ -60,7 +71,9 @@ export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): Exchan
             ),
         });
         return yield* Effect.fail(
-          new ExchangeError(`Binance HTTP ${response.status}: ${body.slice(0, 200)}`),
+          new ExchangeError(
+            `Binance HTTP ${response.status}: ${body.slice(0, 200)}`,
+          ),
         );
       }
 
@@ -99,9 +112,15 @@ export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): Exchan
         });
 
         const totalQty = data.fills.reduce((sum, f) => sum + Number(f.qty), 0);
-        const totalCost = data.fills.reduce((sum, f) => sum + Number(f.price) * Number(f.qty), 0);
+        const totalCost = data.fills.reduce(
+          (sum, f) => sum + Number(f.price) * Number(f.qty),
+          0,
+        );
         const avgPrice = totalQty > 0 ? totalCost / totalQty : 0;
-        const fee = data.fills.reduce((sum, f) => sum + Number(f.commission), 0);
+        const fee = data.fills.reduce(
+          (sum, f) => sum + Number(f.commission),
+          0,
+        );
 
         return {
           orderId: String(data.orderId),
@@ -122,13 +141,13 @@ export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): Exchan
           );
         }
 
-        const data = yield* signedRequest<{ balances: Array<{ asset: string; free: string; locked: string }> }>(
-          "GET",
-          "/api/v3/account",
-          {},
-        );
+        const data = yield* signedRequest<{
+          balances: Array<{ asset: string; free: string; locked: string }>;
+        }>("GET", "/api/v3/account", {});
 
-        const match = data.balances.find((b) => b.asset === asset.toUpperCase());
+        const match = data.balances.find(
+          (b) => b.asset === asset.toUpperCase(),
+        );
         return {
           asset,
           free: match ? Number(match.free) : 0,
@@ -140,11 +159,9 @@ export function makeBinanceLiveAdapter(config: BinanceLiveAdapterConfig): Exchan
 
     closePosition: (symbol) =>
       Effect.gen(function* () {
-        const balances = yield* signedRequest<{ balances: Array<{ asset: string; free: string }> }>(
-          "GET",
-          "/api/v3/account",
-          {},
-        );
+        const balances = yield* signedRequest<{
+          balances: Array<{ asset: string; free: string }>;
+        }>("GET", "/api/v3/account", {});
 
         const baseAsset = symbol.split("/")[0]?.toUpperCase() ?? "";
         const match = balances.balances.find((b) => b.asset === baseAsset);
@@ -166,5 +183,6 @@ function binanceSymbol(symbol: string): string {
   return symbol.replace("/", "").toUpperCase();
 }
 
-export const BinanceLiveExchangeAdapterLive = (config: BinanceLiveAdapterConfig) =>
-  Layer.succeed(ExchangeAdapter, makeBinanceLiveAdapter(config));
+export const BinanceLiveExchangeAdapterLive = (
+  config: BinanceLiveAdapterConfig,
+) => Layer.succeed(ExchangeAdapter, makeBinanceLiveAdapter(config));

@@ -584,11 +584,14 @@ func (e *ScalpingBacktestEngine) evaluateSignal(ctx context.Context, signal Hist
 		return eval, nil
 	}
 
-	decision := e.buildDecisionFromSignal(ctx, signal.Signal)
+	decision, reason := e.buildDecisionFromSignal(ctx, signal.Signal)
 	if decision == nil || decision.Action == "hold" {
 		eval.Allowed = false
 		eval.FunnelStage = "deterministic_hold"
-		eval.RejectionReason = "no_directional_edge"
+		if reason == "" {
+			reason = "no_directional_edge"
+		}
+		eval.RejectionReason = reason
 		return eval, nil
 	}
 
@@ -762,16 +765,25 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 
 	if exitReason == "mark_to_market" {
 		maxLossPct := decimal.NewFromFloat(0.015)
+		if e.config.MaxLossPct > 0 {
+			maxLossPct = decimal.NewFromFloat(e.config.MaxLossPct)
+		}
 		switch side {
 		case "buy":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Sub(maxLossPct))
-			if candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice) {
+			if markPrice.LessThanOrEqual(maxLossPrice) {
+				exitPrice = markPrice
+				exitReason = "max_loss"
+			} else if candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(maxLossPrice) {
 				exitPrice = maxLossPrice
 				exitReason = "max_loss"
 			}
 		case "sell":
 			maxLossPrice := position.EntryPrice.Mul(decimal.NewFromInt(1).Add(maxLossPct))
-			if candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice) {
+			if markPrice.GreaterThanOrEqual(maxLossPrice) {
+				exitPrice = markPrice
+				exitReason = "max_loss"
+			} else if candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(maxLossPrice) {
 				exitPrice = maxLossPrice
 				exitReason = "max_loss"
 			}
@@ -781,12 +793,18 @@ func (e *ScalpingBacktestEngine) closeSimulatedPosition(signal HistoricalSignal,
 	if exitReason == "mark_to_market" {
 		switch side {
 		case "buy":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
+			if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.LessThanOrEqual(position.StopLoss) {
+				exitPrice = markPrice
+				exitReason = "stop_loss"
+			} else if position.StopLoss.GreaterThan(decimal.Zero) && candleLow.GreaterThan(decimal.Zero) && candleLow.LessThanOrEqual(position.StopLoss) {
 				exitPrice = position.StopLoss
 				exitReason = "stop_loss"
 			}
 		case "sell":
-			if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
+			if position.StopLoss.GreaterThan(decimal.Zero) && markPrice.GreaterThanOrEqual(position.StopLoss) {
+				exitPrice = markPrice
+				exitReason = "stop_loss"
+			} else if position.StopLoss.GreaterThan(decimal.Zero) && candleHigh.GreaterThan(decimal.Zero) && candleHigh.GreaterThanOrEqual(position.StopLoss) {
 				exitPrice = position.StopLoss
 				exitReason = "stop_loss"
 			}
@@ -1216,8 +1234,7 @@ func scalpingBacktestBuyRejectionReason(signal MarketSignal) string {
 	}
 }
 
-func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) (decision *AITradingDecision) {
-	var rejectionReason string
+func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, signal MarketSignal) (decision *AITradingDecision, rejectionReason string) {
 	defer func() {
 		if decision == nil {
 			zaplogrus.Infof("[SCALPING-BACKTEST] reject %s on %s (spread=%.4f%%, imbalance=%.4f, ADX=%.1f, ATR=%.2f, BB%%b=%.4f, range=%.1f%%, trend_24h=%.4f%%, recent=%.4f%%)",
@@ -1228,7 +1245,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	fallback := e.config.DeterministicFallback.Normalized()
 	if signal.Price <= 0 || strings.TrimSpace(signal.Symbol) == "" {
 		rejectionReason = "invalid_signal"
-		return nil
+		return nil, rejectionReason
 	}
 
 	imbalance := math.Abs(signal.OrderBookImbalance)
@@ -1236,15 +1253,15 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	sellWindow := scalpingSellWindowCandidate(signal, fallback)
 	if signal.BidAskSpread <= 0 || (signal.BidAskSpread > e.config.MaxBidAskSpreadPct && !reversalBuy && !sellWindow) {
 		rejectionReason = "spread_too_wide"
-		return nil
+		return nil, rejectionReason
 	}
 	if signal.ADX > fallback.ADXMaxPct {
 		rejectionReason = "adx_too_high"
-		return nil
+		return nil, rejectionReason
 	}
 	if signal.ATRRatio > fallback.ATRRatioMax {
 		rejectionReason = "atr_too_high"
-		return nil
+		return nil, rejectionReason
 	}
 	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
 	if e.config.RequireRecentMomentum {
@@ -1252,7 +1269,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	}
 	if imbalance < effectiveMinImbalance && !scalpingBlowoffSellTrendConfirmed(signal, fallback) && !reversalBuy && !sellWindow {
 		rejectionReason = "imbalance_too_weak"
-		return nil
+		return nil, rejectionReason
 	}
 
 	momentumPct := fallbackMomentumPct(signal)
@@ -1261,7 +1278,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	if e.config.RequireRecentMomentum {
 		if !signal.RecentChangeKnown {
 			rejectionReason = "recent_momentum_required"
-			return nil
+			return nil, rejectionReason
 		}
 		momentumPct = signal.RecentPriceChange
 		minRecentMomentum := e.config.MinRecentMomentumPct
@@ -1317,29 +1334,38 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		rangeAlignment = clampFloat((signal.RangePosition24h-(fallback.BuyRangeMax-5))/math.Max(fallback.SellRangeMin-(fallback.BuyRangeMax-5), 1), 0, 1)
 	default:
 		rejectionReason = "no_directional_edge"
-		return nil
+		return nil, rejectionReason
+	}
+
+	if action == "buy" && e.config.MinEntryMomentumPct > 0 {
+		buyMomentumMin = math.Max(buyMomentumMin, e.config.MinEntryMomentumPct)
+		if momentumPct < buyMomentumMin {
+			rejectionReason = "entry_momentum_misaligned"
+			return nil, rejectionReason
+		}
+		momentumAligned = true
 	}
 
 	if !momentumAligned {
 		rejectionReason = "momentum_not_aligned"
-		return nil
+		return nil, rejectionReason
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.BidAskSpread > fallback.RecentBuyMaxSpreadPct {
 		rejectionReason = "recent_buy_spread_too_wide"
-		return nil
+		return nil, rejectionReason
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.PriceChange24h < fallback.RecentBuyMinTrendPct {
 		rejectionReason = "recent_buy_trend_too_low"
-		return nil
+		return nil, rejectionReason
 	}
 	if e.config.RequireRecentMomentum && action == "buy" && !reversalBuy && signal.RangePosition24h > fallback.RecentBuyMaxRangePct {
 		rejectionReason = "recent_buy_range_too_high"
-		return nil
+		return nil, rejectionReason
 	}
 	if e.config.RequireRecentMomentum && action == "sell" && !scalpingBlowoffSellTrendConfirmed(signal, fallback) &&
 		!sellWindow && signal.RangePosition24h < fallback.RecentSellMinRangePct {
 		rejectionReason = "recent_sell_range_too_low"
-		return nil
+		return nil, rejectionReason
 	}
 
 	liquidityScore := clampFloat(1-(signal.BidAskSpread/math.Max(e.config.MaxBidAskSpreadPct, 0.0001)), 0, 1)
@@ -1356,7 +1382,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 
 	if confidence < e.config.MinConfidence {
 		rejectionReason = "confidence_below_floor"
-		return nil
+		return nil, rejectionReason
 	}
 
 	risk, reward := fallbackRiskRewardPct(signal)
@@ -1364,7 +1390,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 	requiredNetEdgePct := fallbackRequiredNetEdgePct(TradingPortfolio{AccountTier: e.policy.AccountTier}, e.config.MinExpectancyEdge)
 	if projectedNetEdgePct.LessThan(requiredNetEdgePct) {
 		rejectionReason = "expectancy_below_min_edge"
-		return nil
+		return nil, rejectionReason
 	}
 
 	price := decimal.NewFromFloat(signal.Price)
@@ -1395,7 +1421,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		StopLoss:        &stopLoss,
 		TakeProfit:      &takeProfit,
 		RangeAlignment:  rangeAlignment,
-	}
+	}, ""
 }
 
 func computeExpectancy(wins, losses int, winSum, lossSum decimal.Decimal) float64 {

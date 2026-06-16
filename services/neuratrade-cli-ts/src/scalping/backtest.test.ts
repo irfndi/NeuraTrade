@@ -3,7 +3,11 @@ import { runBacktest } from "./backtest.js";
 import { defaultComposerConfig } from "./composer.js";
 import type { CandleLike } from "./types.js";
 
-function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "flat" = "flat"): CandleLike[] {
+function makeCandles(
+  count: number,
+  baseClose = 100,
+  trend: "up" | "down" | "flat" = "flat",
+): CandleLike[] {
   const candles: CandleLike[] = [];
   let close = baseClose;
   for (let i = 0; i < count; i++) {
@@ -12,7 +16,14 @@ function makeCandles(count: number, baseClose = 100, trend: "up" | "down" | "fla
     else if (trend === "down") close *= 0.995;
     const high = Math.max(open, close) * 1.002;
     const low = Math.min(open, close) * 0.998;
-    candles.push({ open, high, low, close, volume: 10, timestamp: new Date(Date.now() + i * 60000) });
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      volume: 10,
+      timestamp: new Date(Date.now() + i * 60000),
+    });
   }
   return candles;
 }

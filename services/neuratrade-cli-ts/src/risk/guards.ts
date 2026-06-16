@@ -45,7 +45,9 @@ export interface RiskContext {
  * Port for pre-trade risk checks.
  */
 export interface RiskGuardService {
-  readonly check: (context: RiskContext) => Effect.Effect<void, RiskError, never>;
+  readonly check: (
+    context: RiskContext,
+  ) => Effect.Effect<void, RiskError, never>;
 }
 
 export const RiskGuard = Context.GenericTag<RiskGuardService>("RiskGuard");
@@ -96,7 +98,8 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
 
         const drawdownPct =
           context.peakCapital > 0
-            ? ((context.peakCapital - context.capital) / context.peakCapital) * 100
+            ? ((context.peakCapital - context.capital) / context.peakCapital) *
+              100
             : 0;
         if (drawdownPct > limits.maxDrawdownPct) {
           violations.push(
@@ -106,7 +109,7 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
 
         const dailyLossPct =
           context.startOfDayCapital > 0
-            ? ((-context.dailyRealizedPnl) / context.startOfDayCapital) * 100
+            ? (-context.dailyRealizedPnl / context.startOfDayCapital) * 100
             : 0;
         if (dailyLossPct > limits.maxDailyLossPct) {
           violations.push(
@@ -121,7 +124,9 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
         }
 
         const positionSizePct =
-          context.capital > 0 ? (context.positionValue / context.capital) * 100 : 0;
+          context.capital > 0
+            ? (context.positionValue / context.capital) * 100
+            : 0;
         if (positionSizePct > limits.maxPositionSizePct) {
           violations.push(
             `position size ${positionSizePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
@@ -133,7 +138,9 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
           limits.allowedSymbols.length > 0 &&
           !limits.allowedSymbols.includes(context.symbol)
         ) {
-          violations.push(`symbol ${context.symbol} is not in the allowed list`);
+          violations.push(
+            `symbol ${context.symbol} is not in the allowed list`,
+          );
         }
 
         if (violations.length > 0) {

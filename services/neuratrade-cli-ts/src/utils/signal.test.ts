@@ -11,9 +11,7 @@ describe("signalAndWait", () => {
     const proc = Bun.spawn(["sleep", "0.05"]);
     const pid = proc.pid;
 
-    const result = await Effect.runPromise(
-      signalAndWait(pid, "SIGTERM", 2000)
-    );
+    const result = await Effect.runPromise(signalAndWait(pid, "SIGTERM", 2000));
     expect(result).toBe(true);
   });
 
@@ -24,9 +22,7 @@ describe("signalAndWait", () => {
     // Give it a moment to start
     await Bun.sleep(50);
 
-    const result = await Effect.runPromise(
-      signalAndWait(pid, "SIGTERM", 2000)
-    );
+    const result = await Effect.runPromise(signalAndWait(pid, "SIGTERM", 2000));
     expect(result).toBe(true);
 
     // Clean up in case it didn't exit
@@ -46,9 +42,7 @@ describe("signalAndWait", () => {
     await Bun.sleep(50);
 
     // Very short timeout — sleep won't exit that fast
-    const result = await Effect.runPromise(
-      signalAndWait(pid, "SIGTERM", 1)
-    );
+    const result = await Effect.runPromise(signalAndWait(pid, "SIGTERM", 1));
     // The process may or may not exit within 1ms — we just verify no crash
     expect(typeof result).toBe("boolean");
 
@@ -65,7 +59,7 @@ describe("signalAndWait", () => {
   test("handles non-existent PID gracefully", async () => {
     // Use a PID that almost certainly doesn't exist
     const result = await Effect.runPromise(
-      signalAndWait(2_147_483_647, "SIGTERM", 100)
+      signalAndWait(2_147_483_647, "SIGTERM", 100),
     );
     // Should not throw; process not found = treated as already exited
     expect(result).toBe(true);
@@ -77,9 +71,7 @@ describe("signalAndWait", () => {
 
     await Bun.sleep(50);
 
-    const result = await Effect.runPromise(
-      signalAndWait(pid, "SIGINT", 2000)
-    );
+    const result = await Effect.runPromise(signalAndWait(pid, "SIGINT", 2000));
     expect(result).toBe(true);
 
     try {

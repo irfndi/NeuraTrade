@@ -33,7 +33,9 @@ function provideAll<A, E, R>(effect: Effect.Effect<A, E, R>, home: string) {
   );
 }
 
-function makeDefaultState(overrides?: Partial<GatewayStateType>): GatewayStateType {
+function makeDefaultState(
+  overrides?: Partial<GatewayStateType>,
+): GatewayStateType {
   return {
     mode: "starting",
     supervised: false,
@@ -82,7 +84,10 @@ describe("GatewayState service", () => {
           updated_at: "2025-06-01T12:00:00Z",
           health_timeout_seconds: 120,
           services: {
-            backend: { status: "healthy", endpoint: "http://127.0.0.1:8080/health" },
+            backend: {
+              status: "healthy",
+              endpoint: "http://127.0.0.1:8080/health",
+            },
           },
         });
 
@@ -97,7 +102,9 @@ describe("GatewayState service", () => {
         expect(result.supervised).toBe(true);
         expect(result.health_timeout_seconds).toBe(120);
         expect(result.services.backend.status).toBe("healthy");
-        expect(result.services.backend.endpoint).toBe("http://127.0.0.1:8080/health");
+        expect(result.services.backend.endpoint).toBe(
+          "http://127.0.0.1:8080/health",
+        );
       } finally {
         rmDir(home);
       }
@@ -140,7 +147,10 @@ describe("GatewayState service", () => {
             supervised: true,
             health_timeout_seconds: 200,
             services: {
-              backend: { status: "healthy", endpoint: "http://localhost:8080/health" },
+              backend: {
+                status: "healthy",
+                endpoint: "http://localhost:8080/health",
+              },
             },
           });
           yield* gw.write(state);
@@ -249,12 +259,17 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.write(makeDefaultState({
-            mode: "starting",
-            services: {
-              backend: { status: "healthy", endpoint: "http://localhost:8080/health" },
-            },
-          }));
+          yield* gw.write(
+            makeDefaultState({
+              mode: "starting",
+              services: {
+                backend: {
+                  status: "healthy",
+                  endpoint: "http://localhost:8080/health",
+                },
+              },
+            }),
+          );
           yield* gw.writeMode("warming", "backend warming up");
           return yield* gw.read();
         });
@@ -277,11 +292,13 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.write(makeDefaultState({
-            services: {
-              backend: { status: "healthy" },
-            },
-          }));
+          yield* gw.write(
+            makeDefaultState({
+              services: {
+                backend: { status: "healthy" },
+              },
+            }),
+          );
           yield* gw.writeMode("degraded");
           return yield* gw.read();
         });
@@ -307,7 +324,12 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.writeServiceState("backend", "healthy", "probe ok", "http://127.0.0.1:8080/health");
+          yield* gw.writeServiceState(
+            "backend",
+            "healthy",
+            "probe ok",
+            "http://127.0.0.1:8080/health",
+          );
           return yield* gw.read();
         });
 
@@ -328,13 +350,20 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.write(makeDefaultState({
-            services: {
-              backend: { status: "starting" },
-              telegram: { status: "starting" },
-            },
-          }));
-          yield* gw.writeServiceState("backend", "healthy", "ok", "http://127.0.0.1:8080/health");
+          yield* gw.write(
+            makeDefaultState({
+              services: {
+                backend: { status: "starting" },
+                telegram: { status: "starting" },
+              },
+            }),
+          );
+          yield* gw.writeServiceState(
+            "backend",
+            "healthy",
+            "ok",
+            "http://127.0.0.1:8080/health",
+          );
           return yield* gw.read();
         });
 
@@ -342,7 +371,9 @@ describe("GatewayState service", () => {
 
         expect(result.services.backend.status).toBe("healthy");
         expect(result.services.backend.detail).toBe("ok");
-        expect(result.services.backend.endpoint).toBe("http://127.0.0.1:8080/health");
+        expect(result.services.backend.endpoint).toBe(
+          "http://127.0.0.1:8080/health",
+        );
         expect(result.services.telegram.status).toBe("starting");
       } finally {
         rmDir(home);
@@ -433,14 +464,22 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.write(makeDefaultState({
-            mode: "healthy",
-            services: {
-              backend: { status: "healthy", endpoint: "http://127.0.0.1:8080/health" },
-              ccxt: { status: "embedded", detail: "native mode" },
-              telegram: { status: "healthy", endpoint: "http://127.0.0.1:3002/health" },
-            },
-          }));
+          yield* gw.write(
+            makeDefaultState({
+              mode: "healthy",
+              services: {
+                backend: {
+                  status: "healthy",
+                  endpoint: "http://127.0.0.1:8080/health",
+                },
+                ccxt: { status: "embedded", detail: "native mode" },
+                telegram: {
+                  status: "healthy",
+                  endpoint: "http://127.0.0.1:3002/health",
+                },
+              },
+            }),
+          );
           yield* gw.markStopped("backend health check failed");
           return yield* gw.read();
         });
@@ -450,7 +489,9 @@ describe("GatewayState service", () => {
         expect(result.mode).toBe("down");
         expect(result.services.gateway.status).toBe("down");
         expect(result.services.backend.status).toBe("down");
-        expect(result.services.backend.detail).toBe("backend health check failed");
+        expect(result.services.backend.detail).toBe(
+          "backend health check failed",
+        );
         expect(result.services.ccxt.status).toBe("down");
         expect(result.services.telegram.status).toBe("down");
       } finally {
@@ -463,13 +504,15 @@ describe("GatewayState service", () => {
       try {
         const program = Effect.gen(function* () {
           const gw = yield* GatewayState;
-          yield* gw.write(makeDefaultState({
-            mode: "healthy",
-            services: {
-              backend: { status: "healthy" },
-              custom_worker: { status: "running", detail: "custom" },
-            },
-          }));
+          yield* gw.write(
+            makeDefaultState({
+              mode: "healthy",
+              services: {
+                backend: { status: "healthy" },
+                custom_worker: { status: "running", detail: "custom" },
+              },
+            }),
+          );
           yield* gw.markStopped("gateway stopped");
           return yield* gw.read();
         });

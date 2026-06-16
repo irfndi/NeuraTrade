@@ -47,6 +47,5 @@ export interface MarketDataGatewayService {
   ) => Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never>;
 }
 
-export const MarketDataGateway = Context.GenericTag<MarketDataGatewayService>(
-  "MarketDataGateway",
-);
+export const MarketDataGateway =
+  Context.GenericTag<MarketDataGatewayService>("MarketDataGateway");

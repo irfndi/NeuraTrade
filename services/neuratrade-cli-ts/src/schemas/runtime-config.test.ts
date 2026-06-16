@@ -14,7 +14,10 @@ describe("RuntimeConfigSchema", () => {
       server: { host: "0.0.0.0", port: 8080 },
       database: { driver: "sqlite", sqlite_path: "/data/neuratrade.db" },
       redis: { host: "127.0.0.1", port: 6379 },
-      ccxt: { service_url: "http://localhost:3001", grpc_address: "127.0.0.1:50051" },
+      ccxt: {
+        service_url: "http://localhost:3001",
+        grpc_address: "127.0.0.1:50051",
+      },
       telegram: {
         service_url: "http://localhost:3002",
         grpc_address: "127.0.0.1:50052",
@@ -182,7 +185,10 @@ describe("RuntimeConfigSchema", () => {
       server: { host: "0.0.0.0", port: 8080 },
       database: { driver: "sqlite", sqlite_path: "/tmp/db" },
       redis: { host: "127.0.0.1", port: 6379 },
-      ccxt: { service_url: "http://localhost:3001", grpc_address: "127.0.0.1:50051" },
+      ccxt: {
+        service_url: "http://localhost:3001",
+        grpc_address: "127.0.0.1:50051",
+      },
       telegram: {
         service_url: "http://localhost:3002",
         grpc_address: "127.0.0.1:50052",
