@@ -89,7 +89,12 @@ export function runSoak<E>(
       const actions: Array<"opened" | "closed" | "hold"> = [];
       const notes: string[] = [];
 
-      for (let i = 0; i < options.iterationsPerSymbol; i++) {
+      // iterationsPerSymbol = 0 means an unbounded soak, matching the CLI help.
+      for (
+        let i = 0;
+        options.iterationsPerSymbol === 0 || i < options.iterationsPerSymbol;
+        i++
+      ) {
         const result = yield* runner(entry.symbol, exchange, entry.bestParams);
         capitalSnapshots.push(result.capital);
         actions.push(result.action);
@@ -98,6 +103,7 @@ export function runSoak<E>(
         }
 
         if (
+          options.iterationsPerSymbol > 0 &&
           i < options.iterationsPerSymbol - 1 &&
           options.intervalSeconds > 0
         ) {

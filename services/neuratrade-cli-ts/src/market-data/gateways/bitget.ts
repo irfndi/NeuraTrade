@@ -151,7 +151,17 @@ export function fetchOHLCV(
   const { symbol: bSymbol, productType } = bitgetSymbol(symbol, marketType);
   const granularity = bitgetGranularity(timeframe, marketType);
   const startParam = startTime
-    ? `&startTime=${startTime.getTime()}&endTime=${Date.now()}`
+    ? (() => {
+        const startMs = startTime.getTime();
+        // Bitget futures rejects very wide startTime/endTime ranges (e.g. >90
+        // days). Cap each request to the requested batch horizon so callers
+        // that paginate through a year of history still issue valid requests.
+        const endMs = Math.min(
+          Date.now(),
+          startMs + candleWindowMs(timeframe) * limit,
+        );
+        return `&startTime=${startMs}&endTime=${endMs}`;
+      })()
     : "";
 
   const path =
@@ -292,4 +302,13 @@ function bitgetGranularity(timeframe: string, marketType: MarketType): string {
     "1d": "1D",
   };
   return (marketType === "spot" ? spotMap : futuresMap)[timeframe] ?? timeframe;
+}
+
+function candleWindowMs(timeframe: string): number {
+  const value = Number(timeframe.slice(0, -1));
+  if (Number.isNaN(value)) return 60_000;
+  if (timeframe.endsWith("m")) return value * 60_000;
+  if (timeframe.endsWith("h")) return value * 60 * 60_000;
+  if (timeframe.endsWith("d")) return value * 24 * 60 * 60_000;
+  return 60_000;
 }

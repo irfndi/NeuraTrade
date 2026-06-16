@@ -109,6 +109,7 @@ export interface BitgetInstrument {
   readonly status: string;
   readonly minTradeAmount: string;
   readonly maxTradeAmount: string;
+  readonly minTradeUSDT: string;
   readonly takerFeeRate: string;
   readonly makerFeeRate: string;
   readonly pricePrecision: string;
@@ -545,6 +546,7 @@ function parseInstrument(data: Record<string, unknown>): BitgetInstrument {
     status: String(data.status ?? ""),
     minTradeAmount: String(data.minTradeAmount ?? data.minTradeAmt ?? "0"),
     maxTradeAmount: String(data.maxTradeAmount ?? data.maxTradeAmt ?? "0"),
+    minTradeUSDT: String(data.minTradeUSDT ?? "0"),
     takerFeeRate: String(data.takerFeeRate ?? "0"),
     makerFeeRate: String(data.makerFeeRate ?? "0"),
     pricePrecision: String(data.pricePrecision ?? "0"),

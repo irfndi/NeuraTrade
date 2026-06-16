@@ -24,6 +24,25 @@ const (
 	DefaultScalpingBacktestHoldPeriod       = 4 * time.Hour
 	DefaultScalpingBacktestMaxCapitalPct    = 5.0
 	DefaultScalpingBacktestSpreadMultiplier = 8
+	// DefaultScalpingBacktestImbalanceFloor is the minimum absolute order-book
+	// imbalance required by the backtest signal gate when not overridden by
+	// configuration.
+	DefaultScalpingBacktestImbalanceFloor = 0.05
+	// DefaultScalpingBacktestMinRecentMomentumPct is the fallback floor for
+	// the recent-momentum filter when RequireRecentMomentum is true but no
+	// explicit MinRecentMomentumPct is configured.
+	DefaultScalpingBacktestMinRecentMomentumPct = 0.05
+	// DefaultScalpingBacktestTrendImbalanceFloor is the imbalance threshold
+	// used in regime classification to label a market as "trend".
+	DefaultScalpingBacktestTrendImbalanceFloor = 0.25
+	// DefaultScalpingBacktestChopImbalanceCeiling is the maximum imbalance
+	// below which a market is classified as "chop".
+	DefaultScalpingBacktestChopImbalanceCeiling = 0.10
+	// DefaultScalpingBacktestRegimeRangeBufferPct is the buffer (in percent of
+	// the 24h range) kept away from the high/low bands when classifying a
+	// trending regime.
+	DefaultScalpingBacktestRegimeRangeBufferPct = 5.0
+
 	// maxProfitFactorNoLosses represents an effectively unbounded profit
 	// factor when a report has winning trades and no losing trades.
 	maxProfitFactorNoLosses = 999
@@ -389,12 +408,16 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 			if !signal.Timestamp.Equal(position.EntryTime) {
 				position.HoldCandles++
 			}
-			e.updateDynamicStop(position, signal)
 
 			markPrice := decimal.NewFromFloat(signal.Signal.Price)
 			candleLow := decimal.NewFromFloat(signal.Signal.Low)
 			candleHigh := decimal.NewFromFloat(signal.Signal.High)
 
+			// Evaluate the configured stop/target against this candle using the
+			// stop as it existed at the start of the candle. Dynamic-stop updates
+			// are applied afterwards so a candle that both hits the original stop
+			// and reaches the breakeven/trailing trigger cannot retroactively
+			// improve the exit price.
 			slTPExit := false
 			switch strings.ToLower(strings.TrimSpace(position.Side)) {
 			case "buy":
@@ -415,6 +438,8 @@ func (e *ScalpingBacktestEngine) RunSignals(ctx context.Context, historicalSigna
 				e.tradeHistory = append(e.tradeHistory, trade)
 				e.capital = e.capital.Add(trade.PnL)
 				delete(e.positions, positionKey)
+			} else {
+				e.updateDynamicStop(position, signal)
 			}
 		}
 
@@ -782,6 +807,7 @@ func (e *ScalpingBacktestEngine) updateDynamicStop(
 	one := decimal.NewFromInt(1)
 	side := strings.ToLower(strings.TrimSpace(position.Side))
 
+	wasBreakevenTriggered := position.BreakevenTriggered
 	if cfg.BreakevenEnabled {
 		triggerPct := decimal.NewFromFloat(cfg.BreakevenTriggerPct)
 		offsetPct := decimal.NewFromFloat(cfg.BreakevenOffsetPct)
@@ -807,7 +833,11 @@ func (e *ScalpingBacktestEngine) updateDynamicStop(
 		}
 	}
 
-	if cfg.TrailingStopEnabled && position.BreakevenTriggered {
+	// Only trail on signals *after* the breakeven trigger fired. This prevents
+	// the same candle that triggers breakeven from also tightening the stop to
+	// the current extreme, matching how live trailing stops react to subsequent
+	// ticks.
+	if cfg.TrailingStopEnabled && wasBreakevenTriggered {
 		trailPct := decimal.NewFromFloat(cfg.TrailingStopPct)
 		switch side {
 		case "buy":
@@ -970,10 +1000,12 @@ func (e *ScalpingBacktestEngine) classifyRegime(signal MarketSignal) string {
 		return "illiquid"
 	}
 	imbalance := math.Abs(signal.OrderBookImbalance)
-	if imbalance >= 0.25 && signal.RangePosition24h > e.configRegimeLowBand()+5 && signal.RangePosition24h < e.configRegimeHighBand()-5 {
+	if imbalance >= DefaultScalpingBacktestTrendImbalanceFloor &&
+		signal.RangePosition24h > e.configRegimeLowBand()+DefaultScalpingBacktestRegimeRangeBufferPct &&
+		signal.RangePosition24h < e.configRegimeHighBand()-DefaultScalpingBacktestRegimeRangeBufferPct {
 		return "trend"
 	}
-	if imbalance < 0.10 {
+	if imbalance < DefaultScalpingBacktestChopImbalanceCeiling {
 		return "chop"
 	}
 	return "neutral"
@@ -999,7 +1031,7 @@ func (e *ScalpingBacktestEngine) evaluateGates(signal MarketSignal, decision *AI
 			scalpingSellWindowCandidate(signal, fallback))
 	results["spread"] = GateResult{Allowed: spreadAllowed, Reason: gateReason(spreadAllowed, "spread_too_wide")}
 
-	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= 0.05
+	imbalanceAllowed := math.Abs(signal.OrderBookImbalance) >= DefaultScalpingBacktestImbalanceFloor
 	results["imbalance"] = GateResult{Allowed: imbalanceAllowed, Reason: gateReason(imbalanceAllowed, "imbalance_too_weak")}
 
 	confidenceAllowed := decision != nil && decision.Confidence >= e.config.MinConfidence
@@ -1351,7 +1383,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		rejectionReason = "atr_too_high"
 		return nil, rejectionReason
 	}
-	effectiveMinImbalance := math.Min(fallback.MinImbalance, 0.20)
+	effectiveMinImbalance := math.Min(fallback.MinImbalance, fallback.BacktestStrongImbalanceFloor)
 	if e.config.RequireRecentMomentum {
 		effectiveMinImbalance = fallback.MinImbalance
 	}
@@ -1371,7 +1403,7 @@ func (e *ScalpingBacktestEngine) buildDecisionFromSignal(ctx context.Context, si
 		momentumPct = signal.RecentPriceChange
 		minRecentMomentum := e.config.MinRecentMomentumPct
 		if minRecentMomentum <= 0 {
-			minRecentMomentum = 0.05
+			minRecentMomentum = DefaultScalpingBacktestMinRecentMomentumPct
 		}
 		buyMomentumMin = math.Max(buyMomentumMin, minRecentMomentum)
 		sellMomentumMax = math.Min(sellMomentumMax, -minRecentMomentum)

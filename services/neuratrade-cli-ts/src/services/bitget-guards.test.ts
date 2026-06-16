@@ -14,6 +14,7 @@ const btcInstrument: BitgetInstrument = {
   status: "online",
   minTradeAmount: "5",
   maxTradeAmount: "1000000",
+  minTradeUSDT: "5",
   takerFeeRate: "0.001",
   makerFeeRate: "0.001",
   pricePrecision: "2",
@@ -152,5 +153,26 @@ describe("BitgetGuards", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toContain("not tradable");
+  });
+
+  it("uses minTradeUSDT when minTradeAmount is zero", async () => {
+    const usdtMin = {
+      ...btcInstrument,
+      minTradeAmount: "0",
+      minTradeUSDT: "5",
+    };
+    const result = await run(
+      {
+        symbol: "BTC/USDT",
+        side: "sell",
+        orderType: "market",
+        size: "0.00001",
+      },
+      "65000",
+      usdtMin,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("min trade amount");
   });
 });

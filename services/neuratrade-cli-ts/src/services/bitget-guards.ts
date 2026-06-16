@@ -189,7 +189,13 @@ function checkNotionalAndLimits(
   referencePrice: string,
 ): Effect.Effect<void, BitgetGuardError> {
   return Effect.gen(function* () {
-    const minTrade = instrument.minTradeAmount;
+    // Bitget v2 spot instruments report the real minimum notional in
+    // minTradeUSDT; minTradeAmount is often 0 and would let under-minimum
+    // orders pass the local guard.
+    const minTrade =
+      compare(instrument.minTradeUSDT ?? "0", "0") > 0
+        ? instrument.minTradeUSDT
+        : instrument.minTradeAmount;
     const maxTrade = instrument.maxTradeAmount;
 
     // Notional guard: estimate notional using the order limit price when

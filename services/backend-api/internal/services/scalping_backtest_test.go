@@ -1810,7 +1810,7 @@ func TestScalpingBacktestEngine_UpdateDynamicStop(t *testing.T) {
 	// The observed high here is low enough that the trailing stop is below the
 	// breakeven level, so the stop lands at the breakeven price.
 	engine.updateDynamicStop(pos, HistoricalSignal{
-		Signal: MarketSignal{Price: 101.6, Low: 101.5, High: 101.0},
+		Signal: MarketSignal{Price: 101.6, Low: 101.2, High: 101.3},
 	})
 	require.True(t, pos.BreakevenTriggered)
 	require.True(t, closeEnough(pos.StopLoss, decimal.NewFromFloat(100.5)), "breakeven stop = %s", pos.StopLoss)
@@ -1831,14 +1831,14 @@ func TestScalpingBacktestEngine_UpdateDynamicStop(t *testing.T) {
 		LowPrice:   decimal.NewFromFloat(100),
 	}
 	engine.updateDynamicStop(sellPos, HistoricalSignal{
-		Signal: MarketSignal{Price: 98.4, Low: 99.0, High: 98.5},
+		Signal: MarketSignal{Price: 98.4, Low: 98.3, High: 98.6},
 	})
 	require.True(t, sellPos.BreakevenTriggered)
 	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.5)), "sell breakeven stop = %s", sellPos.StopLoss)
 
 	// A later candle sets a new lower low; the trailing stop should tighten.
 	engine.updateDynamicStop(sellPos, HistoricalSignal{
-		Signal: MarketSignal{Price: 98.6, Low: 98.3, High: 98.7},
+		Signal: MarketSignal{Price: 98.6, Low: 98.3, High: 98.6},
 	})
 	// Trailing stop = lowest low (98.3) * (1 + 0.01) = 99.283
 	require.True(t, closeEnough(sellPos.StopLoss, decimal.NewFromFloat(99.283)), "sell trailing stop = %s", sellPos.StopLoss)

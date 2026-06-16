@@ -1838,8 +1838,8 @@ export const soakCommand = Command.make(
             initialCapital: args.capital,
             isLive: args.live,
             leverage: entry?.leverage ?? args.leverage,
-            marginMode: marginModeParsed,
-            productType: productTypeParsed,
+            marginMode: entry?.marginMode ?? marginModeParsed,
+            productType: entry?.productType ?? productTypeParsed,
           };
           return runFuturesPaperTradingIteration(opts).pipe(
             Effect.provide(futuresAdapterLayer),

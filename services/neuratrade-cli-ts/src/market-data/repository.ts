@@ -251,7 +251,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
       const sql = `SELECT open_price, high_price, low_price, close_price, volume, timestamp
                    FROM ohlcv_data
                    WHERE ${conditions.join(" AND ")}
-                   ORDER BY timestamp ASC
+                   ORDER BY timestamp DESC
                    ${query.limit ? "LIMIT ?" : ""}`;
       if (query.limit) params.push(query.limit);
 
@@ -266,19 +266,22 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
             timestamp: string;
           }>;
 
-          return rows.map(
-            (r): Candle => ({
-              exchange: query.exchange,
-              symbol: query.symbol,
-              timeframe: query.timeframe,
-              open: r.open_price,
-              high: r.high_price,
-              low: r.low_price,
-              close: r.close_price,
-              volume: r.volume,
-              timestamp: new Date(r.timestamp),
-            }),
-          );
+          return rows
+            .slice()
+            .reverse()
+            .map(
+              (r): Candle => ({
+                exchange: query.exchange,
+                symbol: query.symbol,
+                timeframe: query.timeframe,
+                open: r.open_price,
+                high: r.high_price,
+                low: r.low_price,
+                close: r.close_price,
+                volume: r.volume,
+                timestamp: new Date(r.timestamp),
+              }),
+            );
         },
         catch: (err) =>
           new MarketDataRepositoryError(

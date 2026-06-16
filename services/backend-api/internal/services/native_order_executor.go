@@ -215,6 +215,12 @@ func (e *NativeOrderExecutor) formatTradeNotification(d TradeDetails, orderID st
 			}
 			lines = append(lines, fmt.Sprintf("   🔴 SL: %s (%.1f%%)", formatPrice(*d.StopLoss), slPercent))
 		}
+		if d.BreakevenEnabled {
+			lines = append(lines, fmt.Sprintf("   ⏺️ Breakeven @ %.1f%%", d.BreakevenTriggerPct*100))
+		}
+		if d.TrailingStopEnabled {
+			lines = append(lines, fmt.Sprintf("   📉 Trailing stop @ %.1f%%", d.TrailingStopPct*100))
+		}
 		lines = append(lines, "")
 	}
 
