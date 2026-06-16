@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Either, Layer } from "effect";
+import { Effect, Either } from "effect";
 import {
   MarketDataGateway,
   type MarketDataGatewayService,
@@ -9,7 +9,6 @@ import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import {
   RiskGuard,
-  type RiskGuardService,
   makeRiskGuard,
 } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";

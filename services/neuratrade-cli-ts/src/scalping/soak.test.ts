@@ -3,7 +3,6 @@ import { Effect } from "effect";
 import { defaultComposerConfig } from "./composer.js";
 import {
   runSoak,
-  type IterationResult,
   type IterationRunner,
   type SoakOptions,
   type SoakSymbol,

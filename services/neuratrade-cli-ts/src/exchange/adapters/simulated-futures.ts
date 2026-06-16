@@ -124,7 +124,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
           const notional = money(price).times(request.size);
           const marginRequired = notional.div(money(request.leverage));
 
-          if (balance.lessThan(marginRequired)) {
+          if (!request.reduceOnly && balance.lessThan(marginRequired)) {
             return yield* Effect.fail(
               new ExchangeError(
                 `insufficient ${marginCoin} margin: required ${marginRequired.toFixed(4)}, available ${balance.toFixed(4)}`,

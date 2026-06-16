@@ -1,4 +1,4 @@
-import { Effect, Either, Console } from "effect";
+import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";

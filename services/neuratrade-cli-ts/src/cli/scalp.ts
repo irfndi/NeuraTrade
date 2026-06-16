@@ -22,12 +22,9 @@ import { RiskGuardLive } from "../risk/guards.js";
 import {
   KillSwitch,
   KillSwitchSQLiteLive,
-  type KillSwitchService,
 } from "../risk/kill-switch.js";
 import {
-  CircuitBreaker,
   CircuitBreakerSQLiteLive,
-  type CircuitBreakerService,
 } from "../risk/circuit-breaker.js";
 import {
   runPaperTradingIteration,
@@ -45,7 +42,6 @@ import { BitgetConfigLive } from "../services/bitget-config.js";
 import { RateLimiterLive } from "../services/rate-limiter.js";
 import {
   PaperTradingRepository,
-  PaperTradingRepositoryError,
   PaperTradingRepositorySQLiteLive,
 } from "../paper-trading/repository.js";
 import {
@@ -1680,38 +1676,6 @@ function printSoakResult(result: import("../scalping/soak.js").SoakResult) {
 const soakWatchlistOption = Options.text("watchlist").pipe(
   Options.withDescription("Path to a JSON watchlist in NEURATRADE_HOME/data"),
 );
-
-interface SoakCommandArgs {
-  readonly watchlist: string;
-  readonly exchange: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly fee: number;
-  readonly minConfidence: number;
-  readonly useAtrStops: boolean;
-  readonly atrStopMultiplier: number;
-  readonly atrTakeProfitMultiplier: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly noTrend: boolean;
-  readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly interval: number;
-  readonly iterations: number;
-  readonly live: boolean;
-  readonly apiKey: string;
-  readonly apiSecret: string;
-  readonly futures: boolean;
-  readonly leverage: number;
-  readonly marginMode: string;
-  readonly productType: string;
-  readonly maxDrawdownPct: Option.Option<number>;
-  readonly maxDailyLossPct: Option.Option<number>;
-  readonly maxPositionSizePct: Option.Option<number>;
-  readonly maxTradesPerDay: Option.Option<number>;
-  readonly minCapital: Option.Option<number>;
-}
 
 export const soakCommand = Command.make(
   "soak",

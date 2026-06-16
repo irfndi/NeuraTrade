@@ -146,6 +146,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
           current.timestamp,
           fundingRatePct,
           fundingIntervalMs,
+          isFutures,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -191,6 +192,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
           next.timestamp,
           fundingRatePct,
           fundingIntervalMs,
+          isFutures,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -291,6 +293,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       last.timestamp,
       fundingRatePct,
       fundingIntervalMs,
+      isFutures,
     );
     const pnlPct =
       ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -448,8 +451,9 @@ function chargeFunding(
   now: Date,
   fundingRatePct: number,
   fundingIntervalMs: number,
+  isFutures: boolean,
 ): number {
-  if (fundingRatePct === 0 || !lastFundingTime) return 0;
+  if (!isFutures || fundingRatePct === 0 || !lastFundingTime) return 0;
   const elapsed = now.getTime() - lastFundingTime.getTime();
   if (elapsed < fundingIntervalMs) return 0;
   const intervals = Math.floor(elapsed / fundingIntervalMs);
