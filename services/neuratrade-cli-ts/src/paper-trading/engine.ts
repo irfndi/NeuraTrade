@@ -138,7 +138,10 @@ export function runPaperTradingIteration(
     );
 
     const todayPnl = yield* repo.getTodayRealizedPnl();
-    const startOfDayCapital = toNumber(capital.minus(money(todayPnl)));
+    const startOfDayCapital = yield* repo.getStartOfDayCapital(
+      new Date(),
+      toNumber(capital),
+    );
 
     // Exit existing position first.
     if (position) {
