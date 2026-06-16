@@ -15,12 +15,24 @@ import { runBacktest, type BacktestResult } from "../scalping/backtest.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
-import { ExchangeAdapter } from "../exchange/adapter.js";
+import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
+import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
+import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,
 } from "../paper-trading/engine.js";
+import {
+  runFuturesPaperTradingIteration,
+  type FuturesPaperTradingOptions,
+} from "../paper-trading/futures-engine.js";
+import {
+  BitgetClientLiveConfig,
+  type BitgetProductType,
+} from "../services/bitget-client.js";
+import { BitgetConfigLive } from "../services/bitget-config.js";
+import { RateLimiterLive } from "../services/rate-limiter.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -967,7 +979,7 @@ const iterationsOption = Options.integer("iterations").pipe(
 const liveOption = Options.boolean("live").pipe(
   Options.withDefault(false),
   Options.withDescription(
-    "Use live Binance exchange adapter (requires API key/secret)",
+    "Use live exchange adapter (Binance spot or Bitget futures)",
   ),
 );
 
@@ -979,6 +991,28 @@ const apiKeyOption = Options.text("api-key").pipe(
 const apiSecretOption = Options.text("api-secret").pipe(
   Options.withDefault(""),
   Options.withDescription("Binance API secret (or set BINANCE_API_SECRET env)"),
+);
+
+const futuresOption = Options.boolean("futures").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Trade perpetual futures instead of spot"),
+);
+
+const leverageOption = Options.integer("leverage").pipe(
+  Options.withDefault(3),
+  Options.withDescription("Futures leverage (default 3x)"),
+);
+
+const marginModeOption = Options.text("margin-mode").pipe(
+  Options.withDefault("crossed"),
+  Options.withDescription("Futures margin mode: crossed or isolated"),
+);
+
+const productTypeOption = Options.text("product-type").pipe(
+  Options.withDefault("USDT-FUTURES"),
+  Options.withDescription(
+    "Futures product type: USDT-FUTURES, COIN-FUTURES or USDC-FUTURES",
+  ),
 );
 
 const maxDrawdownOption = Options.float("max-drawdown-pct").pipe(
@@ -1053,6 +1087,10 @@ interface PaperTradeArgs {
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
+  readonly futures: boolean;
+  readonly leverage: number;
+  readonly marginMode: string;
+  readonly productType: string;
   readonly maxDrawdownPct: Option.Option<number>;
   readonly maxDailyLossPct: Option.Option<number>;
   readonly maxPositionSizePct: Option.Option<number>;
@@ -1121,6 +1159,10 @@ export const paperTradeCommand = Command.make(
     live: liveOption,
     apiKey: apiKeyOption,
     apiSecret: apiSecretOption,
+    futures: futuresOption,
+    leverage: leverageOption,
+    marginMode: marginModeOption,
+    productType: productTypeOption,
     maxDrawdownPct: maxDrawdownOption,
     maxDailyLossPct: maxDailyLossOption,
     maxPositionSizePct: maxPositionSizeOption,
@@ -1142,18 +1184,11 @@ export const paperTradeCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
-      const adapterLayer = args.live
-        ? BinanceLiveExchangeAdapterLive({
-            apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
-            apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
-          })
-        : SimulatedExchangeAdapterLive();
       const riskGuardLayer = RiskGuardLive(args.live, buildRiskOverrides(args));
       const layers = Layer.mergeAll(
         BunContext.layer,
         PathLive(process.env.NEURATRADE_HOME),
         MarketDataGatewayLive,
-        adapterLayer,
         repoLayer,
         paperRepoLayer,
         riskGuardLayer,
@@ -1181,6 +1216,21 @@ export const paperTradeCommand = Command.make(
   Command.withDescription("Run deterministic scalping paper-trading loop"),
 );
 
+function parseMarginMode(value: string): FuturesMarginMode {
+  return value === "isolated" ? "isolated" : "crossed";
+}
+
+function parseProductType(value: string): BitgetProductType {
+  if (
+    value === "USDT-FUTURES" ||
+    value === "COIN-FUTURES" ||
+    value === "USDC-FUTURES"
+  ) {
+    return value;
+  }
+  return "USDT-FUTURES";
+}
+
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
@@ -1206,7 +1256,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
 
     const entries =
       args.entries && args.entries.length > 0 ? args.entries : undefined;
-    const makeOptions = (
+
+    const makeSpotOptions = (
       symbol: string,
       overrides?: Partial<PaperTradingOptions>,
     ): PaperTradingOptions => ({
@@ -1226,17 +1277,99 @@ function paperTradeProgram(args: PaperTradeArgs) {
       isLive: args.live,
     });
 
+    const marginMode = parseMarginMode(args.marginMode);
+    const productType = parseProductType(args.productType);
+    const makeFuturesOptions = (
+      symbol: string,
+      overrides?: Partial<FuturesPaperTradingOptions>,
+    ): FuturesPaperTradingOptions => ({
+      exchange: args.exchange,
+      symbol,
+      timeframe: args.timeframe,
+      composerConfig,
+      positionSizePct: args.positionSize,
+      feePct: args.fee,
+      minConfidence: overrides?.minConfidence ?? args.minConfidence,
+      useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
+      atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
+      atrTakeProfitMultiplier:
+        overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+      holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
+      initialCapital: args.capital,
+      isLive: args.live,
+      leverage: args.leverage,
+      marginMode,
+      productType,
+    });
+
+    const spotAdapterLayer = args.live
+      ? BinanceLiveExchangeAdapterLive({
+          apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
+          apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
+        })
+      : SimulatedExchangeAdapterLive();
+    const futuresAdapterLayer = args.live
+      ? Layer.provide(
+          BitgetFuturesExchangeAdapterLive,
+          Layer.provide(
+            BitgetClientLiveConfig,
+            Layer.merge(BitgetConfigLive, RateLimiterLive()),
+          ),
+        )
+      : SimulatedFuturesExchangeAdapterLive();
+
+    const runSpotIteration = (
+      opts: PaperTradingOptions,
+    ): Effect.Effect<
+      import("../paper-trading/engine.js").PaperTradingIterationResult,
+      never,
+      never
+    > =>
+      runPaperTradingIteration(opts).pipe(
+        Effect.provide(spotAdapterLayer),
+      ) as Effect.Effect<
+        import("../paper-trading/engine.js").PaperTradingIterationResult,
+        never,
+        never
+      >;
+
+    const runFuturesIteration = (
+      opts: FuturesPaperTradingOptions,
+    ): Effect.Effect<
+      import("../paper-trading/futures-engine.js").FuturesPaperTradingIterationResult,
+      never,
+      never
+    > =>
+      runFuturesPaperTradingIteration(opts).pipe(
+        Effect.provide(futuresAdapterLayer),
+      ) as Effect.Effect<
+        import("../paper-trading/futures-engine.js").FuturesPaperTradingIterationResult,
+        never,
+        never
+      >;
+
     let remaining = args.iterations;
     while (remaining !== 0) {
       if (entries) {
         for (const entry of entries) {
           if (remaining === 0) break;
-          const options = makeOptions(entry.symbol, {
-            minConfidence: entry.bestParams?.minConfidence,
-            atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
-            atrTakeProfitMultiplier: entry.bestParams?.atrTakeProfitMultiplier,
-          });
-          const result = yield* runPaperTradingIteration(options);
+          const result = args.futures
+            ? yield* runFuturesIteration(
+                makeFuturesOptions(entry.symbol, {
+                  minConfidence: entry.bestParams?.minConfidence,
+                  atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
+                  atrTakeProfitMultiplier:
+                    entry.bestParams?.atrTakeProfitMultiplier,
+                }),
+              )
+            : yield* runSpotIteration(
+                makeSpotOptions(entry.symbol, {
+                  minConfidence: entry.bestParams?.minConfidence,
+                  atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
+                  atrTakeProfitMultiplier:
+                    entry.bestParams?.atrTakeProfitMultiplier,
+                }),
+              );
           yield* Console.log(
             `[${new Date().toISOString()}] ${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
           );
@@ -1250,8 +1383,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
           }
         }
       } else {
-        const options = makeOptions(args.symbol);
-        const result = yield* runPaperTradingIteration(options);
+        const result = args.futures
+          ? yield* runFuturesIteration(makeFuturesOptions(args.symbol))
+          : yield* runSpotIteration(makeSpotOptions(args.symbol));
         yield* Console.log(
           `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
         );
