@@ -41,6 +41,9 @@ export interface BacktestResult {
   readonly maxDrawdownPct: number;
   readonly sharpeRatio: number;
   readonly trades: readonly BacktestTrade[];
+  readonly totalFeesPaid: number;
+  readonly totalFundingCost: number;
+  readonly benchmarkReturnPct: number;
 }
 
 export interface BacktestOptions {
@@ -61,6 +64,14 @@ export interface BacktestOptions {
   readonly atrTakeProfitMultiplier?: number;
   /** When true, ignore opposite-direction signal exits and only exit on stop/take-profit. */
   readonly holdUntilStop?: boolean;
+  /** Slippage in basis points applied to entry and exit fills. Default 0. */
+  readonly slippageBps?: number;
+  /** Per-interval funding rate as whole-number percent (e.g. 0.01 = 0.01%). Default 0. */
+  readonly fundingRatePct?: number;
+  /** Hours between funding settlements. Default 8. */
+  readonly fundingIntervalHours?: number;
+  /** When true, accumulate funding costs on positions. Default false. */
+  readonly isFutures?: boolean;
 }
 
 /**
@@ -79,6 +90,14 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
   let peakCapital = capital;
   let maxDrawdown = 0;
   let tradeId = 0;
+  let totalFeesPaid = 0;
+  let totalFundingCost = 0;
+  let lastFundingTime: Date | null = null;
+
+  const slippageBps = options.slippageBps ?? 0;
+  const fundingRatePct = options.fundingRatePct ?? 0;
+  const fundingIntervalMs = (options.fundingIntervalHours ?? 8) * 3600_000;
+  const isFutures = options.isFutures ?? false;
 
   // We need a rolling window of candles plus current OB metrics.
   // For backtesting, derive synthetic order-book metrics from the candle.
@@ -109,11 +128,30 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       // Check stop-loss / take-profit on current candle
       const { stopLoss, takeProfit } = checkExitLevels(position, current);
       if (stopLoss || takeProfit) {
-        const exitPrice = stopLoss ? position.stopLoss : position.takeProfit;
+        const rawExit = stopLoss ? position.stopLoss : position.takeProfit;
+        const exitSide = position.side === "long" ? "short" : "long";
+        const exitPrice = applySlippage(
+          rawExit,
+          exitSide,
+          slippageBps,
+          current.high,
+          current.low,
+        );
         const reason = stopLoss ? "stop_loss" : "take_profit";
         const pnl = calculatePnl(position, exitPrice);
-        const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
-        capital += pnl;
+        const exitFee = exitPrice * position.size * (options.feePct / 100);
+        const funding = chargeFunding(
+          position,
+          lastFundingTime,
+          current.timestamp,
+          fundingRatePct,
+          fundingIntervalMs,
+        );
+        const pnlPct =
+          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
+        capital += pnl - exitFee - funding;
+        totalFeesPaid += exitFee;
+        totalFundingCost += funding;
         trades.push({
           id: `trade-${tradeId++}`,
           symbol: options.symbol,
@@ -127,6 +165,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
           exitReason: reason,
         });
         position = null;
+        lastFundingTime = null;
         continue;
       }
 
@@ -136,10 +175,28 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         signal &&
         shouldExitPosition(position, signal)
       ) {
-        const exitPrice = next.open;
+        const exitSide = position.side === "long" ? "short" : "long";
+        const exitPrice = applySlippage(
+          next.open,
+          exitSide,
+          slippageBps,
+          next.high,
+          next.low,
+        );
         const pnl = calculatePnl(position, exitPrice);
-        const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
-        capital += pnl;
+        const exitFee = exitPrice * position.size * (options.feePct / 100);
+        const funding = chargeFunding(
+          position,
+          lastFundingTime,
+          next.timestamp,
+          fundingRatePct,
+          fundingIntervalMs,
+        );
+        const pnlPct =
+          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
+        capital += pnl - exitFee - funding;
+        totalFeesPaid += exitFee;
+        totalFundingCost += funding;
         trades.push({
           id: `trade-${tradeId++}`,
           symbol: options.symbol,
@@ -153,13 +210,21 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
           exitReason: "signal",
         });
         position = null;
+        lastFundingTime = null;
       }
     }
 
     // Open new position if signal is strong enough and no position
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
       const side = signal.direction === "buy" ? "long" : "short";
-      const entryPrice = next.open;
+      const rawEntry = next.open;
+      const entryPrice = applySlippage(
+        rawEntry,
+        side,
+        slippageBps,
+        next.high,
+        next.low,
+      );
       const positionValue = capital * (options.positionSizePct / 100);
       const size = positionValue / entryPrice;
 
@@ -200,18 +265,38 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
         takeProfit,
       };
 
-      // Deduct fee on entry (simplified)
-      capital -= positionValue * (options.feePct / 100);
+      const entryFee = positionValue * (options.feePct / 100);
+      capital -= entryFee;
+      totalFeesPaid += entryFee;
+      lastFundingTime = next.timestamp;
     }
   }
 
   // Close any open position at the last candle
   if (position && candles.length > 0) {
     const last = candles[candles.length - 1];
-    const exitPrice = last.close;
+    const exitSide = position.side === "long" ? "short" : "long";
+    const exitPrice = applySlippage(
+      last.close,
+      exitSide,
+      slippageBps,
+      last.high,
+      last.low,
+    );
     const pnl = calculatePnl(position, exitPrice);
-    const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
-    capital += pnl;
+    const exitFee = exitPrice * position.size * (options.feePct / 100);
+    const funding = chargeFunding(
+      position,
+      lastFundingTime,
+      last.timestamp,
+      fundingRatePct,
+      fundingIntervalMs,
+    );
+    const pnlPct =
+      ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
+    capital += pnl - exitFee - funding;
+    totalFeesPaid += exitFee;
+    totalFundingCost += funding;
     trades.push({
       id: `trade-${tradeId++}`,
       symbol: options.symbol,
@@ -243,6 +328,9 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
     maxDrawdownPct: maxDrawdown * 100,
     sharpeRatio: sharpe,
     trades,
+    totalFeesPaid,
+    totalFundingCost,
+    benchmarkReturnPct: computeBenchmark(candles),
   };
 }
 
@@ -257,6 +345,9 @@ function emptyResult(symbol: string): BacktestResult {
     maxDrawdownPct: 0,
     sharpeRatio: 0,
     trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
   };
 }
 
@@ -329,4 +420,42 @@ function calculateSharpe(returns: readonly number[]): number {
     returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
   const std = Math.sqrt(variance);
   return std === 0 ? 0 : mean / std;
+}
+
+function applySlippage(
+  price: number,
+  side: "long" | "short",
+  bps: number,
+  candleHigh: number,
+  candleLow: number,
+): number {
+  if (bps === 0) return price;
+  const factor = bps / 10000;
+  const slipped = side === "long" ? price * (1 + factor) : price * (1 - factor);
+  return Math.min(candleHigh, Math.max(candleLow, slipped));
+}
+
+function computeBenchmark(candles: readonly CandleLike[]): number {
+  if (candles.length < 2) return 0;
+  const first = candles[0].close;
+  const last = candles[candles.length - 1].close;
+  return first === 0 ? 0 : ((last - first) / first) * 100;
+}
+
+function chargeFunding(
+  position: BacktestPosition,
+  lastFundingTime: Date | null,
+  now: Date,
+  fundingRatePct: number,
+  fundingIntervalMs: number,
+): number {
+  if (fundingRatePct === 0 || !lastFundingTime) return 0;
+  const elapsed = now.getTime() - lastFundingTime.getTime();
+  if (elapsed < fundingIntervalMs) return 0;
+  const intervals = Math.floor(elapsed / fundingIntervalMs);
+  const notional = position.entryPrice * position.size;
+  // Longs pay on positive rate; shorts pay on negative rate (inverse).
+  const effectiveRate =
+    position.side === "long" ? fundingRatePct : -fundingRatePct;
+  return notional * (effectiveRate / 100) * intervals;
 }

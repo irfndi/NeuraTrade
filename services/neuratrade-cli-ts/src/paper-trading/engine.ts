@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Either, Console } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
@@ -16,6 +16,16 @@ import {
   type ExchangeAdapterService,
 } from "../exchange/adapter.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
+import {
+  KillSwitch,
+  KillSwitchError,
+  type KillSwitchService,
+} from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerError,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
@@ -58,16 +68,25 @@ export function runPaperTradingIteration(
   options: PaperTradingOptions,
 ): Effect.Effect<
   PaperTradingIterationResult,
-  MarketDataError | PaperTradingRepositoryError | ExchangeError | RiskError,
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | ExchangeError
+  | RiskError
+  | KillSwitchError
+  | CircuitBreakerError,
   | MarketDataGatewayService
   | PaperTradingRepositoryService
   | ExchangeAdapterService
   | RiskGuardService
+  | KillSwitchService
+  | CircuitBreakerService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
     const gateway = yield* MarketDataGateway;
     const adapter = yield* ExchangeAdapter;
+    const killSwitch = yield* KillSwitch;
+    const circuitBreaker = yield* CircuitBreaker;
 
     yield* repo.ensureTables();
 
@@ -82,6 +101,26 @@ export function runPaperTradingIteration(
       options.exchange,
       options.symbol,
     );
+
+    if (yield* killSwitch.isEngaged()) {
+      const reason = yield* killSwitch.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `KILL SWITCH ENGAGED: ${reason}`,
+      };
+    }
+
+    if (yield* circuitBreaker.isOpen()) {
+      const reason = yield* circuitBreaker.getReason();
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: `CIRCUIT BREAKER OPEN: ${reason}`,
+      };
+    }
 
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
@@ -148,6 +187,8 @@ export function runPaperTradingIteration(
         capital = capital.plus(money(trade.pnl)).minus(exitFee);
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+
+        yield* circuitBreaker.recordTradeResult(trade.pnl);
 
         return {
           action: "closed" as const,

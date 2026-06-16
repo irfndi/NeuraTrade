@@ -70,6 +70,9 @@ describe("scanProgram", () => {
         optimize: true,
         minReturnPct: Option.none(),
         saveWatchlist: Option.none(),
+        futures: false,
+        fundingRatePct: 0.01,
+        slippageBps: 0,
       }).pipe(Effect.provide(repoLayer)),
     );
 
@@ -117,6 +120,9 @@ describe("scanProgram", () => {
         optimize: false,
         minReturnPct: Option.none(),
         saveWatchlist: Option.none(),
+        futures: false,
+        fundingRatePct: 0.01,
+        slippageBps: 0,
       }).pipe(Effect.provide(repoLayer)),
     );
 

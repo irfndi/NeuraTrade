@@ -19,6 +19,16 @@ import {
 } from "../exchange/futures-adapter.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import {
+  KillSwitch,
+  KillSwitchError,
+  type KillSwitchService,
+} from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerError,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
+import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
@@ -62,16 +72,25 @@ export function runFuturesPaperTradingIteration(
   options: FuturesPaperTradingOptions,
 ): Effect.Effect<
   FuturesPaperTradingIterationResult,
-  MarketDataError | PaperTradingRepositoryError | ExchangeError | RiskError,
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | ExchangeError
+  | RiskError
+  | KillSwitchError
+  | CircuitBreakerError,
   | MarketDataGatewayService
   | PaperTradingRepositoryService
   | FuturesExchangeAdapterService
   | RiskGuardService
+  | KillSwitchService
+  | CircuitBreakerService
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
     const gateway = yield* MarketDataGateway;
     const adapter = yield* FuturesExchangeAdapter;
+    const killSwitch = yield* KillSwitch;
+    const circuitBreaker = yield* CircuitBreaker;
 
     yield* repo.ensureTables();
 
@@ -162,6 +181,8 @@ export function runFuturesPaperTradingIteration(
         peakCapital = Decimal.max(peakCapital, capital);
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
 
+        yield* circuitBreaker.recordTradeResult(trade.pnl);
+
         return {
           action: "closed" as const,
           position: null,
@@ -214,6 +235,26 @@ export function runFuturesPaperTradingIteration(
           position,
           capital: toNumber(capital),
           note: `RISK BLOCKED: ${riskCheck.left.violations.join("; ")}`,
+        };
+      }
+
+      if (yield* killSwitch.isEngaged()) {
+        const reason = yield* killSwitch.getReason();
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: `KILL SWITCH ENGAGED: ${reason}`,
+        };
+      }
+
+      if (yield* circuitBreaker.isOpen()) {
+        const reason = yield* circuitBreaker.getReason();
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: `CIRCUIT BREAKER OPEN: ${reason}`,
         };
       }
 

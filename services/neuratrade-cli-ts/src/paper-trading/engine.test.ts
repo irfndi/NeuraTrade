@@ -15,6 +15,11 @@ import {
   type RiskGuardService,
   makeRiskGuard,
 } from "../risk/guards.js";
+import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
 import {
   PaperTradingRepository,
   type PaperTradingRepositoryService,
@@ -146,6 +151,54 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 }
 
+class InMemoryKillSwitch implements KillSwitchService {
+  private engaged = false;
+
+  engage(reason: string) {
+    return Effect.sync(() => {
+      this.engaged = true;
+    });
+  }
+
+  disengage() {
+    return Effect.sync(() => {
+      this.engaged = false;
+    });
+  }
+
+  isEngaged() {
+    return Effect.succeed(this.engaged);
+  }
+
+  getReason() {
+    return Effect.succeed("");
+  }
+}
+
+class InMemoryCircuitBreaker implements CircuitBreakerService {
+  constructor(private openState = false) {}
+
+  recordTradeResult(_realizedPnl: number) {
+    return Effect.void;
+  }
+
+  isOpen() {
+    return Effect.succeed(this.openState);
+  }
+
+  currentDailyLossPct() {
+    return Effect.succeed(0);
+  }
+
+  reset() {
+    return Effect.void;
+  }
+
+  getReason() {
+    return Effect.succeed("");
+  }
+}
+
 function makeGateway(price: number): MarketDataGatewayService {
   const candles = makeCandles(100, price, "up");
   const orderBook = makeOrderBook(price);
@@ -198,6 +251,8 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(MarketDataGateway, gateway),
         Effect.provideService(ExchangeAdapter, adapter),
         Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
       ),
     );
 
@@ -226,11 +281,73 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(MarketDataGateway, gateway),
         Effect.provideService(ExchangeAdapter, adapter),
         Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
       ),
     );
 
     expect(result.action).toBe("hold");
     expect(result.note).toContain("RISK BLOCKED");
+    expect(result.position).toBeNull();
+  });
+
+  it("blocks entry when kill switch is engaged", async () => {
+    const repo = new InMemoryPaperRepository();
+    const gateway = makeGateway(100);
+    const adapter = makeSimulatedExchangeAdapter({ USDT: 10_000 });
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+    const killSwitch = new InMemoryKillSwitch();
+    Effect.runSync(killSwitch.engage("test"));
+
+    const result = await Effect.runPromise(
+      runPaperTradingIteration(makeOptions()).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(ExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, killSwitch),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("KILL SWITCH ENGAGED");
+    expect(result.position).toBeNull();
+  });
+
+  it("blocks entry when circuit breaker is open", async () => {
+    const repo = new InMemoryPaperRepository();
+    const gateway = makeGateway(100);
+    const adapter = makeSimulatedExchangeAdapter({ USDT: 10_000 });
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runPaperTradingIteration(makeOptions()).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(ExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("CIRCUIT BREAKER OPEN");
     expect(result.position).toBeNull();
   });
 });

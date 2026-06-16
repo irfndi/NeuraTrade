@@ -20,6 +20,16 @@ import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-fu
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import {
+  KillSwitch,
+  KillSwitchSQLiteLive,
+  type KillSwitchService,
+} from "../risk/kill-switch.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerSQLiteLive,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
+import {
   runPaperTradingIteration,
   type PaperTradingOptions,
 } from "../paper-trading/engine.js";
@@ -38,6 +48,12 @@ import {
   PaperTradingRepositoryError,
   PaperTradingRepositorySQLiteLive,
 } from "../paper-trading/repository.js";
+import {
+  runSoak,
+  type SoakOptions,
+  type SoakSymbol,
+  type IterationResult,
+} from "../scalping/soak.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -77,6 +93,28 @@ const takeProfitOption = Options.float("take-profit").pipe(
 const feeOption = Options.float("fee").pipe(
   Options.withDefault(0.1),
   Options.withDescription("Trading fee percent per side"),
+);
+
+const futuresOption = Options.boolean("futures").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Trade perpetual futures instead of spot"),
+);
+
+const leverageOption = Options.integer("leverage").pipe(
+  Options.withDefault(3),
+  Options.withDescription("Futures leverage (default 3x)"),
+);
+
+const fundingRateOption = Options.float("funding-rate-pct").pipe(
+  Options.withDefault(0.01),
+  Options.withDescription(
+    "Per-interval funding cost in percent (default 0.01% every 8h)",
+  ),
+);
+
+const slippageBpsOption = Options.float("slippage-bps").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Slippage in basis points applied to fills"),
 );
 
 const confidenceOption = Options.float("min-confidence").pipe(
@@ -163,6 +201,9 @@ export const backtestCommand = Command.make(
     holdUntilStop: holdUntilStopOption,
     noTrend: noTrendOption,
     regimeMode: regimeModeOption,
+    futures: futuresOption,
+    fundingRatePct: fundingRateOption,
+    slippageBps: slippageBpsOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -211,6 +252,9 @@ interface BacktestArgs {
   readonly holdUntilStop: boolean;
   readonly noTrend: boolean;
   readonly regimeMode: "trend" | "reversion";
+  readonly futures: boolean;
+  readonly fundingRatePct: number;
+  readonly slippageBps: number;
 }
 
 function buildBacktestComposerConfig(
@@ -301,6 +345,9 @@ function backtestProgram(args: BacktestArgs) {
       atrStopMultiplier: args.atrStopMultiplier,
       atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
       holdUntilStop: args.holdUntilStop,
+      isFutures: args.futures,
+      fundingRatePct: args.fundingRatePct,
+      slippageBps: args.slippageBps,
     });
   });
 }
@@ -342,6 +389,9 @@ function emptyResult(
     maxDrawdownPct: 0,
     sharpeRatio: 0,
     trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
   };
 }
 
@@ -655,6 +705,9 @@ interface ScanArgs {
   readonly minReturnPct: Option.Option<number>;
   readonly saveWatchlist: Option.Option<string>;
   readonly watchlistPath?: string;
+  readonly futures: boolean;
+  readonly fundingRatePct: number;
+  readonly slippageBps: number;
 }
 
 export const scanCommand = Command.make(
@@ -679,6 +732,9 @@ export const scanCommand = Command.make(
     optimize: optimizeScanOption,
     minReturnPct: minReturnOption,
     saveWatchlist: saveWatchlistOption,
+    futures: futuresOption,
+    fundingRatePct: fundingRateOption,
+    slippageBps: slippageBpsOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -886,6 +942,9 @@ function runBacktestWithParams(
     atrStopMultiplier: params.atrStopMultiplier,
     atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
     holdUntilStop: args.holdUntilStop,
+    isFutures: args.futures,
+    fundingRatePct: args.fundingRatePct,
+    slippageBps: args.slippageBps,
   });
 }
 
@@ -954,6 +1013,9 @@ function emptyScanResult(symbol: string): BacktestResult {
     maxDrawdownPct: 0,
     sharpeRatio: 0,
     trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
   };
 }
 
@@ -1089,16 +1151,6 @@ const apiSecretOption = Options.text("api-secret").pipe(
   Options.withDescription("Binance API secret (or set BINANCE_API_SECRET env)"),
 );
 
-const futuresOption = Options.boolean("futures").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Trade perpetual futures instead of spot"),
-);
-
-const leverageOption = Options.integer("leverage").pipe(
-  Options.withDefault(3),
-  Options.withDescription("Futures leverage (default 3x)"),
-);
-
 const marginModeOption = Options.text("margin-mode").pipe(
   Options.withDefault("crossed"),
   Options.withDescription("Futures margin mode: crossed or isolated"),
@@ -1151,6 +1203,18 @@ const watchlistOption = Options.text("watchlist").pipe(
   ),
 );
 
+const killSwitchOption = Options.boolean("kill-switch").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Engage kill switch before starting (blocks all new trades)",
+  ),
+);
+
+const disengageOption = Options.boolean("disengage").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Disengage kill switch before starting"),
+);
+
 interface WatchlistEntry {
   readonly symbol: string;
   readonly exchange?: string;
@@ -1194,6 +1258,8 @@ interface PaperTradeArgs {
   readonly maxTradesPerDay: Option.Option<number>;
   readonly minCapital: Option.Option<number>;
   readonly watchlist: Option.Option<string>;
+  readonly killSwitch: boolean;
+  readonly disengage: boolean;
   readonly entries?: readonly WatchlistEntry[];
 }
 
@@ -1266,6 +1332,8 @@ export const paperTradeCommand = Command.make(
     maxTradesPerDay: maxTradesPerDayOption,
     minCapital: minCapitalOption,
     watchlist: watchlistOption,
+    killSwitch: killSwitchOption,
+    disengage: disengageOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -1282,6 +1350,15 @@ export const paperTradeCommand = Command.make(
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
       const riskGuardLayer = RiskGuardLive(args.live, buildRiskOverrides(args));
+      const killSwitchLayer = KillSwitchSQLiteLive(db);
+      const circuitBreakerMaxLoss = Option.getOrElse(
+        args.maxDailyLossPct,
+        () => 2,
+      );
+      const circuitBreakerLayer = CircuitBreakerSQLiteLive(
+        db,
+        circuitBreakerMaxLoss,
+      );
       const layers = Layer.mergeAll(
         BunContext.layer,
         PathLive(process.env.NEURATRADE_HOME),
@@ -1289,7 +1366,24 @@ export const paperTradeCommand = Command.make(
         repoLayer,
         paperRepoLayer,
         riskGuardLayer,
+        killSwitchLayer,
+        circuitBreakerLayer,
       );
+
+      if (args.killSwitch) {
+        yield* Effect.provide(
+          KillSwitch.pipe(
+            Effect.flatMap((ks) => ks.engage("CLI --kill-switch")),
+          ),
+          killSwitchLayer,
+        );
+      }
+      if (args.disengage) {
+        yield* Effect.provide(
+          KillSwitch.pipe(Effect.flatMap((ks) => ks.disengage())),
+          killSwitchLayer,
+        );
+      }
 
       const result = yield* paperTradeProgram({
         ...args,
@@ -1516,9 +1610,351 @@ function paperTradeProgram(args: PaperTradeArgs) {
   });
 }
 
+interface SoakWatchlistFileEntry {
+  readonly symbol: string;
+  readonly exchange?: string;
+  readonly productType?: "USDT-FUTURES" | "USDC-FUTURES" | "COIN-FUTURES";
+  readonly leverage?: number;
+  readonly marginMode?: string;
+  readonly bestParams?: {
+    readonly minConfidence?: number;
+    readonly atrStopMultiplier?: number;
+    readonly atrTakeProfitMultiplier?: number;
+  };
+}
+
+function loadSoakWatchlist(
+  path: string,
+): Effect.Effect<readonly SoakWatchlistFileEntry[], MarketDataRepositoryError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const file = Bun.file(path);
+      const text = await file.text();
+      return JSON.parse(text) as readonly SoakWatchlistFileEntry[];
+    },
+    catch: (err) =>
+      new MarketDataRepositoryError(
+        `Failed to load soak watchlist from ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      ),
+  });
+}
+
+function printSoakResult(result: import("../scalping/soak.js").SoakResult) {
+  return Effect.gen(function* () {
+    yield* Console.log("\n Multi-ticker soak results");
+    yield* Console.log(
+      "Symbol        Trades  Return   Drawdown  Win%    Sharpe",
+    );
+    yield* Console.log(
+      "-------------------------------------------------------",
+    );
+
+    for (const r of result.perSymbolResults) {
+      yield* Console.log(
+        `${r.symbol.padEnd(13)} ${String(r.trades).padStart(6)}  ` +
+          `${r.totalReturnPct.toFixed(2).padStart(6)}%  ` +
+          `${r.maxDrawdownPct.toFixed(2).padStart(7)}%   ` +
+          `${(r.winRate * 100).toFixed(1).padStart(5)}%  ` +
+          `${r.sharpeRatio.toFixed(3)}`,
+      );
+    }
+
+    yield* Console.log(
+      "-------------------------------------------------------",
+    );
+
+    const agg = result.aggregate;
+    const totalSymbols = result.perSymbolResults.length;
+    yield* Console.log("\nSummary");
+    yield* Console.log(`  Symbols:      ${totalSymbols}`);
+    yield* Console.log(
+      `  Profitable:   ${agg.profitableCount} (${totalSymbols > 0 ? ((agg.profitableCount / totalSymbols) * 100).toFixed(1) : "0.0"}%)`,
+    );
+    yield* Console.log(`  Avg return:   ${agg.avgReturnPct.toFixed(2)}%`);
+    yield* Console.log(`  Max drawdown: ${agg.maxDrawdownPct.toFixed(2)}%`);
+    yield* Console.log(`  Avg Sharpe:   ${agg.avgSharpeRatio.toFixed(3)}`);
+  });
+}
+
+const soakWatchlistOption = Options.text("watchlist").pipe(
+  Options.withDescription("Path to a JSON watchlist in NEURATRADE_HOME/data"),
+);
+
+interface SoakCommandArgs {
+  readonly watchlist: string;
+  readonly exchange: string;
+  readonly timeframe: string;
+  readonly capital: number;
+  readonly positionSize: number;
+  readonly fee: number;
+  readonly minConfidence: number;
+  readonly useAtrStops: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrTakeProfitMultiplier: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly noTrend: boolean;
+  readonly holdUntilStop: boolean;
+  readonly regimeMode: "trend" | "reversion";
+  readonly interval: number;
+  readonly iterations: number;
+  readonly live: boolean;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+  readonly futures: boolean;
+  readonly leverage: number;
+  readonly marginMode: string;
+  readonly productType: string;
+  readonly maxDrawdownPct: Option.Option<number>;
+  readonly maxDailyLossPct: Option.Option<number>;
+  readonly maxPositionSizePct: Option.Option<number>;
+  readonly maxTradesPerDay: Option.Option<number>;
+  readonly minCapital: Option.Option<number>;
+}
+
+export const soakCommand = Command.make(
+  "soak",
+  {
+    watchlist: soakWatchlistOption,
+    exchange: exchangeOption,
+    timeframe: timeframeOption,
+    capital: capitalOption,
+    positionSize: positionSizeOption,
+    fee: feeOption,
+    minConfidence: confidenceOption,
+    useAtrStops: useAtrStopsOption,
+    atrStopMultiplier: atrStopMultiplierOption,
+    atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    priceOnly: priceOnlyOption,
+    noRsi: noRsiOption,
+    noTrend: noTrendOption,
+    holdUntilStop: holdUntilStopOption,
+    regimeMode: regimeModeOption,
+    interval: intervalOption,
+    iterations: iterationsOption,
+    live: liveOption,
+    apiKey: apiKeyOption,
+    apiSecret: apiSecretOption,
+    futures: futuresOption,
+    leverage: leverageOption,
+    marginMode: marginModeOption,
+    productType: productTypeOption,
+    maxDrawdownPct: maxDrawdownOption,
+    maxDailyLossPct: maxDailyLossOption,
+    maxPositionSizePct: maxPositionSizeOption,
+    maxTradesPerDay: maxTradesPerDayOption,
+    minCapital: minCapitalOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+
+      const watchlistPath = resolve(path.homeDir, "data", args.watchlist);
+      const watchlistEntries = yield* loadSoakWatchlist(watchlistPath);
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
+      const soakRiskOverrides: MutablePartialRiskLimits = {};
+      if (Option.isSome(args.maxDrawdownPct))
+        soakRiskOverrides.maxDrawdownPct = args.maxDrawdownPct.value;
+      if (Option.isSome(args.maxDailyLossPct))
+        soakRiskOverrides.maxDailyLossPct = args.maxDailyLossPct.value;
+      if (Option.isSome(args.maxPositionSizePct))
+        soakRiskOverrides.maxPositionSizePct = args.maxPositionSizePct.value;
+      if (Option.isSome(args.maxTradesPerDay))
+        soakRiskOverrides.maxTradesPerDay = args.maxTradesPerDay.value;
+      if (Option.isSome(args.minCapital))
+        soakRiskOverrides.minCapital = args.minCapital.value;
+      const riskGuardLayer = RiskGuardLive(args.live, soakRiskOverrides);
+      const killSwitchLayer = KillSwitchSQLiteLive(db);
+      const circuitBreakerMaxLoss = Option.getOrElse(
+        args.maxDailyLossPct,
+        () => 2,
+      );
+      const circuitBreakerLayer = CircuitBreakerSQLiteLive(
+        db,
+        circuitBreakerMaxLoss,
+      );
+      const layers = Layer.mergeAll(
+        BunContext.layer,
+        PathLive(process.env.NEURATRADE_HOME),
+        MarketDataGatewayLive,
+        repoLayer,
+        paperRepoLayer,
+        riskGuardLayer,
+        killSwitchLayer,
+        circuitBreakerLayer,
+      );
+
+      const spotAdapterLayer = args.live
+        ? BinanceLiveExchangeAdapterLive({
+            apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
+            apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
+          })
+        : SimulatedExchangeAdapterLive();
+      const futuresAdapterLayer = args.live
+        ? Layer.provide(
+            BitgetFuturesExchangeAdapterLive,
+            Layer.provide(
+              BitgetClientLiveConfig,
+              Layer.merge(BitgetConfigLive, RateLimiterLive()),
+            ),
+          )
+        : SimulatedFuturesExchangeAdapterLive();
+
+      const composerConfig = buildBacktestComposerConfig(
+        args.priceOnly,
+        args.noRsi,
+        args.noTrend,
+        args.regimeMode,
+      );
+
+      const marginModeParsed = parseMarginMode(args.marginMode);
+      const productTypeParsed = parseProductType(args.productType);
+
+      const soakWatchlist: SoakSymbol[] = watchlistEntries.map((e) => ({
+        symbol: e.symbol,
+        exchange: e.exchange ?? args.exchange,
+        productType:
+          e.productType ?? (args.futures ? productTypeParsed : undefined),
+        leverage: e.leverage ?? args.leverage,
+        marginMode: (e.marginMode ??
+          args.marginMode) as SoakSymbol["marginMode"],
+        bestParams: e.bestParams,
+      }));
+
+      const runner = (
+        symbol: string,
+        exchange: string,
+        bestParams?: SoakSymbol["bestParams"],
+      ): Effect.Effect<IterationResult, unknown, never> => {
+        const entry = soakWatchlist.find((e) => e.symbol === symbol);
+        const useFutures = entry?.productType !== undefined || args.futures;
+
+        if (useFutures) {
+          const opts: FuturesPaperTradingOptions = {
+            exchange,
+            symbol,
+            timeframe: args.timeframe,
+            composerConfig,
+            positionSizePct: args.positionSize,
+            feePct: args.fee,
+            minConfidence: bestParams?.minConfidence ?? args.minConfidence,
+            useAtrStops:
+              bestParams?.atrStopMultiplier !== undefined
+                ? true
+                : args.useAtrStops,
+            atrStopMultiplier:
+              bestParams?.atrStopMultiplier ?? args.atrStopMultiplier,
+            atrTakeProfitMultiplier:
+              bestParams?.atrTakeProfitMultiplier ??
+              args.atrTakeProfitMultiplier,
+            holdUntilStop: args.holdUntilStop,
+            initialCapital: args.capital,
+            isLive: args.live,
+            leverage: entry?.leverage ?? args.leverage,
+            marginMode: marginModeParsed,
+            productType: productTypeParsed,
+          };
+          return runFuturesPaperTradingIteration(opts).pipe(
+            Effect.provide(futuresAdapterLayer),
+            Effect.provide(layers),
+            Effect.map(
+              (r): IterationResult => ({
+                action: r.action,
+                capital: r.capital,
+                note: r.note,
+              }),
+            ),
+          ) as Effect.Effect<IterationResult, unknown, never>;
+        }
+
+        const opts: PaperTradingOptions = {
+          exchange,
+          symbol,
+          timeframe: args.timeframe,
+          composerConfig,
+          positionSizePct: args.positionSize,
+          feePct: args.fee,
+          minConfidence: bestParams?.minConfidence ?? args.minConfidence,
+          useAtrStops:
+            bestParams?.atrStopMultiplier !== undefined
+              ? true
+              : args.useAtrStops,
+          atrStopMultiplier:
+            bestParams?.atrStopMultiplier ?? args.atrStopMultiplier,
+          atrTakeProfitMultiplier:
+            bestParams?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+          holdUntilStop: args.holdUntilStop,
+          initialCapital: args.capital,
+          isLive: args.live,
+        };
+        return runPaperTradingIteration(opts).pipe(
+          Effect.provide(spotAdapterLayer),
+          Effect.provide(layers),
+          Effect.map(
+            (r): IterationResult => ({
+              action: r.action,
+              capital: r.capital,
+              note: r.note,
+            }),
+          ),
+        ) as Effect.Effect<IterationResult, unknown, never>;
+      };
+
+      const soakOptions: SoakOptions = {
+        watchlist: soakWatchlist,
+        iterationsPerSymbol: args.iterations,
+        intervalSeconds: args.interval,
+        isLive: args.live,
+        initialCapital: args.capital,
+        positionSizePct: args.positionSize,
+        feePct: args.fee,
+        minConfidence: args.minConfidence,
+        useAtrStops: args.useAtrStops,
+        atrStopMultiplier: args.atrStopMultiplier,
+        atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+        holdUntilStop: args.holdUntilStop,
+        regimeMode: args.regimeMode,
+        composerConfig,
+        leverage: args.leverage,
+        marginMode: marginModeParsed,
+        productType: productTypeParsed,
+      };
+
+      const result = yield* runSoak(soakOptions, runner).pipe(
+        Effect.catchAll((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(
+              `soak failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return {
+              perSymbolResults: [],
+              aggregate: {
+                avgReturnPct: 0,
+                profitableCount: 0,
+                maxDrawdownPct: 0,
+                avgSharpeRatio: 0,
+                totalTrades: 0,
+              },
+            };
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      yield* printSoakResult(result);
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Run multi-ticker paper-trading soak harness"));
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -1527,5 +1963,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     optimizeCommand,
     scanCommand,
     paperTradeCommand,
+    soakCommand,
   ]),
 );

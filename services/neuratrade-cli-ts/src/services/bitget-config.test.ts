@@ -8,12 +8,22 @@ import {
 
 describe("BitgetConfig", () => {
   it("loads credentials and sandbox flag from environment", async () => {
-    const config = await Effect.runPromise(
-      Effect.gen(function* () {
-        return yield* BitgetConfig;
-      }).pipe(Effect.provide(BitgetConfigLive)),
-    );
-    expect(config.useSandbox).toBe(false);
+    const original = process.env.BITGET_USE_SANDBOX;
+    delete process.env.BITGET_USE_SANDBOX;
+    try {
+      const config = await Effect.runPromise(
+        Effect.gen(function* () {
+          return yield* BitgetConfig;
+        }).pipe(Effect.provide(BitgetConfigLive)),
+      );
+      expect(config.useSandbox).toBe(false);
+    } finally {
+      if (original === undefined) {
+        delete process.env.BITGET_USE_SANDBOX;
+      } else {
+        process.env.BITGET_USE_SANDBOX = original;
+      }
+    }
   });
 
   it("parses BITGET_USE_SANDBOX=true", async () => {
