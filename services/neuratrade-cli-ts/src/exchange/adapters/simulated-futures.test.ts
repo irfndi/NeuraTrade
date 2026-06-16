@@ -1,14 +1,10 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
-import {
-  makeSimulatedFuturesExchangeAdapterService,
-  SimulatedFuturesExchangeAdapterLive,
-} from "./simulated-futures.js";
+import { makeSimulatedFuturesExchangeAdapterService } from "./simulated-futures.js";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../futures-adapter.js";
-import { MarketDataGateway } from "../../market-data/gateway.js";
 import type { MarketDataGatewayService } from "../../market-data/gateway.js";
 
 const mockGateway: MarketDataGatewayService = {

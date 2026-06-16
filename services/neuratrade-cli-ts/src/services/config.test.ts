@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as nodePath from "path";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   LocalConfig,
@@ -370,7 +370,9 @@ describe("Config service", () => {
 
     it("local-only fields (secrets) are preserved in resolved config", async () => {
       const home = tmpDir();
+      const previousAdminKey = process.env.ADMIN_API_KEY;
       try {
+        delete process.env.ADMIN_API_KEY;
         writeJson(nodePath.join(home, "config.json"), {
           admin_api_key: "local-admin-key",
           security: { jwt_secret: "local-jwt-secret" },
@@ -388,6 +390,11 @@ describe("Config service", () => {
         expect(result).toHaveProperty("jwt_secret", "local-jwt-secret");
         expect(result).toHaveProperty("ai_api_key", "local-ai-key");
       } finally {
+        if (previousAdminKey === undefined) {
+          delete process.env.ADMIN_API_KEY;
+        } else {
+          process.env.ADMIN_API_KEY = previousAdminKey;
+        }
         rmDir(home);
       }
     });

@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect";
+import { Effect, Layer, Ref } from "effect";
 import { randomUUID } from "node:crypto";
 import {
   FuturesExchangeAdapter,
@@ -6,11 +6,8 @@ import {
   type FuturesOrderFill,
   type FuturesOrderRequest,
   type FuturesPosition,
-  type FuturesBalance,
   type ClosePositionRequest,
   type FuturesProductType,
-  type FuturesMarginMode,
-  type FuturesPositionMode,
 } from "../futures-adapter.js";
 import { ExchangeError } from "../adapter.js";
 import {

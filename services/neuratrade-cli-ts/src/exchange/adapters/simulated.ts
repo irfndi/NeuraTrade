@@ -5,7 +5,7 @@ import {
   ExchangeError,
   type ExchangeAdapterService,
 } from "../adapter.js";
-import type { Balance, OrderFill, OrderRequest, Position } from "../types.js";
+import type { OrderFill, OrderRequest, Position } from "../types.js";
 import { MarketDataGateway } from "../../market-data/gateway.js";
 
 interface SimulatedState {
