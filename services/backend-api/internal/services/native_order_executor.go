@@ -39,6 +39,12 @@ type TradeDetails struct {
 	IntentID             string // idempotency cross-reference
 	ClientOrderID        string // idempotency key for the exchange
 	PreTradeSafetyStatus string // JSON snapshot of pre-trade safety check
+
+	// Asymmetric exit controls passed to execution for post-fill monitoring.
+	BreakevenEnabled    bool
+	BreakevenTriggerPct float64
+	TrailingStopEnabled bool
+	TrailingStopPct     float64
 }
 
 // NativeOrderExecutor implements ScalpingOrderExecutor using native CCXT service
