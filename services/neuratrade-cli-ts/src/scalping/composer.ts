@@ -56,6 +56,11 @@ const defaultThresholds: ComposerThresholds = {
   regimeMode: "trend",
   trendFilterFastPeriod: 50,
   trendFilterSlowPeriod: 100,
+  volumeMinRatio: 0,
+  volumeLookback: 20,
+  minConfluence: 0,
+  entryCandleConfirm: false,
+  momentumConfirmBars: 0,
 };
 
 export const defaultComposerConfig: ComposerConfig = {
@@ -122,6 +127,11 @@ export function composeSignal(
 
   const weights = effectiveConfig.weights;
   const thresholds = effectiveConfig.thresholds;
+
+  if (!passesVolumeFilter(candles, thresholds)) {
+    return null;
+  }
+
   const components: SignalComponent[] = [];
 
   const spreadComponent = buildSpreadComponent(
@@ -176,6 +186,31 @@ export function composeSignal(
     components,
     config.thresholds.minConfidenceSpread,
   );
+
+  if (
+    !passesConfluenceFilter(components, direction, thresholds.minConfluence)
+  ) {
+    return null;
+  }
+
+  if (
+    thresholds.entryCandleConfirm &&
+    !passesEntryCandleConfirmation(candles[candles.length - 1], direction)
+  ) {
+    return null;
+  }
+
+  if (
+    thresholds.momentumConfirmBars &&
+    thresholds.momentumConfirmBars > 0 &&
+    !passesMomentumConfirmation(
+      candles,
+      direction,
+      thresholds.momentumConfirmBars,
+    )
+  ) {
+    return null;
+  }
 
   const attributionWeights: Record<string, number> = {};
   for (const c of components) {
@@ -588,4 +623,59 @@ function strengthValue(strength: SignalStrength): number {
     case "weak":
       return 0.3;
   }
+}
+
+function passesConfluenceFilter(
+  components: readonly SignalComponent[],
+  direction: Direction,
+  minConfluence = 0,
+): boolean {
+  if (minConfluence <= 0 || direction === "hold") return true;
+  const agreeing = components.filter((c) => c.signal === direction).length;
+  return agreeing >= minConfluence;
+}
+
+function passesEntryCandleConfirmation(
+  candle: CandleLike,
+  direction: Direction,
+): boolean {
+  if (direction === "buy") {
+    return candle.close > candle.open;
+  }
+  if (direction === "sell") {
+    return candle.close < candle.open;
+  }
+  return true;
+}
+
+function passesMomentumConfirmation(
+  candles: readonly CandleLike[],
+  direction: Direction,
+  bars: number,
+): boolean {
+  if (direction === "hold" || candles.length < bars + 1) return true;
+  const start = candles[candles.length - bars - 1].close;
+  const end = candles[candles.length - 1].close;
+  if (start === 0) return true;
+  const change = (end - start) / start;
+  return direction === "buy" ? change > 0 : change < 0;
+}
+
+function passesVolumeFilter(
+  candles: readonly CandleLike[],
+  thresholds: ComposerThresholds,
+): boolean {
+  const minRatio = thresholds.volumeMinRatio ?? 0;
+  if (minRatio <= 0) return true;
+
+  const lookback = thresholds.volumeLookback ?? 20;
+  if (candles.length < lookback + 1) return true;
+
+  const current = candles[candles.length - 1].volume;
+  const recent = candles.slice(-lookback - 1, -1);
+  const avgVolume =
+    recent.reduce((sum, c) => sum + c.volume, 0) / recent.length;
+  if (avgVolume <= 0) return true;
+
+  return current >= avgVolume * minRatio;
 }

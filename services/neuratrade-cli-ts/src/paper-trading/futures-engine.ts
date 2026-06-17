@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
 import { calculateATR } from "../scalping/indicators.js";
+import { computeExitLevels } from "../scalping/exit-engine.js";
 import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   MarketDataError,
@@ -41,12 +42,25 @@ export interface FuturesPaperTradingOptions {
   readonly timeframe: string;
   readonly composerConfig: ComposerConfig;
   readonly positionSizePct: number;
+  readonly riskPerTradePct: number;
+  readonly maxPositionSizePct: number;
   readonly feePct: number;
   readonly minConfidence: number;
   readonly useAtrStops: boolean;
   readonly atrStopMultiplier: number;
   readonly atrTakeProfitMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
+  readonly stopLossPct: number;
+  readonly takeProfitPct: number;
   readonly holdUntilStop: boolean;
+  readonly minAtrPct: number;
   readonly initialCapital: number;
   readonly isLive: boolean;
   readonly leverage: number;
@@ -55,10 +69,44 @@ export interface FuturesPaperTradingOptions {
 }
 
 export interface FuturesPaperTradingIterationResult {
-  readonly action: "opened" | "closed" | "hold";
+  readonly action: "opened" | "closed" | "hold" | "scaled_out";
   readonly position: PaperPosition | null;
   readonly capital: number;
   readonly note: string;
+}
+
+function calculateFuturesNotionalValue(
+  capital: number,
+  entryPrice: number,
+  stopDistancePct: number,
+  options: FuturesPaperTradingOptions,
+): number {
+  // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
+  const maxNotionalByRiskCap =
+    capital * ((options.maxPositionSizePct ?? 100) / 100);
+
+  if (
+    options.riskPerTradePct &&
+    options.riskPerTradePct > 0 &&
+    stopDistancePct > 0
+  ) {
+    const riskAmount = capital * (options.riskPerTradePct / 100);
+    const riskBasedNotional = riskAmount / stopDistancePct;
+    // Also cap by available margin: notional / leverage must fit in capital.
+    const maxNotionalByMargin = capital * options.leverage;
+    return Math.min(
+      riskBasedNotional,
+      maxNotionalByRiskCap,
+      maxNotionalByMargin,
+    );
+  }
+
+  // Fallback to legacy margin allocation.
+  const allocatedMargin = capital * (options.positionSizePct / 100);
+  const marginPerContract = entryPrice / options.leverage;
+  const feePerContract = entryPrice * (options.feePct / 100);
+  const size = allocatedMargin / (marginPerContract + feePerContract);
+  return size * entryPrice;
 }
 
 /**
@@ -155,6 +203,35 @@ export function runFuturesPaperTradingIteration(
         signal,
         options,
       );
+      if (exitReason === "scale_out") {
+        const exitPrice = fallbackExitPrice(
+          position,
+          currentCandle,
+          exitReason,
+        );
+        const scaleOut = yield* repo.scaleOutPosition(
+          position,
+          exitPrice,
+          options.scaleOutPct,
+          currentCandle.timestamp,
+        );
+        const closeFee = money(exitPrice)
+          .times(scaleOut.trade.size)
+          .times(options.feePct / 100);
+        capital = capital.plus(money(scaleOut.trade.pnl)).minus(closeFee);
+        peakCapital = Decimal.max(peakCapital, capital);
+        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+        position = scaleOut.updatedPosition;
+        yield* repo.saveOpenPosition(position);
+
+        return {
+          action: "scaled_out" as const,
+          position,
+          capital: toNumber(capital),
+          note: `SCALE-OUT ${scaleOut.trade.side} ${scaleOut.trade.entryPrice.toFixed(2)} → ${scaleOut.trade.exitPrice.toFixed(2)} size=${scaleOut.trade.size.toFixed(6)} | PnL ${scaleOut.trade.pnlPct.toFixed(2)}%`,
+        };
+      }
+
       if (exitReason) {
         const fill = yield* adapter.closePosition({
           symbol: options.symbol,
@@ -202,16 +279,39 @@ export function runFuturesPaperTradingIteration(
     // Open new position if signal is strong enough and no position.
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
       const side = signal.direction === "buy" ? "long" : "short";
-      const allocatedMargin = capital.times(options.positionSizePct / 100);
 
+      // Pre-compute ATR and estimate stop distance from orderbook mid so we
+      // can size the order by risk if requested.
+      const needsAtr = options.useAtrStops || options.minAtrPct > 0;
+      const atr = needsAtr ? calculateATR(candles, 14) : null;
+      const useAtr = options.useAtrStops && atr !== null && atr > 0;
       const entryPriceNum = midPrice(orderBook);
       const entryPrice = money(entryPriceNum);
-      // Cost per contract = margin + fee. Size so total cost fits in the
-      // allocated margin bucket (this prevents the simulated adapter from
-      // rejecting the order for insufficient margin+fee).
-      const marginPerContract = entryPrice.div(money(options.leverage));
-      const feePerContract = entryPrice.times(options.feePct / 100);
-      const size = allocatedMargin.div(marginPerContract.plus(feePerContract));
+
+      let estimatedStopLoss: number;
+      if (useAtr) {
+        estimatedStopLoss =
+          side === "long"
+            ? entryPriceNum - atr * options.atrStopMultiplier
+            : entryPriceNum + atr * options.atrStopMultiplier;
+      } else {
+        estimatedStopLoss =
+          side === "long"
+            ? entryPriceNum * (1 - options.stopLossPct / 100)
+            : entryPriceNum * (1 + options.stopLossPct / 100);
+      }
+      const stopDistancePct =
+        entryPriceNum > 0
+          ? Math.abs(entryPriceNum - estimatedStopLoss) / entryPriceNum
+          : 0;
+
+      const notionalValue = calculateFuturesNotionalValue(
+        toNumber(capital),
+        entryPriceNum,
+        stopDistancePct,
+        options,
+      );
+      const size = notionalValue / entryPriceNum;
 
       if (yield* killSwitch.isEngaged()) {
         const reason = yield* killSwitch.getReason();
@@ -243,7 +343,7 @@ export function runFuturesPaperTradingIteration(
           startOfDayCapital,
           dailyRealizedPnl: todayPnl,
           tradesTodayCount,
-          positionValue: toNumber(entryPrice.times(toNumber(size, 8))),
+          positionValue: notionalValue,
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
           leverage: options.leverage,
@@ -277,7 +377,7 @@ export function runFuturesPaperTradingIteration(
         symbol: options.symbol,
         side: signal.direction as "buy" | "sell",
         type: "market",
-        size: toNumber(size, 8),
+        size: Number(size.toFixed(8)),
         productType: options.productType,
         marginMode: options.marginMode,
         leverage: options.leverage,
@@ -287,29 +387,47 @@ export function runFuturesPaperTradingIteration(
       const openFee = money(fill.fee);
       capital = capital.minus(openFee);
 
-      const atr = options.useAtrStops ? calculateATR(candles, 14) : null;
-      const useAtr = options.useAtrStops && atr !== null && atr > 0;
-
-      let stopLoss: Decimal;
-      let takeProfit: Decimal;
-      const atrValue = money(atr ?? 0);
-      if (useAtr) {
-        stopLoss =
-          side === "long"
-            ? filledPrice.minus(atrValue.times(options.atrStopMultiplier))
-            : filledPrice.plus(atrValue.times(options.atrStopMultiplier));
-        takeProfit =
-          side === "long"
-            ? filledPrice.plus(atrValue.times(options.atrTakeProfitMultiplier))
-            : filledPrice.minus(
-                atrValue.times(options.atrTakeProfitMultiplier),
-              );
-      } else {
-        stopLoss =
-          side === "long" ? filledPrice.times(0.985) : filledPrice.times(1.015);
-        takeProfit =
-          side === "long" ? filledPrice.times(1.03) : filledPrice.times(0.97);
+      if (options.minAtrPct > 0) {
+        const entryPriceNum = toNumber(filledPrice, 8);
+        const atrPct = atr && entryPriceNum > 0 ? atr / entryPriceNum : 0;
+        if (atrPct < options.minAtrPct / 100) {
+          return {
+            action: "hold" as const,
+            position,
+            capital: toNumber(capital),
+            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
+          };
+        }
       }
+
+      const stopMult = options.atrStopMultiplier;
+      const tpMult = options.atrTakeProfitMultiplier;
+      const atrRiskReward =
+        options.atrRiskReward > 0 ? options.atrRiskReward : tpMult / stopMult;
+      const filledPriceNum = toNumber(filledPrice, 8);
+      const {
+        stopLoss: stopLossNum,
+        takeProfit: takeProfitNum,
+        scaleOutPrice,
+      } = computeExitLevels({
+        side,
+        entryPrice: filledPriceNum,
+        atr,
+        useAtr,
+        atrStopMultiplier: stopMult,
+        atrRiskReward,
+        stopLossPct: options.stopLossPct,
+        takeProfitPct: options.takeProfitPct,
+        scaleOutAtR: options.scaleOutAtR,
+        candles,
+        volatilityLookback: options.volatilityLookback,
+        volatilityLowPct: options.volatilityLowPct,
+        volatilityHighPct: options.volatilityHighPct,
+        volatilityLowFactor: options.volatilityLowFactor,
+        volatilityHighFactor: options.volatilityHighFactor,
+      });
+      const stopLoss = money(stopLossNum);
+      const takeProfit = money(takeProfitNum);
 
       const newPosition: PaperPosition = {
         id: randomUUID(),
@@ -323,6 +441,8 @@ export function runFuturesPaperTradingIteration(
         takeProfit: toNumber(takeProfit, 8),
         openedAt: new Date(),
         signalId: signal.id,
+        scaledOut: false,
+        scaleOutPrice: scaleOutPrice ?? 0,
       };
 
       yield* repo.saveOpenPosition(newPosition);
@@ -353,7 +473,15 @@ function checkExitReason(
   candle: Candle,
   signal: ReturnType<typeof composeSignal>,
   options: FuturesPaperTradingOptions,
-): "stop_loss" | "take_profit" | "signal" | null {
+): "stop_loss" | "take_profit" | "signal" | "scale_out" | null {
+  if (!position.scaledOut && position.scaleOutPrice > 0) {
+    if (position.side === "long") {
+      if (candle.high >= position.scaleOutPrice) return "scale_out";
+    } else {
+      if (candle.low <= position.scaleOutPrice) return "scale_out";
+    }
+  }
+
   if (position.side === "long") {
     if (candle.low <= position.stopLoss) return "stop_loss";
     if (candle.high >= position.takeProfit) return "take_profit";
@@ -376,7 +504,7 @@ function checkExitReason(
 function fallbackExitPrice(
   position: PaperPosition,
   candle: Candle,
-  reason: "stop_loss" | "take_profit" | "signal",
+  reason: "stop_loss" | "take_profit" | "signal" | "scale_out",
 ): number {
   if (reason === "stop_loss") {
     return position.side === "long"
@@ -387,6 +515,11 @@ function fallbackExitPrice(
     return position.side === "long"
       ? Math.max(candle.open, position.takeProfit)
       : Math.min(candle.open, position.takeProfit);
+  }
+  if (reason === "scale_out") {
+    return position.side === "long"
+      ? Math.max(candle.open, position.scaleOutPrice)
+      : Math.min(candle.open, position.scaleOutPrice);
   }
   return candle.close;
 }

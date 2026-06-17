@@ -124,6 +124,49 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
+  scaleOutPosition(
+    position: PaperPosition,
+    exitPrice: number,
+    scaleOutPct: number,
+    closedAt: Date,
+  ) {
+    return Effect.sync(() => {
+      const pct = Math.max(0, Math.min(100, scaleOutPct));
+      const partialSize = position.size * (pct / 100);
+      const remainingSize = position.size - partialSize;
+      const priceDiff =
+        position.side === "long"
+          ? exitPrice - position.entryPrice
+          : position.entryPrice - exitPrice;
+      const pnl = priceDiff * partialSize;
+      const pnlPct = (pnl / (position.entryPrice * partialSize)) * 100;
+      const trade: PaperTrade = {
+        id: `paper-trade-${Date.now()}`,
+        exchange: position.exchange,
+        symbol: position.symbol,
+        timeframe: position.timeframe,
+        side: position.side,
+        entryPrice: position.entryPrice,
+        exitPrice,
+        size: partialSize,
+        pnl,
+        pnlPct,
+        exitReason: "scale_out",
+        openedAt: position.openedAt,
+        closedAt,
+      };
+      this.trades.push(trade);
+      const updatedPosition: PaperPosition = {
+        ...position,
+        size: remainingSize,
+        stopLoss: position.entryPrice,
+        scaledOut: true,
+      };
+      this.position = updatedPosition;
+      return { trade, updatedPosition };
+    });
+  }
+
   getPortfolio() {
     return Effect.succeed({
       capital: this.capital,
@@ -224,12 +267,25 @@ function makeOptions(
     timeframe: "1h",
     composerConfig,
     positionSizePct: 100,
+    riskPerTradePct: 0,
+    maxPositionSizePct: 100,
     feePct: 0.1,
     minConfidence: 0.5,
     useAtrStops: false,
     atrStopMultiplier: 1.5,
     atrTakeProfitMultiplier: 2.5,
+    atrRiskReward: 0,
+    scaleOutAtR: 0,
+    scaleOutPct: 50,
+    volatilityLookback: 0,
+    volatilityLowPct: 20,
+    volatilityHighPct: 80,
+    volatilityLowFactor: 0.8,
+    volatilityHighFactor: 1.2,
+    stopLossPct: 1.5,
+    takeProfitPct: 3.0,
     holdUntilStop: false,
+    minAtrPct: 0,
     initialCapital: 10_000,
     isLive: false,
   };

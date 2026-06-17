@@ -46,6 +46,15 @@ import {
   type SoakSymbol,
   type IterationResult,
 } from "../scalping/soak.js";
+import {
+  buildStrategyProfileFromArgs,
+  loadStrategyProfile,
+  resolveBacktestArgs,
+  saveStrategyProfile,
+  type ResolvedBacktestArgs,
+  type StrategyProfile,
+  type StrategyProfileParams,
+} from "../scalping/strategy-profile.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -70,6 +79,20 @@ const capitalOption = Options.integer("capital").pipe(
 const positionSizeOption = Options.integer("position-size").pipe(
   Options.withDefault(100),
   Options.withDescription("Position size as percent of capital"),
+);
+
+const riskPerTradeOption = Options.float("risk-per-trade").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Risk per trade as percent of capital (overrides --position-size; 0 = disabled)",
+  ),
+);
+
+const riskBasedMaxPositionSizeOption = Options.float("max-position-size").pipe(
+  Options.withDefault(100),
+  Options.withDescription(
+    "Maximum position size as percent of capital when using --risk-per-trade",
+  ),
 );
 
 const stopLossOption = Options.float("stop-loss").pipe(
@@ -109,6 +132,90 @@ const slippageBpsOption = Options.float("slippage-bps").pipe(
   Options.withDescription("Slippage in basis points applied to fills"),
 );
 
+const trailingStopPctOption = Options.float("trailing-stop-pct").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Trail stop-loss this percentage behind the most favorable price (0 = disabled)",
+  ),
+);
+
+const trailingStopAtrMultOption = Options.float("trailing-stop-atr-mult").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Trail stop-loss at this ATR multiplier behind the most favorable price (0 = disabled)",
+  ),
+);
+
+const minAtrPctOption = Options.float("min-atr-pct").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum ATR% required to enter a trade, filters low-volatility chop (0 = disabled)",
+  ),
+);
+
+const volumeMinRatioOption = Options.float("volume-min-ratio").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Require current volume >= this ratio of its moving average to enter (0 = disabled)",
+  ),
+);
+
+const volumeLookbackOption = Options.integer("volume-lookback").pipe(
+  Options.withDefault(20),
+  Options.withDescription("Lookback period for volume moving average filter"),
+);
+
+const minConfluenceOption = Options.integer("min-confluence").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum number of components that must agree to enter (0 = disabled)",
+  ),
+);
+
+const entryCandleConfirmOption = Options.boolean("entry-candle-confirm").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Require the entry candle body to align with the signal direction",
+  ),
+);
+
+const signalPersistenceOption = Options.integer("signal-persistence").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Require the same directional signal for N consecutive candles before entering (0 = disabled)",
+  ),
+);
+
+const momentumConfirmBarsOption = Options.integer("momentum-confirm-bars").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Require net price movement over the last N candles to align with the signal (0 = disabled)",
+  ),
+);
+
+const lossConfidencePenaltyOption = Options.float(
+  "loss-confidence-penalty",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Boost min-confidence by this amount after a losing trade (0 = disabled)",
+  ),
+);
+
+const lossConfidenceDecayOption = Options.float("loss-confidence-decay").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Decay the post-loss confidence penalty by this amount each candle (0 = step reset)",
+  ),
+);
+
+const profileOption = Options.text("profile").pipe(
+  Options.withDefault(""),
+  Options.withDescription(
+    "Strategy profile name to load from ~/.neuratrade/profiles",
+  ),
+);
+
 const confidenceOption = Options.float("min-confidence").pipe(
   Options.withDefault(0.5),
   Options.withDescription("Minimum signal confidence to enter a trade"),
@@ -131,7 +238,63 @@ const atrTakeProfitMultiplierOption = Options.float(
 ).pipe(
   Options.withDefault(2.5),
   Options.withDescription(
-    "ATR multiplier for take profit when --use-atr-stops is set",
+    "ATR multiplier for take profit when --use-atr-stops is set (legacy; overridden by --atr-risk-reward)",
+  ),
+);
+
+const atrRiskRewardOption = Options.float("atr-risk-reward").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "ATR take-profit distance as a multiple of the stop distance (0 = use --atr-take-profit-multiplier)",
+  ),
+);
+
+const scaleOutAtROption = Options.float("scale-out-at-r").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Partial scale-out trigger in R multiples (e.g. 1.0 = +1R). 0 disables scale-out.",
+  ),
+);
+
+const scaleOutPctOption = Options.float("scale-out-pct").pipe(
+  Options.withDefault(50),
+  Options.withDescription(
+    "Percentage of the position to close at the scale-out trigger",
+  ),
+);
+
+const volatilityLookbackOption = Options.integer("volatility-lookback").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Lookback window length for ATR% volatility calibration. 0 disables.",
+  ),
+);
+
+const volatilityLowPctOption = Options.float("volatility-low-pct").pipe(
+  Options.withDefault(20),
+  Options.withDescription(
+    "Low percentile threshold for volatility calibration",
+  ),
+);
+
+const volatilityHighPctOption = Options.float("volatility-high-pct").pipe(
+  Options.withDefault(80),
+  Options.withDescription(
+    "High percentile threshold for volatility calibration",
+  ),
+);
+
+const volatilityLowFactorOption = Options.float("volatility-low-factor").pipe(
+  Options.withDefault(0.8),
+  Options.withDescription(
+    "Multiplier applied to ATR stop distance in low-volatility regimes",
+  ),
+);
+
+const volatilityHighFactorOption = Options.float("volatility-high-factor").pipe(
+  Options.withDefault(1.2),
+  Options.withDescription(
+    "Multiplier applied to ATR stop distance in high-volatility regimes",
   ),
 );
 
@@ -173,30 +336,71 @@ function makeLayer(home?: string) {
   return Layer.mergeAll(BunContext.layer, PathLive(home));
 }
 
+function loadProfileIfNeeded(
+  homeDir: string,
+  profileName: string,
+): Effect.Effect<Option.Option<StrategyProfile>, Error> {
+  if (!profileName || profileName.trim().length === 0) {
+    return Effect.succeed(Option.none());
+  }
+  return loadStrategyProfile(homeDir, profileName).pipe(
+    Effect.map((p) => Option.some(p)),
+  );
+}
+
+function formatNumber(value: number, digits: number): string {
+  if (!Number.isFinite(value)) return String(value);
+  return value.toFixed(digits);
+}
+
+const backtestOptions = {
+  exchange: exchangeOption,
+  symbol: symbolOption,
+  timeframe: timeframeOption,
+  capital: capitalOption,
+  positionSize: positionSizeOption,
+  riskPerTrade: riskPerTradeOption,
+  maxPositionSize: riskBasedMaxPositionSizeOption,
+  stopLoss: stopLossOption,
+  takeProfit: takeProfitOption,
+  fee: feeOption,
+  minConfidence: confidenceOption,
+  useAtrStops: useAtrStopsOption,
+  atrStopMultiplier: atrStopMultiplierOption,
+  atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+  atrRiskReward: atrRiskRewardOption,
+  scaleOutAtR: scaleOutAtROption,
+  scaleOutPct: scaleOutPctOption,
+  volatilityLookback: volatilityLookbackOption,
+  volatilityLowPct: volatilityLowPctOption,
+  volatilityHighPct: volatilityHighPctOption,
+  volatilityLowFactor: volatilityLowFactorOption,
+  volatilityHighFactor: volatilityHighFactorOption,
+  priceOnly: priceOnlyOption,
+  noRsi: noRsiOption,
+  holdUntilStop: holdUntilStopOption,
+  noTrend: noTrendOption,
+  regimeMode: regimeModeOption,
+  futures: futuresOption,
+  fundingRatePct: fundingRateOption,
+  slippageBps: slippageBpsOption,
+  trailingStopPct: trailingStopPctOption,
+  trailingStopAtrMultiplier: trailingStopAtrMultOption,
+  minAtrPct: minAtrPctOption,
+  volumeMinRatio: volumeMinRatioOption,
+  volumeLookback: volumeLookbackOption,
+  minConfluence: minConfluenceOption,
+  entryCandleConfirm: entryCandleConfirmOption,
+  signalPersistence: signalPersistenceOption,
+  momentumConfirmBars: momentumConfirmBarsOption,
+  lossConfidencePenalty: lossConfidencePenaltyOption,
+  lossConfidenceDecay: lossConfidenceDecayOption,
+  profile: profileOption,
+};
+
 export const backtestCommand = Command.make(
   "backtest",
-  {
-    exchange: exchangeOption,
-    symbol: symbolOption,
-    timeframe: timeframeOption,
-    capital: capitalOption,
-    positionSize: positionSizeOption,
-    stopLoss: stopLossOption,
-    takeProfit: takeProfitOption,
-    fee: feeOption,
-    minConfidence: confidenceOption,
-    useAtrStops: useAtrStopsOption,
-    atrStopMultiplier: atrStopMultiplierOption,
-    atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
-    priceOnly: priceOnlyOption,
-    noRsi: noRsiOption,
-    holdUntilStop: holdUntilStopOption,
-    noTrend: noTrendOption,
-    regimeMode: regimeModeOption,
-    futures: futuresOption,
-    fundingRatePct: fundingRateOption,
-    slippageBps: slippageBpsOption,
-  },
+  backtestOptions,
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
@@ -206,7 +410,18 @@ export const backtestCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* backtestProgram(args).pipe(
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const programArgs = Option.isSome(profile)
+        ? resolveBacktestArgs(
+            profile.value,
+            args.symbol,
+            args.exchange,
+            args.timeframe,
+            args,
+          )
+        : args;
+
+      const result = yield* backtestProgram(programArgs).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printBacktestResult(r)),
         Effect.catchAll((err) =>
@@ -226,40 +441,28 @@ export const backtestCommand = Command.make(
   ),
 );
 
-interface BacktestArgs {
-  readonly exchange: string;
-  readonly symbol: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly stopLoss: number;
-  readonly takeProfit: number;
-  readonly fee: number;
-  readonly minConfidence: number;
-  readonly useAtrStops: boolean;
-  readonly atrStopMultiplier: number;
-  readonly atrTakeProfitMultiplier: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly holdUntilStop: boolean;
-  readonly noTrend: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly futures: boolean;
-  readonly fundingRatePct: number;
-  readonly slippageBps: number;
-}
+interface BacktestArgs extends ResolvedBacktestArgs {}
 
 function buildBacktestComposerConfig(
   priceOnly: boolean,
   noRsi: boolean,
   noTrend: boolean,
   regimeMode: "trend" | "reversion" = "trend",
+  volumeMinRatio = 0,
+  volumeLookback = 20,
+  minConfluence = 0,
+  entryCandleConfirm = false,
+  momentumConfirmBars = 0,
 ): ComposerConfig {
   if (
     !priceOnly &&
     !noRsi &&
     !noTrend &&
-    regimeMode === defaultComposerConfig.thresholds.regimeMode
+    regimeMode === defaultComposerConfig.thresholds.regimeMode &&
+    volumeMinRatio <= 0 &&
+    minConfluence <= 0 &&
+    !entryCandleConfirm &&
+    momentumConfirmBars <= 0
   ) {
     return defaultComposerConfig;
   }
@@ -292,11 +495,19 @@ function buildBacktestComposerConfig(
 
   return {
     weights: normalized,
-    thresholds: { ...defaultComposerConfig.thresholds, regimeMode },
+    thresholds: {
+      ...defaultComposerConfig.thresholds,
+      regimeMode,
+      volumeMinRatio,
+      volumeLookback,
+      minConfluence,
+      entryCandleConfirm,
+      momentumConfirmBars,
+    },
   };
 }
 
-function backtestProgram(args: BacktestArgs) {
+function backtestProgram(args: ResolvedBacktestArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
 
@@ -319,6 +530,11 @@ function backtestProgram(args: BacktestArgs) {
       args.noRsi,
       args.noTrend,
       args.regimeMode,
+      args.volumeMinRatio,
+      args.volumeLookback,
+      args.minConfluence,
+      args.entryCandleConfirm,
+      args.momentumConfirmBars,
     );
 
     return runBacktest({
@@ -329,6 +545,8 @@ function backtestProgram(args: BacktestArgs) {
       composerConfig,
       initialCapital: args.capital,
       positionSizePct: args.positionSize,
+      riskPerTradePct: args.riskPerTrade,
+      maxPositionSizePct: args.maxPositionSize,
       stopLossPct: args.stopLoss,
       takeProfitPct: args.takeProfit,
       feePct: args.fee,
@@ -336,10 +554,24 @@ function backtestProgram(args: BacktestArgs) {
       useAtrStops: args.useAtrStops,
       atrStopMultiplier: args.atrStopMultiplier,
       atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+      atrRiskReward: args.atrRiskReward,
+      scaleOutAtR: args.scaleOutAtR,
+      scaleOutPct: args.scaleOutPct,
+      volatilityLookback: args.volatilityLookback,
+      volatilityLowPct: args.volatilityLowPct,
+      volatilityHighPct: args.volatilityHighPct,
+      volatilityLowFactor: args.volatilityLowFactor,
+      volatilityHighFactor: args.volatilityHighFactor,
       holdUntilStop: args.holdUntilStop,
       isFutures: args.futures,
       fundingRatePct: args.fundingRatePct,
       slippageBps: args.slippageBps,
+      trailingStopPct: args.trailingStopPct,
+      trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
+      minAtrPct: args.minAtrPct,
+      signalPersistence: args.signalPersistence,
+      lossConfidencePenalty: args.lossConfidencePenalty,
+      lossConfidenceDecay: args.lossConfidenceDecay,
     });
   });
 }
@@ -356,6 +588,32 @@ function printBacktestResult(
     yield* Console.log(`Total return:  ${result.totalReturnPct.toFixed(2)}%`);
     yield* Console.log(`Max drawdown:  ${result.maxDrawdownPct.toFixed(2)}%`);
     yield* Console.log(`Sharpe ratio:  ${result.sharpeRatio.toFixed(3)}`);
+    yield* Console.log("\n📈 Performance Metrics");
+    yield* Console.log("----------------------");
+    yield* Console.log(
+      `Profit factor:   ${formatNumber(result.metrics.profitFactor, 3)}`,
+    );
+    yield* Console.log(
+      `Expectancy:      ${result.metrics.expectancy.toFixed(3)}%`,
+    );
+    yield* Console.log(
+      `Avg R-multiple:  ${result.metrics.averageRMultiple.toFixed(3)}`,
+    );
+    yield* Console.log(
+      `Sortino ratio:   ${formatNumber(result.metrics.sortinoRatio, 3)}`,
+    );
+    yield* Console.log(
+      `Calmar ratio:    ${formatNumber(result.metrics.calmarRatio, 3)}`,
+    );
+    yield* Console.log(
+      `Max cons. losses: ${result.metrics.maxConsecutiveLosses}`,
+    );
+    yield* Console.log(
+      `Avg trade duration: ${result.metrics.averageTradeDurationHours.toFixed(2)}h`,
+    );
+    yield* Console.log(
+      `Time in market:  ${result.metrics.timeInMarketPct.toFixed(2)}%`,
+    );
     if (result.trades.length > 0) {
       yield* Console.log("\nLast 5 trades:");
       for (const trade of result.trades.slice(-5)) {
@@ -384,6 +642,16 @@ function emptyResult(
     totalFeesPaid: 0,
     totalFundingCost: 0,
     benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: 0,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
   };
 }
 
@@ -438,12 +706,22 @@ interface OptimizeArgs {
   readonly timeframe: string;
   readonly capital: number;
   readonly positionSize: number;
+  readonly riskPerTrade: number;
+  readonly maxPositionSize: number;
   readonly fee: number;
   readonly priceOnly: boolean;
   readonly noRsi: boolean;
   readonly noTrend: boolean;
   readonly holdUntilStop: boolean;
   readonly regimeMode: "trend" | "reversion";
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
   readonly atrStopMin: number;
   readonly atrStopMax: number;
   readonly atrStopStep: number;
@@ -453,6 +731,42 @@ interface OptimizeArgs {
   readonly confMin: number;
   readonly confMax: number;
   readonly confStep: number;
+  readonly volumeMinRatio: number;
+  readonly volumeLookback: number;
+  readonly minConfluence: number;
+  readonly entryCandleConfirm: boolean;
+  readonly momentumConfirmBars: number;
+}
+
+function mergeOptimizeArgs(
+  args: OptimizeArgs,
+  profile: StrategyProfile,
+): OptimizeArgs {
+  const overrides = profile.symbols[args.symbol] ?? {};
+  const get = <K extends keyof StrategyProfileParams>(
+    key: K,
+  ): StrategyProfileParams[K] =>
+    (overrides[key] !== undefined
+      ? overrides[key]
+      : profile.defaults[key]) as StrategyProfileParams[K];
+
+  const base: Partial<OptimizeArgs> = {
+    atrRiskReward: get("atrRiskReward"),
+    scaleOutAtR: get("scaleOutAtR"),
+    scaleOutPct: get("scaleOutPct"),
+    volatilityLookback: get("volatilityLookback"),
+    volatilityLowPct: get("volatilityLowPct"),
+    volatilityHighPct: get("volatilityHighPct"),
+    volatilityLowFactor: get("volatilityLowFactor"),
+    volatilityHighFactor: get("volatilityHighFactor"),
+    volumeMinRatio: get("volumeMinRatio"),
+    volumeLookback: get("volumeLookback"),
+    minConfluence: get("minConfluence"),
+    entryCandleConfirm: get("entryCandleConfirm"),
+    momentumConfirmBars: get("momentumConfirmBars"),
+  };
+
+  return { ...base, ...args };
 }
 
 export const optimizeCommand = Command.make(
@@ -463,12 +777,22 @@ export const optimizeCommand = Command.make(
     timeframe: timeframeOption,
     capital: capitalOption,
     positionSize: positionSizeOption,
+    riskPerTrade: riskPerTradeOption,
+    maxPositionSize: riskBasedMaxPositionSizeOption,
     fee: feeOption,
     priceOnly: priceOnlyOption,
     noRsi: noRsiOption,
     noTrend: noTrendOption,
     holdUntilStop: holdUntilStopOption,
     regimeMode: regimeModeOption,
+    atrRiskReward: atrRiskRewardOption,
+    scaleOutAtR: scaleOutAtROption,
+    scaleOutPct: scaleOutPctOption,
+    volatilityLookback: volatilityLookbackOption,
+    volatilityLowPct: volatilityLowPctOption,
+    volatilityHighPct: volatilityHighPctOption,
+    volatilityLowFactor: volatilityLowFactorOption,
+    volatilityHighFactor: volatilityHighFactorOption,
     atrStopMin: atrStopMinOption,
     atrStopMax: atrStopMaxOption,
     atrStopStep: atrStopStepOption,
@@ -478,6 +802,12 @@ export const optimizeCommand = Command.make(
     confMin: confMinOption,
     confMax: confMaxOption,
     confStep: confStepOption,
+    volumeMinRatio: volumeMinRatioOption,
+    volumeLookback: volumeLookbackOption,
+    minConfluence: minConfluenceOption,
+    entryCandleConfirm: entryCandleConfirmOption,
+    momentumConfirmBars: momentumConfirmBarsOption,
+    profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -488,7 +818,12 @@ export const optimizeCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const result = yield* optimizeProgram(args).pipe(
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const programArgs = Option.isSome(profile)
+        ? mergeOptimizeArgs(args, profile.value)
+        : args;
+
+      const result = yield* optimizeProgram(programArgs).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
         Effect.catchAll((err) =>
@@ -531,6 +866,11 @@ function optimizeProgram(args: OptimizeArgs) {
       args.noRsi,
       args.noTrend,
       args.regimeMode,
+      args.volumeMinRatio,
+      args.volumeLookback,
+      args.minConfluence,
+      args.entryCandleConfirm,
+      args.momentumConfirmBars,
     );
     const results: Array<{
       readonly stopMult: number;
@@ -566,6 +906,8 @@ function optimizeProgram(args: OptimizeArgs) {
             composerConfig,
             initialCapital: args.capital,
             positionSizePct: args.positionSize,
+            riskPerTradePct: args.riskPerTrade,
+            maxPositionSizePct: args.maxPositionSize,
             stopLossPct: 1.5,
             takeProfitPct: 3.0,
             feePct: args.fee,
@@ -573,6 +915,14 @@ function optimizeProgram(args: OptimizeArgs) {
             useAtrStops: true,
             atrStopMultiplier: Number(stopMult.toFixed(4)),
             atrTakeProfitMultiplier: Number(tpMult.toFixed(4)),
+            atrRiskReward: args.atrRiskReward,
+            scaleOutAtR: args.scaleOutAtR,
+            scaleOutPct: args.scaleOutPct,
+            volatilityLookback: args.volatilityLookback,
+            volatilityLowPct: args.volatilityLowPct,
+            volatilityHighPct: args.volatilityHighPct,
+            volatilityLowFactor: args.volatilityLowFactor,
+            volatilityHighFactor: args.volatilityHighFactor,
             holdUntilStop: args.holdUntilStop,
           });
           results.push({
@@ -669,6 +1019,20 @@ const minReturnOption = Options.float("min-return-pct").pipe(
   ),
 );
 
+const minSharpeOption = Options.float("min-sharpe").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Skip symbols with Sharpe ratio below this threshold",
+  ),
+);
+
+const scanMaxDrawdownOption = Options.float("max-drawdown-pct").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Skip symbols with max drawdown above this threshold",
+  ),
+);
+
 const saveWatchlistOption = Options.text("save-watchlist").pipe(
   Options.optional,
   Options.withDescription(
@@ -681,25 +1045,79 @@ interface ScanArgs {
   readonly timeframe: string;
   readonly capital: number;
   readonly positionSize: number;
+  readonly riskPerTrade: number;
+  readonly maxPositionSize: number;
   readonly fee: number;
   readonly minConfidence: number;
   readonly useAtrStops: boolean;
   readonly atrStopMultiplier: number;
   readonly atrTakeProfitMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
+  readonly stopLoss: number;
+  readonly takeProfit: number;
   readonly priceOnly: boolean;
   readonly noRsi: boolean;
   readonly noTrend: boolean;
   readonly holdUntilStop: boolean;
   readonly regimeMode: "trend" | "reversion";
+  readonly minAtrPct: number;
   readonly minCandles: number;
   readonly top: number;
   readonly optimize: boolean;
   readonly minReturnPct: Option.Option<number>;
+  readonly minSharpe: Option.Option<number>;
+  readonly maxDrawdownPct: Option.Option<number>;
   readonly saveWatchlist: Option.Option<string>;
   readonly watchlistPath?: string;
   readonly futures: boolean;
   readonly fundingRatePct: number;
   readonly slippageBps: number;
+  readonly volumeMinRatio: number;
+  readonly volumeLookback: number;
+  readonly minConfluence: number;
+  readonly entryCandleConfirm: boolean;
+  readonly momentumConfirmBars: number;
+}
+
+function mergeScanArgs(args: ScanArgs, profile: StrategyProfile): ScanArgs {
+  const defaults = profile.defaults;
+  const get = <K extends keyof StrategyProfileParams>(
+    key: K,
+  ): StrategyProfileParams[K] => defaults[key];
+
+  const base: Partial<ScanArgs> = {
+    minConfidence: get("minConfidence"),
+    useAtrStops: get("useAtrStops"),
+    atrStopMultiplier: get("atrStopMultiplier"),
+    atrTakeProfitMultiplier: get("atrTakeProfitMultiplier"),
+    atrRiskReward: get("atrRiskReward"),
+    stopLoss: get("stopLossPct"),
+    takeProfit: get("takeProfitPct"),
+    scaleOutAtR: get("scaleOutAtR"),
+    scaleOutPct: get("scaleOutPct"),
+    volatilityLookback: get("volatilityLookback"),
+    volatilityLowPct: get("volatilityLowPct"),
+    volatilityHighPct: get("volatilityHighPct"),
+    volatilityLowFactor: get("volatilityLowFactor"),
+    volatilityHighFactor: get("volatilityHighFactor"),
+    minAtrPct: get("minAtrPct"),
+    holdUntilStop: get("holdUntilStop"),
+    fee: get("feePct"),
+    volumeMinRatio: get("volumeMinRatio"),
+    volumeLookback: get("volumeLookback"),
+    minConfluence: get("minConfluence"),
+    entryCandleConfirm: get("entryCandleConfirm"),
+    momentumConfirmBars: get("momentumConfirmBars"),
+  };
+
+  return { ...base, ...args };
 }
 
 export const scanCommand = Command.make(
@@ -709,24 +1127,45 @@ export const scanCommand = Command.make(
     timeframe: timeframeOption,
     capital: capitalOption,
     positionSize: positionSizeOption,
+    riskPerTrade: riskPerTradeOption,
+    maxPositionSize: riskBasedMaxPositionSizeOption,
     fee: feeOption,
     minConfidence: confidenceOption,
     useAtrStops: useAtrStopsOption,
     atrStopMultiplier: atrStopMultiplierOption,
     atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    atrRiskReward: atrRiskRewardOption,
+    scaleOutAtR: scaleOutAtROption,
+    scaleOutPct: scaleOutPctOption,
+    volatilityLookback: volatilityLookbackOption,
+    volatilityLowPct: volatilityLowPctOption,
+    volatilityHighPct: volatilityHighPctOption,
+    volatilityLowFactor: volatilityLowFactorOption,
+    volatilityHighFactor: volatilityHighFactorOption,
+    stopLoss: stopLossOption,
+    takeProfit: takeProfitOption,
     priceOnly: priceOnlyOption,
     noRsi: noRsiOption,
     noTrend: noTrendOption,
     holdUntilStop: holdUntilStopOption,
     regimeMode: regimeModeOption,
+    minAtrPct: minAtrPctOption,
     minCandles: minCandlesOption,
     top: topOption,
     optimize: optimizeScanOption,
     minReturnPct: minReturnOption,
+    minSharpe: minSharpeOption,
+    maxDrawdownPct: scanMaxDrawdownOption,
     saveWatchlist: saveWatchlistOption,
     futures: futuresOption,
     fundingRatePct: fundingRateOption,
     slippageBps: slippageBpsOption,
+    volumeMinRatio: volumeMinRatioOption,
+    volumeLookback: volumeLookbackOption,
+    minConfluence: minConfluenceOption,
+    entryCandleConfirm: entryCandleConfirmOption,
+    momentumConfirmBars: momentumConfirmBarsOption,
+    profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -737,12 +1176,17 @@ export const scanCommand = Command.make(
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
-      const watchlistPath = Option.match(args.saveWatchlist, {
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const mergedArgs = Option.isSome(profile)
+        ? mergeScanArgs(args, profile.value)
+        : args;
+
+      const watchlistPath = Option.match(mergedArgs.saveWatchlist, {
         onNone: () => undefined as string | undefined,
         onSome: (file) => resolve(path.homeDir, "data", file),
       });
 
-      const result = yield* scanProgram({ ...args, watchlistPath }).pipe(
+      const result = yield* scanProgram({ ...mergedArgs, watchlistPath }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printScanResult(r)),
         Effect.catchAll((err) =>
@@ -781,6 +1225,11 @@ export function scanProgram(args: ScanArgs) {
       args.noRsi,
       args.noTrend,
       args.regimeMode,
+      args.volumeMinRatio,
+      args.volumeLookback,
+      args.minConfluence,
+      args.entryCandleConfirm,
+      args.momentumConfirmBars,
     );
 
     const results: Array<ScanResult> = [];
@@ -875,6 +1324,20 @@ function scanSingleExchange(
         continue;
       }
 
+      if (
+        Option.isSome(args.minSharpe) &&
+        result.sharpeRatio < args.minSharpe.value
+      ) {
+        continue;
+      }
+
+      if (
+        Option.isSome(args.maxDrawdownPct) &&
+        result.maxDrawdownPct > args.maxDrawdownPct.value
+      ) {
+        continue;
+      }
+
       results.push({
         symbol,
         exchange,
@@ -926,14 +1389,25 @@ function runBacktestWithParams(
     composerConfig,
     initialCapital: args.capital,
     positionSizePct: args.positionSize,
-    stopLossPct: 1.5,
-    takeProfitPct: 3.0,
+    riskPerTradePct: args.riskPerTrade,
+    maxPositionSizePct: args.maxPositionSize,
+    stopLossPct: args.stopLoss,
+    takeProfitPct: args.takeProfit,
     feePct: args.fee,
     minConfidence: params.minConfidence,
     useAtrStops: args.useAtrStops,
     atrStopMultiplier: params.atrStopMultiplier,
     atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
+    atrRiskReward: args.atrRiskReward,
+    scaleOutAtR: args.scaleOutAtR,
+    scaleOutPct: args.scaleOutPct,
+    volatilityLookback: args.volatilityLookback,
+    volatilityLowPct: args.volatilityLowPct,
+    volatilityHighPct: args.volatilityHighPct,
+    volatilityLowFactor: args.volatilityLowFactor,
+    volatilityHighFactor: args.volatilityHighFactor,
     holdUntilStop: args.holdUntilStop,
+    minAtrPct: args.minAtrPct,
     isFutures: args.futures,
     fundingRatePct: args.fundingRatePct,
     slippageBps: args.slippageBps,
@@ -1008,6 +1482,16 @@ function emptyScanResult(symbol: string): BacktestResult {
     totalFeesPaid: 0,
     totalFundingCost: 0,
     benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: 0,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
   };
 }
 
@@ -1065,13 +1549,41 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
       }
     }
 
+    const highSharpe = results.filter((r) => r.sharpeRatio > 0.5);
+    const lowDrawdown = results.filter((r) => r.maxDrawdownPct < 15);
+    const liveReady = results.filter(
+      (r) =>
+        r.totalReturnPct > 0 && r.sharpeRatio > 0.5 && r.maxDrawdownPct < 15,
+    );
+    const best = results.reduce((max, r) =>
+      r.totalReturnPct > max.totalReturnPct ? r : max,
+    );
+    const worst = results.reduce((min, r) =>
+      r.totalReturnPct < min.totalReturnPct ? r : min,
+    );
+
     yield* Console.log("\nSummary");
     yield* Console.log(`  Symbols tested: ${results.length}`);
     yield* Console.log(
       `  Profitable:     ${profitable.length} (${((profitable.length / results.length) * 100).toFixed(1)}%)`,
     );
+    yield* Console.log(
+      `  Sharpe > 0.5:   ${highSharpe.length} (${((highSharpe.length / results.length) * 100).toFixed(1)}%)`,
+    );
+    yield* Console.log(
+      `  Drawdown < 15%: ${lowDrawdown.length} (${((lowDrawdown.length / results.length) * 100).toFixed(1)}%)`,
+    );
+    yield* Console.log(
+      `  Live-ready:     ${liveReady.length} (${((liveReady.length / results.length) * 100).toFixed(1)}%)`,
+    );
     yield* Console.log(`  Avg return:     ${avgReturn.toFixed(2)}%`);
     yield* Console.log(`  Avg Sharpe:     ${avgSharpe.toFixed(3)}`);
+    yield* Console.log(
+      `  Best:           ${multiExchange ? `${best.exchange}:` : ""}${best.symbol} ${best.totalReturnPct.toFixed(2)}% (Sharpe ${best.sharpeRatio.toFixed(3)})`,
+    );
+    yield* Console.log(
+      `  Worst:          ${multiExchange ? `${worst.exchange}:` : ""}${worst.symbol} ${worst.totalReturnPct.toFixed(2)}% (Sharpe ${worst.sharpeRatio.toFixed(3)})`,
+    );
 
     if (multiExchange) {
       const byExchange = new Map<string, ScanResult[]>();
@@ -1225,16 +1737,33 @@ interface PaperTradeArgs {
   readonly timeframe: string;
   readonly capital: number;
   readonly positionSize: number;
+  readonly riskPerTrade: number;
   readonly fee: number;
   readonly minConfidence: number;
   readonly useAtrStops: boolean;
   readonly atrStopMultiplier: number;
   readonly atrTakeProfitMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
+  readonly stopLoss: number;
+  readonly takeProfit: number;
   readonly priceOnly: boolean;
   readonly noRsi: boolean;
   readonly noTrend: boolean;
   readonly holdUntilStop: boolean;
   readonly regimeMode: "trend" | "reversion";
+  readonly minAtrPct: number;
+  readonly volumeMinRatio: number;
+  readonly volumeLookback: number;
+  readonly minConfluence: number;
+  readonly entryCandleConfirm: boolean;
+  readonly momentumConfirmBars: number;
   readonly interval: number;
   readonly iterations: number;
   readonly live: boolean;
@@ -1253,6 +1782,136 @@ interface PaperTradeArgs {
   readonly killSwitch: boolean;
   readonly disengage: boolean;
   readonly entries?: readonly WatchlistEntry[];
+}
+
+function mergePaperTradeArgs(
+  args: PaperTradeArgs,
+  profile: StrategyProfile,
+): PaperTradeArgs {
+  const overrides = profile.symbols[args.symbol] ?? {};
+  const get = <K extends keyof StrategyProfileParams>(
+    key: K,
+  ): StrategyProfileParams[K] =>
+    (overrides[key] !== undefined
+      ? overrides[key]
+      : profile.defaults[key]) as StrategyProfileParams[K];
+
+  const base: Partial<PaperTradeArgs> = {
+    minConfidence: get("minConfidence"),
+    useAtrStops: get("useAtrStops"),
+    atrStopMultiplier: get("atrStopMultiplier"),
+    atrTakeProfitMultiplier: get("atrTakeProfitMultiplier"),
+    atrRiskReward: get("atrRiskReward"),
+    stopLoss: get("stopLossPct"),
+    takeProfit: get("takeProfitPct"),
+    scaleOutAtR: get("scaleOutAtR"),
+    scaleOutPct: get("scaleOutPct"),
+    volatilityLookback: get("volatilityLookback"),
+    volatilityLowPct: get("volatilityLowPct"),
+    volatilityHighPct: get("volatilityHighPct"),
+    volatilityLowFactor: get("volatilityLowFactor"),
+    volatilityHighFactor: get("volatilityHighFactor"),
+    positionSize: get("positionSizePct"),
+    riskPerTrade: get("riskPerTradePct"),
+    fee: get("feePct"),
+    minAtrPct: get("minAtrPct"),
+    holdUntilStop: get("holdUntilStop"),
+    volumeMinRatio: get("volumeMinRatio"),
+    volumeLookback: get("volumeLookback"),
+    minConfluence: get("minConfluence"),
+    entryCandleConfirm: get("entryCandleConfirm"),
+    momentumConfirmBars: get("momentumConfirmBars"),
+  };
+
+  return { ...base, ...args };
+}
+
+interface SoakArgs {
+  readonly exchange: string;
+  readonly timeframe: string;
+  readonly capital: number;
+  readonly positionSize: number;
+  readonly riskPerTrade: number;
+  readonly maxPositionSize: number;
+  readonly fee: number;
+  readonly minConfidence: number;
+  readonly useAtrStops: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrTakeProfitMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
+  readonly stopLoss: number;
+  readonly takeProfit: number;
+  readonly priceOnly: boolean;
+  readonly noRsi: boolean;
+  readonly noTrend: boolean;
+  readonly holdUntilStop: boolean;
+  readonly regimeMode: "trend" | "reversion";
+  readonly minAtrPct: number;
+  readonly volumeMinRatio: number;
+  readonly volumeLookback: number;
+  readonly minConfluence: number;
+  readonly entryCandleConfirm: boolean;
+  readonly momentumConfirmBars: number;
+  readonly watchlist: string;
+  readonly interval: number;
+  readonly iterations: number;
+  readonly live: boolean;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+  readonly futures: boolean;
+  readonly leverage: number;
+  readonly marginMode: string;
+  readonly productType: string;
+  readonly maxDrawdownPct: Option.Option<number>;
+  readonly maxDailyLossPct: Option.Option<number>;
+  readonly maxPositionSizePct: Option.Option<number>;
+  readonly maxTradesPerDay: Option.Option<number>;
+  readonly minCapital: Option.Option<number>;
+  readonly profile: string;
+}
+
+function mergeSoakArgs(args: SoakArgs, profile: StrategyProfile): SoakArgs {
+  const defaults = profile.defaults;
+  const get = <K extends keyof StrategyProfileParams>(
+    key: K,
+  ): StrategyProfileParams[K] => defaults[key];
+
+  const base: Partial<SoakArgs> = {
+    minConfidence: get("minConfidence"),
+    useAtrStops: get("useAtrStops"),
+    atrStopMultiplier: get("atrStopMultiplier"),
+    atrTakeProfitMultiplier: get("atrTakeProfitMultiplier"),
+    atrRiskReward: get("atrRiskReward"),
+    stopLoss: get("stopLossPct"),
+    takeProfit: get("takeProfitPct"),
+    scaleOutAtR: get("scaleOutAtR"),
+    scaleOutPct: get("scaleOutPct"),
+    volatilityLookback: get("volatilityLookback"),
+    volatilityLowPct: get("volatilityLowPct"),
+    volatilityHighPct: get("volatilityHighPct"),
+    volatilityLowFactor: get("volatilityLowFactor"),
+    volatilityHighFactor: get("volatilityHighFactor"),
+    positionSize: get("positionSizePct"),
+    riskPerTrade: get("riskPerTradePct"),
+    maxPositionSize: get("maxPositionSizePct"),
+    minAtrPct: get("minAtrPct"),
+    holdUntilStop: get("holdUntilStop"),
+    fee: get("feePct"),
+    volumeMinRatio: get("volumeMinRatio"),
+    volumeLookback: get("volumeLookback"),
+    minConfluence: get("minConfluence"),
+    entryCandleConfirm: get("entryCandleConfirm"),
+    momentumConfirmBars: get("momentumConfirmBars"),
+  };
+
+  return { ...base, ...args };
 }
 
 type MutablePartialRiskLimits = {
@@ -1299,16 +1958,33 @@ export const paperTradeCommand = Command.make(
     timeframe: timeframeOption,
     capital: capitalOption,
     positionSize: positionSizeOption,
+    riskPerTrade: riskPerTradeOption,
     fee: feeOption,
     minConfidence: confidenceOption,
     useAtrStops: useAtrStopsOption,
     atrStopMultiplier: atrStopMultiplierOption,
     atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    atrRiskReward: atrRiskRewardOption,
+    scaleOutAtR: scaleOutAtROption,
+    scaleOutPct: scaleOutPctOption,
+    volatilityLookback: volatilityLookbackOption,
+    volatilityLowPct: volatilityLowPctOption,
+    volatilityHighPct: volatilityHighPctOption,
+    volatilityLowFactor: volatilityLowFactorOption,
+    volatilityHighFactor: volatilityHighFactorOption,
+    stopLoss: stopLossOption,
+    takeProfit: takeProfitOption,
     priceOnly: priceOnlyOption,
     noRsi: noRsiOption,
     noTrend: noTrendOption,
     holdUntilStop: holdUntilStopOption,
     regimeMode: regimeModeOption,
+    minAtrPct: minAtrPctOption,
+    volumeMinRatio: volumeMinRatioOption,
+    volumeLookback: volumeLookbackOption,
+    minConfluence: minConfluenceOption,
+    entryCandleConfirm: entryCandleConfirmOption,
+    momentumConfirmBars: momentumConfirmBarsOption,
     interval: intervalOption,
     iterations: iterationsOption,
     live: liveOption,
@@ -1326,6 +2002,7 @@ export const paperTradeCommand = Command.make(
     watchlist: watchlistOption,
     killSwitch: killSwitchOption,
     disengage: disengageOption,
+    profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -1334,24 +2011,32 @@ export const paperTradeCommand = Command.make(
       const db = new Database(sqlitePath);
       db.exec("PRAGMA foreign_keys = ON;");
 
-      const watchlist = yield* Option.match(args.watchlist, {
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const mergedArgs = Option.isSome(profile)
+        ? mergePaperTradeArgs(args, profile.value)
+        : args;
+
+      const watchlist = yield* Option.match(mergedArgs.watchlist, {
         onNone: () => Effect.succeed<readonly WatchlistEntry[]>([]),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
-      const riskGuardLayer = RiskGuardLive(args.live, buildRiskOverrides(args));
+      const riskGuardLayer = RiskGuardLive(
+        mergedArgs.live,
+        buildRiskOverrides(mergedArgs),
+      );
       const killSwitchLayer = KillSwitchSQLiteLive(db);
       const circuitBreakerMaxLoss = Option.getOrElse(
-        args.maxDailyLossPct,
+        mergedArgs.maxDailyLossPct,
         () => 2,
       );
       const circuitBreakerLayer = CircuitBreakerSQLiteLive(
         db,
         circuitBreakerMaxLoss,
       );
-      const marketDataLayer = args.live
+      const marketDataLayer = mergedArgs.live
         ? MarketDataGatewayLive
         : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
@@ -1365,7 +2050,7 @@ export const paperTradeCommand = Command.make(
         circuitBreakerLayer,
       );
 
-      if (args.killSwitch) {
+      if (mergedArgs.killSwitch) {
         yield* Effect.provide(
           KillSwitch.pipe(
             Effect.flatMap((ks) => ks.engage("CLI --kill-switch")),
@@ -1373,7 +2058,7 @@ export const paperTradeCommand = Command.make(
           killSwitchLayer,
         );
       }
-      if (args.disengage) {
+      if (mergedArgs.disengage) {
         yield* Effect.provide(
           KillSwitch.pipe(Effect.flatMap((ks) => ks.disengage())),
           killSwitchLayer,
@@ -1381,7 +2066,7 @@ export const paperTradeCommand = Command.make(
       }
 
       const result = yield* paperTradeProgram({
-        ...args,
+        ...mergedArgs,
         entries: watchlist,
       }).pipe(
         Effect.provide(layers),
@@ -1445,6 +2130,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.noRsi,
       args.noTrend,
       args.regimeMode,
+      args.volumeMinRatio,
+      args.volumeLookback,
+      args.minConfluence,
+      args.entryCandleConfirm,
+      args.momentumConfirmBars,
     );
 
     const entries =
@@ -1460,13 +2150,31 @@ function paperTradeProgram(args: PaperTradeArgs) {
       timeframe: args.timeframe,
       composerConfig,
       positionSizePct: args.positionSize,
+      riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
+      maxPositionSizePct:
+        overrides?.maxPositionSizePct ??
+        Option.getOrElse(args.maxPositionSizePct, () => 100),
       feePct: args.fee,
       minConfidence: overrides?.minConfidence ?? args.minConfidence,
       useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
       atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
       atrTakeProfitMultiplier:
         overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+      atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
+      scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
+      scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
+      volatilityLookback:
+        overrides?.volatilityLookback ?? args.volatilityLookback,
+      volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
+      volatilityHighPct: overrides?.volatilityHighPct ?? args.volatilityHighPct,
+      volatilityLowFactor:
+        overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
+      volatilityHighFactor:
+        overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
+      stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
+      takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
       holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
+      minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
       initialCapital: args.capital,
       isLive: args.live,
     });
@@ -1489,13 +2197,31 @@ function paperTradeProgram(args: PaperTradeArgs) {
       timeframe: args.timeframe,
       composerConfig,
       positionSizePct: args.positionSize,
+      riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
+      maxPositionSizePct:
+        overrides?.maxPositionSizePct ??
+        Option.getOrElse(args.maxPositionSizePct, () => 100),
       feePct: args.fee,
       minConfidence: overrides?.minConfidence ?? args.minConfidence,
       useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
       atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
       atrTakeProfitMultiplier:
         overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+      atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
+      scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
+      scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
+      volatilityLookback:
+        overrides?.volatilityLookback ?? args.volatilityLookback,
+      volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
+      volatilityHighPct: overrides?.volatilityHighPct ?? args.volatilityHighPct,
+      volatilityLowFactor:
+        overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
+      volatilityHighFactor:
+        overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
+      stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
+      takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
       holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
+      minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
       initialCapital: args.capital,
       isLive: args.live,
       leverage: args.leverage,
@@ -1697,16 +2423,34 @@ export const soakCommand = Command.make(
     timeframe: timeframeOption,
     capital: capitalOption,
     positionSize: positionSizeOption,
+    riskPerTrade: riskPerTradeOption,
+    maxPositionSize: riskBasedMaxPositionSizeOption,
     fee: feeOption,
     minConfidence: confidenceOption,
     useAtrStops: useAtrStopsOption,
     atrStopMultiplier: atrStopMultiplierOption,
     atrTakeProfitMultiplier: atrTakeProfitMultiplierOption,
+    atrRiskReward: atrRiskRewardOption,
+    scaleOutAtR: scaleOutAtROption,
+    scaleOutPct: scaleOutPctOption,
+    volatilityLookback: volatilityLookbackOption,
+    volatilityLowPct: volatilityLowPctOption,
+    volatilityHighPct: volatilityHighPctOption,
+    volatilityLowFactor: volatilityLowFactorOption,
+    volatilityHighFactor: volatilityHighFactorOption,
+    stopLoss: stopLossOption,
+    takeProfit: takeProfitOption,
     priceOnly: priceOnlyOption,
     noRsi: noRsiOption,
     noTrend: noTrendOption,
     holdUntilStop: holdUntilStopOption,
     regimeMode: regimeModeOption,
+    minAtrPct: minAtrPctOption,
+    volumeMinRatio: volumeMinRatioOption,
+    volumeLookback: volumeLookbackOption,
+    minConfluence: minConfluenceOption,
+    entryCandleConfirm: entryCandleConfirmOption,
+    momentumConfirmBars: momentumConfirmBarsOption,
     interval: intervalOption,
     iterations: iterationsOption,
     live: liveOption,
@@ -1721,6 +2465,7 @@ export const soakCommand = Command.make(
     maxPositionSizePct: maxPositionSizeOption,
     maxTradesPerDay: maxTradesPerDayOption,
     minCapital: minCapitalOption,
+    profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -1729,33 +2474,39 @@ export const soakCommand = Command.make(
       const db = new Database(sqlitePath);
       db.exec("PRAGMA foreign_keys = ON;");
 
-      const watchlistPath = resolve(path.homeDir, "data", args.watchlist);
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const mergedArgs = Option.isSome(profile)
+        ? mergeSoakArgs(args, profile.value)
+        : args;
+
+      const watchlistPath = resolve(path.homeDir, "data", mergedArgs.watchlist);
       const watchlistEntries = yield* loadSoakWatchlist(watchlistPath);
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
       const soakRiskOverrides: MutablePartialRiskLimits = {};
-      if (Option.isSome(args.maxDrawdownPct))
-        soakRiskOverrides.maxDrawdownPct = args.maxDrawdownPct.value;
-      if (Option.isSome(args.maxDailyLossPct))
-        soakRiskOverrides.maxDailyLossPct = args.maxDailyLossPct.value;
-      if (Option.isSome(args.maxPositionSizePct))
-        soakRiskOverrides.maxPositionSizePct = args.maxPositionSizePct.value;
-      if (Option.isSome(args.maxTradesPerDay))
-        soakRiskOverrides.maxTradesPerDay = args.maxTradesPerDay.value;
-      if (Option.isSome(args.minCapital))
-        soakRiskOverrides.minCapital = args.minCapital.value;
-      const riskGuardLayer = RiskGuardLive(args.live, soakRiskOverrides);
+      if (Option.isSome(mergedArgs.maxDrawdownPct))
+        soakRiskOverrides.maxDrawdownPct = mergedArgs.maxDrawdownPct.value;
+      if (Option.isSome(mergedArgs.maxDailyLossPct))
+        soakRiskOverrides.maxDailyLossPct = mergedArgs.maxDailyLossPct.value;
+      if (Option.isSome(mergedArgs.maxPositionSizePct))
+        soakRiskOverrides.maxPositionSizePct =
+          mergedArgs.maxPositionSizePct.value;
+      if (Option.isSome(mergedArgs.maxTradesPerDay))
+        soakRiskOverrides.maxTradesPerDay = mergedArgs.maxTradesPerDay.value;
+      if (Option.isSome(mergedArgs.minCapital))
+        soakRiskOverrides.minCapital = mergedArgs.minCapital.value;
+      const riskGuardLayer = RiskGuardLive(mergedArgs.live, soakRiskOverrides);
       const killSwitchLayer = KillSwitchSQLiteLive(db);
       const circuitBreakerMaxLoss = Option.getOrElse(
-        args.maxDailyLossPct,
+        mergedArgs.maxDailyLossPct,
         () => 2,
       );
       const circuitBreakerLayer = CircuitBreakerSQLiteLive(
         db,
         circuitBreakerMaxLoss,
       );
-      const marketDataLayer = args.live
+      const marketDataLayer = mergedArgs.live
         ? MarketDataGatewayLive
         : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
@@ -1769,13 +2520,14 @@ export const soakCommand = Command.make(
         circuitBreakerLayer,
       );
 
-      const spotAdapterLayer = args.live
+      const spotAdapterLayer = mergedArgs.live
         ? BinanceLiveExchangeAdapterLive({
-            apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
-            apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
+            apiKey: mergedArgs.apiKey || process.env.BINANCE_API_KEY || "",
+            apiSecret:
+              mergedArgs.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
-      const futuresAdapterLayer = args.live
+      const futuresAdapterLayer = mergedArgs.live
         ? Layer.provide(
             BitgetFuturesExchangeAdapterLive,
             Layer.provide(
@@ -1786,23 +2538,28 @@ export const soakCommand = Command.make(
         : SimulatedFuturesExchangeAdapterLive();
 
       const composerConfig = buildBacktestComposerConfig(
-        args.priceOnly,
-        args.noRsi,
-        args.noTrend,
-        args.regimeMode,
+        mergedArgs.priceOnly,
+        mergedArgs.noRsi,
+        mergedArgs.noTrend,
+        mergedArgs.regimeMode,
+        mergedArgs.volumeMinRatio,
+        mergedArgs.volumeLookback,
+        mergedArgs.minConfluence,
+        mergedArgs.entryCandleConfirm,
+        mergedArgs.momentumConfirmBars,
       );
 
-      const marginModeParsed = parseMarginMode(args.marginMode);
-      const productTypeParsed = parseProductType(args.productType);
+      const marginModeParsed = parseMarginMode(mergedArgs.marginMode);
+      const productTypeParsed = parseProductType(mergedArgs.productType);
 
       const soakWatchlist: SoakSymbol[] = watchlistEntries.map((e) => ({
         symbol: e.symbol,
-        exchange: e.exchange ?? args.exchange,
+        exchange: e.exchange ?? mergedArgs.exchange,
         productType:
-          e.productType ?? (args.futures ? productTypeParsed : undefined),
-        leverage: e.leverage ?? args.leverage,
+          e.productType ?? (mergedArgs.futures ? productTypeParsed : undefined),
+        leverage: e.leverage ?? mergedArgs.leverage,
         marginMode: (e.marginMode ??
-          args.marginMode) as SoakSymbol["marginMode"],
+          mergedArgs.marginMode) as SoakSymbol["marginMode"],
         bestParams: e.bestParams,
       }));
 
@@ -1812,7 +2569,8 @@ export const soakCommand = Command.make(
         bestParams?: SoakSymbol["bestParams"],
       ): Effect.Effect<IterationResult, unknown, never> => {
         const entry = soakWatchlist.find((e) => e.symbol === symbol);
-        const useFutures = entry?.productType !== undefined || args.futures;
+        const useFutures =
+          entry?.productType !== undefined || mergedArgs.futures;
         const futuresExchange =
           useFutures && exchange === "binance" ? "bitget-futures" : exchange;
 
@@ -1820,24 +2578,38 @@ export const soakCommand = Command.make(
           const opts: FuturesPaperTradingOptions = {
             exchange: futuresExchange,
             symbol,
-            timeframe: args.timeframe,
+            timeframe: mergedArgs.timeframe,
             composerConfig,
-            positionSizePct: args.positionSize,
-            feePct: args.fee,
-            minConfidence: bestParams?.minConfidence ?? args.minConfidence,
+            positionSizePct: mergedArgs.positionSize,
+            riskPerTradePct: mergedArgs.riskPerTrade,
+            maxPositionSizePct: mergedArgs.maxPositionSize,
+            feePct: mergedArgs.fee,
+            minConfidence:
+              bestParams?.minConfidence ?? mergedArgs.minConfidence,
             useAtrStops:
               bestParams?.atrStopMultiplier !== undefined
                 ? true
-                : args.useAtrStops,
+                : mergedArgs.useAtrStops,
             atrStopMultiplier:
-              bestParams?.atrStopMultiplier ?? args.atrStopMultiplier,
+              bestParams?.atrStopMultiplier ?? mergedArgs.atrStopMultiplier,
             atrTakeProfitMultiplier:
               bestParams?.atrTakeProfitMultiplier ??
-              args.atrTakeProfitMultiplier,
-            holdUntilStop: args.holdUntilStop,
-            initialCapital: args.capital,
-            isLive: args.live,
-            leverage: entry?.leverage ?? args.leverage,
+              mergedArgs.atrTakeProfitMultiplier,
+            atrRiskReward: mergedArgs.atrRiskReward,
+            scaleOutAtR: mergedArgs.scaleOutAtR,
+            scaleOutPct: mergedArgs.scaleOutPct,
+            volatilityLookback: mergedArgs.volatilityLookback,
+            volatilityLowPct: mergedArgs.volatilityLowPct,
+            volatilityHighPct: mergedArgs.volatilityHighPct,
+            volatilityLowFactor: mergedArgs.volatilityLowFactor,
+            volatilityHighFactor: mergedArgs.volatilityHighFactor,
+            stopLossPct: mergedArgs.stopLoss,
+            takeProfitPct: mergedArgs.takeProfit,
+            holdUntilStop: mergedArgs.holdUntilStop,
+            minAtrPct: mergedArgs.minAtrPct,
+            initialCapital: mergedArgs.capital,
+            isLive: mergedArgs.live,
+            leverage: entry?.leverage ?? mergedArgs.leverage,
             marginMode: entry?.marginMode ?? marginModeParsed,
             productType: entry?.productType ?? productTypeParsed,
           };
@@ -1857,22 +2629,36 @@ export const soakCommand = Command.make(
         const opts: PaperTradingOptions = {
           exchange,
           symbol,
-          timeframe: args.timeframe,
+          timeframe: mergedArgs.timeframe,
           composerConfig,
-          positionSizePct: args.positionSize,
-          feePct: args.fee,
-          minConfidence: bestParams?.minConfidence ?? args.minConfidence,
+          positionSizePct: mergedArgs.positionSize,
+          riskPerTradePct: mergedArgs.riskPerTrade,
+          maxPositionSizePct: mergedArgs.maxPositionSize,
+          feePct: mergedArgs.fee,
+          minConfidence: bestParams?.minConfidence ?? mergedArgs.minConfidence,
           useAtrStops:
             bestParams?.atrStopMultiplier !== undefined
               ? true
-              : args.useAtrStops,
+              : mergedArgs.useAtrStops,
           atrStopMultiplier:
-            bestParams?.atrStopMultiplier ?? args.atrStopMultiplier,
+            bestParams?.atrStopMultiplier ?? mergedArgs.atrStopMultiplier,
           atrTakeProfitMultiplier:
-            bestParams?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
-          holdUntilStop: args.holdUntilStop,
-          initialCapital: args.capital,
-          isLive: args.live,
+            bestParams?.atrTakeProfitMultiplier ??
+            mergedArgs.atrTakeProfitMultiplier,
+          atrRiskReward: mergedArgs.atrRiskReward,
+          scaleOutAtR: mergedArgs.scaleOutAtR,
+          scaleOutPct: mergedArgs.scaleOutPct,
+          volatilityLookback: mergedArgs.volatilityLookback,
+          volatilityLowPct: mergedArgs.volatilityLowPct,
+          volatilityHighPct: mergedArgs.volatilityHighPct,
+          volatilityLowFactor: mergedArgs.volatilityLowFactor,
+          volatilityHighFactor: mergedArgs.volatilityHighFactor,
+          stopLossPct: mergedArgs.stopLoss,
+          takeProfitPct: mergedArgs.takeProfit,
+          holdUntilStop: mergedArgs.holdUntilStop,
+          minAtrPct: mergedArgs.minAtrPct,
+          initialCapital: mergedArgs.capital,
+          isLive: mergedArgs.live,
         };
         return runPaperTradingIteration(opts).pipe(
           Effect.provide(spotAdapterLayer),
@@ -1889,20 +2675,28 @@ export const soakCommand = Command.make(
 
       const soakOptions: SoakOptions = {
         watchlist: soakWatchlist,
-        iterationsPerSymbol: args.iterations,
-        intervalSeconds: args.interval,
-        isLive: args.live,
-        initialCapital: args.capital,
-        positionSizePct: args.positionSize,
-        feePct: args.fee,
-        minConfidence: args.minConfidence,
-        useAtrStops: args.useAtrStops,
-        atrStopMultiplier: args.atrStopMultiplier,
-        atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-        holdUntilStop: args.holdUntilStop,
-        regimeMode: args.regimeMode,
+        iterationsPerSymbol: mergedArgs.iterations,
+        intervalSeconds: mergedArgs.interval,
+        isLive: mergedArgs.live,
+        initialCapital: mergedArgs.capital,
+        positionSizePct: mergedArgs.positionSize,
+        feePct: mergedArgs.fee,
+        minConfidence: mergedArgs.minConfidence,
+        useAtrStops: mergedArgs.useAtrStops,
+        atrStopMultiplier: mergedArgs.atrStopMultiplier,
+        atrTakeProfitMultiplier: mergedArgs.atrTakeProfitMultiplier,
+        atrRiskReward: mergedArgs.atrRiskReward,
+        scaleOutAtR: mergedArgs.scaleOutAtR,
+        scaleOutPct: mergedArgs.scaleOutPct,
+        volatilityLookback: mergedArgs.volatilityLookback,
+        volatilityLowPct: mergedArgs.volatilityLowPct,
+        volatilityHighPct: mergedArgs.volatilityHighPct,
+        volatilityLowFactor: mergedArgs.volatilityLowFactor,
+        volatilityHighFactor: mergedArgs.volatilityHighFactor,
+        holdUntilStop: mergedArgs.holdUntilStop,
+        regimeMode: mergedArgs.regimeMode,
         composerConfig,
-        leverage: args.leverage,
+        leverage: mergedArgs.leverage,
         marginMode: marginModeParsed,
         productType: productTypeParsed,
       };
@@ -1933,9 +2727,46 @@ export const soakCommand = Command.make(
     }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run multi-ticker paper-trading soak harness"));
 
+const profileNameOption = Options.text("name").pipe(
+  Options.withDescription(
+    "Profile name (used as filename in ~/.neuratrade/profiles)",
+  ),
+);
+
+const profileSaveCommand = Command.make(
+  "save",
+  { name: profileNameOption, ...backtestOptions },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const { name, profile: _profile, ...rest } = args;
+      const profile = buildStrategyProfileFromArgs(
+        name,
+        rest as ResolvedBacktestArgs,
+      );
+      yield* saveStrategyProfile(path.homeDir, name, profile);
+      yield* Console.log(
+        `Profile saved to ${resolve(path.homeDir, "profiles", `${name}.json`)}`,
+      );
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Save current backtest options as a strategy profile",
+  ),
+);
+
+const profileCommand = Command.make("profile", {}, () =>
+  Console.log(
+    "Profile commands. Use 'profile save --name <name> [backtest options]'.",
+  ),
+).pipe(
+  Command.withDescription("Strategy profile management"),
+  Command.withSubcommands([profileSaveCommand]),
+);
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -1945,5 +2776,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     scanCommand,
     paperTradeCommand,
     soakCommand,
+    profileCommand,
   ]),
 );

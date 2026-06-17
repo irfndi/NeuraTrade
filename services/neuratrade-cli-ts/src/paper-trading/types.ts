@@ -20,6 +20,8 @@ export interface PaperPosition {
   readonly openedAt: Date;
   readonly signalId: string;
   readonly capitalAtEntry?: number;
+  readonly scaledOut: boolean;
+  readonly scaleOutPrice: number;
 }
 
 export interface PaperTrade {
@@ -33,7 +35,7 @@ export interface PaperTrade {
   readonly size: number;
   readonly pnl: number;
   readonly pnlPct: number;
-  readonly exitReason: "signal" | "stop_loss" | "take_profit";
+  readonly exitReason: "signal" | "stop_loss" | "take_profit" | "scale_out";
   readonly openedAt: Date;
   readonly closedAt: Date;
 }

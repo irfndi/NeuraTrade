@@ -147,6 +147,89 @@ describe("ScalpingSignalComposer", () => {
     expect(Math.abs(signal!.attributionWeights.imbalance)).toBeCloseTo(0, 10);
     expect(Math.abs(signal!.attributionWeights.liquidity)).toBeCloseTo(0, 10);
   });
+
+  it("filters low-volume candles with volumeMinRatio", () => {
+    const candles = makeCandles(30, 100, "up").map((c, i) => ({
+      ...c,
+      volume: i === 29 ? 1 : 100,
+    }));
+    const config = {
+      ...defaultComposerConfig,
+      thresholds: {
+        ...defaultComposerConfig.thresholds,
+        volumeMinRatio: 1.0,
+        volumeLookback: 20,
+      },
+    };
+    const signal = composeSignal(makeOHLCV(candles), makeOB(), config);
+
+    expect(signal).toBeNull();
+  });
+
+  it("requires entry candle confirmation when enabled", () => {
+    const candles = makeCandles(30, 100, "up");
+    // Force the last candle to be a red candle in an uptrend.
+    candles[candles.length - 1] = {
+      ...candles[candles.length - 1],
+      open: candles[candles.length - 1].close * 1.01,
+      close: candles[candles.length - 1].close * 0.99,
+      high: candles[candles.length - 1].close * 1.02,
+      low: candles[candles.length - 1].close * 0.98,
+    };
+    const config = {
+      ...defaultComposerConfig,
+      thresholds: {
+        ...defaultComposerConfig.thresholds,
+        entryCandleConfirm: true,
+      },
+    };
+    const signal = composeSignal(makeOHLCV(candles), makeOB(), config);
+
+    expect(signal).toBeNull();
+  });
+
+  it("requires momentum confirmation when enabled", () => {
+    const candles = makeCandles(50, 100, "up");
+    // Make the net return over the last 3 candles negative while keeping the
+    // longer-term trend positive.
+    const anchor = candles[candles.length - 4].close;
+    const c = candles[candles.length - 1];
+    candles[candles.length - 1] = {
+      ...c,
+      open: anchor * 1.002,
+      close: anchor * 0.995,
+      high: anchor * 1.003,
+      low: anchor * 0.994,
+    };
+    const config = {
+      ...defaultComposerConfig,
+      thresholds: {
+        ...defaultComposerConfig.thresholds,
+        momentumConfirmBars: 3,
+      },
+    };
+    const ob = makeOB({ exchange: "synthetic" });
+    const signal = composeSignal(makeOHLCV(candles), ob, config);
+
+    expect(signal).toBeNull();
+  });
+
+  it("requires confluence when minConfluence is set", () => {
+    // Strong uptrend with synthetic OB gives a buy signal from a handful of
+    // components; demanding 10 agreeing components suppresses it.
+    const candles = makeCandles(40, 100, "up");
+    const ob = makeOB({ exchange: "synthetic" });
+    const config = {
+      ...defaultComposerConfig,
+      thresholds: {
+        ...defaultComposerConfig.thresholds,
+        minConfluence: 10,
+      },
+    };
+    const signal = composeSignal(makeOHLCV(candles), ob, config);
+
+    expect(signal).toBeNull();
+  });
 });
 
 describe("validateWeights", () => {

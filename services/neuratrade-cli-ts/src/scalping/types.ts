@@ -117,6 +117,21 @@ export interface ComposerThresholds {
    *  The filter is skipped when insufficient candles are available. */
   readonly trendFilterFastPeriod?: number;
   readonly trendFilterSlowPeriod?: number;
+  /** Minimum ratio of current volume to its moving average required to enter.
+   *  0 disables the filter. Typical values: 1.0-1.5. */
+  readonly volumeMinRatio?: number;
+  /** Lookback period for volume moving average. Default 20. */
+  readonly volumeLookback?: number;
+  /** Minimum number of independent components that must agree with the final
+   *  direction. 0 disables the filter. Typical values: 2-3. */
+  readonly minConfluence?: number;
+  /** If true, require the entry candle's body to align with the signal
+   *  direction (green candle for buy, red candle for sell). */
+  readonly entryCandleConfirm?: boolean;
+  /** Number of recent candles used for short-term momentum confirmation.
+   *  A signal is only emitted when the net return over those candles aligns
+   *  with the signal direction. 0 disables the filter. */
+  readonly momentumConfirmBars?: number;
 }
 
 export interface ComposerConfig {

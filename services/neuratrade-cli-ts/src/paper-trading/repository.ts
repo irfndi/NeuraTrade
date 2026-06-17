@@ -33,6 +33,16 @@ export interface PaperTradingRepositoryService {
     exitReason: PaperTrade["exitReason"],
     closedAt: Date,
   ) => Effect.Effect<PaperTrade, PaperTradingRepositoryError, never>;
+  readonly scaleOutPosition: (
+    position: PaperPosition,
+    exitPrice: number,
+    scaleOutPct: number,
+    closedAt: Date,
+  ) => Effect.Effect<
+    { readonly trade: PaperTrade; readonly updatedPosition: PaperPosition },
+    PaperTradingRepositoryError,
+    never
+  >;
   readonly getPortfolio: () => Effect.Effect<
     { readonly capital: number; readonly peakCapital: number },
     PaperTradingRepositoryError,
@@ -84,7 +94,9 @@ CREATE TABLE IF NOT EXISTS paper_positions (
   stop_loss REAL NOT NULL,
   take_profit REAL NOT NULL,
   opened_at DATETIME NOT NULL,
-  signal_id TEXT NOT NULL
+  signal_id TEXT NOT NULL,
+  scaled_out INTEGER NOT NULL DEFAULT 0,
+  scale_out_price REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -137,7 +149,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const row = this.db
           .query(
-            `SELECT id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id
+            `SELECT id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id, scaled_out, scale_out_price
              FROM paper_positions
              WHERE exchange = ? AND symbol = ?`,
           )
@@ -153,6 +165,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           take_profit: number;
           opened_at: string;
           signal_id: string;
+          scaled_out: number;
+          scale_out_price: number;
         } | null;
 
         if (!row) return null;
@@ -169,6 +183,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           takeProfit: row.take_profit,
           openedAt: new Date(row.opened_at),
           signalId: row.signal_id,
+          scaledOut: Boolean(row.scaled_out),
+          scaleOutPrice: row.scale_out_price,
         };
       },
       catch: (err) =>
@@ -187,8 +203,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db
           .query(
             `INSERT OR REPLACE INTO paper_positions
-             (id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id, scaled_out, scale_out_price)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             position.id,
@@ -202,6 +218,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             position.takeProfit,
             position.openedAt.toISOString(),
             position.signalId,
+            position.scaledOut ? 1 : 0,
+            position.scaleOutPrice,
           );
       },
       catch: (err) =>
@@ -232,30 +250,34 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         const pnlNum = pnl.toNumber();
         const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const insert = this.db.query(
-          `INSERT INTO paper_trades
-           (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        insert.run(
-          tradeId,
-          position.exchange,
-          position.symbol,
-          position.timeframe,
-          position.side,
-          position.entryPrice,
-          exitPrice,
-          position.size,
-          pnlNum,
-          pnlPct,
-          exitReason,
-          position.openedAt.toISOString(),
-          closedAt.toISOString(),
-        );
+        // Wrap trade insertion and position deletion in a transaction so the
+        // close is atomic.
+        this.db.transaction(() => {
+          const insert = this.db.query(
+            `INSERT INTO paper_trades
+             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          );
+          insert.run(
+            tradeId,
+            position.exchange,
+            position.symbol,
+            position.timeframe,
+            position.side,
+            position.entryPrice,
+            exitPrice,
+            position.size,
+            pnlNum,
+            pnlPct,
+            exitReason,
+            position.openedAt.toISOString(),
+            closedAt.toISOString(),
+          );
 
-        this.db
-          .query("DELETE FROM paper_positions WHERE id = ?")
-          .run(position.id);
+          this.db
+            .query("DELETE FROM paper_positions WHERE id = ?")
+            .run(position.id);
+        })();
 
         return {
           id: tradeId,
@@ -276,6 +298,103 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to close position: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  scaleOutPosition(
+    position: PaperPosition,
+    exitPrice: number,
+    scaleOutPct: number,
+    closedAt: Date,
+  ): Effect.Effect<
+    { readonly trade: PaperTrade; readonly updatedPosition: PaperPosition },
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const pct = Math.max(0, Math.min(100, scaleOutPct));
+        const partialSize = new Decimal(position.size).times(pct / 100);
+        if (partialSize.lessThanOrEqualTo(0)) {
+          throw new Error("scale-out size must be positive");
+        }
+
+        const entryPrice = new Decimal(position.entryPrice);
+        const exitPriceDec = new Decimal(exitPrice);
+        const priceDiff =
+          position.side === "long"
+            ? exitPriceDec.minus(entryPrice)
+            : entryPrice.minus(exitPriceDec);
+        const pnl = priceDiff.times(partialSize);
+        const pnlPct = pnl
+          .div(entryPrice.times(partialSize))
+          .times(100)
+          .toNumber();
+        const pnlNum = pnl.toNumber();
+        const remainingSize = new Decimal(position.size)
+          .minus(partialSize)
+          .toNumber();
+        const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        this.db.transaction(() => {
+          const insert = this.db.query(
+            `INSERT INTO paper_trades
+             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          );
+          insert.run(
+            tradeId,
+            position.exchange,
+            position.symbol,
+            position.timeframe,
+            position.side,
+            position.entryPrice,
+            exitPrice,
+            partialSize.toNumber(),
+            pnlNum,
+            pnlPct,
+            "scale_out",
+            position.openedAt.toISOString(),
+            closedAt.toISOString(),
+          );
+
+          this.db
+            .query(
+              `UPDATE paper_positions
+               SET size = ?, stop_loss = ?, scaled_out = 1
+               WHERE id = ?`,
+            )
+            .run(remainingSize, position.entryPrice, position.id);
+        })();
+
+        const trade: PaperTrade = {
+          id: tradeId,
+          exchange: position.exchange,
+          symbol: position.symbol,
+          timeframe: position.timeframe,
+          side: position.side,
+          entryPrice: position.entryPrice,
+          exitPrice,
+          size: partialSize.toNumber(),
+          pnl: pnlNum,
+          pnlPct,
+          exitReason: "scale_out",
+          openedAt: position.openedAt,
+          closedAt,
+        };
+        const updatedPosition: PaperPosition = {
+          ...position,
+          size: remainingSize,
+          stopLoss: position.entryPrice,
+          scaledOut: true,
+        };
+        return { trade, updatedPosition };
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to scale out position: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });
