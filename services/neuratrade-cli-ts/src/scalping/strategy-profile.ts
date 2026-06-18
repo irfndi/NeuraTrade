@@ -36,6 +36,18 @@ const StrategyProfileParamsSchemaRaw = S.Struct({
   signalPersistence: S.optional(S.Number),
   lossConfidencePenalty: S.optional(S.Number),
   lossConfidenceDecay: S.optional(S.Number),
+  adxMin: S.optional(S.Number),
+  htfTimeframe: S.optional(S.String),
+  htfTrendFastPeriod: S.optional(S.Number),
+  htfTrendSlowPeriod: S.optional(S.Number),
+  entryPullbackEmaPeriod: S.optional(S.Number),
+  entryPullbackMarginPct: S.optional(S.Number),
+  minEfficiencyRatio: S.optional(S.Number),
+  efficiencyRatioPeriod: S.optional(S.Number),
+  rsiLongMax: S.optional(S.Number),
+  rsiShortMin: S.optional(S.Number),
+  bollingerLongMaxPctB: S.optional(S.Number),
+  bollingerShortMinPctB: S.optional(S.Number),
   exchange: S.optional(S.String),
   defaultSymbol: S.optional(S.String),
   timeframe: S.optional(S.String),
@@ -71,6 +83,18 @@ function defaultStrategyProfileParams(): StrategyProfileParams {
     signalPersistence: 0,
     lossConfidencePenalty: 0,
     lossConfidenceDecay: 0,
+    adxMin: 0,
+    htfTimeframe: undefined,
+    htfTrendFastPeriod: 50,
+    htfTrendSlowPeriod: 100,
+    entryPullbackEmaPeriod: 0,
+    entryPullbackMarginPct: 0.1,
+    minEfficiencyRatio: 0,
+    efficiencyRatioPeriod: 20,
+    rsiLongMax: 0,
+    rsiShortMin: 0,
+    bollingerLongMaxPctB: -1,
+    bollingerShortMinPctB: 2,
   };
 }
 
@@ -123,6 +147,32 @@ const StrategyProfileParamsSchema = S.Struct({
   ),
   lossConfidenceDecay: S.optional(S.Number).pipe(
     S.withDecodingDefault(() => 0),
+  ),
+  adxMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  htfTimeframe: S.optional(S.String),
+  htfTrendFastPeriod: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 50),
+  ),
+  htfTrendSlowPeriod: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 100),
+  ),
+  entryPullbackEmaPeriod: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 0),
+  ),
+  entryPullbackMarginPct: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 0.1),
+  ),
+  minEfficiencyRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  efficiencyRatioPeriod: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 20),
+  ),
+  rsiLongMax: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  rsiShortMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  bollingerLongMaxPctB: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => -1),
+  ),
+  bollingerShortMinPctB: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 2),
   ),
   exchange: S.optional(S.String),
   defaultSymbol: S.optional(S.String),
@@ -193,6 +243,18 @@ export interface ResolvedBacktestArgs {
   readonly momentumConfirmBars: number;
   readonly lossConfidencePenalty: number;
   readonly lossConfidenceDecay: number;
+  readonly adxMin: number;
+  readonly htfTimeframe?: string;
+  readonly htfTrendFastPeriod: number;
+  readonly htfTrendSlowPeriod: number;
+  readonly entryPullbackEmaPeriod: number;
+  readonly entryPullbackMarginPct: number;
+  readonly minEfficiencyRatio: number;
+  readonly efficiencyRatioPeriod: number;
+  readonly rsiLongMax: number;
+  readonly rsiShortMin: number;
+  readonly bollingerLongMaxPctB: number;
+  readonly bollingerShortMinPctB: number;
 }
 
 function profileDir(homeDir: string): string {
@@ -311,6 +373,18 @@ export function resolveBacktestArgs(
     signalPersistence: get("signalPersistence"),
     lossConfidencePenalty: get("lossConfidencePenalty"),
     lossConfidenceDecay: get("lossConfidenceDecay"),
+    adxMin: get("adxMin"),
+    htfTimeframe: get("htfTimeframe"),
+    htfTrendFastPeriod: get("htfTrendFastPeriod"),
+    htfTrendSlowPeriod: get("htfTrendSlowPeriod"),
+    entryPullbackEmaPeriod: get("entryPullbackEmaPeriod"),
+    entryPullbackMarginPct: get("entryPullbackMarginPct"),
+    minEfficiencyRatio: get("minEfficiencyRatio"),
+    efficiencyRatioPeriod: get("efficiencyRatioPeriod"),
+    rsiLongMax: get("rsiLongMax"),
+    rsiShortMin: get("rsiShortMin"),
+    bollingerLongMaxPctB: get("bollingerLongMaxPctB"),
+    bollingerShortMinPctB: get("bollingerShortMinPctB"),
   };
 
   // CLI defaults should not override profile values. Only use CLI values that
@@ -357,6 +431,18 @@ export function resolveBacktestArgs(
     momentumConfirmBars: 0,
     lossConfidencePenalty: 0,
     lossConfidenceDecay: 0,
+    adxMin: 0,
+    htfTimeframe: undefined,
+    htfTrendFastPeriod: 50,
+    htfTrendSlowPeriod: 100,
+    entryPullbackEmaPeriod: 0,
+    entryPullbackMarginPct: 0.1,
+    minEfficiencyRatio: 0,
+    efficiencyRatioPeriod: 20,
+    rsiLongMax: 0,
+    rsiShortMin: 0,
+    bollingerLongMaxPctB: -1,
+    bollingerShortMinPctB: 2,
   };
 
   const merged = { ...base } as ResolvedBacktestArgs;
@@ -413,6 +499,18 @@ export function buildStrategyProfileFromArgs(
       signalPersistence: args.signalPersistence,
       lossConfidencePenalty: args.lossConfidencePenalty,
       lossConfidenceDecay: args.lossConfidenceDecay,
+      adxMin: args.adxMin,
+      htfTimeframe: args.htfTimeframe,
+      htfTrendFastPeriod: args.htfTrendFastPeriod,
+      htfTrendSlowPeriod: args.htfTrendSlowPeriod,
+      entryPullbackEmaPeriod: args.entryPullbackEmaPeriod,
+      entryPullbackMarginPct: args.entryPullbackMarginPct,
+      minEfficiencyRatio: args.minEfficiencyRatio,
+      efficiencyRatioPeriod: args.efficiencyRatioPeriod,
+      rsiLongMax: args.rsiLongMax,
+      rsiShortMin: args.rsiShortMin,
+      bollingerLongMaxPctB: args.bollingerLongMaxPctB,
+      bollingerShortMinPctB: args.bollingerShortMinPctB,
     },
     symbols: {},
   };

@@ -7,7 +7,12 @@ import type {
   ScalpingSignal,
 } from "./types.js";
 import { composeSignal } from "./composer.js";
-import { calculateATR } from "./indicators.js";
+import {
+  calculateATR,
+  calculateBollingerBands,
+  calculateEMA,
+  calculateRSI,
+} from "./indicators.js";
 import { computeExitLevels } from "./exit-engine.js";
 import {
   computePerformanceMetrics,
@@ -121,6 +126,30 @@ export interface BacktestOptions {
    *  Decays by decay per candle. Helps avoid revenge trades in choppy regimes. */
   readonly lossConfidencePenalty?: number;
   readonly lossConfidenceDecay?: number;
+  /** Optional higher-timeframe candles for a trend filter. When provided, entries
+   *  are only allowed when the trade direction aligns with the HTF trend. */
+  readonly htfCandles?: readonly CandleLike[];
+  /** HTF EMA fast period. Default 50. */
+  readonly htfTrendFastPeriod?: number;
+  /** HTF EMA slow period. Default 100. */
+  readonly htfTrendSlowPeriod?: number;
+  /** When > 0, only enter when price is within this percentage of the EMA of
+   *  the given period (pullback / value-entry filter). 0 disables. */
+  readonly entryPullbackEmaPeriod?: number;
+  readonly entryPullbackMarginPct?: number;
+  /** Kaufman Efficiency Ratio filter. When > 0, only enter when the ER over the
+   *  configured lookback is >= this value (0.0-1.0). 0 disables.
+   *  High ER = strong trend, low ER = chop. */
+  readonly minEfficiencyRatio?: number;
+  readonly efficiencyRatioPeriod?: number;
+  /** Leading RSI neutral-zone filter. For longs, require RSI <= rsiLongMax.
+   *  For shorts, require RSI >= rsiShortMin. 0 disables. */
+  readonly rsiLongMax?: number;
+  readonly rsiShortMin?: number;
+  /** Leading Bollinger %B pullback filter. For longs, require %B <= bollingerLongMaxPctB.
+   *  For shorts, require %B >= bollingerShortMinPctB. Values outside [0,1] disable. */
+  readonly bollingerLongMaxPctB?: number;
+  readonly bollingerShortMinPctB?: number;
 }
 
 /**
@@ -356,6 +385,74 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
       persistenceMet
     ) {
       const side = signal.direction === "buy" ? "long" : "short";
+
+      if (
+        options.htfCandles &&
+        options.htfCandles.length > 0 &&
+        !alignsWithHigherTimeframeTrend(
+          side,
+          options.htfCandles,
+          options.htfTrendFastPeriod,
+          options.htfTrendSlowPeriod,
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        options.entryPullbackEmaPeriod &&
+        options.entryPullbackEmaPeriod > 0 &&
+        !priceWithinEmaPullback(
+          current.close,
+          window,
+          options.entryPullbackEmaPeriod,
+          options.entryPullbackMarginPct ?? 0.1,
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        options.minEfficiencyRatio &&
+        options.minEfficiencyRatio > 0 &&
+        efficiencyRatio(window, options.efficiencyRatioPeriod ?? 20) <
+          options.minEfficiencyRatio
+      ) {
+        continue;
+      }
+
+      if (
+        (options.rsiLongMax || options.rsiShortMin) &&
+        !passesRsiNeutralZone(
+          window,
+          side,
+          options.rsiLongMax ?? 100,
+          options.rsiShortMin ?? 0,
+        )
+      ) {
+        continue;
+      }
+
+      const useBollingerLong =
+        options.bollingerLongMaxPctB !== undefined &&
+        options.bollingerLongMaxPctB >= 0 &&
+        options.bollingerLongMaxPctB <= 1;
+      const useBollingerShort =
+        options.bollingerShortMinPctB !== undefined &&
+        options.bollingerShortMinPctB >= 0 &&
+        options.bollingerShortMinPctB <= 1;
+      if (
+        (useBollingerLong || useBollingerShort) &&
+        !passesBollingerPullback(
+          window,
+          side,
+          useBollingerLong ? options.bollingerLongMaxPctB! : 1,
+          useBollingerShort ? options.bollingerShortMinPctB! : 0,
+        )
+      ) {
+        continue;
+      }
+
       const rawEntry = next.open;
       const entryPrice = applySlippage(
         rawEntry,
@@ -569,6 +666,77 @@ function syntheticOrderBook(candle: CandleLike): OrderBookMetricsInput {
     midPrice,
     timestamp: candle.timestamp,
   };
+}
+
+function alignsWithHigherTimeframeTrend(
+  side: "long" | "short",
+  htfCandles: readonly CandleLike[],
+  fastPeriod = 50,
+  slowPeriod = 100,
+): boolean {
+  if (htfCandles.length < slowPeriod + 1) return true;
+  const closes = htfCandles.map((c) => c.close);
+  const fastEMA = calculateEMA(closes, fastPeriod);
+  const slowEMA = calculateEMA(closes, slowPeriod);
+  const lastFast = fastEMA[fastEMA.length - 1];
+  const lastSlow = slowEMA[slowEMA.length - 1];
+  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0) {
+    return true;
+  }
+  const htfUp = lastFast > lastSlow;
+  return side === "long" ? htfUp : !htfUp;
+}
+
+function efficiencyRatio(candles: readonly CandleLike[], period = 20): number {
+  if (candles.length < period + 1) return 0;
+  const start = candles[candles.length - period - 1].close;
+  const end = candles[candles.length - 1].close;
+  if (start === 0) return 0;
+  const netChange = Math.abs(end - start);
+  let sumChanges = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    sumChanges += Math.abs(candles[i].close - candles[i - 1].close);
+  }
+  return sumChanges === 0 ? 0 : netChange / sumChanges;
+}
+
+function passesRsiNeutralZone(
+  candles: readonly CandleLike[],
+  side: "long" | "short",
+  rsiLongMax: number,
+  rsiShortMin: number,
+): boolean {
+  const rsi = calculateRSI(candles, 14);
+  if (rsi === null) return true;
+  if (side === "long") return rsi <= rsiLongMax;
+  return rsi >= rsiShortMin;
+}
+
+function passesBollingerPullback(
+  candles: readonly CandleLike[],
+  side: "long" | "short",
+  longMaxPctB: number,
+  shortMinPctB: number,
+): boolean {
+  const bb = calculateBollingerBands(candles, 20);
+  if (bb === null) return true;
+  if (side === "long") return bb.percentB <= longMaxPctB;
+  return bb.percentB >= shortMinPctB;
+}
+
+function priceWithinEmaPullback(
+  price: number,
+  candles: readonly CandleLike[],
+  period: number,
+  marginPct: number,
+): boolean {
+  if (candles.length < period + 1 || price <= 0) return true;
+  const closes = candles.map((c) => c.close);
+  const emaSeries = calculateEMA(closes, period);
+  const ema = emaSeries[emaSeries.length - 1];
+  if (Number.isNaN(ema) || ema <= 0) return true;
+  const margin = marginPct / 100;
+  return price >= ema * (1 - margin) && price <= ema * (1 + margin);
 }
 
 function calculatePositionValue(

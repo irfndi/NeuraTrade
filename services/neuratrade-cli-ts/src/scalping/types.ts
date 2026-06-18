@@ -107,6 +107,9 @@ export interface ComposerThresholds {
   readonly rsiOverboughtStrong: number;
   readonly adxStrongTrend: number;
   readonly adxWeakTrend: number;
+  /** Optional override for the minimum ADX required to enter. When 0 the
+   *  existing adxWeakTrend default is used. */
+  readonly adxMin?: number;
   readonly atrMaxPctOfPrice: number;
   readonly bollingerEntryMaxPct: number;
   readonly bollingerEntryMinPct: number;

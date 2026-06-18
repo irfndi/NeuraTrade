@@ -534,7 +534,8 @@ function buildRegimeComponent(
   } else {
     // Trend-strength regime: require ADX, DI lines, Bollinger position, and
     // higher-timeframe trend alignment to agree before entering.
-    if (adx > thresholds.adxWeakTrend) {
+    const minAdx = thresholds.adxMin ?? thresholds.adxWeakTrend;
+    if (adx > minAdx) {
       if (
         allowLong &&
         plusDI > minusDI &&

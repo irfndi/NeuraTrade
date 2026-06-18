@@ -62,6 +62,18 @@ function defaultResolvedArgs(
     momentumConfirmBars: 0,
     lossConfidencePenalty: 0,
     lossConfidenceDecay: 0,
+    adxMin: 0,
+    htfTimeframe: undefined,
+    htfTrendFastPeriod: 50,
+    htfTrendSlowPeriod: 100,
+    entryPullbackEmaPeriod: 0,
+    entryPullbackMarginPct: 0.1,
+    minEfficiencyRatio: 0,
+    efficiencyRatioPeriod: 20,
+    rsiLongMax: 0,
+    rsiShortMin: 0,
+    bollingerLongMaxPctB: -1,
+    bollingerShortMinPctB: 2,
     ...overrides,
   };
 }

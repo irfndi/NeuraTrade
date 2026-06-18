@@ -153,6 +153,13 @@ const minAtrPctOption = Options.float("min-atr-pct").pipe(
   ),
 );
 
+const adxMinOption = Options.float("adx-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum ADX required by the regime filter (0 = use default adxWeakTrend)",
+  ),
+);
+
 const volumeMinRatioOption = Options.float("volume-min-ratio").pipe(
   Options.withDefault(0),
   Options.withDescription(
@@ -206,6 +213,87 @@ const lossConfidenceDecayOption = Options.float("loss-confidence-decay").pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Decay the post-loss confidence penalty by this amount each candle (0 = step reset)",
+  ),
+);
+
+const htfTimeframeOption = Options.text("htf-timeframe").pipe(
+  Options.withDefault(""),
+  Options.withDescription(
+    "Higher-timeframe for trend filter (e.g. 1h). Empty disables the filter.",
+  ),
+);
+
+const htfTrendFastPeriodOption = Options.integer("htf-trend-fast").pipe(
+  Options.withDefault(50),
+  Options.withDescription("Higher-timeframe EMA fast period for trend filter"),
+);
+
+const htfTrendSlowPeriodOption = Options.integer("htf-trend-slow").pipe(
+  Options.withDefault(100),
+  Options.withDescription("Higher-timeframe EMA slow period for trend filter"),
+);
+
+const entryPullbackEmaPeriodOption = Options.integer(
+  "entry-pullback-ema-period",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Only enter when price is within --entry-pullback-margin-pct of this EMA period (0 = disabled)",
+  ),
+);
+
+const entryPullbackMarginPctOption = Options.float(
+  "entry-pullback-margin-pct",
+).pipe(
+  Options.withDefault(0.1),
+  Options.withDescription(
+    "Allowed distance from the pullback EMA as a percentage of price",
+  ),
+);
+
+const minEfficiencyRatioOption = Options.float("min-efficiency-ratio").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum Kaufman Efficiency Ratio (0-1) required to enter; high values filter chop",
+  ),
+);
+
+const efficiencyRatioPeriodOption = Options.integer(
+  "efficiency-ratio-period",
+).pipe(
+  Options.withDefault(20),
+  Options.withDescription("Lookback period for the efficiency-ratio filter"),
+);
+
+const rsiLongMaxOption = Options.float("rsi-long-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Leading RSI filter: only enter longs when RSI <= this value (0 = disabled)",
+  ),
+);
+
+const rsiShortMinOption = Options.float("rsi-short-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Leading RSI filter: only enter shorts when RSI >= this value (0 = disabled)",
+  ),
+);
+
+const bollingerLongMaxPctBOption = Options.float(
+  "bollinger-long-max-pctb",
+).pipe(
+  Options.withDefault(-1),
+  Options.withDescription(
+    "Leading Bollinger %B filter: only enter longs when %B <= this value (-1 = disabled)",
+  ),
+);
+
+const bollingerShortMinPctBOption = Options.float(
+  "bollinger-short-min-pctb",
+).pipe(
+  Options.withDefault(2),
+  Options.withDescription(
+    "Leading Bollinger %B filter: only enter shorts when %B >= this value (2 = disabled)",
   ),
 );
 
@@ -387,6 +475,7 @@ const backtestOptions = {
   trailingStopPct: trailingStopPctOption,
   trailingStopAtrMultiplier: trailingStopAtrMultOption,
   minAtrPct: minAtrPctOption,
+  adxMin: adxMinOption,
   volumeMinRatio: volumeMinRatioOption,
   volumeLookback: volumeLookbackOption,
   minConfluence: minConfluenceOption,
@@ -395,6 +484,17 @@ const backtestOptions = {
   momentumConfirmBars: momentumConfirmBarsOption,
   lossConfidencePenalty: lossConfidencePenaltyOption,
   lossConfidenceDecay: lossConfidenceDecayOption,
+  htfTimeframe: htfTimeframeOption,
+  htfTrendFastPeriod: htfTrendFastPeriodOption,
+  htfTrendSlowPeriod: htfTrendSlowPeriodOption,
+  entryPullbackEmaPeriod: entryPullbackEmaPeriodOption,
+  entryPullbackMarginPct: entryPullbackMarginPctOption,
+  minEfficiencyRatio: minEfficiencyRatioOption,
+  efficiencyRatioPeriod: efficiencyRatioPeriodOption,
+  rsiLongMax: rsiLongMaxOption,
+  rsiShortMin: rsiShortMinOption,
+  bollingerLongMaxPctB: bollingerLongMaxPctBOption,
+  bollingerShortMinPctB: bollingerShortMinPctBOption,
   profile: profileOption,
 };
 
@@ -453,6 +553,7 @@ function buildBacktestComposerConfig(
   minConfluence = 0,
   entryCandleConfirm = false,
   momentumConfirmBars = 0,
+  adxMin = 0,
 ): ComposerConfig {
   if (
     !priceOnly &&
@@ -462,7 +563,8 @@ function buildBacktestComposerConfig(
     volumeMinRatio <= 0 &&
     minConfluence <= 0 &&
     !entryCandleConfirm &&
-    momentumConfirmBars <= 0
+    momentumConfirmBars <= 0 &&
+    adxMin <= 0
   ) {
     return defaultComposerConfig;
   }
@@ -503,6 +605,7 @@ function buildBacktestComposerConfig(
       minConfluence,
       entryCandleConfirm,
       momentumConfirmBars,
+      adxMin,
     },
   };
 }
@@ -516,6 +619,15 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       symbol: args.symbol,
       timeframe: args.timeframe,
     });
+
+    const htfCandles =
+      args.htfTimeframe && args.htfTimeframe.trim().length > 0
+        ? yield* repo.getCandles({
+            exchange: args.exchange,
+            symbol: args.symbol,
+            timeframe: args.htfTimeframe,
+          })
+        : [];
 
     if (candles.length === 0) {
       return yield* Effect.fail(
@@ -535,6 +647,7 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       args.minConfluence,
       args.entryCandleConfirm,
       args.momentumConfirmBars,
+      args.adxMin,
     );
 
     return runBacktest({
@@ -572,6 +685,17 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       signalPersistence: args.signalPersistence,
       lossConfidencePenalty: args.lossConfidencePenalty,
       lossConfidenceDecay: args.lossConfidenceDecay,
+      htfCandles,
+      htfTrendFastPeriod: args.htfTrendFastPeriod,
+      htfTrendSlowPeriod: args.htfTrendSlowPeriod,
+      entryPullbackEmaPeriod: args.entryPullbackEmaPeriod,
+      entryPullbackMarginPct: args.entryPullbackMarginPct,
+      minEfficiencyRatio: args.minEfficiencyRatio,
+      efficiencyRatioPeriod: args.efficiencyRatioPeriod,
+      rsiLongMax: args.rsiLongMax,
+      rsiShortMin: args.rsiShortMin,
+      bollingerLongMaxPctB: args.bollingerLongMaxPctB,
+      bollingerShortMinPctB: args.bollingerShortMinPctB,
     });
   });
 }
