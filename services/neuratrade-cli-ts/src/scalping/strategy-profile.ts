@@ -48,6 +48,18 @@ const StrategyProfileParamsSchemaRaw = S.Struct({
   rsiShortMin: S.optional(S.Number),
   bollingerLongMaxPctB: S.optional(S.Number),
   bollingerShortMinPctB: S.optional(S.Number),
+  recordEquityCurve: S.optional(S.Boolean),
+  exportTrades: S.optional(S.String),
+  oosPct: S.optional(S.Number),
+  mcIterations: S.optional(S.Number),
+  leverage: S.optional(S.Number),
+  breakevenAtR: S.optional(S.Number),
+  maxBarsInTrade: S.optional(S.Number),
+  lossCooldownBars: S.optional(S.Number),
+  sessionStart: S.optional(S.String),
+  sessionEnd: S.optional(S.String),
+  autoRegimeFilter: S.optional(S.Boolean),
+  autoRegimeAdxThreshold: S.optional(S.Number),
   exchange: S.optional(S.String),
   defaultSymbol: S.optional(S.String),
   timeframe: S.optional(S.String),
@@ -95,6 +107,18 @@ function defaultStrategyProfileParams(): StrategyProfileParams {
     rsiShortMin: 0,
     bollingerLongMaxPctB: -1,
     bollingerShortMinPctB: 2,
+    recordEquityCurve: false,
+    exportTrades: "",
+    oosPct: 0,
+    mcIterations: 0,
+    leverage: 1,
+    breakevenAtR: 0,
+    maxBarsInTrade: 0,
+    lossCooldownBars: 0,
+    sessionStart: "",
+    sessionEnd: "",
+    autoRegimeFilter: false,
+    autoRegimeAdxThreshold: 25,
   };
 }
 
@@ -173,6 +197,24 @@ const StrategyProfileParamsSchema = S.Struct({
   ),
   bollingerShortMinPctB: S.optional(S.Number).pipe(
     S.withDecodingDefault(() => 2),
+  ),
+  recordEquityCurve: S.optional(S.Boolean).pipe(
+    S.withDecodingDefault(() => false),
+  ),
+  exportTrades: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
+  oosPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  mcIterations: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  leverage: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1)),
+  breakevenAtR: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  maxBarsInTrade: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  lossCooldownBars: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  sessionStart: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
+  sessionEnd: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
+  autoRegimeFilter: S.optional(S.Boolean).pipe(
+    S.withDecodingDefault(() => false),
+  ),
+  autoRegimeAdxThreshold: S.optional(S.Number).pipe(
+    S.withDecodingDefault(() => 25),
   ),
   exchange: S.optional(S.String),
   defaultSymbol: S.optional(S.String),
@@ -255,6 +297,18 @@ export interface ResolvedBacktestArgs {
   readonly rsiShortMin: number;
   readonly bollingerLongMaxPctB: number;
   readonly bollingerShortMinPctB: number;
+  readonly recordEquityCurve: boolean;
+  readonly exportTrades: string;
+  readonly oosPct: number;
+  readonly mcIterations: number;
+  readonly leverage: number;
+  readonly breakevenAtR: number;
+  readonly maxBarsInTrade: number;
+  readonly lossCooldownBars: number;
+  readonly sessionStart: string;
+  readonly sessionEnd: string;
+  readonly autoRegimeFilter: boolean;
+  readonly autoRegimeAdxThreshold: number;
 }
 
 function profileDir(homeDir: string): string {
@@ -385,6 +439,18 @@ export function resolveBacktestArgs(
     rsiShortMin: get("rsiShortMin"),
     bollingerLongMaxPctB: get("bollingerLongMaxPctB"),
     bollingerShortMinPctB: get("bollingerShortMinPctB"),
+    recordEquityCurve: get("recordEquityCurve"),
+    exportTrades: get("exportTrades"),
+    oosPct: get("oosPct"),
+    mcIterations: get("mcIterations"),
+    leverage: get("leverage"),
+    breakevenAtR: get("breakevenAtR"),
+    maxBarsInTrade: get("maxBarsInTrade"),
+    lossCooldownBars: get("lossCooldownBars"),
+    sessionStart: get("sessionStart"),
+    sessionEnd: get("sessionEnd"),
+    autoRegimeFilter: get("autoRegimeFilter"),
+    autoRegimeAdxThreshold: get("autoRegimeAdxThreshold"),
   };
 
   // CLI defaults should not override profile values. Only use CLI values that
@@ -443,6 +509,18 @@ export function resolveBacktestArgs(
     rsiShortMin: 0,
     bollingerLongMaxPctB: -1,
     bollingerShortMinPctB: 2,
+    recordEquityCurve: false,
+    exportTrades: "",
+    oosPct: 0,
+    mcIterations: 0,
+    leverage: 1,
+    breakevenAtR: 0,
+    maxBarsInTrade: 0,
+    lossCooldownBars: 0,
+    sessionStart: "",
+    sessionEnd: "",
+    autoRegimeFilter: false,
+    autoRegimeAdxThreshold: 25,
   };
 
   const merged = { ...base } as ResolvedBacktestArgs;
@@ -511,6 +589,18 @@ export function buildStrategyProfileFromArgs(
       rsiShortMin: args.rsiShortMin,
       bollingerLongMaxPctB: args.bollingerLongMaxPctB,
       bollingerShortMinPctB: args.bollingerShortMinPctB,
+      recordEquityCurve: args.recordEquityCurve,
+      exportTrades: args.exportTrades,
+      oosPct: args.oosPct,
+      mcIterations: args.mcIterations,
+      leverage: args.leverage,
+      breakevenAtR: args.breakevenAtR,
+      maxBarsInTrade: args.maxBarsInTrade,
+      lossCooldownBars: args.lossCooldownBars,
+      sessionStart: args.sessionStart,
+      sessionEnd: args.sessionEnd,
+      autoRegimeFilter: args.autoRegimeFilter,
+      autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
     },
     symbols: {},
   };

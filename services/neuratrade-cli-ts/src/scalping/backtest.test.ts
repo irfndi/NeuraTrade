@@ -212,4 +212,224 @@ describe("runBacktest scale-out and atrRiskReward", () => {
       expect(trade.pnl).toBeGreaterThan(0);
     }
   });
+
+  it("splits candles into in-sample and out-of-sample results", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(200, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      oosPct: 30,
+    });
+
+    expect(result.oosResult).toBeDefined();
+    expect(result.oosResult!.totalTrades).toBeGreaterThanOrEqual(0);
+    expect(result.oosResult!.maxDrawdownPct).toBeGreaterThanOrEqual(0);
+    expect(result.monteCarlo).toBeUndefined();
+  });
+
+  it("runs Monte Carlo drawdown simulation when requested", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(200, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      mcIterations: 100,
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.monteCarlo).toBeDefined();
+    expect(result.monteCarlo!.iterations).toBe(100);
+    expect(result.monteCarlo!.worstMaxDrawdownPct).toBeGreaterThanOrEqual(0);
+    expect(result.monteCarlo!.p95MaxDrawdownPct).toBeGreaterThanOrEqual(0);
+    expect(result.monteCarlo!.p95MaxDrawdownPct).toBeGreaterThanOrEqual(
+      result.monteCarlo!.medianMaxDrawdownPct,
+    );
+    expect(result.monteCarlo!.p99MaxDrawdownPct).toBeGreaterThanOrEqual(
+      result.monteCarlo!.p95MaxDrawdownPct,
+    );
+  });
+
+  it("applies leverage to futures returns", () => {
+    const unleveraged = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      isFutures: true,
+      leverage: 1,
+    });
+    const leveraged = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      isFutures: true,
+      leverage: 5,
+    });
+
+    expect(leveraged.totalTrades).toBeGreaterThan(0);
+    expect(leveraged.totalReturnPct).toBeGreaterThan(
+      unleveraged.totalReturnPct,
+    );
+  });
+
+  it("liquidates an over-leveraged futures position", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "down"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 50,
+      takeProfitPct: 50,
+      feePct: 0,
+      minConfidence: 0.1,
+      holdUntilStop: true,
+      isFutures: true,
+      leverage: 10,
+    });
+
+    expect(result.trades.some((t) => t.exitReason === "liquidation")).toBe(
+      true,
+    );
+  });
+
+  it("moves stop-loss to breakeven after reaching target R", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 20,
+      feePct: 0,
+      minConfidence: 0.1,
+      breakevenAtR: 1,
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+  });
+
+  it("exits via time-stop after max bars", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 50,
+      takeProfitPct: 50,
+      feePct: 0,
+      minConfidence: 0.1,
+      holdUntilStop: true,
+      maxBarsInTrade: 5,
+    });
+
+    expect(result.trades.some((t) => t.exitReason === "time_stop")).toBe(true);
+  });
+
+  it("skips entries during loss cooldown", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(200, 100, "flat"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 0.5,
+      takeProfitPct: 1,
+      feePct: 0,
+      minConfidence: 0.1,
+      lossCooldownBars: 10,
+    });
+
+    expect(result.totalReturnPct).toBeFinite();
+    expect(result.maxDrawdownPct).toBeGreaterThanOrEqual(0);
+  });
+
+  it("respects UTC session window", () => {
+    const candles = makeCandles(100, 100, "up").map((c, idx) => ({
+      ...c,
+      timestamp: new Date(Date.UTC(2025, 0, 1, idx % 24, 0, 0)),
+    }));
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles,
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      sessionStart: "02:00",
+      sessionEnd: "04:00",
+    });
+
+    for (const trade of result.trades) {
+      const hour = trade.entryTime.getUTCHours();
+      expect(hour).toBeGreaterThanOrEqual(2);
+      expect(hour).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("applies auto-regime filter", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      autoRegimeFilter: true,
+      autoRegimeAdxThreshold: 20,
+    });
+
+    expect(result.totalReturnPct).toBeFinite();
+    expect(result.maxDrawdownPct).toBeGreaterThanOrEqual(0);
+  });
 });

@@ -18,6 +18,7 @@ function makeTrade(overrides: Partial<BacktestTrade> = {}): BacktestTrade {
     exitPrice: 102,
     pnl: 2,
     pnlPct: 2,
+    netPnl: 2,
     exitReason: "take_profit",
     initialRiskPct: 0.01,
     ...overrides,

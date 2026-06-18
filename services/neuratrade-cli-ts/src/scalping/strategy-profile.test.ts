@@ -74,6 +74,18 @@ function defaultResolvedArgs(
     rsiShortMin: 0,
     bollingerLongMaxPctB: -1,
     bollingerShortMinPctB: 2,
+    recordEquityCurve: false,
+    exportTrades: "",
+    oosPct: 0,
+    mcIterations: 0,
+    leverage: 1,
+    breakevenAtR: 0,
+    maxBarsInTrade: 0,
+    lossCooldownBars: 0,
+    sessionStart: "",
+    sessionEnd: "",
+    autoRegimeFilter: false,
+    autoRegimeAdxThreshold: 25,
     ...overrides,
   };
 }

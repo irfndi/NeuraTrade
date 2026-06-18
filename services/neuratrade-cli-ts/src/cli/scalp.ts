@@ -2,7 +2,8 @@ import { Command, Options } from "@effect/cli";
 import { BunContext } from "@effect/platform-bun";
 import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
-import { resolve } from "node:path";
+import * as fs from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
 import {
   MarketDataRepository,
@@ -304,6 +305,77 @@ const profileOption = Options.text("profile").pipe(
   ),
 );
 
+const recordEquityCurveOption = Options.boolean("record-equity-curve").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Record equity curve at each trade close"),
+);
+
+const exportTradesOption = Options.text("export-trades").pipe(
+  Options.withDefault(""),
+  Options.withDescription(
+    "Write trades.csv (+ equity.csv if --record-equity-curve) to this path",
+  ),
+);
+
+const oosPctOption = Options.integer("oos-pct").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Percentage of recent candles to hold out for out-of-sample validation (0 disables)",
+  ),
+);
+
+const mcIterationsOption = Options.integer("mc-iterations").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Number of Monte Carlo permutations for drawdown simulation (0 disables)",
+  ),
+);
+
+const breakevenAtROption = Options.float("breakeven-at-r").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Move stop-loss to breakeven once price reaches this R profit (0 disables)",
+  ),
+);
+
+const maxBarsInTradeOption = Options.integer("max-bars-in-trade").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Maximum bars to hold a position before time-stop exit (0 disables)",
+  ),
+);
+
+const lossCooldownBarsOption = Options.integer("loss-cooldown-bars").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Bars to skip after a losing trade before allowing new entries (0 disables)",
+  ),
+);
+
+const sessionStartOption = Options.text("session-start").pipe(
+  Options.withDefault(""),
+  Options.withDescription("UTC session start in HH:MM (empty disables)"),
+);
+
+const sessionEndOption = Options.text("session-end").pipe(
+  Options.withDefault(""),
+  Options.withDescription("UTC session end in HH:MM (empty disables)"),
+);
+
+const autoRegimeFilterOption = Options.boolean("auto-regime-filter").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Block entries that do not match the detected trend/mean-reversion regime",
+  ),
+);
+
+const autoRegimeAdxThresholdOption = Options.float(
+  "auto-regime-adx-threshold",
+).pipe(
+  Options.withDefault(25),
+  Options.withDescription("ADX threshold for auto-regime detection"),
+);
+
 const confidenceOption = Options.float("min-confidence").pipe(
   Options.withDefault(0.5),
   Options.withDescription("Minimum signal confidence to enter a trade"),
@@ -495,6 +567,18 @@ const backtestOptions = {
   rsiShortMin: rsiShortMinOption,
   bollingerLongMaxPctB: bollingerLongMaxPctBOption,
   bollingerShortMinPctB: bollingerShortMinPctBOption,
+  recordEquityCurve: recordEquityCurveOption,
+  exportTrades: exportTradesOption,
+  oosPct: oosPctOption,
+  mcIterations: mcIterationsOption,
+  leverage: leverageOption,
+  breakevenAtR: breakevenAtROption,
+  maxBarsInTrade: maxBarsInTradeOption,
+  lossCooldownBars: lossCooldownBarsOption,
+  sessionStart: sessionStartOption,
+  sessionEnd: sessionEndOption,
+  autoRegimeFilter: autoRegimeFilterOption,
+  autoRegimeAdxThreshold: autoRegimeAdxThresholdOption,
   profile: profileOption,
 };
 
@@ -526,7 +610,8 @@ export const backtestCommand = Command.make(
         Effect.tap((r) => printBacktestResult(r)),
         Effect.catchAll((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`backtest failed: ${err.reason}`);
+            const msg = err instanceof Error ? err.message : err.reason;
+            yield* Console.error(`backtest failed: ${msg}`);
             return emptyResult(args.symbol);
           }),
         ),
@@ -613,6 +698,7 @@ function buildBacktestComposerConfig(
 function backtestProgram(args: ResolvedBacktestArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
+    const path = yield* Path;
 
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
@@ -650,7 +736,7 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       args.adxMin,
     );
 
-    return runBacktest({
+    const result = runBacktest({
       symbol: args.symbol,
       exchange: args.exchange,
       timeframe: args.timeframe,
@@ -696,7 +782,67 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       rsiShortMin: args.rsiShortMin,
       bollingerLongMaxPctB: args.bollingerLongMaxPctB,
       bollingerShortMinPctB: args.bollingerShortMinPctB,
+      recordEquityCurve: args.recordEquityCurve || args.exportTrades.length > 0,
+      oosPct: args.oosPct,
+      mcIterations: args.mcIterations,
+      leverage: args.leverage,
+      breakevenAtR: args.breakevenAtR,
+      maxBarsInTrade: args.maxBarsInTrade,
+      lossCooldownBars: args.lossCooldownBars,
+      sessionStart: args.sessionStart,
+      sessionEnd: args.sessionEnd,
+      autoRegimeFilter: args.autoRegimeFilter,
+      autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
     });
+
+    if (args.exportTrades && args.exportTrades.length > 0) {
+      const exportPath = isAbsolute(args.exportTrades)
+        ? args.exportTrades
+        : resolve(path.homeDir, "data", args.exportTrades);
+      yield* exportBacktestResults(result, exportPath);
+    }
+
+    return result;
+  });
+}
+
+function exportBacktestResults(
+  result: import("../scalping/backtest.js").BacktestResult,
+  exportPath: string,
+): Effect.Effect<void, Error> {
+  return Effect.gen(function* () {
+    fs.mkdirSync(dirname(exportPath), { recursive: true });
+
+    const tradesHeader =
+      "symbol,side,entryTime,exitTime,entryPrice,exitPrice,pnl,pnlPct,exitReason,initialRiskPct\n";
+    const tradesRows = result.trades
+      .map(
+        (t) =>
+          `${t.symbol},${t.side},${t.entryTime.toISOString()},${t.exitTime.toISOString()},${t.entryPrice.toFixed(8)},${t.exitPrice.toFixed(8)},${t.pnl.toFixed(8)},${t.pnlPct.toFixed(8)},${t.exitReason},${t.initialRiskPct.toFixed(8)}`,
+      )
+      .join("\n");
+    yield* Effect.tryPromise({
+      try: () =>
+        Bun.write(`${exportPath}-trades.csv`, tradesHeader + tradesRows),
+      catch: (err) => new Error(`Failed to write trades CSV: ${String(err)}`),
+    });
+
+    if (result.equityCurve && result.equityCurve.length > 0) {
+      const equityHeader = "tradeIndex,timestamp,capital\n";
+      const equityRows = result.equityCurve
+        .map(
+          (e) =>
+            `${e.tradeIndex},${e.timestamp.toISOString()},${e.capital.toFixed(8)}`,
+        )
+        .join("\n");
+      yield* Effect.tryPromise({
+        try: () =>
+          Bun.write(`${exportPath}-equity.csv`, equityHeader + equityRows),
+        catch: (err) => new Error(`Failed to write equity CSV: ${String(err)}`),
+      });
+    }
+
+    yield* Console.log(`\n💾 Exported trades to ${exportPath}-trades.csv`);
   });
 }
 
@@ -738,6 +884,39 @@ function printBacktestResult(
     yield* Console.log(
       `Time in market:  ${result.metrics.timeInMarketPct.toFixed(2)}%`,
     );
+    if (result.oosResult) {
+      const oos = result.oosResult;
+      yield* Console.log("\n📤 Out-of-Sample Results");
+      yield* Console.log("------------------------");
+      yield* Console.log(`Total trades:  ${oos.totalTrades}`);
+      yield* Console.log(`Win rate:      ${(oos.winRate * 100).toFixed(2)}%`);
+      yield* Console.log(`Total return:  ${oos.totalReturnPct.toFixed(2)}%`);
+      yield* Console.log(`Max drawdown:  ${oos.maxDrawdownPct.toFixed(2)}%`);
+      yield* Console.log(`Sharpe ratio:  ${oos.sharpeRatio.toFixed(3)}`);
+    }
+
+    if (result.monteCarlo) {
+      const mc = result.monteCarlo;
+      yield* Console.log("\n🎲 Monte Carlo Drawdown");
+      yield* Console.log("------------------------");
+      yield* Console.log(`Iterations:        ${mc.iterations}`);
+      yield* Console.log(
+        `Median max DD:     ${mc.medianMaxDrawdownPct.toFixed(2)}%`,
+      );
+      yield* Console.log(
+        `P95 max DD:        ${mc.p95MaxDrawdownPct.toFixed(2)}%`,
+      );
+      yield* Console.log(
+        `P99 max DD:        ${mc.p99MaxDrawdownPct.toFixed(2)}%`,
+      );
+      yield* Console.log(
+        `Worst max DD:      ${mc.worstMaxDrawdownPct.toFixed(2)}%`,
+      );
+      yield* Console.log(
+        `Ruin probability:  ${mc.probabilityOfRuinPct.toFixed(2)}%`,
+      );
+    }
+
     if (result.trades.length > 0) {
       yield* Console.log("\nLast 5 trades:");
       for (const trade of result.trades.slice(-5)) {
