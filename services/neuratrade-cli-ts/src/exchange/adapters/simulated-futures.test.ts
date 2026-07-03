@@ -20,6 +20,7 @@ const mockGateway: MarketDataGatewayService = {
     }),
   fetchSymbols: () => Effect.die("not used"),
   fetch24hrVolumes: () => Effect.die("not used"),
+  fetchFundingRates: () => Effect.succeed([]),
 };
 
 let sharedAdapter: ReturnType<

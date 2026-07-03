@@ -1,0 +1,1027 @@
+import { describe, expect, it } from "bun:test";
+import type { BacktestResult } from "../scalping/backtest.js";
+import { applyPreset } from "../scalping/presets.js";
+import {
+  buildStrategyProfileFromArgs,
+  type ResolvedBacktestArgs,
+} from "../scalping/strategy-profile.js";
+import type { CandleLike } from "../scalping/types.js";
+import { Command } from "@effect/cli";
+import {
+  buildCandidate,
+  buildPaperTradeComposerConfig,
+  buildStrategyProfileFromOptimizeResult,
+  combineWalkForwardResults,
+  extractExplicitOverrides,
+  generateCandidates,
+  generateWalkForwardWindows,
+  isLiveReady,
+  libraryCommand,
+  loadSelectWatchlist,
+  objectiveValue,
+  runSelectBacktest,
+  selectBestForSymbol,
+  selectWinner,
+  validateWatchlist,
+  walkForwardCommand,
+  buildValidateBacktestArgs,
+  type OptimizeArgs,
+  type OptimizeCandidateParams,
+  type OptimizeResult,
+  type SelectArgs,
+  type SelectWatchlistEntry,
+  type ValidationRow,
+} from "./scalp.js";
+import { Effect, Layer } from "effect";
+import { BunContext } from "@effect/platform-bun";
+import { PathLive } from "../services/path.js";
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { MarketDataRepositorySQLite } from "../market-data/repository.js";
+
+function makeOptimizeArgs(overrides: Partial<OptimizeArgs> = {}): OptimizeArgs {
+  return {
+    exchange: "binance",
+    symbol: "BTC/USDT",
+    timeframe: "1h",
+    capital: 10000,
+    positionSize: 10,
+    riskPerTrade: 1,
+    maxPositionSize: 50,
+    fee: 0.001,
+    makerFeePct: 0,
+    entryOrderType: "market",
+    entryLimitOffsetBps: 0,
+    priceOnly: false,
+    noRsi: false,
+    noTrend: false,
+    holdUntilStop: false,
+    regimeMode: "trend",
+    breakoutLookback: 20,
+    breakoutVolumeMinRatio: 1.2,
+    breakoutAdxMin: 20,
+    useFunding: false,
+    fundingBiasThreshold: 0.0001,
+    atrRiskReward: 0,
+    scaleOutAtR: 0,
+    scaleOutPct: 0,
+    volatilityLookback: 20,
+    volatilityLowPct: 20,
+    volatilityHighPct: 80,
+    volatilityLowFactor: 1,
+    volatilityHighFactor: 1,
+    volatilityTargetAnnualPct: 0,
+    atrStopMin: 1,
+    atrStopMax: 1,
+    atrStopStep: 0,
+    atrTpMin: 2,
+    atrTpMax: 2,
+    atrTpStep: 0,
+    confMin: 0.6,
+    confMax: 0.6,
+    confStep: 0,
+    volumeMinRatio: 0,
+    volumeLookback: 20,
+    minConfluence: 0,
+    entryCandleConfirm: false,
+    momentumConfirmBars: 0,
+    oosPct: 0,
+    mcIterations: 0,
+    walkForward: false,
+    wfTrainDays: 180,
+    wfTestDays: 60,
+    wfStepDays: 60,
+    minTrades: 0,
+    minOosTrades: 0,
+    selectBy: "return",
+    noAtr: false,
+    randomSearch: 0,
+    breakevenAtRMin: 1,
+    breakevenAtRMax: 1,
+    breakevenAtRStep: 0,
+    maxBarsInTradeMin: 24,
+    maxBarsInTradeMax: 24,
+    maxBarsInTradeStep: 0,
+    lossCooldownBarsMin: 0,
+    lossCooldownBarsMax: 0,
+    lossCooldownBarsStep: 0,
+    adxMinMin: 0,
+    adxMinMax: 0,
+    adxMinStep: 0,
+    minEfficiencyRatioMin: 0,
+    minEfficiencyRatioMax: 0,
+    minEfficiencyRatioStep: 0,
+    rsiLongMaxMin: 70,
+    rsiLongMaxMax: 70,
+    rsiLongMaxStep: 0,
+    rsiShortMinMin: 30,
+    rsiShortMinMax: 30,
+    rsiShortMinStep: 0,
+    stopLossMin: 1,
+    stopLossMax: 1,
+    stopLossStep: 0,
+    takeProfitMin: 2,
+    takeProfitMax: 2,
+    takeProfitStep: 0,
+    htfTimeframe: "",
+    htfSignalConfidence: 0,
+    scanEntryOrders: false,
+    observedPrice: false,
+    strictRealism: false,
+    realistic: false,
+    slippageBps: 0,
+    realisticSlippageBps: 5,
+    rsiPeriod: 14,
+    rsiOversoldStrong: 30,
+    rsiOverboughtStrong: 70,
+    stopLoss: 1.5,
+    takeProfit: 3.0,
+    minConfidence: 0.5,
+    useAtrStops: false,
+    atrStopMultiplier: 1.5,
+    atrTakeProfitMultiplier: 2.5,
+    futures: false,
+    fundingRatePct: 0.01,
+    trailingStopPct: 0,
+    trailingStopAtrMultiplier: 0,
+    minAtrPct: 0,
+    adxMin: 0,
+    signalPersistence: 0,
+    lossConfidencePenalty: 0,
+    lossConfidenceDecay: 0,
+    htfTrendFastPeriod: 50,
+    htfTrendSlowPeriod: 100,
+    entryPullbackEmaPeriod: 0,
+    entryPullbackMarginPct: 0.1,
+    minEfficiencyRatio: 0,
+    efficiencyRatioPeriod: 20,
+    rsiLongMax: 0,
+    rsiShortMin: 0,
+    bollingerLongMaxPctB: -1,
+    bollingerShortMinPctB: 2,
+    trendFilterPeriod: 200,
+    entryRsiLongThreshold: 10,
+    entryRsiShortThreshold: 90,
+    exitRsiPeriod: 0,
+    exitRsiLongLevel: 0,
+    exitRsiShortLevel: 0,
+    recordEquityCurve: false,
+    exportTrades: "",
+    leverage: 1,
+    breakevenAtR: 0,
+    maxBarsInTrade: 0,
+    lossCooldownBars: 0,
+    sessionStart: "",
+    sessionEnd: "",
+    autoRegimeFilter: false,
+    autoRegimeAdxThreshold: 25,
+    trendSignalStyle: "slope",
+    trendFastPeriod: 9,
+    trendSlowPeriod: 21,
+    directionalOnly: false,
+    rsiFollowTrend: false,
+    strictAgreement: false,
+    entryOnClose: false,
+    strategyType: "signal",
+    gridStepPct: 0,
+    gridMaxGrids: 0,
+    gridPauseAfterLossBars: 0,
+    ...overrides,
+  };
+}
+
+function makeResult(overrides: Partial<BacktestResult> = {}): BacktestResult {
+  return {
+    symbol: "BTC/USDT",
+    totalTrades: 10,
+    winningTrades: 5,
+    losingTrades: 5,
+    winRate: 0.5,
+    totalReturnPct: 0,
+    maxDrawdownPct: 5,
+    sharpeRatio: 1,
+    trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: 1,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 1,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 1,
+      timeInMarketPct: 10,
+    },
+    robustnessScore: 0,
+    ...overrides,
+  };
+}
+
+function makeOptimizeResult(
+  params: OptimizeCandidateParams,
+  isResult: Partial<BacktestResult> = {},
+  oosResult?: Partial<BacktestResult>,
+): OptimizeResult {
+  return {
+    params,
+    isResult: makeResult(isResult),
+    oosResult: oosResult ? makeResult(oosResult) : undefined,
+  };
+}
+
+describe("optimizer candidate generation", () => {
+  it("buildCandidate maps dimensions to parameters", () => {
+    const c = buildCandidate(true, [1.5, 3, 0.7, 1, 12, 6, 20, 0.3, 65, 35]);
+    expect(c).toEqual({
+      useAtrStops: true,
+      stopMult: 1.5,
+      tpMult: 3,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      minConfidence: 0.7,
+      breakevenAtR: 1,
+      maxBarsInTrade: 12,
+      lossCooldownBars: 6,
+      adxMin: 20,
+      minEfficiencyRatio: 0.3,
+      rsiLongMax: 65,
+      rsiShortMin: 35,
+      entryOrderType: "market",
+      entryLimitOffsetBps: 0,
+    });
+  });
+
+  it("buildCandidate maps fixed-pct stops when ATR is disabled", () => {
+    const c = buildCandidate(false, [1.5, 3, 0.7, 1, 12, 6, 0, 0, 70, 30]);
+    expect(c.stopLossPct).toBe(1.5);
+    expect(c.takeProfitPct).toBe(3);
+    expect(c.stopMult).toBe(0);
+    expect(c.tpMult).toBe(0);
+  });
+
+  it("generateCandidates produces the full Cartesian grid by default", () => {
+    const args = makeOptimizeArgs({
+      atrStopMin: 1,
+      atrStopMax: 2,
+      atrStopStep: 1,
+      confMin: 0.5,
+      confMax: 0.6,
+      confStep: 0.1,
+    });
+    const candidates = generateCandidates(args);
+    expect(candidates.length).toBe(4);
+    expect(new Set(candidates.map((c) => c.stopMult)).size).toBe(2);
+    expect(new Set(candidates.map((c) => c.minConfidence)).size).toBe(2);
+  });
+
+  it("generateCandidates respects --no-atr", () => {
+    const args = makeOptimizeArgs({
+      noAtr: true,
+      stopLossMin: 1,
+      stopLossMax: 2,
+      stopLossStep: 1,
+      takeProfitMin: 2,
+      takeProfitMax: 3,
+      takeProfitStep: 1,
+    });
+    const candidates = generateCandidates(args);
+    expect(candidates.every((c) => !c.useAtrStops)).toBe(true);
+    expect(candidates[0].stopLossPct).toBe(1);
+  });
+
+  it("generateCandidates supports random search", () => {
+    const args = makeOptimizeArgs({ randomSearch: 5 });
+    const candidates = generateCandidates(args);
+    expect(candidates.length).toBe(5);
+  });
+
+  it("generateCandidates expands order types and limit offsets when scanning", () => {
+    const args = makeOptimizeArgs({
+      scanEntryOrders: true,
+      atrStopMin: 1,
+      atrStopMax: 1,
+      atrStopStep: 0,
+      confMin: 0.6,
+      confMax: 0.6,
+      confStep: 0,
+    });
+    const candidates = generateCandidates(args);
+    const orderTypes = new Set(candidates.map((c) => c.entryOrderType));
+    const offsets = new Set(candidates.map((c) => c.entryLimitOffsetBps));
+    expect(orderTypes.has("market")).toBe(true);
+    expect(orderTypes.has("limit")).toBe(true);
+    expect(offsets.has(0)).toBe(true);
+    expect(offsets.has(5)).toBe(true);
+    expect(offsets.has(10)).toBe(true);
+  });
+});
+
+describe("optimizer selection", () => {
+  it("objectiveValue returns total return by default", () => {
+    const r = makeResult({ totalReturnPct: 12.3 });
+    expect(objectiveValue(r, "return")).toBe(12.3);
+  });
+
+  it("objectiveValue returns Sharpe when requested", () => {
+    const r = makeResult({ sharpeRatio: 1.7 });
+    expect(objectiveValue(r, "sharpe")).toBe(1.7);
+  });
+
+  it("objectiveValue returns Calmar when requested", () => {
+    const r = makeResult({
+      metrics: { ...makeResult().metrics, calmarRatio: 2.5 },
+    });
+    expect(objectiveValue(r, "calmar")).toBe(2.5);
+  });
+
+  it("selectWinner picks the best OOS result when it meets minTrades", () => {
+    const p = buildCandidate(true, [1, 2, 0.6, 1, 24, 0, 0, 0, 70, 30]);
+    const results: OptimizeResult[] = [
+      makeOptimizeResult(
+        p,
+        { totalReturnPct: 10 },
+        { totalReturnPct: 5, totalTrades: 8 },
+      ),
+      makeOptimizeResult(
+        p,
+        { totalReturnPct: 5 },
+        { totalReturnPct: 15, totalTrades: 8 },
+      ),
+    ];
+    const winner = selectWinner(results, "return", 5);
+    expect(winner).toBe(results[1]);
+  });
+
+  it("selectWinner returns null when OOS does not meet minOosTrades", () => {
+    const p = buildCandidate(true, [1, 2, 0.6, 1, 24, 0, 0, 0, 70, 30]);
+    const results: OptimizeResult[] = [
+      makeOptimizeResult(
+        p,
+        { totalReturnPct: 20, totalTrades: 10 },
+        { totalReturnPct: 100, totalTrades: 1 },
+      ),
+      makeOptimizeResult(
+        p,
+        { totalReturnPct: 5, totalTrades: 10 },
+        { totalReturnPct: 6, totalTrades: 1 },
+      ),
+    ];
+    const winner = selectWinner(results, "return", 5, 5);
+    expect(winner).toBeNull();
+  });
+
+  it("selectWinner returns null when no result passes the trade floor", () => {
+    const p = buildCandidate(true, [1, 2, 0.6, 1, 24, 0, 0, 0, 70, 30]);
+    const results: OptimizeResult[] = [
+      makeOptimizeResult(p, { totalReturnPct: 5, totalTrades: 1 }),
+      makeOptimizeResult(p, { totalReturnPct: 10, totalTrades: 1 }),
+    ];
+    const winner = selectWinner(results, "return", 5);
+    expect(winner).toBeNull();
+  });
+
+  it("selectWinner uses IS floor when OOS is disabled", () => {
+    const p = buildCandidate(true, [1, 2, 0.6, 1, 24, 0, 0, 0, 70, 30]);
+    const results: OptimizeResult[] = [
+      makeOptimizeResult(p, { totalReturnPct: 5, totalTrades: 10 }),
+      makeOptimizeResult(p, { totalReturnPct: 10, totalTrades: 10 }),
+    ];
+    const winner = selectWinner(results, "return", 5);
+    expect(winner).toBe(results[1]);
+  });
+});
+
+describe("buildStrategyProfileFromOptimizeResult", () => {
+  it("writes winning ATR params to the per-symbol override", () => {
+    const args = makeOptimizeArgs();
+    const p = buildCandidate(true, [2, 4, 0.7, 1, 24, 6, 25, 0.3, 65, 35]);
+    const winner = makeOptimizeResult(p, { totalReturnPct: 10 });
+    const profile = buildStrategyProfileFromOptimizeResult(
+      "test-profile",
+      args,
+      winner,
+    );
+
+    expect(profile.name).toBe("test-profile");
+    expect(profile.defaults.exchange).toBe(args.exchange);
+    expect(profile.defaults.useAtrStops).toBe(true);
+
+    const override = profile.symbols[args.symbol];
+    expect(override).toBeDefined();
+    expect(override.minConfidence).toBe(0.7);
+    expect(override.atrStopMultiplier).toBe(2);
+    expect(override.atrTakeProfitMultiplier).toBe(4);
+    expect(override.adxMin).toBe(25);
+    expect(override.breakevenAtR).toBe(1);
+    expect(override.maxBarsInTrade).toBe(24);
+    expect(override.lossCooldownBars).toBe(6);
+    expect(override.entryOrderType).toBe("market");
+    expect(override.entryLimitOffsetBps).toBe(0);
+  });
+
+  it("writes winning fixed-pct params to the per-symbol override", () => {
+    const args = makeOptimizeArgs({ noAtr: true });
+    const p = buildCandidate(false, [1.5, 3, 0.6, 1, 24, 0, 0, 0, 70, 30]);
+    const winner = makeOptimizeResult(p, { totalReturnPct: 10 });
+    const profile = buildStrategyProfileFromOptimizeResult(
+      "test-profile",
+      args,
+      winner,
+    );
+
+    const override = profile.symbols[args.symbol];
+    expect(override.stopLossPct).toBe(1.5);
+    expect(override.takeProfitPct).toBe(3);
+    expect(override.atrStopMultiplier).toBe(0);
+    expect(override.atrTakeProfitMultiplier).toBe(0);
+  });
+
+  it("persists winning entry order type and limit offset", () => {
+    const args = makeOptimizeArgs({ entryOrderType: "limit" });
+    const p: OptimizeCandidateParams = {
+      ...buildCandidate(true, [1, 2, 0.6, 1, 24, 0, 0, 0, 70, 30]),
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 5,
+    };
+    const winner = makeOptimizeResult(p, { totalReturnPct: 10 });
+    const profile = buildStrategyProfileFromOptimizeResult(
+      "test-profile",
+      args,
+      winner,
+    );
+
+    expect(profile.defaults.entryOrderType).toBe("limit");
+    expect(profile.defaults.entryLimitOffsetBps).toBe(5);
+    expect(profile.symbols[args.symbol].entryOrderType).toBe("limit");
+    expect(profile.symbols[args.symbol].entryLimitOffsetBps).toBe(5);
+  });
+});
+
+describe("walk-forward optimization helpers", () => {
+  function makeCandles(count: number, startMs: number) {
+    const candles = [];
+    for (let i = 0; i < count; i++) {
+      const t = startMs + i * 60 * 60 * 1000;
+      candles.push({
+        open: 100,
+        high: 101,
+        low: 99,
+        close: 100,
+        volume: 1,
+        timestamp: new Date(t),
+      });
+    }
+    return candles;
+  }
+
+  it("generateWalkForwardWindows creates sequential train/test slices", () => {
+    const candles = makeCandles(24 * 400, 0); // 400 days hourly
+    const windows = generateWalkForwardWindows(candles, 180, 60, 60);
+    expect(windows.length).toBeGreaterThan(1);
+    const first = windows[0];
+    expect(first.trainCandles.length).toBeGreaterThanOrEqual(24 * 180 - 24); // hourly
+    expect(first.testCandles.length).toBeGreaterThanOrEqual(24 * 60 - 24);
+    for (const w of windows) {
+      const trainEnd =
+        w.trainCandles[w.trainCandles.length - 1].timestamp.getTime();
+      const testStart = w.testCandles[0].timestamp.getTime();
+      expect(testStart).toBeGreaterThanOrEqual(trainEnd);
+    }
+    for (let i = 1; i < windows.length; i++) {
+      expect(
+        windows[i].trainCandles[0].timestamp.getTime(),
+      ).toBeGreaterThanOrEqual(
+        windows[i - 1].trainCandles[0].timestamp.getTime(),
+      );
+    }
+  });
+
+  it("combineWalkForwardResults compounds window returns", () => {
+    const r1 = makeResult({
+      totalReturnPct: 10,
+      totalTrades: 1,
+      trades: [
+        {
+          id: "t1",
+          symbol: "BTC/USDT",
+          side: "long",
+          entryTime: new Date(0),
+          exitTime: new Date(1),
+          entryPrice: 100,
+          exitPrice: 110,
+          pnl: 100,
+          pnlPct: 1,
+          netPnl: 100,
+          exitReason: "take_profit",
+          initialRiskPct: 0.01,
+          fillType: "taker",
+          entryFeePct: 0.1,
+          exitFeePct: 0.1,
+        },
+      ],
+    });
+    const r2 = makeResult({
+      totalReturnPct: 10,
+      totalTrades: 1,
+      trades: [
+        {
+          id: "t2",
+          symbol: "BTC/USDT",
+          side: "long",
+          entryTime: new Date(2),
+          exitTime: new Date(3),
+          entryPrice: 100,
+          exitPrice: 110,
+          pnl: 100,
+          pnlPct: 1,
+          netPnl: 100,
+          exitReason: "take_profit",
+          initialRiskPct: 0.01,
+          fillType: "taker",
+          entryFeePct: 0.1,
+          exitFeePct: 0.1,
+        },
+      ],
+    });
+    const combined = combineWalkForwardResults([r1, r2], 10000, "BTC/USDT");
+    expect(combined.totalTrades).toBe(2);
+    expect(combined.totalReturnPct).toBeGreaterThan(0);
+    expect(combined.trades[0].netPnl).toBe(100);
+    expect(combined.trades[1].netPnl).toBeGreaterThan(100);
+  });
+});
+
+describe("preset command helpers", () => {
+  it("extractExplicitOverrides keeps only values that differ from defaults", () => {
+    const base = applyPreset("balanced");
+    const args: import("../scalping/strategy-profile.js").ResolvedBacktestArgs =
+      {
+        ...base,
+        symbol: "ETH/USDT",
+        timeframe: "4h",
+        fee: 0.05,
+      };
+
+    const overrides = extractExplicitOverrides(args);
+
+    // Defaults equal to the built-in command defaults should be omitted.
+    expect(overrides.exchange).toBeUndefined();
+    expect(overrides.capital).toBeUndefined();
+
+    // Explicit overrides should be kept.
+    expect(overrides.symbol).toBe("ETH/USDT");
+    expect(overrides.timeframe).toBe("4h");
+    expect(overrides.fee).toBe(0.05);
+  });
+
+  it("extractExplicitOverrides treats observed-price=false as an explicit override", () => {
+    const base = applyPreset("balanced");
+    const args: import("../scalping/strategy-profile.js").ResolvedBacktestArgs =
+      {
+        ...base,
+        observedPrice: false,
+      };
+
+    const overrides = extractExplicitOverrides(args);
+    expect(overrides.observedPrice).toBe(false);
+  });
+});
+
+describe("realistic mode", () => {
+  it("presets default to realistic=true and observedPrice=false", () => {
+    for (const name of ["conservative", "balanced", "aggressive"] as const) {
+      const preset = applyPreset(name);
+      expect(preset.realistic).toBe(true);
+      expect(preset.observedPrice).toBe(false);
+    }
+  });
+
+  it("extractExplicitOverrides includes --realistic=true", () => {
+    const base = applyPreset("balanced");
+    const args: ResolvedBacktestArgs = { ...base, realistic: false };
+    const overrides = extractExplicitOverrides(args);
+    expect(overrides.realistic).toBe(false);
+  });
+
+  it("buildStrategyProfileFromArgs persists realistic flag", () => {
+    const base = applyPreset("balanced");
+    const profile = buildStrategyProfileFromArgs("realistic-test", {
+      ...base,
+      realistic: true,
+    });
+    expect(profile.defaults.realistic).toBe(true);
+  });
+});
+
+function makeUptrendCandles(count: number): CandleLike[] {
+  const candles: CandleLike[] = [];
+  let close = 100;
+  for (let i = 0; i < count; i++) {
+    const open = close;
+    close *= 1.01;
+    const high = close * 1.005;
+    const low = open * 0.995;
+    candles.push({
+      open,
+      high,
+      low,
+      close,
+      volume: 1,
+      timestamp: new Date(i * 3_600_000),
+    });
+  }
+  return candles;
+}
+
+function makeSelectArgs(overrides: Partial<SelectArgs> = {}): SelectArgs {
+  const base = applyPreset("balanced");
+  return {
+    ...base,
+    universe: "",
+    top: 0,
+    minRobustness: 0,
+    minReturnPct: 0,
+    maxDrawdownPct: 100,
+    minTrades: 0,
+    selectLookbackCandles: 0,
+    ...overrides,
+  } as SelectArgs;
+}
+
+describe("select command helpers", () => {
+  it("runSelectBacktest applies realistic slippage when realistic=true", () => {
+    const candles = makeUptrendCandles(100);
+    const args = makeSelectArgs({
+      realistic: true,
+      slippageBps: 0,
+      fee: 0.1,
+    });
+    const withRealism = runSelectBacktest(
+      "BTC/USDT",
+      candles,
+      args,
+      "binance",
+      {
+        regimeMode: "trend",
+        atrStopMultiplier: 2,
+        atrTakeProfitMultiplier: 3,
+        minConfidence: 0.5,
+        adxMin: 0,
+      },
+    );
+
+    const withoutRealism = runSelectBacktest(
+      "BTC/USDT",
+      candles,
+      { ...args, realistic: false },
+      "binance",
+      {
+        regimeMode: "trend",
+        atrStopMultiplier: 2,
+        atrTakeProfitMultiplier: 3,
+        minConfidence: 0.5,
+        adxMin: 0,
+      },
+    );
+
+    expect(withRealism.totalTrades).toBeGreaterThan(0);
+    expect(withoutRealism.totalTrades).toBeGreaterThan(0);
+    expect(withRealism.totalReturnPct).not.toBe(withoutRealism.totalReturnPct);
+  });
+
+  it("selectBestForSymbol returns the best passing grid config", () => {
+    const candles = makeUptrendCandles(100);
+    const args = makeSelectArgs({
+      realistic: false,
+      slippageBps: 0,
+      fee: 0,
+      minTrades: 1,
+      minReturnPct: -100,
+    });
+    const best = selectBestForSymbol("BTC/USDT", candles, args, "binance");
+
+    expect(best).not.toBeNull();
+    expect(best!.symbol).toBe("BTC/USDT");
+    expect(best!.result.totalTrades).toBeGreaterThanOrEqual(1);
+    expect(["trend", "reversion"]).toContain(best!.params.regimeMode);
+    expect([1.5, 2.0]).toContain(best!.params.atrStopMultiplier);
+    expect([2.0, 2.5]).toContain(best!.params.atrTakeProfitMultiplier);
+    expect([0.4, 0.5]).toContain(best!.params.minConfidence);
+    expect([0, 20]).toContain(best!.params.adxMin);
+  });
+});
+
+describe("validate command", () => {
+  function makeWatchlistEntry(
+    overrides: Partial<SelectWatchlistEntry> = {},
+  ): SelectWatchlistEntry {
+    const base = {
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      profile: {
+        regimeMode: "trend" as const,
+        atrStopMultiplier: 2,
+        atrTakeProfitMultiplier: 3,
+        minConfidence: 0.5,
+        adxMin: 0,
+      },
+    };
+    return {
+      ...base,
+      ...overrides,
+      profile: overrides.profile
+        ? { ...base.profile, ...overrides.profile }
+        : base.profile,
+    };
+  }
+
+  it("fails gracefully when watchlist does not exist", async () => {
+    const result = await Effect.runPromise(
+      validateWatchlist({ watchlist: "missing", exchange: "binance" }).pipe(
+        Effect.catchAll((err) => Effect.succeed(err)),
+        Effect.provide(PathLive(process.env.NEURATRADE_HOME)),
+      ),
+    );
+
+    const reason = "reason" in result ? String(result.reason) : String(result);
+    expect(reason).toContain("Failed to load watchlist");
+  });
+
+  it("loads a saved watchlist fixture", async () => {
+    const homeDir = process.env.NEURATRADE_HOME!;
+    const watchlistDir = path.join(homeDir, "watchlists");
+    fs.mkdirSync(watchlistDir, { recursive: true });
+    const watchlistPath = path.join(watchlistDir, "test.json");
+    const entries = [makeWatchlistEntry()];
+    fs.writeFileSync(watchlistPath, JSON.stringify(entries, null, 2));
+
+    const loaded = await Effect.runPromise(
+      loadSelectWatchlist(watchlistPath).pipe(
+        Effect.catchAll((err) => Effect.fail(err)),
+      ),
+    );
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].symbol).toBe("BTC/USDT");
+    expect(loaded[0].profile.atrStopMultiplier).toBe(2);
+  });
+
+  it("builds validation backtest args from watchlist entry", () => {
+    const entry = makeWatchlistEntry({
+      symbol: "ETH/USDT",
+      timeframe: "4h",
+      profile: {
+        regimeMode: "reversion",
+        atrStopMultiplier: 1.5,
+        atrTakeProfitMultiplier: 3,
+        minConfidence: 0.5,
+        adxMin: 0,
+      },
+    });
+    const args = buildValidateBacktestArgs(entry, "binance");
+
+    expect(args.symbol).toBe("ETH/USDT");
+    expect(args.timeframe).toBe("4h");
+    expect(args.exchange).toBe("binance");
+    expect(args.useAtrStops).toBe(true);
+    expect(args.atrStopMultiplier).toBe(1.5);
+    expect(args.atrTakeProfitMultiplier).toBe(3);
+    expect(args.minConfidence).toBe(0.5);
+    expect(args.regimeMode).toBe("reversion");
+    expect(args.adxMin).toBe(0);
+    expect(args.oosPct).toBe(20);
+    expect(args.mcIterations).toBe(200);
+    expect(args.realistic).toBe(true);
+  });
+
+  it("marks rows live-ready only when all gates pass", () => {
+    const base: ValidationRow = {
+      symbol: "BTC/USDT",
+      regimeMode: "trend",
+      isReturnPct: 10,
+      oosReturnPct: 5,
+      oosMaxDrawdownPct: 10,
+      mcP95DrawdownPct: 15,
+      mcRuinPct: 2,
+      robustnessScore: 20,
+      isTrades: 15,
+      oosTrades: 12,
+      liveReady: false,
+      entry: makeWatchlistEntry(),
+    };
+
+    expect(isLiveReady(base)).toBe(true);
+    expect(isLiveReady({ ...base, oosReturnPct: -1 })).toBe(false);
+    expect(isLiveReady({ ...base, oosMaxDrawdownPct: 16 })).toBe(false);
+    expect(isLiveReady({ ...base, mcP95DrawdownPct: 21 })).toBe(false);
+    expect(isLiveReady({ ...base, mcRuinPct: 6 })).toBe(false);
+    expect(isLiveReady({ ...base, isTrades: 9 })).toBe(false);
+    expect(isLiveReady({ ...base, oosTrades: 9 })).toBe(false);
+  });
+
+  it("validates a saved watchlist against stored candles", async () => {
+    const homeDir = process.env.NEURATRADE_HOME!;
+    const dataDir = path.join(homeDir, "data");
+    fs.mkdirSync(dataDir, { recursive: true });
+    const db = new Database(path.join(dataDir, "neuratrade.db"));
+    db.exec("PRAGMA foreign_keys = ON;");
+
+    const repo = new MarketDataRepositorySQLite(db);
+    await Effect.runPromise(repo.ensureTables());
+
+    const candles = makeUptrendCandles(300).map((c, i) => ({
+      ...c,
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      volume: 1,
+      timestamp: new Date(Date.UTC(2026, 0, 1, i)),
+    }));
+    await Effect.runPromise(repo.saveCandles(candles));
+    db.close();
+
+    const watchlistDir = path.join(homeDir, "watchlists");
+    fs.mkdirSync(watchlistDir, { recursive: true });
+    const entries: SelectWatchlistEntry[] = [
+      {
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        profile: {
+          regimeMode: "trend",
+          atrStopMultiplier: 2,
+          atrTakeProfitMultiplier: 3,
+          minConfidence: 0.4,
+          adxMin: 0,
+        },
+      },
+    ];
+    fs.writeFileSync(
+      path.join(watchlistDir, "candidates.json"),
+      JSON.stringify(entries, null, 2),
+    );
+
+    const rows = await Effect.runPromise(
+      validateWatchlist({ watchlist: "candidates", exchange: "binance" }).pipe(
+        Effect.provide(PathLive(homeDir)),
+      ),
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].symbol).toBe("BTC/USDT");
+    expect(rows[0].mcP95DrawdownPct).toBeGreaterThanOrEqual(0);
+    expect(rows[0].mcRuinPct).toBeGreaterThanOrEqual(0);
+    expect(rows[0].isTrades).toBeGreaterThanOrEqual(0);
+    expect(rows[0].oosTrades).toBeGreaterThanOrEqual(0);
+  });
+});
+describe("library command", () => {
+  it("prints the strategy catalog for 'scalp library --list'", async () => {
+    const run = Command.run(libraryCommand, { name: "test", version: "0.0.0" });
+    const result = await Effect.runPromise(
+      run(["bun", "test", "--list"]).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            BunContext.layer,
+            PathLive(process.env.NEURATRADE_HOME),
+          ),
+        ),
+      ),
+    );
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("'scalp library gridScalp --help' lists grid options", async () => {
+    const proc = Bun.spawn([
+      "bun",
+      "run",
+      "index.ts",
+      "scalp",
+      "library",
+      "gridScalp",
+      "--help",
+    ]);
+    const output = await new Response(proc.stdout).text();
+    expect(output).toContain("--grid-step-pct");
+    expect(output).toContain("--grid-max-grids");
+    expect(output).toContain("--grid-pause-after-loss-bars");
+    expect(output).toContain("--realistic");
+  });
+});
+
+describe("walk-forward command", () => {
+  it("runs walk-forward optimization on stored candles", async () => {
+    const homeDir = process.env.NEURATRADE_HOME!;
+    const dataDir = path.join(homeDir, "data");
+    fs.mkdirSync(dataDir, { recursive: true });
+    const db = new Database(path.join(dataDir, "neuratrade.db"));
+    db.exec("PRAGMA foreign_keys = ON;");
+
+    const repo = new MarketDataRepositorySQLite(db);
+    await Effect.runPromise(repo.ensureTables());
+
+    const candles = makeUptrendCandles(300).map((c, i) => ({
+      ...c,
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "4h",
+      volume: 1,
+      timestamp: new Date(Date.UTC(2026, 0, 1, i * 4)),
+    }));
+    await Effect.runPromise(repo.saveCandles(candles));
+    db.close();
+
+    const run = Command.run(walkForwardCommand, {
+      name: "test",
+      version: "0.0.0",
+    });
+    const result = await Effect.runPromise(
+      run([
+        "bun",
+        "test",
+        "--symbol",
+        "BTC/USDT",
+        "--timeframe",
+        "4h",
+        "--exchange",
+        "binance",
+        "--realistic",
+        "--train-window",
+        "120",
+        "--test-window",
+        "60",
+        "--min-trades",
+        "1",
+      ]).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            BunContext.layer,
+            PathLive(process.env.NEURATRADE_HOME),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toBeDefined();
+    expect(
+      (result as unknown as { windows: unknown[] }).windows.length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("paper-trade command", () => {
+  it("buildPaperTradeComposerConfig returns a config matching the dualEmaCross template", () => {
+    const config = buildPaperTradeComposerConfig({
+      strategy: "dualEmaCross",
+      priceOnly: false,
+      noRsi: false,
+      noTrend: false,
+      regimeMode: "trend",
+      volumeMinRatio: 0,
+      volumeLookback: 20,
+      minConfluence: 0,
+      entryCandleConfirm: false,
+      momentumConfirmBars: 0,
+      breakoutLookback: 20,
+      breakoutVolumeMinRatio: 1.2,
+      breakoutAdxMin: 20,
+      useFunding: false,
+      fundingBiasThreshold: 0.0001,
+      rsiPeriod: 14,
+      rsiOversoldStrong: 30,
+      rsiOverboughtStrong: 70,
+      trendFilterPeriod: 200,
+      entryRsiLongThreshold: 10,
+      entryRsiShortThreshold: 90,
+      exitRsiLongLevel: 60,
+      exitRsiShortLevel: 40,
+    });
+
+    expect(config.thresholds.regimeMode).toBe("trend");
+    expect(config.thresholds.trendSignalStyle).toBe("cross");
+    expect(config.thresholds.trendFastPeriod).toBe(50);
+    expect(config.thresholds.trendSlowPeriod).toBe(200);
+    expect(config.weights.trend).toBeGreaterThan(config.weights.volatility);
+    expect(config.weights.trend).toBeGreaterThan(config.weights.regime);
+    expect(config.weights.trend).toBeGreaterThan(config.weights.rsi);
+  });
+
+  it("paper-trade --strategy dualEmaCross --help lists the strategy option", async () => {
+    const proc = Bun.spawn([
+      "bun",
+      "run",
+      "index.ts",
+      "scalp",
+      "paper-trade",
+      "--help",
+      "--strategy",
+      "dualEmaCross",
+    ]);
+    const output = await new Response(proc.stdout).text();
+    expect(output).toContain("--strategy");
+    expect(output).toContain("dualEmaCross");
+    expect(output).toContain("--realistic");
+  });
+});

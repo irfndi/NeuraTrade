@@ -1,5 +1,5 @@
 import { Context, Effect } from "effect";
-import type { Candle, OrderBook, Tick } from "./types.js";
+import type { Candle, FundingRate, OrderBook, Tick } from "./types.js";
 
 /**
  * Error raised when exchange market-data fetch fails.
@@ -45,6 +45,14 @@ export interface MarketDataGatewayService {
   readonly fetch24hrVolumes: (
     exchange: string,
   ) => Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never>;
+
+  readonly fetchFundingRates: (
+    exchange: string,
+    symbol: string,
+    startTime?: Date,
+    endTime?: Date,
+    limit?: number,
+  ) => Effect.Effect<readonly FundingRate[], MarketDataError, never>;
 }
 
 export const MarketDataGateway =

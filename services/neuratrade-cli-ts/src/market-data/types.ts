@@ -65,6 +65,17 @@ export interface OrderBookMetrics {
   readonly timestamp: Date;
 }
 
+/**
+ * Normalized perpetual futures funding rate.
+ */
+export interface FundingRate {
+  readonly exchange: string;
+  readonly symbol: string;
+  /** Funding rate as a decimal, e.g. 0.0001 = 0.01% per 8h. */
+  readonly fundingRate: number;
+  readonly timestamp: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Schema-validated primitives for config and persistence
 // ---------------------------------------------------------------------------

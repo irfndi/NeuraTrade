@@ -22,6 +22,7 @@ const StubMarketDataGateway = Layer.succeed(MarketDataGateway, {
   fetchOrderBook: () => Effect.dieMessage("not reached in test"),
   fetchSymbols: () => Effect.dieMessage("not reached in test"),
   fetch24hrVolumes: () => Effect.dieMessage("not reached in test"),
+  fetchFundingRates: () => Effect.dieMessage("not reached in test"),
 });
 
 describe("runTest", () => {

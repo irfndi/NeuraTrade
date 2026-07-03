@@ -16,6 +16,7 @@ const dummyGateway = MarketDataGateway.of({
     }),
   fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
   fetch24hrVolumes: () => Effect.succeed({}),
+  fetchFundingRates: () => Effect.succeed([]),
 });
 
 describe("BinanceLiveExchangeAdapter", () => {

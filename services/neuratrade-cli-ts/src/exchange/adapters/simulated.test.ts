@@ -43,6 +43,7 @@ describe("SimulatedExchangeAdapter", () => {
         }),
       fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
       fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
     });
 
     const fill = await Effect.runPromise(
@@ -88,6 +89,7 @@ describe("SimulatedExchangeAdapter", () => {
         }),
       fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
       fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
     });
 
     await Effect.runPromise(

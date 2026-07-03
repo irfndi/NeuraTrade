@@ -11,8 +11,16 @@ import {
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
-import type { ComposerConfig } from "../scalping/types.js";
-import { runBacktest, type BacktestResult } from "../scalping/backtest.js";
+import type { CandleLike, ComposerConfig } from "../scalping/types.js";
+import {
+  runBacktest,
+  type BacktestResult,
+  type BacktestTrade,
+} from "../scalping/backtest.js";
+import {
+  runGridBacktest,
+  type GridResult,
+} from "../scalping/grid.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
@@ -32,11 +40,19 @@ import {
   type FuturesPaperTradingOptions,
 } from "../paper-trading/futures-engine.js";
 import {
+  runGridPaperTradingIteration,
+  type GridPaperTradingOptions,
+  type GridPaperTradingIterationResult,
+} from "../paper-trading/grid-engine.js";
+import {
   BitgetClientLiveConfig,
   type BitgetProductType,
 } from "../services/bitget-client.js";
 import { BitgetConfigLive } from "../services/bitget-config.js";
-import { RateLimiterLive } from "../services/rate-limiter.js";
+import {
+  RateLimiterLive,
+  bitgetRateLimiterConfig,
+} from "../services/rate-limiter.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLiteLive,
@@ -56,6 +72,14 @@ import {
   type StrategyProfile,
   type StrategyProfileParams,
 } from "../scalping/strategy-profile.js";
+import { applyPreset } from "../scalping/presets.js";
+import {
+  listStrategies,
+  buildBacktestArgsFromTemplate,
+  buildComposerConfigFromTemplate,
+  type StrategyTemplateName,
+} from "../scalping/strategy-library.js";
+import { runWalkForward } from "../scalping/walk-forward.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -200,6 +224,426 @@ const momentumConfirmBarsOption = Options.integer("momentum-confirm-bars").pipe(
     "Require net price movement over the last N candles to align with the signal (0 = disabled)",
   ),
 );
+const makerFeeOption = Options.float("maker-fee-pct").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maker fee percent per side (for limit entries)"),
+);
+
+const entryOrderTypeOption = Options.choice("entry-order-type", [
+  "market",
+  "limit",
+] as const).pipe(
+  Options.withDefault("market" as const),
+  Options.withDescription("Entry fill type: market or limit"),
+);
+
+const entryLimitOffsetBpsOption = Options.float("entry-limit-offset-bps").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Limit entry offset from signal price in basis points",
+  ),
+);
+
+const rsiPeriodOption = Options.integer("rsi-period").pipe(
+  Options.withDefault(14),
+  Options.withDescription("RSI lookback period"),
+);
+
+const rsiOversoldStrongOption = Options.float("rsi-oversold-strong").pipe(
+  Options.withDefault(30),
+  Options.withDescription("RSI level considered strongly oversold"),
+);
+
+const rsiOverboughtStrongOption = Options.float("rsi-overbought-strong").pipe(
+  Options.withDefault(70),
+  Options.withDescription("RSI level considered strongly overbought"),
+);
+
+const trendFilterPeriodOption = Options.integer("trend-filter-period").pipe(
+  Options.withDefault(200),
+  Options.withDescription("SMA trend filter period for Connors RSI(2) entries"),
+);
+
+const entryRsiLongThresholdOption = Options.float(
+  "entry-rsi-long-threshold",
+).pipe(
+  Options.withDefault(10),
+  Options.withDescription("RSI(2) long entry threshold"),
+);
+
+const entryRsiShortThresholdOption = Options.float(
+  "entry-rsi-short-threshold",
+).pipe(
+  Options.withDefault(90),
+  Options.withDescription("RSI(2) short entry threshold"),
+);
+
+const exitRsiPeriodOption = Options.integer("exit-rsi-period").pipe(
+  Options.withDefault(0),
+  Options.withDescription("RSI exit lookback period (0 disables RSI exits)"),
+);
+
+const exitRsiLongLevelOption = Options.float("exit-rsi-long-level").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Close long when RSI rises above this level"),
+);
+
+const exitRsiShortLevelOption = Options.float("exit-rsi-short-level").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Close short when RSI falls below this level"),
+);
+
+const observedPriceOption = Options.boolean("observed-price").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Use observed price (close-only) for entries"),
+);
+
+const realisticOption = Options.boolean("realistic").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Apply realistic slippage and fee assumptions"),
+);
+
+const strictRealismOption = Options.boolean("strict-realism").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Use strict realism (close-only + slippage)"),
+);
+
+const realisticSlippageBpsOption = Options.float("realistic-slippage-bps").pipe(
+  Options.withDefault(5),
+  Options.withDescription("Realistic slippage in basis points"),
+);
+
+const trendSignalStyleOption = Options.choice("trend-signal-style", [
+  "slope",
+  "cross",
+] as const).pipe(
+  Options.withDefault("slope" as const),
+  Options.withDescription("Trend signal style: slope or cross"),
+);
+
+const trendFastPeriodOption = Options.integer("trend-fast-period").pipe(
+  Options.withDefault(9),
+  Options.withDescription("Fast EMA period for trend component"),
+);
+
+const trendSlowPeriodOption = Options.integer("trend-slow-period").pipe(
+  Options.withDefault(21),
+  Options.withDescription("Slow EMA period for trend component"),
+);
+
+const directionalOnlyOption = Options.boolean("directional-only").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Use only directional components as signals"),
+);
+
+const rsiFollowTrendOption = Options.boolean("rsi-follow-trend").pipe(
+  Options.withDefault(false),
+  Options.withDescription("RSI confirms trend direction instead of fading"),
+);
+
+const strictAgreementOption = Options.boolean("strict-agreement").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Require all directional components to agree"),
+);
+
+const entryOnCloseOption = Options.boolean("entry-on-close").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Enter at the close of the signal candle"),
+);
+
+const breakoutLookbackOption = Options.integer("breakout-lookback").pipe(
+  Options.withDefault(20),
+  Options.withDescription("Breakout regime lookback period"),
+);
+
+const breakoutVolumeMinRatioOption = Options.float(
+  "breakout-volume-min-ratio",
+).pipe(
+  Options.withDefault(1.2),
+  Options.withDescription("Breakout minimum volume ratio"),
+);
+
+const breakoutAdxMinOption = Options.float("breakout-adx-min").pipe(
+  Options.withDefault(20),
+  Options.withDescription("Breakout minimum ADX threshold"),
+);
+
+const fundingBiasThresholdOption = Options.float("funding-bias-threshold").pipe(
+  Options.withDefault(0.0001),
+  Options.withDescription("Funding bias threshold for contrarian signal"),
+);
+
+const useFundingOption = Options.boolean("use-funding").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Enable funding-rate bias component"),
+);
+
+const strategyTypeOption = Options.choice("strategy-type", [
+  "signal",
+  "grid",
+] as const).pipe(
+  Options.withDefault("signal" as const),
+  Options.withDescription("Strategy type: signal-based or grid scalping"),
+);
+
+const gridStepPctOption = Options.float("grid-step-pct").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Grid step percentage (0 disables grid)"),
+);
+
+const gridMaxGridsOption = Options.float("grid-max-grids").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum number of grid levels"),
+);
+
+const gridPauseAfterLossBarsOption = Options.integer(
+  "grid-pause-after-loss-bars",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Bars to pause grid after a loss"),
+);
+
+const onlyWithTrendOption = Options.boolean("only-with-trend").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Grid: only enter long above trend SMA and short below it",
+  ),
+);
+
+const targetRatioOption = Options.float("target-ratio").pipe(
+  Options.withDefault(1),
+  Options.withDescription(
+    "Grid: target distance as a multiple of the grid step (default 1.0)",
+  ),
+);
+
+const volatilityTargetAnnualPctOption = Options.float(
+  "volatility-target-annual-pct",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Annual volatility target percent for position sizing",
+  ),
+);
+
+const noAtrOption = Options.boolean("no-atr").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Disable ATR stops and use fixed percent stops"),
+);
+
+const scanEntryOrdersOption = Options.boolean("scan-entry-orders").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Scan market/limit entry order types in optimize"),
+);
+
+const randomSearchOption = Options.integer("random-search").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Random search sample count (0 = full grid)"),
+);
+
+const walkForwardOption = Options.boolean("walk-forward").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Run walk-forward optimization"),
+);
+
+const wfTrainDaysOption = Options.integer("wf-train-days").pipe(
+  Options.withDefault(180),
+  Options.withDescription("Walk-forward training window in days"),
+);
+
+const wfTestDaysOption = Options.integer("wf-test-days").pipe(
+  Options.withDefault(60),
+  Options.withDescription("Walk-forward testing window in days"),
+);
+
+const wfStepDaysOption = Options.integer("wf-step-days").pipe(
+  Options.withDefault(60),
+  Options.withDescription("Walk-forward step size in days"),
+);
+
+const minTradesOption = Options.integer("min-trades").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum trades filter for optimization/selection"),
+);
+
+const minOosTradesOption = Options.integer("min-oos-trades").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum out-of-sample trades filter"),
+);
+
+const selectByOption = Options.choice("select-by", [
+  "return",
+  "sharpe",
+  "calmar",
+] as const).pipe(
+  Options.withDefault("return" as const),
+  Options.withDescription("Objective for selecting best candidate"),
+);
+
+const stopLossMinOption = Options.float("stop-loss-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum fixed stop loss percent to test"),
+);
+
+const stopLossMaxOption = Options.float("stop-loss-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum fixed stop loss percent to test"),
+);
+
+const stopLossStepOption = Options.float("stop-loss-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for fixed stop loss percent"),
+);
+
+const takeProfitMinOption = Options.float("take-profit-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum fixed take profit percent to test"),
+);
+
+const takeProfitMaxOption = Options.float("take-profit-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum fixed take profit percent to test"),
+);
+
+const takeProfitStepOption = Options.float("take-profit-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for fixed take profit percent"),
+);
+
+const breakevenAtRMinOption = Options.float("breakeven-at-r-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum breakeven-at-R to test"),
+);
+
+const breakevenAtRMaxOption = Options.float("breakeven-at-r-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum breakeven-at-R to test"),
+);
+
+const breakevenAtRStepOption = Options.float("breakeven-at-r-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for breakeven-at-R"),
+);
+
+const maxBarsInTradeMinOption = Options.integer("max-bars-in-trade-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum max-bars-in-trade to test"),
+);
+
+const maxBarsInTradeMaxOption = Options.integer("max-bars-in-trade-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum max-bars-in-trade to test"),
+);
+
+const maxBarsInTradeStepOption = Options.integer("max-bars-in-trade-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for max-bars-in-trade"),
+);
+
+const lossCooldownBarsMinOption = Options.integer(
+  "loss-cooldown-bars-min",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum loss-cooldown-bars to test"),
+);
+
+const lossCooldownBarsMaxOption = Options.integer(
+  "loss-cooldown-bars-max",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum loss-cooldown-bars to test"),
+);
+
+const lossCooldownBarsStepOption = Options.integer(
+  "loss-cooldown-bars-step",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for loss-cooldown-bars"),
+);
+
+const adxMinMinOption = Options.float("adx-min-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum ADX filter to test"),
+);
+
+const adxMinMaxOption = Options.float("adx-min-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum ADX filter to test"),
+);
+
+const adxMinStepOption = Options.float("adx-min-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for ADX filter"),
+);
+
+const minEfficiencyRatioMinOption = Options.float(
+  "min-efficiency-ratio-min",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum efficiency ratio to test"),
+);
+
+const minEfficiencyRatioMaxOption = Options.float(
+  "min-efficiency-ratio-max",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum efficiency ratio to test"),
+);
+
+const minEfficiencyRatioStepOption = Options.float(
+  "min-efficiency-ratio-step",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for efficiency ratio"),
+);
+
+const rsiLongMaxMinOption = Options.float("rsi-long-max-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum RSI long max filter to test"),
+);
+
+const rsiLongMaxMaxOption = Options.float("rsi-long-max-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum RSI long max filter to test"),
+);
+
+const rsiLongMaxStepOption = Options.float("rsi-long-max-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for RSI long max filter"),
+);
+
+const rsiShortMinMinOption = Options.float("rsi-short-min-min").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum RSI short min filter to test"),
+);
+
+const rsiShortMinMaxOption = Options.float("rsi-short-min-max").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Maximum RSI short min filter to test"),
+);
+
+const rsiShortMinStepOption = Options.float("rsi-short-min-step").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Step size for RSI short min filter"),
+);
+
+const strategyOption = Options.choice("strategy", [
+  "meanReversion",
+  "trendFollowing",
+  "breakout",
+  "emaPullback",
+  "momentum",
+  "rangeExpansion",
+  "fundingCarry",
+  "dualEmaCross",
+  "ensemble",
+  "microScalp",
+  "connorsRsi2",
+  "gridScalp",
+] as const).pipe(
+  Options.withDefault("meanReversion" as const),
+  Options.withDescription("Strategy template for paper-trade"),
+);
 
 const lossConfidencePenaltyOption = Options.float(
   "loss-confidence-penalty",
@@ -232,6 +676,13 @@ const htfTrendFastPeriodOption = Options.integer("htf-trend-fast").pipe(
 const htfTrendSlowPeriodOption = Options.integer("htf-trend-slow").pipe(
   Options.withDefault(100),
   Options.withDescription("Higher-timeframe EMA slow period for trend filter"),
+);
+
+const htfSignalConfidenceOption = Options.float("htf-signal-confidence").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Confidence boost when HTF trend aligns (0 disables)",
+  ),
 );
 
 const entryPullbackEmaPeriodOption = Options.integer(
@@ -485,6 +936,7 @@ const noTrendOption = Options.boolean("no-trend").pipe(
 const regimeModeOption = Options.choice("regime-mode", [
   "trend",
   "reversion",
+  "breakout",
 ] as const).pipe(
   Options.withDefault("trend" as const),
   Options.withDescription(
@@ -559,6 +1011,7 @@ const backtestOptions = {
   htfTimeframe: htfTimeframeOption,
   htfTrendFastPeriod: htfTrendFastPeriodOption,
   htfTrendSlowPeriod: htfTrendSlowPeriodOption,
+  htfSignalConfidence: htfSignalConfidenceOption,
   entryPullbackEmaPeriod: entryPullbackEmaPeriodOption,
   entryPullbackMarginPct: entryPullbackMarginPctOption,
   minEfficiencyRatio: minEfficiencyRatioOption,
@@ -579,6 +1032,41 @@ const backtestOptions = {
   sessionEnd: sessionEndOption,
   autoRegimeFilter: autoRegimeFilterOption,
   autoRegimeAdxThreshold: autoRegimeAdxThresholdOption,
+  trendSignalStyle: trendSignalStyleOption,
+  trendFastPeriod: trendFastPeriodOption,
+  trendSlowPeriod: trendSlowPeriodOption,
+  directionalOnly: directionalOnlyOption,
+  rsiFollowTrend: rsiFollowTrendOption,
+  strictAgreement: strictAgreementOption,
+  entryOnClose: entryOnCloseOption,
+  observedPrice: observedPriceOption,
+  realistic: realisticOption,
+  strictRealism: strictRealismOption,
+  realisticSlippageBps: realisticSlippageBpsOption,
+  makerFeePct: makerFeeOption,
+  entryOrderType: entryOrderTypeOption,
+  entryLimitOffsetBps: entryLimitOffsetBpsOption,
+  rsiPeriod: rsiPeriodOption,
+  rsiOversoldStrong: rsiOversoldStrongOption,
+  rsiOverboughtStrong: rsiOverboughtStrongOption,
+  trendFilterPeriod: trendFilterPeriodOption,
+  entryRsiLongThreshold: entryRsiLongThresholdOption,
+  entryRsiShortThreshold: entryRsiShortThresholdOption,
+  exitRsiPeriod: exitRsiPeriodOption,
+  exitRsiLongLevel: exitRsiLongLevelOption,
+  exitRsiShortLevel: exitRsiShortLevelOption,
+  breakoutLookback: breakoutLookbackOption,
+  breakoutVolumeMinRatio: breakoutVolumeMinRatioOption,
+  breakoutAdxMin: breakoutAdxMinOption,
+  fundingBiasThreshold: fundingBiasThresholdOption,
+  useFunding: useFundingOption,
+  strategyType: strategyTypeOption,
+  gridStepPct: gridStepPctOption,
+  gridMaxGrids: gridMaxGridsOption,
+  gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
+  onlyWithTrend: onlyWithTrendOption,
+  targetRatio: targetRatioOption,
+  volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
   profile: profileOption,
 };
 
@@ -626,13 +1114,13 @@ export const backtestCommand = Command.make(
   ),
 );
 
-interface BacktestArgs extends ResolvedBacktestArgs {}
+export interface BacktestArgs extends ResolvedBacktestArgs {}
 
-function buildBacktestComposerConfig(
+export function buildBacktestComposerConfig(
   priceOnly: boolean,
   noRsi: boolean,
   noTrend: boolean,
-  regimeMode: "trend" | "reversion" = "trend",
+  regimeMode: "trend" | "reversion" | "breakout" = "trend",
   volumeMinRatio = 0,
   volumeLookback = 20,
   minConfluence = 0,
@@ -677,7 +1165,11 @@ function buildBacktestComposerConfig(
     trend: weights.trend / activeSum,
     liquidity: weights.liquidity / activeSum,
     rsi: weights.rsi / activeSum,
+    rsiPullback: weights.rsiPullback / activeSum,
+    emaPullback: weights.emaPullback / activeSum,
     regime: weights.regime / activeSum,
+    funding: weights.funding / activeSum,
+    connorsRsi2: weights.connorsRsi2 / activeSum,
   };
 
   return {
@@ -695,7 +1187,7 @@ function buildBacktestComposerConfig(
   };
 }
 
-function backtestProgram(args: ResolvedBacktestArgs) {
+export function backtestProgram(args: ResolvedBacktestArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
     const path = yield* Path;
@@ -736,64 +1228,81 @@ function backtestProgram(args: ResolvedBacktestArgs) {
       args.adxMin,
     );
 
-    const result = runBacktest({
-      symbol: args.symbol,
-      exchange: args.exchange,
-      timeframe: args.timeframe,
-      candles,
-      composerConfig,
-      initialCapital: args.capital,
-      positionSizePct: args.positionSize,
-      riskPerTradePct: args.riskPerTrade,
-      maxPositionSizePct: args.maxPositionSize,
-      stopLossPct: args.stopLoss,
-      takeProfitPct: args.takeProfit,
-      feePct: args.fee,
-      minConfidence: args.minConfidence,
-      useAtrStops: args.useAtrStops,
-      atrStopMultiplier: args.atrStopMultiplier,
-      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-      atrRiskReward: args.atrRiskReward,
-      scaleOutAtR: args.scaleOutAtR,
-      scaleOutPct: args.scaleOutPct,
-      volatilityLookback: args.volatilityLookback,
-      volatilityLowPct: args.volatilityLowPct,
-      volatilityHighPct: args.volatilityHighPct,
-      volatilityLowFactor: args.volatilityLowFactor,
-      volatilityHighFactor: args.volatilityHighFactor,
-      holdUntilStop: args.holdUntilStop,
-      isFutures: args.futures,
-      fundingRatePct: args.fundingRatePct,
-      slippageBps: args.slippageBps,
-      trailingStopPct: args.trailingStopPct,
-      trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
-      minAtrPct: args.minAtrPct,
-      signalPersistence: args.signalPersistence,
-      lossConfidencePenalty: args.lossConfidencePenalty,
-      lossConfidenceDecay: args.lossConfidenceDecay,
-      htfCandles,
-      htfTrendFastPeriod: args.htfTrendFastPeriod,
-      htfTrendSlowPeriod: args.htfTrendSlowPeriod,
-      entryPullbackEmaPeriod: args.entryPullbackEmaPeriod,
-      entryPullbackMarginPct: args.entryPullbackMarginPct,
-      minEfficiencyRatio: args.minEfficiencyRatio,
-      efficiencyRatioPeriod: args.efficiencyRatioPeriod,
-      rsiLongMax: args.rsiLongMax,
-      rsiShortMin: args.rsiShortMin,
-      bollingerLongMaxPctB: args.bollingerLongMaxPctB,
-      bollingerShortMinPctB: args.bollingerShortMinPctB,
-      recordEquityCurve: args.recordEquityCurve || args.exportTrades.length > 0,
-      oosPct: args.oosPct,
-      mcIterations: args.mcIterations,
-      leverage: args.leverage,
-      breakevenAtR: args.breakevenAtR,
-      maxBarsInTrade: args.maxBarsInTrade,
-      lossCooldownBars: args.lossCooldownBars,
-      sessionStart: args.sessionStart,
-      sessionEnd: args.sessionEnd,
-      autoRegimeFilter: args.autoRegimeFilter,
-      autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
-    });
+    const result: BacktestResult =
+      args.strategyType === "grid"
+        ? gridResultToBacktestResult(
+            args.symbol,
+            runGridBacktest(candles, {
+              gridStepPct: args.gridStepPct,
+              gridMaxGrids: args.gridMaxGrids,
+              gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+              feePct: args.fee,
+              slippageBps: args.slippageBps,
+              initialCapital: args.capital,
+              trendFilterPeriod: args.trendFilterPeriod,
+              leverage: args.leverage,
+              onlyWithTrend: args.onlyWithTrend,
+              targetRatio: args.targetRatio,
+            }),
+          )
+        : runBacktest({
+            symbol: args.symbol,
+            exchange: args.exchange,
+            timeframe: args.timeframe,
+            candles,
+            composerConfig,
+            initialCapital: args.capital,
+            positionSizePct: args.positionSize,
+            riskPerTradePct: args.riskPerTrade,
+            maxPositionSizePct: args.maxPositionSize,
+            stopLossPct: args.stopLoss,
+            takeProfitPct: args.takeProfit,
+            feePct: args.fee,
+            minConfidence: args.minConfidence,
+            useAtrStops: args.useAtrStops,
+            atrStopMultiplier: args.atrStopMultiplier,
+            atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+            atrRiskReward: args.atrRiskReward,
+            scaleOutAtR: args.scaleOutAtR,
+            scaleOutPct: args.scaleOutPct,
+            volatilityLookback: args.volatilityLookback,
+            volatilityLowPct: args.volatilityLowPct,
+            volatilityHighPct: args.volatilityHighPct,
+            volatilityLowFactor: args.volatilityLowFactor,
+            volatilityHighFactor: args.volatilityHighFactor,
+            holdUntilStop: args.holdUntilStop,
+            isFutures: args.futures,
+            fundingRatePct: args.fundingRatePct,
+            slippageBps: args.slippageBps,
+            trailingStopPct: args.trailingStopPct,
+            trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
+            minAtrPct: args.minAtrPct,
+            signalPersistence: args.signalPersistence,
+            lossConfidencePenalty: args.lossConfidencePenalty,
+            lossConfidenceDecay: args.lossConfidenceDecay,
+            htfCandles,
+            htfTrendFastPeriod: args.htfTrendFastPeriod,
+            htfTrendSlowPeriod: args.htfTrendSlowPeriod,
+            entryPullbackEmaPeriod: args.entryPullbackEmaPeriod,
+            entryPullbackMarginPct: args.entryPullbackMarginPct,
+            minEfficiencyRatio: args.minEfficiencyRatio,
+            efficiencyRatioPeriod: args.efficiencyRatioPeriod,
+            rsiLongMax: args.rsiLongMax,
+            rsiShortMin: args.rsiShortMin,
+            bollingerLongMaxPctB: args.bollingerLongMaxPctB,
+            bollingerShortMinPctB: args.bollingerShortMinPctB,
+            recordEquityCurve: args.recordEquityCurve || args.exportTrades.length > 0,
+            oosPct: args.oosPct,
+            mcIterations: args.mcIterations,
+            leverage: args.leverage,
+            breakevenAtR: args.breakevenAtR,
+            maxBarsInTrade: args.maxBarsInTrade,
+            lossCooldownBars: args.lossCooldownBars,
+            sessionStart: args.sessionStart,
+            sessionEnd: args.sessionEnd,
+            autoRegimeFilter: args.autoRegimeFilter,
+            autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
+          });
 
     if (args.exportTrades && args.exportTrades.length > 0) {
       const exportPath = isAbsolute(args.exportTrades)
@@ -929,6 +1438,37 @@ function printBacktestResult(
   });
 }
 
+function gridResultToBacktestResult(
+  symbol: string,
+  grid: GridResult,
+): BacktestResult {
+  return {
+    symbol,
+    totalTrades: grid.totalTrades,
+    winningTrades: Math.round(grid.totalTrades * (grid.winRate / 100)),
+    losingTrades: grid.totalTrades - Math.round(grid.totalTrades * (grid.winRate / 100)),
+    winRate: grid.winRate / 100,
+    totalReturnPct: grid.totalReturnPct,
+    maxDrawdownPct: grid.maxDrawdownPct,
+    sharpeRatio: 0,
+    trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: grid.profitFactor,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
+    robustnessScore: 0,
+  };
+}
+
 function emptyResult(
   symbol: string,
 ): import("../scalping/backtest.js").BacktestResult {
@@ -955,6 +1495,7 @@ function emptyResult(
       averageTradeDurationHours: 0,
       timeInMarketPct: 0,
     },
+    robustnessScore: 0,
   };
 }
 
@@ -1003,28 +1544,31 @@ const confStepOption = Options.float("conf-step").pipe(
   Options.withDescription("Step size for min-confidence"),
 );
 
-interface OptimizeArgs {
-  readonly exchange: string;
-  readonly symbol: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly riskPerTrade: number;
-  readonly maxPositionSize: number;
-  readonly fee: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly noTrend: boolean;
-  readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly atrRiskReward: number;
-  readonly scaleOutAtR: number;
-  readonly scaleOutPct: number;
-  readonly volatilityLookback: number;
-  readonly volatilityLowPct: number;
-  readonly volatilityHighPct: number;
-  readonly volatilityLowFactor: number;
-  readonly volatilityHighFactor: number;
+export interface OptimizeCandidateParams {
+  readonly useAtrStops: boolean;
+  readonly stopMult: number;
+  readonly tpMult: number;
+  readonly stopLossPct: number;
+  readonly takeProfitPct: number;
+  readonly minConfidence: number;
+  readonly breakevenAtR: number;
+  readonly maxBarsInTrade: number;
+  readonly lossCooldownBars: number;
+  readonly adxMin: number;
+  readonly minEfficiencyRatio: number;
+  readonly rsiLongMax: number;
+  readonly rsiShortMin: number;
+  readonly entryOrderType: "market" | "limit";
+  readonly entryLimitOffsetBps: number;
+}
+
+export interface OptimizeResult {
+  readonly params: OptimizeCandidateParams;
+  readonly isResult: BacktestResult;
+  readonly oosResult?: BacktestResult;
+}
+
+export interface OptimizeArgs extends ResolvedBacktestArgs {
   readonly atrStopMin: number;
   readonly atrStopMax: number;
   readonly atrStopStep: number;
@@ -1034,11 +1578,43 @@ interface OptimizeArgs {
   readonly confMin: number;
   readonly confMax: number;
   readonly confStep: number;
-  readonly volumeMinRatio: number;
-  readonly volumeLookback: number;
-  readonly minConfluence: number;
-  readonly entryCandleConfirm: boolean;
-  readonly momentumConfirmBars: number;
+  readonly stopLossMin: number;
+  readonly stopLossMax: number;
+  readonly stopLossStep: number;
+  readonly takeProfitMin: number;
+  readonly takeProfitMax: number;
+  readonly takeProfitStep: number;
+  readonly breakevenAtRMin: number;
+  readonly breakevenAtRMax: number;
+  readonly breakevenAtRStep: number;
+  readonly maxBarsInTradeMin: number;
+  readonly maxBarsInTradeMax: number;
+  readonly maxBarsInTradeStep: number;
+  readonly lossCooldownBarsMin: number;
+  readonly lossCooldownBarsMax: number;
+  readonly lossCooldownBarsStep: number;
+  readonly adxMinMin: number;
+  readonly adxMinMax: number;
+  readonly adxMinStep: number;
+  readonly minEfficiencyRatioMin: number;
+  readonly minEfficiencyRatioMax: number;
+  readonly minEfficiencyRatioStep: number;
+  readonly rsiLongMaxMin: number;
+  readonly rsiLongMaxMax: number;
+  readonly rsiLongMaxStep: number;
+  readonly rsiShortMinMin: number;
+  readonly rsiShortMinMax: number;
+  readonly rsiShortMinStep: number;
+  readonly scanEntryOrders: boolean;
+  readonly randomSearch: number;
+  readonly noAtr: boolean;
+  readonly walkForward: boolean;
+  readonly wfTrainDays: number;
+  readonly wfTestDays: number;
+  readonly wfStepDays: number;
+  readonly minTrades: number;
+  readonly minOosTrades: number;
+  readonly selectBy: "return" | "sharpe" | "calmar";
 }
 
 function mergeOptimizeArgs(
@@ -1110,6 +1686,71 @@ export const optimizeCommand = Command.make(
     minConfluence: minConfluenceOption,
     entryCandleConfirm: entryCandleConfirmOption,
     momentumConfirmBars: momentumConfirmBarsOption,
+    noAtr: noAtrOption,
+    scanEntryOrders: scanEntryOrdersOption,
+    randomSearch: randomSearchOption,
+    walkForward: walkForwardOption,
+    wfTrainDays: wfTrainDaysOption,
+    wfTestDays: wfTestDaysOption,
+    wfStepDays: wfStepDaysOption,
+    minTrades: minTradesOption,
+    minOosTrades: minOosTradesOption,
+    selectBy: selectByOption,
+    stopLossMin: stopLossMinOption,
+    stopLossMax: stopLossMaxOption,
+    stopLossStep: stopLossStepOption,
+    takeProfitMin: takeProfitMinOption,
+    takeProfitMax: takeProfitMaxOption,
+    takeProfitStep: takeProfitStepOption,
+    breakevenAtRMin: breakevenAtRMinOption,
+    breakevenAtRMax: breakevenAtRMaxOption,
+    breakevenAtRStep: breakevenAtRStepOption,
+    maxBarsInTradeMin: maxBarsInTradeMinOption,
+    maxBarsInTradeMax: maxBarsInTradeMaxOption,
+    maxBarsInTradeStep: maxBarsInTradeStepOption,
+    lossCooldownBarsMin: lossCooldownBarsMinOption,
+    lossCooldownBarsMax: lossCooldownBarsMaxOption,
+    lossCooldownBarsStep: lossCooldownBarsStepOption,
+    adxMinMin: adxMinMinOption,
+    adxMinMax: adxMinMaxOption,
+    adxMinStep: adxMinStepOption,
+    minEfficiencyRatioMin: minEfficiencyRatioMinOption,
+    minEfficiencyRatioMax: minEfficiencyRatioMaxOption,
+    minEfficiencyRatioStep: minEfficiencyRatioStepOption,
+    rsiLongMaxMin: rsiLongMaxMinOption,
+    rsiLongMaxMax: rsiLongMaxMaxOption,
+    rsiLongMaxStep: rsiLongMaxStepOption,
+    rsiShortMinMin: rsiShortMinMinOption,
+    rsiShortMinMax: rsiShortMinMaxOption,
+    rsiShortMinStep: rsiShortMinStepOption,
+    makerFeePct: makerFeeOption,
+    entryOrderType: entryOrderTypeOption,
+    entryLimitOffsetBps: entryLimitOffsetBpsOption,
+    rsiPeriod: rsiPeriodOption,
+    rsiOversoldStrong: rsiOversoldStrongOption,
+    rsiOverboughtStrong: rsiOverboughtStrongOption,
+    trendFilterPeriod: trendFilterPeriodOption,
+    entryRsiLongThreshold: entryRsiLongThresholdOption,
+    entryRsiShortThreshold: entryRsiShortThresholdOption,
+    exitRsiPeriod: exitRsiPeriodOption,
+    exitRsiLongLevel: exitRsiLongLevelOption,
+    exitRsiShortLevel: exitRsiShortLevelOption,
+    observedPrice: observedPriceOption,
+    realistic: realisticOption,
+    strictRealism: strictRealismOption,
+    realisticSlippageBps: realisticSlippageBpsOption,
+    breakoutLookback: breakoutLookbackOption,
+    breakoutVolumeMinRatio: breakoutVolumeMinRatioOption,
+    breakoutAdxMin: breakoutAdxMinOption,
+    fundingBiasThreshold: fundingBiasThresholdOption,
+    useFunding: useFundingOption,
+    strategyType: strategyTypeOption,
+    gridStepPct: gridStepPctOption,
+    gridMaxGrids: gridMaxGridsOption,
+    gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
+    onlyWithTrend: onlyWithTrendOption,
+    targetRatio: targetRatioOption,
+    volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
@@ -1123,8 +1764,8 @@ export const optimizeCommand = Command.make(
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const programArgs = Option.isSome(profile)
-        ? mergeOptimizeArgs(args, profile.value)
-        : args;
+        ? mergeOptimizeArgs(args as unknown as OptimizeArgs, profile.value)
+        : (args as unknown as OptimizeArgs);
 
       const result = yield* optimizeProgram(programArgs).pipe(
         Effect.provide(repoLayer),
@@ -1343,34 +1984,8 @@ const saveWatchlistOption = Options.text("save-watchlist").pipe(
   ),
 );
 
-interface ScanArgs {
-  readonly exchange: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly riskPerTrade: number;
-  readonly maxPositionSize: number;
-  readonly fee: number;
-  readonly minConfidence: number;
-  readonly useAtrStops: boolean;
-  readonly atrStopMultiplier: number;
-  readonly atrTakeProfitMultiplier: number;
-  readonly atrRiskReward: number;
-  readonly scaleOutAtR: number;
-  readonly scaleOutPct: number;
-  readonly volatilityLookback: number;
-  readonly volatilityLowPct: number;
-  readonly volatilityHighPct: number;
-  readonly volatilityLowFactor: number;
-  readonly volatilityHighFactor: number;
-  readonly stopLoss: number;
-  readonly takeProfit: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly noTrend: boolean;
-  readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly minAtrPct: number;
+export interface ScanArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
+  readonly symbol?: string;
   readonly minCandles: number;
   readonly top: number;
   readonly optimize: boolean;
@@ -1379,14 +1994,9 @@ interface ScanArgs {
   readonly maxDrawdownPct: Option.Option<number>;
   readonly saveWatchlist: Option.Option<string>;
   readonly watchlistPath?: string;
-  readonly futures: boolean;
-  readonly fundingRatePct: number;
-  readonly slippageBps: number;
-  readonly volumeMinRatio: number;
-  readonly volumeLookback: number;
-  readonly minConfluence: number;
-  readonly entryCandleConfirm: boolean;
-  readonly momentumConfirmBars: number;
+  readonly selectBy: "return" | "sharpe" | "calmar";
+  readonly minTrades: number;
+  readonly minOosTrades: number;
 }
 
 function mergeScanArgs(args: ScanArgs, profile: StrategyProfile): ScanArgs {
@@ -1468,6 +2078,71 @@ export const scanCommand = Command.make(
     minConfluence: minConfluenceOption,
     entryCandleConfirm: entryCandleConfirmOption,
     momentumConfirmBars: momentumConfirmBarsOption,
+    noAtr: noAtrOption,
+    scanEntryOrders: scanEntryOrdersOption,
+    randomSearch: randomSearchOption,
+    walkForward: walkForwardOption,
+    wfTrainDays: wfTrainDaysOption,
+    wfTestDays: wfTestDaysOption,
+    wfStepDays: wfStepDaysOption,
+    minTrades: minTradesOption,
+    minOosTrades: minOosTradesOption,
+    selectBy: selectByOption,
+    stopLossMin: stopLossMinOption,
+    stopLossMax: stopLossMaxOption,
+    stopLossStep: stopLossStepOption,
+    takeProfitMin: takeProfitMinOption,
+    takeProfitMax: takeProfitMaxOption,
+    takeProfitStep: takeProfitStepOption,
+    breakevenAtRMin: breakevenAtRMinOption,
+    breakevenAtRMax: breakevenAtRMaxOption,
+    breakevenAtRStep: breakevenAtRStepOption,
+    maxBarsInTradeMin: maxBarsInTradeMinOption,
+    maxBarsInTradeMax: maxBarsInTradeMaxOption,
+    maxBarsInTradeStep: maxBarsInTradeStepOption,
+    lossCooldownBarsMin: lossCooldownBarsMinOption,
+    lossCooldownBarsMax: lossCooldownBarsMaxOption,
+    lossCooldownBarsStep: lossCooldownBarsStepOption,
+    adxMinMin: adxMinMinOption,
+    adxMinMax: adxMinMaxOption,
+    adxMinStep: adxMinStepOption,
+    minEfficiencyRatioMin: minEfficiencyRatioMinOption,
+    minEfficiencyRatioMax: minEfficiencyRatioMaxOption,
+    minEfficiencyRatioStep: minEfficiencyRatioStepOption,
+    rsiLongMaxMin: rsiLongMaxMinOption,
+    rsiLongMaxMax: rsiLongMaxMaxOption,
+    rsiLongMaxStep: rsiLongMaxStepOption,
+    rsiShortMinMin: rsiShortMinMinOption,
+    rsiShortMinMax: rsiShortMinMaxOption,
+    rsiShortMinStep: rsiShortMinStepOption,
+    makerFeePct: makerFeeOption,
+    entryOrderType: entryOrderTypeOption,
+    entryLimitOffsetBps: entryLimitOffsetBpsOption,
+    rsiPeriod: rsiPeriodOption,
+    rsiOversoldStrong: rsiOversoldStrongOption,
+    rsiOverboughtStrong: rsiOverboughtStrongOption,
+    trendFilterPeriod: trendFilterPeriodOption,
+    entryRsiLongThreshold: entryRsiLongThresholdOption,
+    entryRsiShortThreshold: entryRsiShortThresholdOption,
+    exitRsiPeriod: exitRsiPeriodOption,
+    exitRsiLongLevel: exitRsiLongLevelOption,
+    exitRsiShortLevel: exitRsiShortLevelOption,
+    observedPrice: observedPriceOption,
+    realistic: realisticOption,
+    strictRealism: strictRealismOption,
+    realisticSlippageBps: realisticSlippageBpsOption,
+    breakoutLookback: breakoutLookbackOption,
+    breakoutVolumeMinRatio: breakoutVolumeMinRatioOption,
+    breakoutAdxMin: breakoutAdxMinOption,
+    fundingBiasThreshold: fundingBiasThresholdOption,
+    useFunding: useFundingOption,
+    strategyType: strategyTypeOption,
+    gridStepPct: gridStepPctOption,
+    gridMaxGrids: gridMaxGridsOption,
+    gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
+    onlyWithTrend: onlyWithTrendOption,
+    targetRatio: targetRatioOption,
+    volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
@@ -1481,8 +2156,8 @@ export const scanCommand = Command.make(
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
-        ? mergeScanArgs(args, profile.value)
-        : args;
+        ? mergeScanArgs(args as unknown as ScanArgs, profile.value)
+        : (args as unknown as ScanArgs);
 
       const watchlistPath = Option.match(mergedArgs.saveWatchlist, {
         onNone: () => undefined as string | undefined,
@@ -1657,7 +2332,7 @@ function scanSingleExchange(
   });
 }
 
-interface ScanResult {
+export interface ScanResult {
   readonly symbol: string;
   readonly exchange: string;
   readonly totalTrades: number;
@@ -1795,6 +2470,7 @@ function emptyScanResult(symbol: string): BacktestResult {
       averageTradeDurationHours: 0,
       timeInMarketPct: 0,
     },
+    robustnessScore: 0,
   };
 }
 
@@ -2022,7 +2698,7 @@ const disengageOption = Options.boolean("disengage").pipe(
   Options.withDescription("Disengage kill switch before starting"),
 );
 
-interface WatchlistEntry {
+export interface WatchlistEntry {
   readonly symbol: string;
   readonly exchange?: string;
   readonly returnPct: number;
@@ -2034,46 +2710,12 @@ interface WatchlistEntry {
   };
 }
 
-interface PaperTradeArgs {
-  readonly exchange: string;
-  readonly symbol: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly riskPerTrade: number;
-  readonly fee: number;
-  readonly minConfidence: number;
-  readonly useAtrStops: boolean;
-  readonly atrStopMultiplier: number;
-  readonly atrTakeProfitMultiplier: number;
-  readonly atrRiskReward: number;
-  readonly scaleOutAtR: number;
-  readonly scaleOutPct: number;
-  readonly volatilityLookback: number;
-  readonly volatilityLowPct: number;
-  readonly volatilityHighPct: number;
-  readonly volatilityLowFactor: number;
-  readonly volatilityHighFactor: number;
-  readonly stopLoss: number;
-  readonly takeProfit: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly noTrend: boolean;
-  readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly minAtrPct: number;
-  readonly volumeMinRatio: number;
-  readonly volumeLookback: number;
-  readonly minConfluence: number;
-  readonly entryCandleConfirm: boolean;
-  readonly momentumConfirmBars: number;
+export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly interval: number;
   readonly iterations: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
-  readonly futures: boolean;
-  readonly leverage: number;
   readonly marginMode: string;
   readonly productType: string;
   readonly maxDrawdownPct: Option.Option<number>;
@@ -2129,47 +2771,14 @@ function mergePaperTradeArgs(
   return { ...base, ...args };
 }
 
-interface SoakArgs {
-  readonly exchange: string;
-  readonly timeframe: string;
-  readonly capital: number;
-  readonly positionSize: number;
-  readonly riskPerTrade: number;
-  readonly maxPositionSize: number;
-  readonly fee: number;
-  readonly minConfidence: number;
-  readonly useAtrStops: boolean;
-  readonly atrStopMultiplier: number;
-  readonly atrTakeProfitMultiplier: number;
-  readonly atrRiskReward: number;
-  readonly scaleOutAtR: number;
-  readonly scaleOutPct: number;
-  readonly volatilityLookback: number;
-  readonly volatilityLowPct: number;
-  readonly volatilityHighPct: number;
-  readonly volatilityLowFactor: number;
-  readonly volatilityHighFactor: number;
-  readonly stopLoss: number;
-  readonly takeProfit: number;
-  readonly priceOnly: boolean;
-  readonly noRsi: boolean;
-  readonly noTrend: boolean;
-  readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
-  readonly minAtrPct: number;
-  readonly volumeMinRatio: number;
-  readonly volumeLookback: number;
-  readonly minConfluence: number;
-  readonly entryCandleConfirm: boolean;
-  readonly momentumConfirmBars: number;
+export interface SoakArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
+  readonly symbol?: string;
   readonly watchlist: string;
   readonly interval: number;
   readonly iterations: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
-  readonly futures: boolean;
-  readonly leverage: number;
   readonly marginMode: string;
   readonly productType: string;
   readonly maxDrawdownPct: Option.Option<number>;
@@ -2262,6 +2871,7 @@ export const paperTradeCommand = Command.make(
     capital: capitalOption,
     positionSize: positionSizeOption,
     riskPerTrade: riskPerTradeOption,
+    maxPositionSize: riskBasedMaxPositionSizeOption,
     fee: feeOption,
     minConfidence: confidenceOption,
     useAtrStops: useAtrStopsOption,
@@ -2305,6 +2915,45 @@ export const paperTradeCommand = Command.make(
     watchlist: watchlistOption,
     killSwitch: killSwitchOption,
     disengage: disengageOption,
+    strategy: strategyOption,
+    makerFeePct: makerFeeOption,
+    entryOrderType: entryOrderTypeOption,
+    entryLimitOffsetBps: entryLimitOffsetBpsOption,
+    rsiPeriod: rsiPeriodOption,
+    rsiOversoldStrong: rsiOversoldStrongOption,
+    rsiOverboughtStrong: rsiOverboughtStrongOption,
+    trendFilterPeriod: trendFilterPeriodOption,
+    entryRsiLongThreshold: entryRsiLongThresholdOption,
+    entryRsiShortThreshold: entryRsiShortThresholdOption,
+    exitRsiPeriod: exitRsiPeriodOption,
+    exitRsiLongLevel: exitRsiLongLevelOption,
+    exitRsiShortLevel: exitRsiShortLevelOption,
+    observedPrice: observedPriceOption,
+    realistic: realisticOption,
+    strictRealism: strictRealismOption,
+    realisticSlippageBps: realisticSlippageBpsOption,
+    slippageBps: slippageBpsOption,
+    autoRegimeFilter: autoRegimeFilterOption,
+    autoRegimeAdxThreshold: autoRegimeAdxThresholdOption,
+    trendSignalStyle: trendSignalStyleOption,
+    trendFastPeriod: trendFastPeriodOption,
+    trendSlowPeriod: trendSlowPeriodOption,
+    directionalOnly: directionalOnlyOption,
+    rsiFollowTrend: rsiFollowTrendOption,
+    strictAgreement: strictAgreementOption,
+    entryOnClose: entryOnCloseOption,
+    breakoutLookback: breakoutLookbackOption,
+    breakoutVolumeMinRatio: breakoutVolumeMinRatioOption,
+    breakoutAdxMin: breakoutAdxMinOption,
+    fundingBiasThreshold: fundingBiasThresholdOption,
+    useFunding: useFundingOption,
+    strategyType: strategyTypeOption,
+    gridStepPct: gridStepPctOption,
+    gridMaxGrids: gridMaxGridsOption,
+    gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
+    onlyWithTrend: onlyWithTrendOption,
+    targetRatio: targetRatioOption,
+    volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
@@ -2316,8 +2965,8 @@ export const paperTradeCommand = Command.make(
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
-        ? mergePaperTradeArgs(args, profile.value)
-        : args;
+        ? mergePaperTradeArgs(args as unknown as PaperTradeArgs, profile.value)
+        : (args as unknown as PaperTradeArgs);
 
       const watchlist = yield* Option.match(mergedArgs.watchlist, {
         onNone: () => Effect.succeed<readonly WatchlistEntry[]>([]),
@@ -2480,6 +3129,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
       initialCapital: args.capital,
       isLive: args.live,
+      volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
     });
 
     const marginMode = parseMarginMode(args.marginMode);
@@ -2530,6 +3180,31 @@ function paperTradeProgram(args: PaperTradeArgs) {
       leverage: args.leverage,
       marginMode,
       productType,
+      volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
+    });
+
+    const makeGridOptions = (
+      symbol: string,
+      exchange: string,
+    ): GridPaperTradingOptions => ({
+      exchange,
+      symbol,
+      timeframe: args.timeframe,
+      gridStepPct: args.gridStepPct,
+      gridMaxGrids: args.gridMaxGrids,
+      gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+      feePct: args.fee,
+      slippageBps: args.slippageBps,
+      trendFilterPeriod: args.trendFilterPeriod,
+      initialCapital: args.capital,
+      maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+      maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+      leverage: args.leverage,
+      onlyWithTrend: args.onlyWithTrend,
+      targetRatio: args.targetRatio,
+      isLive: args.live,
+      productType,
+      marginMode,
     });
 
     const spotAdapterLayer = args.live
@@ -2543,7 +3218,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
           BitgetFuturesExchangeAdapterLive,
           Layer.provide(
             BitgetClientLiveConfig,
-            Layer.merge(BitgetConfigLive, RateLimiterLive()),
+            Layer.merge(
+              BitgetConfigLive,
+              RateLimiterLive(bitgetRateLimiterConfig),
+            ),
           ),
         )
       : SimulatedFuturesExchangeAdapterLive();
@@ -2578,29 +3256,41 @@ function paperTradeProgram(args: PaperTradeArgs) {
         never
       >;
 
+    const runGridIteration = (
+      opts: GridPaperTradingOptions,
+    ): Effect.Effect<GridPaperTradingIterationResult, never, never> =>
+      runGridPaperTradingIteration(opts).pipe(
+        Effect.provide(futuresAdapterLayer),
+      ) as Effect.Effect<GridPaperTradingIterationResult, never, never>;
+
     let remaining = args.iterations;
     while (remaining !== 0) {
       if (entries) {
         for (const entry of entries) {
           if (remaining === 0) break;
           const entryExchange = entry.exchange ?? args.exchange;
-          const result = args.futures
-            ? yield* runFuturesIteration(
-                makeFuturesOptions(entry.symbol, entryExchange, {
-                  minConfidence: entry.bestParams?.minConfidence,
-                  atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
-                  atrTakeProfitMultiplier:
-                    entry.bestParams?.atrTakeProfitMultiplier,
-                }),
-              )
-            : yield* runSpotIteration(
-                makeSpotOptions(entry.symbol, entryExchange, {
-                  minConfidence: entry.bestParams?.minConfidence,
-                  atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
-                  atrTakeProfitMultiplier:
-                    entry.bestParams?.atrTakeProfitMultiplier,
-                }),
-              );
+          const result =
+            args.strategyType === "grid"
+              ? yield* runGridIteration(
+                  makeGridOptions(entry.symbol, entryExchange),
+                )
+              : args.futures
+                ? yield* runFuturesIteration(
+                    makeFuturesOptions(entry.symbol, entryExchange, {
+                      minConfidence: entry.bestParams?.minConfidence,
+                      atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
+                      atrTakeProfitMultiplier:
+                        entry.bestParams?.atrTakeProfitMultiplier,
+                    }),
+                  )
+                : yield* runSpotIteration(
+                    makeSpotOptions(entry.symbol, entryExchange, {
+                      minConfidence: entry.bestParams?.minConfidence,
+                      atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
+                      atrTakeProfitMultiplier:
+                        entry.bestParams?.atrTakeProfitMultiplier,
+                    }),
+                  );
           yield* Console.log(
             `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
           );
@@ -2614,13 +3304,16 @@ function paperTradeProgram(args: PaperTradeArgs) {
           }
         }
       } else {
-        const result = args.futures
-          ? yield* runFuturesIteration(
-              makeFuturesOptions(args.symbol, args.exchange),
-            )
-          : yield* runSpotIteration(
-              makeSpotOptions(args.symbol, args.exchange),
-            );
+        const result =
+          args.strategyType === "grid"
+            ? yield* runGridIteration(makeGridOptions(args.symbol, args.exchange))
+            : args.futures
+              ? yield* runFuturesIteration(
+                  makeFuturesOptions(args.symbol, args.exchange),
+                )
+              : yield* runSpotIteration(
+                  makeSpotOptions(args.symbol, args.exchange),
+                );
         yield* Console.log(
           `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
         );
@@ -2768,6 +3461,43 @@ export const soakCommand = Command.make(
     maxPositionSizePct: maxPositionSizeOption,
     maxTradesPerDay: maxTradesPerDayOption,
     minCapital: minCapitalOption,
+    makerFeePct: makerFeeOption,
+    entryOrderType: entryOrderTypeOption,
+    entryLimitOffsetBps: entryLimitOffsetBpsOption,
+    rsiPeriod: rsiPeriodOption,
+    rsiOversoldStrong: rsiOversoldStrongOption,
+    rsiOverboughtStrong: rsiOverboughtStrongOption,
+    trendFilterPeriod: trendFilterPeriodOption,
+    entryRsiLongThreshold: entryRsiLongThresholdOption,
+    entryRsiShortThreshold: entryRsiShortThresholdOption,
+    exitRsiPeriod: exitRsiPeriodOption,
+    exitRsiLongLevel: exitRsiLongLevelOption,
+    exitRsiShortLevel: exitRsiShortLevelOption,
+    observedPrice: observedPriceOption,
+    realistic: realisticOption,
+    strictRealism: strictRealismOption,
+    realisticSlippageBps: realisticSlippageBpsOption,
+    autoRegimeFilter: autoRegimeFilterOption,
+    autoRegimeAdxThreshold: autoRegimeAdxThresholdOption,
+    trendSignalStyle: trendSignalStyleOption,
+    trendFastPeriod: trendFastPeriodOption,
+    trendSlowPeriod: trendSlowPeriodOption,
+    directionalOnly: directionalOnlyOption,
+    rsiFollowTrend: rsiFollowTrendOption,
+    strictAgreement: strictAgreementOption,
+    entryOnClose: entryOnCloseOption,
+    breakoutLookback: breakoutLookbackOption,
+    breakoutVolumeMinRatio: breakoutVolumeMinRatioOption,
+    breakoutAdxMin: breakoutAdxMinOption,
+    fundingBiasThreshold: fundingBiasThresholdOption,
+    useFunding: useFundingOption,
+    strategyType: strategyTypeOption,
+    gridStepPct: gridStepPctOption,
+    gridMaxGrids: gridMaxGridsOption,
+    gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
+    onlyWithTrend: onlyWithTrendOption,
+    targetRatio: targetRatioOption,
+    volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
@@ -2779,8 +3509,8 @@ export const soakCommand = Command.make(
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
-        ? mergeSoakArgs(args, profile.value)
-        : args;
+        ? mergeSoakArgs(args as unknown as SoakArgs, profile.value)
+        : (args as unknown as SoakArgs);
 
       const watchlistPath = resolve(path.homeDir, "data", mergedArgs.watchlist);
       const watchlistEntries = yield* loadSoakWatchlist(watchlistPath);
@@ -2835,7 +3565,10 @@ export const soakCommand = Command.make(
             BitgetFuturesExchangeAdapterLive,
             Layer.provide(
               BitgetClientLiveConfig,
-              Layer.merge(BitgetConfigLive, RateLimiterLive()),
+              Layer.merge(
+                BitgetConfigLive,
+                RateLimiterLive(bitgetRateLimiterConfig),
+              ),
             ),
           )
         : SimulatedFuturesExchangeAdapterLive();
@@ -2915,6 +3648,7 @@ export const soakCommand = Command.make(
             leverage: entry?.leverage ?? mergedArgs.leverage,
             marginMode: entry?.marginMode ?? marginModeParsed,
             productType: entry?.productType ?? productTypeParsed,
+            volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
           };
           return runFuturesPaperTradingIteration(opts).pipe(
             Effect.provide(futuresAdapterLayer),
@@ -2962,6 +3696,7 @@ export const soakCommand = Command.make(
           minAtrPct: mergedArgs.minAtrPct,
           initialCapital: mergedArgs.capital,
           isLive: mergedArgs.live,
+          volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
         };
         return runPaperTradingIteration(opts).pipe(
           Effect.provide(spotAdapterLayer),
@@ -3067,6 +3802,1034 @@ const profileCommand = Command.make("profile", {}, () =>
   Command.withSubcommands([profileSaveCommand]),
 );
 
+// ---------------------------------------------------------------------------
+// Select / validate / library / walk-forward helpers
+// ---------------------------------------------------------------------------
+
+export interface SelectArgs extends ResolvedBacktestArgs {
+  readonly universe: string;
+  readonly top: number;
+  readonly minRobustness: number;
+  readonly minReturnPct: number;
+  readonly maxDrawdownPct: number;
+  readonly minTrades: number;
+  readonly selectLookbackCandles: number;
+  readonly selectBy: "return" | "sharpe" | "calmar";
+}
+
+export interface SelectResult {
+  readonly symbol: string;
+  readonly params: {
+    readonly regimeMode: "trend" | "reversion" | "breakout";
+    readonly atrStopMultiplier: number;
+    readonly atrTakeProfitMultiplier: number;
+    readonly minConfidence: number;
+    readonly adxMin: number;
+  };
+  readonly result: BacktestResult;
+}
+
+export interface SelectWatchlistEntry {
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly profile: SelectResult["params"];
+}
+
+export interface ValidationRow {
+  readonly symbol: string;
+  readonly regimeMode: "trend" | "reversion" | "breakout";
+  readonly isReturnPct: number;
+  readonly oosReturnPct: number;
+  readonly oosMaxDrawdownPct: number;
+  readonly mcP95DrawdownPct: number;
+  readonly mcRuinPct: number;
+  readonly robustnessScore: number;
+  readonly isTrades: number;
+  readonly oosTrades: number;
+  readonly liveReady: boolean;
+  readonly entry: SelectWatchlistEntry;
+}
+
+export function buildCandidate(
+  useAtrStops: boolean,
+  vector: readonly number[],
+): OptimizeCandidateParams {
+  const stopMult = useAtrStops ? vector[0] : 0;
+  const tpMult = useAtrStops ? vector[1] : 0;
+  const stopLossPct = useAtrStops ? 0 : vector[0];
+  const takeProfitPct = useAtrStops ? 0 : vector[1];
+  const minConfidence = vector[2] ?? 0.5;
+  const breakevenAtR = vector[3] ?? 0;
+  const maxBarsInTrade = vector[4] ?? 0;
+  const lossCooldownBars = vector[5] ?? 0;
+  const adxMin = vector[6] ?? 0;
+  const minEfficiencyRatio = vector[7] ?? 0;
+  const rsiLongMax = vector[8] ?? 0;
+  const rsiShortMin = vector[9] ?? 0;
+  const hasEntryOrder = vector.length >= 12;
+  const entryOrderTypeIndex = hasEntryOrder ? vector[10] : 0;
+  const entryLimitOffsetBps = hasEntryOrder ? vector[11] : 0;
+  const entryOrderType = entryOrderTypeIndex < 0.5 ? "market" : "limit";
+  return {
+    useAtrStops,
+    stopMult,
+    tpMult,
+    stopLossPct,
+    takeProfitPct,
+    minConfidence,
+    breakevenAtR,
+    maxBarsInTrade,
+    lossCooldownBars,
+    adxMin,
+    minEfficiencyRatio,
+    rsiLongMax,
+    rsiShortMin,
+    entryOrderType,
+    entryLimitOffsetBps,
+  };
+}
+
+function randomInRange(min: number, max: number): number {
+  if (min >= max) return min;
+  return Number((min + Math.random() * (max - min)).toFixed(6));
+}
+
+function cartesianProduct<T>(arrays: T[][]): T[][] {
+  return arrays.reduce<T[][]>(
+    (acc, arr) => acc.flatMap((a) => arr.map((b) => [...a, b])),
+    [[]],
+  );
+}
+
+function range(min: number, max: number, step: number): number[] {
+  const result: number[] = [];
+  if (step <= 0 || max < min) {
+    if (min === max) return [min];
+    return [min];
+  }
+  for (let v = min; v <= max + 1e-9; v += step) {
+    result.push(Number(v.toFixed(6)));
+  }
+  return result;
+}
+
+export function generateCandidates(
+  args: OptimizeArgs,
+): OptimizeCandidateParams[] {
+  const useAtrStops = !args.noAtr;
+  const stopRange = useAtrStops
+    ? range(args.atrStopMin, args.atrStopMax, args.atrStopStep)
+    : range(args.stopLossMin, args.stopLossMax, args.stopLossStep);
+  const tpRange = useAtrStops
+    ? range(args.atrTpMin, args.atrTpMax, args.atrTpStep)
+    : range(args.takeProfitMin, args.takeProfitMax, args.takeProfitStep);
+  const confRange = range(args.confMin, args.confMax, args.confStep);
+  const beRange = range(
+    args.breakevenAtRMin,
+    args.breakevenAtRMax,
+    args.breakevenAtRStep,
+  );
+  const barsRange = range(
+    args.maxBarsInTradeMin,
+    args.maxBarsInTradeMax,
+    args.maxBarsInTradeStep,
+  );
+  const cooldownRange = range(
+    args.lossCooldownBarsMin,
+    args.lossCooldownBarsMax,
+    args.lossCooldownBarsStep,
+  );
+  const adxRange = range(args.adxMinMin, args.adxMinMax, args.adxMinStep);
+  const erRange = range(
+    args.minEfficiencyRatioMin,
+    args.minEfficiencyRatioMax,
+    args.minEfficiencyRatioStep,
+  );
+  const rsiLongRange = range(
+    args.rsiLongMaxMin,
+    args.rsiLongMaxMax,
+    args.rsiLongMaxStep,
+  );
+  const rsiShortRange = range(
+    args.rsiShortMinMin,
+    args.rsiShortMinMax,
+    args.rsiShortMinStep,
+  );
+
+  const dimensions = [
+    stopRange,
+    tpRange,
+    confRange,
+    beRange,
+    barsRange,
+    cooldownRange,
+    adxRange,
+    erRange,
+    rsiLongRange,
+    rsiShortRange,
+  ];
+
+  if (args.scanEntryOrders) {
+    dimensions.push([0, 1]); // market, limit
+    dimensions.push([0, 5, 10]); // offset bps
+  }
+
+  let vectors = cartesianProduct(dimensions);
+
+  if (args.randomSearch > 0) {
+    if (vectors.length > args.randomSearch) {
+      const shuffled = [...vectors].sort(() => Math.random() - 0.5);
+      vectors = shuffled.slice(0, args.randomSearch);
+    } else {
+      // Sample additional random candidates within the search bounds.
+      while (vectors.length < args.randomSearch) {
+        const randomVector = [
+          randomInRange(
+            useAtrStops ? args.atrStopMin : args.stopLossMin,
+            useAtrStops ? args.atrStopMax : args.stopLossMax,
+          ),
+          randomInRange(
+            useAtrStops ? args.atrTpMin : args.takeProfitMin,
+            useAtrStops ? args.atrTpMax : args.takeProfitMax,
+          ),
+          randomInRange(args.confMin, args.confMax),
+          randomInRange(args.breakevenAtRMin, args.breakevenAtRMax),
+          Math.floor(
+            randomInRange(args.maxBarsInTradeMin, args.maxBarsInTradeMax),
+          ),
+          Math.floor(
+            randomInRange(args.lossCooldownBarsMin, args.lossCooldownBarsMax),
+          ),
+          randomInRange(args.adxMinMin, args.adxMinMax),
+          randomInRange(args.minEfficiencyRatioMin, args.minEfficiencyRatioMax),
+          randomInRange(args.rsiLongMaxMin, args.rsiLongMaxMax),
+          randomInRange(args.rsiShortMinMin, args.rsiShortMinMax),
+        ];
+        if (args.scanEntryOrders) {
+          randomVector.push(Math.random() < 0.5 ? 0 : 1);
+          randomVector.push([0, 5, 10][Math.floor(Math.random() * 3)]);
+        }
+        vectors.push(randomVector);
+      }
+    }
+  }
+
+  return vectors.map((v) => buildCandidate(useAtrStops, v));
+}
+
+export function objectiveValue(
+  result: BacktestResult,
+  selectBy: "return" | "sharpe" | "calmar",
+): number {
+  if (selectBy === "sharpe") return result.sharpeRatio;
+  if (selectBy === "calmar") return result.metrics.calmarRatio;
+  return result.totalReturnPct;
+}
+
+export function selectWinner(
+  results: readonly OptimizeResult[],
+  selectBy: "return" | "sharpe" | "calmar",
+  minTrades: number,
+  minOosTrades?: number,
+): OptimizeResult | null {
+  const oosThreshold = minOosTrades ?? minTrades;
+  const passing = results.filter((r) => {
+    if (r.oosResult) {
+      return r.oosResult.totalTrades >= oosThreshold;
+    }
+    return r.isResult.totalTrades >= minTrades;
+  });
+  if (passing.length === 0) return null;
+  const sorted = [...passing].sort(
+    (a, b) =>
+      objectiveValue(b.oosResult ?? b.isResult, selectBy) -
+      objectiveValue(a.oosResult ?? a.isResult, selectBy),
+  );
+  return sorted[0];
+}
+
+export function buildStrategyProfileFromOptimizeResult(
+  name: string,
+  args: OptimizeArgs,
+  winner: OptimizeResult,
+): StrategyProfile {
+  const p = winner.params;
+  const override: Partial<StrategyProfileParams> = {
+    minConfidence: p.minConfidence,
+    adxMin: p.adxMin,
+    breakevenAtR: p.breakevenAtR,
+    maxBarsInTrade: p.maxBarsInTrade,
+    lossCooldownBars: p.lossCooldownBars,
+    minEfficiencyRatio: p.minEfficiencyRatio,
+    rsiLongMax: p.rsiLongMax,
+    rsiShortMin: p.rsiShortMin,
+    entryOrderType: p.entryOrderType,
+    entryLimitOffsetBps: p.entryLimitOffsetBps,
+    ...(p.useAtrStops
+      ? {
+          atrStopMultiplier: p.stopMult,
+          atrTakeProfitMultiplier: p.tpMult,
+          stopLossPct: 0,
+          takeProfitPct: 0,
+        }
+      : {
+          stopLossPct: p.stopLossPct,
+          takeProfitPct: p.takeProfitPct,
+          atrStopMultiplier: 0,
+          atrTakeProfitMultiplier: 0,
+        }),
+  };
+  const defaults: StrategyProfileParams = {
+    ...buildStrategyProfileFromArgs(name, args).defaults,
+    ...override,
+    useAtrStops: p.useAtrStops,
+    exchange: args.exchange,
+    defaultSymbol: args.symbol,
+    timeframe: args.timeframe,
+  };
+  return {
+    name,
+    defaults,
+    symbols: {
+      [args.symbol]: override,
+    },
+  };
+}
+
+export interface WalkForwardWindow {
+  readonly trainCandles: CandleLike[];
+  readonly testCandles: CandleLike[];
+}
+
+export function generateWalkForwardWindows(
+  candles: readonly CandleLike[],
+  trainDays: number,
+  testDays: number,
+  stepDays: number,
+): WalkForwardWindow[] {
+  if (candles.length < 2) return [];
+  const intervalMs =
+    candles[1].timestamp.getTime() - candles[0].timestamp.getTime();
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const candlesPerDay = Math.max(1, Math.round(msPerDay / intervalMs));
+  const trainSize = Math.max(1, trainDays * candlesPerDay);
+  const testSize = Math.max(1, testDays * candlesPerDay);
+  const stepSize = Math.max(1, stepDays * candlesPerDay);
+
+  const windows: WalkForwardWindow[] = [];
+  for (
+    let start = 0;
+    start + trainSize + testSize <= candles.length;
+    start += stepSize
+  ) {
+    windows.push({
+      trainCandles: candles.slice(start, start + trainSize) as CandleLike[],
+      testCandles: candles.slice(
+        start + trainSize,
+        start + trainSize + testSize,
+      ) as CandleLike[],
+    });
+  }
+  return windows;
+}
+
+export function combineWalkForwardResults(
+  results: readonly BacktestResult[],
+  initialCapital: number,
+  symbol: string,
+): BacktestResult {
+  const combinedTrades: BacktestTrade[] = [];
+  let capital = initialCapital;
+  let peak = capital;
+  let totalFeesPaid = 0;
+  let totalFundingCost = 0;
+
+  for (const r of results) {
+    const windowStartCapital = capital;
+    for (const t of r.trades) {
+      const scale = windowStartCapital / initialCapital;
+      const scaledNetPnl = t.netPnl * scale;
+      capital += scaledNetPnl;
+      if (capital > peak) peak = capital;
+      combinedTrades.push({ ...t, pnl: t.pnl * scale, netPnl: scaledNetPnl });
+      totalFeesPaid += (t.pnl - t.netPnl) * scale;
+    }
+    totalFeesPaid += r.totalFeesPaid * (windowStartCapital / initialCapital);
+    totalFundingCost +=
+      r.totalFundingCost * (windowStartCapital / initialCapital);
+  }
+
+  const totalReturnPct = ((capital - initialCapital) / initialCapital) * 100;
+  const maxDrawdownPct = 0; // Simplified
+  const winningTrades = combinedTrades.filter((t) => t.netPnl > 0).length;
+  const losingTrades = combinedTrades.filter((t) => t.netPnl < 0).length;
+
+  return {
+    symbol,
+    totalTrades: combinedTrades.length,
+    winningTrades,
+    losingTrades,
+    winRate:
+      combinedTrades.length > 0 ? winningTrades / combinedTrades.length : 0,
+    totalReturnPct,
+    maxDrawdownPct,
+    sharpeRatio: 0,
+    trades: combinedTrades,
+    totalFeesPaid,
+    totalFundingCost,
+    benchmarkReturnPct: 0,
+    robustnessScore: 0,
+    metrics: {
+      profitFactor: 0,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
+  };
+}
+
+function selectBacktestComposerConfig(
+  args: SelectArgs,
+  params: SelectResult["params"],
+): ComposerConfig {
+  return buildBacktestComposerConfig(
+    args.priceOnly,
+    args.noRsi,
+    args.noTrend,
+    params.regimeMode,
+    args.volumeMinRatio,
+    args.volumeLookback,
+    args.minConfluence,
+    args.entryCandleConfirm,
+    args.momentumConfirmBars,
+    args.adxMin,
+  );
+}
+
+export function runSelectBacktest(
+  symbol: string,
+  candles: readonly CandleLike[],
+  args: SelectArgs,
+  exchange: string,
+  params: SelectResult["params"],
+): BacktestResult {
+  const composerConfig = selectBacktestComposerConfig(args, params);
+  const slippageBps = args.realistic
+    ? args.realisticSlippageBps
+    : args.slippageBps;
+  return runBacktest({
+    symbol,
+    exchange,
+    timeframe: args.timeframe,
+    candles,
+    composerConfig,
+    initialCapital: args.capital,
+    positionSizePct: args.positionSize,
+    riskPerTradePct: args.riskPerTrade,
+    maxPositionSizePct: args.maxPositionSize,
+    stopLossPct: args.stopLoss,
+    takeProfitPct: args.takeProfit,
+    feePct: args.fee,
+    makerFeePct: args.makerFeePct,
+    entryOrderType: args.entryOrderType,
+    entryLimitOffsetBps: args.entryLimitOffsetBps,
+    minConfidence: params.minConfidence,
+    useAtrStops: true,
+    atrStopMultiplier: params.atrStopMultiplier,
+    atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
+    atrRiskReward: args.atrRiskReward,
+    scaleOutAtR: args.scaleOutAtR,
+    scaleOutPct: args.scaleOutPct,
+    volatilityLookback: args.volatilityLookback,
+    volatilityLowPct: args.volatilityLowPct,
+    volatilityHighPct: args.volatilityHighPct,
+    volatilityLowFactor: args.volatilityLowFactor,
+    volatilityHighFactor: args.volatilityHighFactor,
+    volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
+    holdUntilStop: args.holdUntilStop,
+    isFutures: args.futures,
+    fundingRatePct: args.fundingRatePct,
+    slippageBps,
+    trailingStopPct: args.trailingStopPct,
+    trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
+    minAtrPct: args.minAtrPct,
+    signalPersistence: args.signalPersistence,
+    lossConfidencePenalty: args.lossConfidencePenalty,
+    lossConfidenceDecay: args.lossConfidenceDecay,
+    htfCandles: [],
+    htfTrendFastPeriod: args.htfTrendFastPeriod,
+    htfTrendSlowPeriod: args.htfTrendSlowPeriod,
+    entryPullbackEmaPeriod: args.entryPullbackEmaPeriod,
+    entryPullbackMarginPct: args.entryPullbackMarginPct,
+    minEfficiencyRatio: args.minEfficiencyRatio,
+    efficiencyRatioPeriod: args.efficiencyRatioPeriod,
+    rsiLongMax: args.rsiLongMax,
+    rsiShortMin: args.rsiShortMin,
+    bollingerLongMaxPctB: args.bollingerLongMaxPctB,
+    bollingerShortMinPctB: args.bollingerShortMinPctB,
+    recordEquityCurve: false,
+    oosPct: 0,
+    mcIterations: 0,
+    leverage: args.leverage,
+    breakevenAtR: args.breakevenAtR,
+    maxBarsInTrade: args.maxBarsInTrade,
+    lossCooldownBars: args.lossCooldownBars,
+    sessionStart: args.sessionStart,
+    sessionEnd: args.sessionEnd,
+    autoRegimeFilter: args.autoRegimeFilter,
+    autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
+  });
+}
+
+export function selectBestForSymbol(
+  symbol: string,
+  candles: readonly CandleLike[],
+  args: SelectArgs,
+  exchange: string,
+): SelectResult | null {
+  const regimeModes: Array<"trend" | "reversion" | "breakout"> = [
+    "trend",
+    "reversion",
+  ];
+  const stopMults = [1.5, 2.0];
+  const tpMults = [2.0, 2.5];
+  const confs = [0.4, 0.5];
+  const adxMins = [0, 20];
+
+  let best: SelectResult | null = null;
+  let bestObjective = -Infinity;
+
+  for (const regimeMode of regimeModes) {
+    for (const atrStopMultiplier of stopMults) {
+      for (const atrTakeProfitMultiplier of tpMults) {
+        for (const minConfidence of confs) {
+          for (const adxMin of adxMins) {
+            const params: SelectResult["params"] = {
+              regimeMode,
+              atrStopMultiplier,
+              atrTakeProfitMultiplier,
+              minConfidence,
+              adxMin,
+            };
+            const result = runSelectBacktest(
+              symbol,
+              candles,
+              args,
+              exchange,
+              params,
+            );
+            if (result.totalTrades < args.minTrades) continue;
+            if (result.totalReturnPct < args.minReturnPct) continue;
+            if (result.maxDrawdownPct > args.maxDrawdownPct) continue;
+            const obj = objectiveValue(result, args.selectBy);
+            if (obj > bestObjective) {
+              bestObjective = obj;
+              best = { symbol, params, result };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function cliDefaultArgs(): ResolvedBacktestArgs {
+  return {
+    exchange: "binance",
+    symbol: "BTC/USDT",
+    timeframe: "1h",
+    capital: 10000,
+    positionSize: 100,
+    riskPerTrade: 0,
+    maxPositionSize: 100,
+    stopLoss: 1.5,
+    takeProfit: 3.0,
+    fee: 0.1,
+    makerFeePct: 0,
+    entryOrderType: "market",
+    entryLimitOffsetBps: 0,
+    minConfidence: 0.5,
+    useAtrStops: false,
+    atrStopMultiplier: 1.5,
+    atrTakeProfitMultiplier: 2.5,
+    atrRiskReward: 0,
+    rsiPeriod: 14,
+    rsiOversoldStrong: 30,
+    rsiOverboughtStrong: 70,
+    scaleOutAtR: 0,
+    scaleOutPct: 50,
+    volatilityLookback: 0,
+    volatilityLowPct: 20,
+    volatilityHighPct: 80,
+    volatilityLowFactor: 0.8,
+    volatilityHighFactor: 1.2,
+    volatilityTargetAnnualPct: 0,
+    priceOnly: false,
+    noRsi: false,
+    holdUntilStop: false,
+    noTrend: false,
+    regimeMode: "trend",
+    breakoutLookback: 20,
+    breakoutVolumeMinRatio: 1.2,
+    breakoutAdxMin: 20,
+    fundingBiasThreshold: 0.0001,
+    useFunding: false,
+    futures: false,
+    fundingRatePct: 0.01,
+    slippageBps: 0,
+    trailingStopPct: 0,
+    trailingStopAtrMultiplier: 0,
+    minAtrPct: 0,
+    volumeMinRatio: 0,
+    volumeLookback: 20,
+    minConfluence: 0,
+    entryCandleConfirm: false,
+    signalPersistence: 0,
+    momentumConfirmBars: 0,
+    lossConfidencePenalty: 0,
+    lossConfidenceDecay: 0,
+    adxMin: 0,
+    htfTimeframe: "",
+    htfTrendFastPeriod: 50,
+    htfTrendSlowPeriod: 100,
+    htfSignalConfidence: 0,
+    entryPullbackEmaPeriod: 0,
+    entryPullbackMarginPct: 0.1,
+    minEfficiencyRatio: 0,
+    efficiencyRatioPeriod: 20,
+    rsiLongMax: 0,
+    rsiShortMin: 0,
+    bollingerLongMaxPctB: -1,
+    bollingerShortMinPctB: 2,
+    trendFilterPeriod: 200,
+    entryRsiLongThreshold: 10,
+    entryRsiShortThreshold: 90,
+    exitRsiPeriod: 0,
+    exitRsiLongLevel: 0,
+    exitRsiShortLevel: 0,
+    recordEquityCurve: false,
+    exportTrades: "",
+    oosPct: 0,
+    mcIterations: 0,
+    leverage: 1,
+    breakevenAtR: 0,
+    maxBarsInTrade: 0,
+    lossCooldownBars: 0,
+    sessionStart: "",
+    sessionEnd: "",
+    autoRegimeFilter: false,
+    autoRegimeAdxThreshold: 25,
+    trendSignalStyle: "slope",
+    trendFastPeriod: 9,
+    trendSlowPeriod: 21,
+    directionalOnly: false,
+    rsiFollowTrend: false,
+    strictAgreement: false,
+    entryOnClose: false,
+    observedPrice: false,
+    realistic: false,
+    strictRealism: false,
+    realisticSlippageBps: 5,
+    strategyType: "signal",
+    gridStepPct: 0,
+    gridMaxGrids: 0,
+    gridPauseAfterLossBars: 0,
+    onlyWithTrend: false,
+    targetRatio: 1,
+  };
+}
+
+export function extractExplicitOverrides(
+  args: Partial<ResolvedBacktestArgs>,
+): Partial<ResolvedBacktestArgs> {
+  const defaults = cliDefaultArgs();
+  const overrides: Partial<ResolvedBacktestArgs> = {};
+  for (const key of Object.keys(args) as Array<keyof ResolvedBacktestArgs>) {
+    const value = args[key];
+    const defaultValue = defaults[key];
+    if (value !== defaultValue) {
+      (overrides as Record<string, unknown>)[key] = value;
+    }
+  }
+  // Behavioral flags are always explicit so profiles preserve user intent.
+  if (args.observedPrice !== undefined)
+    (overrides as Record<string, unknown>).observedPrice = args.observedPrice;
+  if (args.realistic !== undefined)
+    (overrides as Record<string, unknown>).realistic = args.realistic;
+  if (args.strictRealism !== undefined)
+    (overrides as Record<string, unknown>).strictRealism = args.strictRealism;
+  return overrides;
+}
+
+export function loadSelectWatchlist(
+  path: string,
+): Effect.Effect<readonly SelectWatchlistEntry[], MarketDataRepositoryError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const file = Bun.file(path);
+      const text = await file.text();
+      return JSON.parse(text) as readonly SelectWatchlistEntry[];
+    },
+    catch: (err) =>
+      new MarketDataRepositoryError(
+        `Failed to load watchlist from ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+      ),
+  });
+}
+
+export function buildValidateBacktestArgs(
+  entry: SelectWatchlistEntry,
+  exchange: string,
+): ResolvedBacktestArgs {
+  const base = applyPreset("balanced");
+  return {
+    ...base,
+    exchange,
+    symbol: entry.symbol,
+    timeframe: entry.timeframe,
+    useAtrStops: true,
+    atrStopMultiplier: entry.profile.atrStopMultiplier,
+    atrTakeProfitMultiplier: entry.profile.atrTakeProfitMultiplier,
+    minConfidence: entry.profile.minConfidence,
+    regimeMode: entry.profile.regimeMode,
+    adxMin: entry.profile.adxMin,
+    oosPct: 20,
+    mcIterations: 200,
+    realistic: true,
+  };
+}
+
+export function isLiveReady(row: ValidationRow): boolean {
+  return (
+    row.oosReturnPct > 0 &&
+    row.oosMaxDrawdownPct <= 15 &&
+    row.mcP95DrawdownPct <= 20 &&
+    row.mcRuinPct <= 5 &&
+    row.isTrades >= 10 &&
+    row.oosTrades >= 10
+  );
+}
+
+export function validateWatchlist(args: {
+  watchlist: string;
+  exchange: string;
+}): Effect.Effect<readonly ValidationRow[], MarketDataRepositoryError> {
+  return Effect.gen(function* () {
+    const path = yield* Path;
+    const watchlistPath = resolve(
+      path.homeDir,
+      "watchlists",
+      `${args.watchlist}.json`,
+    );
+    const entries = yield* loadSelectWatchlist(watchlistPath);
+
+    const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+    const db = new Database(sqlitePath);
+    db.exec("PRAGMA foreign_keys = ON;");
+    const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+    const rows = yield* Effect.gen(function* () {
+      const repo = yield* MarketDataRepository;
+      const result: ValidationRow[] = [];
+      for (const entry of entries) {
+        const backtestArgs = buildValidateBacktestArgs(entry, args.exchange);
+        const candles = yield* repo.getCandles({
+          exchange: args.exchange,
+          symbol: entry.symbol,
+          timeframe: entry.timeframe,
+        });
+        if (candles.length === 0) continue;
+        const splitIndex = Math.floor(
+          candles.length * (1 - backtestArgs.oosPct / 100),
+        );
+        const isCandles = candles.slice(0, splitIndex);
+        const oosCandles = candles.slice(splitIndex);
+        const isResult = runBacktest({
+          ...backtestArgs,
+          candles: isCandles,
+          composerConfig: buildBacktestComposerConfig(
+            backtestArgs.priceOnly,
+            backtestArgs.noRsi,
+            backtestArgs.noTrend,
+            backtestArgs.regimeMode,
+            backtestArgs.volumeMinRatio,
+            backtestArgs.volumeLookback,
+            backtestArgs.minConfluence,
+            backtestArgs.entryCandleConfirm,
+            backtestArgs.momentumConfirmBars,
+            backtestArgs.adxMin,
+          ),
+          initialCapital: backtestArgs.capital,
+          positionSizePct: backtestArgs.positionSize,
+          riskPerTradePct: backtestArgs.riskPerTrade,
+          maxPositionSizePct: backtestArgs.maxPositionSize,
+          stopLossPct: backtestArgs.stopLoss,
+          takeProfitPct: backtestArgs.takeProfit,
+          feePct: backtestArgs.fee,
+          recordEquityCurve: false,
+          htfCandles: [],
+        });
+        const oosResult = runBacktest({
+          ...backtestArgs,
+          candles: oosCandles,
+          composerConfig: buildBacktestComposerConfig(
+            backtestArgs.priceOnly,
+            backtestArgs.noRsi,
+            backtestArgs.noTrend,
+            backtestArgs.regimeMode,
+            backtestArgs.volumeMinRatio,
+            backtestArgs.volumeLookback,
+            backtestArgs.minConfluence,
+            backtestArgs.entryCandleConfirm,
+            backtestArgs.momentumConfirmBars,
+            backtestArgs.adxMin,
+          ),
+          initialCapital: backtestArgs.capital,
+          positionSizePct: backtestArgs.positionSize,
+          riskPerTradePct: backtestArgs.riskPerTrade,
+          maxPositionSizePct: backtestArgs.maxPositionSize,
+          stopLossPct: backtestArgs.stopLoss,
+          takeProfitPct: backtestArgs.takeProfit,
+          feePct: backtestArgs.fee,
+          recordEquityCurve: false,
+          htfCandles: [],
+        });
+        const mcP95DrawdownPct = oosResult.monteCarlo?.p95MaxDrawdownPct ?? 0;
+        const mcRuinPct = oosResult.monteCarlo?.probabilityOfRuinPct ?? 0;
+        let row: ValidationRow = {
+          symbol: entry.symbol,
+          regimeMode: entry.profile.regimeMode,
+          isReturnPct: isResult.totalReturnPct,
+          oosReturnPct: oosResult.totalReturnPct,
+          oosMaxDrawdownPct: oosResult.maxDrawdownPct,
+          mcP95DrawdownPct,
+          mcRuinPct,
+          robustnessScore: oosResult.robustnessScore,
+          isTrades: isResult.totalTrades,
+          oosTrades: oosResult.totalTrades,
+          liveReady: false,
+          entry,
+        };
+        row = { ...row, liveReady: isLiveReady(row) };
+        result.push(row);
+      }
+      return result;
+    }).pipe(
+      Effect.provide(repoLayer),
+      Effect.ensuring(Effect.sync(() => db.close())),
+    );
+
+    return rows;
+  }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME)));
+}
+
+export function buildPaperTradeComposerConfig(args: {
+  strategy: StrategyTemplateName;
+  priceOnly: boolean;
+  noRsi: boolean;
+  noTrend: boolean;
+  regimeMode: "trend" | "reversion" | "breakout";
+  volumeMinRatio: number;
+  volumeLookback: number;
+  minConfluence: number;
+  entryCandleConfirm: boolean;
+  momentumConfirmBars: number;
+  breakoutLookback: number;
+  breakoutVolumeMinRatio: number;
+  breakoutAdxMin: number;
+  useFunding: boolean;
+  fundingBiasThreshold: number;
+  rsiPeriod: number;
+  rsiOversoldStrong: number;
+  rsiOverboughtStrong: number;
+  trendFilterPeriod: number;
+  entryRsiLongThreshold: number;
+  entryRsiShortThreshold: number;
+  exitRsiLongLevel: number;
+  exitRsiShortLevel: number;
+}): ComposerConfig {
+  const base = buildComposerConfigFromTemplate(args.strategy);
+  const custom = buildBacktestComposerConfig(
+    args.priceOnly,
+    args.noRsi,
+    args.noTrend,
+    args.regimeMode,
+    args.volumeMinRatio,
+    args.volumeLookback,
+    args.minConfluence,
+    args.entryCandleConfirm,
+    args.momentumConfirmBars,
+    0,
+  );
+  return {
+    weights: { ...custom.weights, ...base.weights },
+    thresholds: {
+      ...custom.thresholds,
+      ...base.thresholds,
+      rsiPeriod: args.rsiPeriod,
+      rsiOversoldStrong: args.rsiOversoldStrong,
+      rsiOverboughtStrong: args.rsiOverboughtStrong,
+      trendFilterPeriod: args.trendFilterPeriod,
+      entryRsiLongThreshold: args.entryRsiLongThreshold,
+      entryRsiShortThreshold: args.entryRsiShortThreshold,
+      exitRsiLongThreshold: args.exitRsiLongLevel,
+      exitRsiShortThreshold: args.exitRsiShortLevel,
+      breakoutLookback: args.breakoutLookback,
+      breakoutVolumeMinRatio: args.breakoutVolumeMinRatio,
+      breakoutAdxMin: args.breakoutAdxMin,
+      useFunding: args.useFunding,
+      fundingBiasThreshold: args.fundingBiasThreshold,
+    },
+  };
+}
+
+const libraryListCommand = Command.make("list", {}, () =>
+  Effect.sync(() => {
+    const strategies = listStrategies();
+    for (const s of strategies) {
+      console.log(`${s.name}: ${s.description}`);
+    }
+    return strategies;
+  }),
+).pipe(Command.withDescription("List available strategy templates"));
+
+const libraryStrategyCommand = Command.make(
+  "strategy",
+  {
+    strategy: strategyOption,
+    ...backtestOptions,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const template = args.strategy as StrategyTemplateName;
+      const baseArgs = args as unknown as ResolvedBacktestArgs;
+      const merged = buildBacktestArgsFromTemplate(template, baseArgs);
+      const config = buildComposerConfigFromTemplate(template);
+      yield* Console.log(`Strategy: ${template}`);
+      yield* Console.log(JSON.stringify(merged, null, 2));
+      return config;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Show strategy template details"));
+
+export const libraryCommand = Command.make(
+  "library",
+  {
+    list: Options.boolean("list").pipe(Options.withDefault(false)),
+    strategy: Options.optional(strategyOption),
+  },
+  (args) =>
+    Effect.gen(function* () {
+      if (args.list || Option.isNone(args.strategy)) {
+        const strategies = listStrategies();
+        for (const s of strategies) {
+          yield* Console.log(`${s.name}: ${s.description}`);
+        }
+        return strategies;
+      }
+      const strategy = Option.getOrElse(
+        args.strategy,
+        () => "meanReversion" as StrategyTemplateName,
+      );
+      const baseArgs = cliDefaultArgs();
+      const merged = buildBacktestArgsFromTemplate(strategy, baseArgs);
+      const config = buildComposerConfigFromTemplate(strategy);
+      yield* Console.log(`Strategy: ${strategy}`);
+      yield* Console.log(JSON.stringify(merged, null, 2));
+      return config;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription("Strategy template library"),
+  Command.withSubcommands([libraryListCommand, libraryStrategyCommand]),
+);
+
+const trainWindowOption = Options.integer("train-window").pipe(
+  Options.withDefault(180),
+  Options.withDescription("Walk-forward training window in days"),
+);
+
+const testWindowOption = Options.integer("test-window").pipe(
+  Options.withDefault(60),
+  Options.withDescription("Walk-forward testing window in days"),
+);
+
+const wfMinTradesOption = Options.integer("min-trades").pipe(
+  Options.withDefault(0),
+  Options.withDescription("Minimum trades per window"),
+);
+
+export const walkForwardCommand = Command.make(
+  "walk-forward",
+  {
+    ...backtestOptions,
+    trainWindow: trainWindowOption,
+    testWindow: testWindowOption,
+    minTrades: wfMinTradesOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = new Database(sqlitePath);
+      db.exec("PRAGMA foreign_keys = ON;");
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const resolvedArgs = args as unknown as Omit<
+        ResolvedBacktestArgs,
+        "minTrades"
+      >;
+      const selectArgs: SelectArgs = {
+        ...resolvedArgs,
+        universe: "",
+        top: 0,
+        minRobustness: 0,
+        minReturnPct: -100,
+        maxDrawdownPct: 100,
+        minTrades: args.minTrades,
+        selectLookbackCandles: 0,
+        selectBy: "return",
+      };
+
+      const result = yield* Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        const candles = yield* repo.getCandles({
+          exchange: args.exchange,
+          symbol: args.symbol,
+          timeframe: args.timeframe,
+        });
+        if (candles.length === 0) {
+          return yield* Effect.fail(
+            new MarketDataRepositoryError(
+              `No candles found for ${args.exchange}:${args.symbol}:${args.timeframe}`,
+            ),
+          );
+        }
+        return runWalkForward({
+          symbol: args.symbol,
+          exchange: args.exchange,
+          candles,
+          trainWindow: args.trainWindow,
+          testWindow: args.testWindow,
+          initialCapital: args.capital,
+          args: selectArgs,
+          selectBestForSymbol,
+          runSelectBacktest,
+        });
+      }).pipe(
+        Effect.provide(repoLayer),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("Run walk-forward optimization"));
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
     "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile --help' for details.",
@@ -3080,5 +4843,7 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     paperTradeCommand,
     soakCommand,
     profileCommand,
+    libraryCommand,
+    walkForwardCommand,
   ]),
 );

@@ -1,8 +1,9 @@
 import { Effect } from "effect";
-import type { Candle, OrderBook, Tick } from "../types.js";
+import type { Candle, FundingRate, OrderBook, Tick } from "../types.js";
 import { MarketDataError } from "../gateway.js";
 
 const BASE_URL = "https://api.binance.com";
+const FUTURES_BASE_URL = "https://fapi.binance.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 function binanceSymbol(symbol: string): string {
@@ -12,6 +13,7 @@ function binanceSymbol(symbol: string): string {
 function getJSON<T>(
   path: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  baseUrl = BASE_URL,
 ): Effect.Effect<T, MarketDataError, never> {
   return Effect.gen(function* () {
     const controller = new AbortController();
@@ -19,7 +21,7 @@ function getJSON<T>(
 
     const response = yield* Effect.tryPromise({
       try: () =>
-        fetch(`${BASE_URL}${path}`, {
+        fetch(`${baseUrl}${path}`, {
           method: "GET",
           signal: controller.signal,
           headers: { Accept: "application/json" },
@@ -214,4 +216,47 @@ function binanceInterval(timeframe: string): string {
     default:
       return timeframe;
   }
+}
+
+const FUNDING_LIMIT = 1000;
+
+export function fetchFundingRates(
+  symbol: string,
+  startTime?: Date,
+  endTime?: Date,
+  limit = FUNDING_LIMIT,
+): Effect.Effect<readonly FundingRate[], MarketDataError, never> {
+  const bSymbol = binanceSymbol(symbol);
+  const effectiveEndTime = endTime ? endTime.getTime() : Date.now();
+  let currentStart = startTime ? startTime.getTime() : 0;
+
+  return Effect.gen(function* () {
+    const results: FundingRate[] = [];
+    while (currentStart < effectiveEndTime) {
+      const path =
+        `/fapi/v1/fundingRate?symbol=${bSymbol}&limit=${limit}` +
+        `&startTime=${currentStart}`;
+      const batch = yield* getJSON<
+        Array<{ symbol: string; fundingRate: string; fundingTime: number }>
+      >(path, DEFAULT_TIMEOUT_MS, FUTURES_BASE_URL);
+
+      if (batch.length === 0) break;
+
+      for (const r of batch) {
+        const time = r.fundingTime;
+        if (time > effectiveEndTime) continue;
+        results.push({
+          exchange: "binance",
+          symbol,
+          fundingRate: Number(r.fundingRate),
+          timestamp: new Date(time),
+        });
+      }
+
+      const lastTime = batch[batch.length - 1]?.fundingTime;
+      if (!lastTime || lastTime <= currentStart) break;
+      currentStart = lastTime + 1;
+    }
+    return results;
+  });
 }
