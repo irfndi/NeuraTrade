@@ -20,6 +20,18 @@ export const defaultBinanceRateLimiterConfig: RateLimiterConfig = {
   perMinute: 600,
 };
 
+/**
+ * Bitget REST limits (public 20/s, private 10/s). We use the private limit
+ * conservatively because the live trading path mixes public market-data fetches
+ * with private order/account calls under the same key.
+ *
+ * @see https://www.bitget.com/support/articles/360007298154
+ */
+export const bitgetRateLimiterConfig: RateLimiterConfig = {
+  perSecond: 10,
+  perMinute: 600,
+};
+
 // ---------------------------------------------------------------------------
 // Service interface
 // ---------------------------------------------------------------------------

@@ -60,6 +60,8 @@ export class SqliteClient extends Context.Tag("SqliteClient")<
 
 const SCHEMA_STATEMENTS: ReadonlyArray<string> = [
   "PRAGMA foreign_keys = ON",
+  "PRAGMA journal_mode = WAL",
+  "PRAGMA busy_timeout = 5000",
   `CREATE TABLE IF NOT EXISTS exchanges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
