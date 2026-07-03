@@ -2,7 +2,10 @@ import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
-import { calculateATR } from "../scalping/indicators.js";
+import {
+  calculateAnnualizedVolatility,
+  calculateATR,
+} from "../scalping/indicators.js";
 import { computeExitLevels } from "../scalping/exit-engine.js";
 import { Decimal, money, toNumber } from "../utils/money.js";
 import {
@@ -55,6 +58,7 @@ export interface PaperTradingOptions {
   readonly volatilityHighPct: number;
   readonly volatilityLowFactor: number;
   readonly volatilityHighFactor: number;
+  readonly volatilityTargetAnnualPct: number;
   readonly stopLossPct: number;
   readonly takeProfitPct: number;
   readonly holdUntilStop: boolean;
@@ -74,23 +78,33 @@ function calculatePaperPositionValue(
   capital: number,
   entryPrice: number,
   stopDistancePct: number,
+  currentVolatility: number,
   options: PaperTradingOptions,
 ): number {
   const maxPositionValue =
     capital * ((options.maxPositionSizePct ?? 100) / 100);
 
+  let positionValue: number;
   if (
     options.riskPerTradePct &&
     options.riskPerTradePct > 0 &&
     stopDistancePct > 0
   ) {
     const riskAmount = capital * (options.riskPerTradePct / 100);
-    const riskBasedValue = riskAmount / stopDistancePct;
-    return Math.min(riskBasedValue, maxPositionValue);
+    positionValue = riskAmount / stopDistancePct;
+  } else {
+    positionValue = capital * (options.positionSizePct / 100);
   }
 
-  const fixedValue = capital * (options.positionSizePct / 100);
-  return Math.min(fixedValue, maxPositionValue);
+  if (
+    options.volatilityTargetAnnualPct &&
+    options.volatilityTargetAnnualPct > 0 &&
+    currentVolatility > 0
+  ) {
+    positionValue *= options.volatilityTargetAnnualPct / currentVolatility;
+  }
+
+  return Math.min(positionValue, maxPositionValue);
 }
 
 /**
@@ -301,11 +315,17 @@ export function runPaperTradingIteration(
         entryPriceNum > 0
           ? Math.abs(entryPriceNum - estimatedStopLoss) / entryPriceNum
           : 0;
+      const currentVolatility = calculateAnnualizedVolatility(
+        candles,
+        options.volatilityLookback,
+        options.timeframe,
+      );
 
       const positionValue = calculatePaperPositionValue(
         toNumber(capital),
         entryPriceNum,
         stopDistancePct,
+        currentVolatility,
         options,
       );
       const size = positionValue / entryPriceNum;

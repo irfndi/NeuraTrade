@@ -17,7 +17,12 @@ import {
   PaperTradingRepository,
   type PaperTradingRepositoryService,
 } from "./repository.js";
-import type { PaperPosition, PaperTrade } from "./types.js";
+import type {
+  GridPaperState,
+  GridPaperTrade,
+  PaperPosition,
+  PaperTrade,
+} from "./types.js";
 import {
   runFuturesPaperTradingIteration,
   type FuturesPaperTradingOptions,
@@ -189,6 +194,43 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   getStartOfDayCapital(_date: Date, currentCapital: number) {
     return Effect.succeed(currentCapital);
   }
+
+  private gridState: GridPaperState | null = null;
+  private gridTrades: GridPaperTrade[] = [];
+
+  getGridState(exchange: string, symbol: string, timeframe: string) {
+    return Effect.succeed(
+      this.gridState &&
+        this.gridState.exchange === exchange &&
+        this.gridState.symbol === symbol &&
+        this.gridState.timeframe === timeframe
+        ? this.gridState
+        : null,
+    );
+  }
+
+  saveGridState(state: GridPaperState) {
+    return Effect.sync(() => {
+      this.gridState = state;
+    });
+  }
+
+  recordGridTrade(trade: GridPaperTrade) {
+    return Effect.sync(() => {
+      this.gridTrades.push(trade);
+    });
+  }
+
+  listRecentGridTrades(
+    _exchange: string,
+    _symbol: string,
+    _timeframe: string,
+    limit: number,
+  ) {
+    return Effect.succeed(
+      this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
+    );
+  }
 }
 
 class InMemoryKillSwitch implements KillSwitchService {
@@ -248,6 +290,7 @@ function makeGateway(price: number): MarketDataGatewayService {
     fetchOrderBook: () => Effect.succeed(orderBook),
     fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
     fetch24hrVolumes: () => Effect.succeed({}),
+    fetchFundingRates: () => Effect.succeed([]),
   };
 }
 
@@ -283,6 +326,7 @@ function makeOptions(
     volatilityHighPct: 80,
     volatilityLowFactor: 0.8,
     volatilityHighFactor: 1.2,
+    volatilityTargetAnnualPct: 0,
     stopLossPct: 1.5,
     takeProfitPct: 3.0,
     holdUntilStop: false,
@@ -490,6 +534,7 @@ describe("runFuturesPaperTradingIteration", () => {
         fetchOrderBook: () => Effect.succeed(makeOrderBook(basePrice)),
         fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
         fetch24hrVolumes: () => Effect.succeed({}),
+        fetchFundingRates: () => Effect.succeed([]),
       };
       const adapter = Effect.runSync(
         makeSimulatedFuturesExchangeAdapterService(gateway, { USDT: 10_000 }),

@@ -2,7 +2,10 @@ import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 import type { ComposerConfig } from "../scalping/types.js";
 import { composeSignal } from "../scalping/composer.js";
-import { calculateATR } from "../scalping/indicators.js";
+import {
+  calculateAnnualizedVolatility,
+  calculateATR,
+} from "../scalping/indicators.js";
 import { computeExitLevels } from "../scalping/exit-engine.js";
 import { Decimal, money, toNumber } from "../utils/money.js";
 import {
@@ -57,6 +60,7 @@ export interface FuturesPaperTradingOptions {
   readonly volatilityHighPct: number;
   readonly volatilityLowFactor: number;
   readonly volatilityHighFactor: number;
+  readonly volatilityTargetAnnualPct: number;
   readonly stopLossPct: number;
   readonly takeProfitPct: number;
   readonly holdUntilStop: boolean;
@@ -79,34 +83,40 @@ function calculateFuturesNotionalValue(
   capital: number,
   entryPrice: number,
   stopDistancePct: number,
+  currentVolatility: number,
   options: FuturesPaperTradingOptions,
 ): number {
   // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
   const maxNotionalByRiskCap =
     capital * ((options.maxPositionSizePct ?? 100) / 100);
 
+  let baseNotional: number;
   if (
     options.riskPerTradePct &&
     options.riskPerTradePct > 0 &&
     stopDistancePct > 0
   ) {
     const riskAmount = capital * (options.riskPerTradePct / 100);
-    const riskBasedNotional = riskAmount / stopDistancePct;
-    // Also cap by available margin: notional / leverage must fit in capital.
-    const maxNotionalByMargin = capital * options.leverage;
-    return Math.min(
-      riskBasedNotional,
-      maxNotionalByRiskCap,
-      maxNotionalByMargin,
-    );
+    baseNotional = riskAmount / stopDistancePct;
+  } else {
+    // Fallback to legacy margin allocation.
+    const allocatedMargin = capital * (options.positionSizePct / 100);
+    const marginPerContract = entryPrice / options.leverage;
+    const feePerContract = entryPrice * (options.feePct / 100);
+    const size = allocatedMargin / (marginPerContract + feePerContract);
+    baseNotional = size * entryPrice;
   }
 
-  // Fallback to legacy margin allocation.
-  const allocatedMargin = capital * (options.positionSizePct / 100);
-  const marginPerContract = entryPrice / options.leverage;
-  const feePerContract = entryPrice * (options.feePct / 100);
-  const size = allocatedMargin / (marginPerContract + feePerContract);
-  return size * entryPrice;
+  if (
+    options.volatilityTargetAnnualPct &&
+    options.volatilityTargetAnnualPct > 0 &&
+    currentVolatility > 0
+  ) {
+    baseNotional *= options.volatilityTargetAnnualPct / currentVolatility;
+  }
+
+  const maxNotionalByMargin = capital * options.leverage;
+  return Math.min(baseNotional, maxNotionalByRiskCap, maxNotionalByMargin);
 }
 
 /**
@@ -304,11 +314,17 @@ export function runFuturesPaperTradingIteration(
         entryPriceNum > 0
           ? Math.abs(entryPriceNum - estimatedStopLoss) / entryPriceNum
           : 0;
+      const currentVolatility = calculateAnnualizedVolatility(
+        candles,
+        options.volatilityLookback,
+        options.timeframe,
+      );
 
       const notionalValue = calculateFuturesNotionalValue(
         toNumber(capital),
         entryPriceNum,
         stopDistancePct,
+        currentVolatility,
         options,
       );
       const size = notionalValue / entryPriceNum;
