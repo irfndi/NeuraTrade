@@ -1,0 +1,16 @@
+--- a/src/scalping/composer.ts
++++ b/src/scalping/composer.ts
+@@ -200,6 +200,14 @@ export function composeSignal(
+   const rsiComponent = buildRsiComponent(candles, weights.rsi, thresholds);
+   if (rsiComponent) components.push(rsiComponent);
+ 
++  const rsiPullbackComponent = buildRsiPullbackComponent(
++    candles,
++    weights.rsiPullback ?? 0,
++    thresholds,
++  );
++  if (rsiPullbackComponent) components.push(rsiPullbackComponent);
++
+   const regimeComponent = buildRegimeComponent(
+     candles,
+     obMetrics,
