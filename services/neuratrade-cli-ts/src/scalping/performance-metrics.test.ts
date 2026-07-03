@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import {
   computePerformanceMetrics,
+  robustnessScore,
   type BacktestMetrics,
 } from "./performance-metrics.js";
-import type { BacktestTrade } from "./backtest.js";
+import type { BacktestResult, BacktestTrade } from "./backtest.js";
 
 function makeTrade(overrides: Partial<BacktestTrade> = {}): BacktestTrade {
   const entryTime = overrides.entryTime ?? new Date(Date.UTC(2025, 0, 1, 0, 0));
@@ -21,6 +22,9 @@ function makeTrade(overrides: Partial<BacktestTrade> = {}): BacktestTrade {
     netPnl: 2,
     exitReason: "take_profit",
     initialRiskPct: 0.01,
+    fillType: "taker",
+    entryFeePct: 0.1,
+    exitFeePct: 0.1,
     ...overrides,
   };
 }
@@ -125,5 +129,103 @@ describe("computePerformanceMetrics", () => {
     ];
     const m = compute(trades);
     expect(m.maxConsecutiveLosses).toBe(3);
+  });
+});
+
+function makeResult(overrides: Partial<BacktestResult> = {}): BacktestResult {
+  return {
+    symbol: "BTC/USDT",
+    totalTrades: 30,
+    winningTrades: 15,
+    losingTrades: 15,
+    winRate: 0.5,
+    totalReturnPct: 0,
+    maxDrawdownPct: 5,
+    sharpeRatio: 0,
+    trades: [],
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: 1,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
+    robustnessScore: 0,
+    ...overrides,
+  };
+}
+
+describe("robustnessScore", () => {
+  it("returns 0 for a flat, baseline result", () => {
+    const score = robustnessScore(makeResult({ maxDrawdownPct: 0 }));
+    expect(score).toBe(0);
+  });
+
+  it("rewards positive returns", () => {
+    const positive = makeResult({ totalReturnPct: 10 });
+    const negative = makeResult({ totalReturnPct: -10 });
+    expect(robustnessScore(positive)).toBeGreaterThan(
+      robustnessScore(negative),
+    );
+  });
+
+  it("penalizes drawdowns", () => {
+    const lowDrawdown = makeResult({ totalReturnPct: 5, maxDrawdownPct: 2 });
+    const highDrawdown = makeResult({ totalReturnPct: 5, maxDrawdownPct: 20 });
+    expect(robustnessScore(lowDrawdown)).toBeGreaterThan(
+      robustnessScore(highDrawdown),
+    );
+  });
+
+  it("rewards higher Sharpe ratios", () => {
+    const betterSharpe = makeResult({ sharpeRatio: 1.5 });
+    const worseSharpe = makeResult({ sharpeRatio: -0.5 });
+    expect(robustnessScore(betterSharpe)).toBeGreaterThan(
+      robustnessScore(worseSharpe),
+    );
+  });
+
+  it("rewards profit factor above 1", () => {
+    const profitable = makeResult({
+      metrics: { ...makeResult().metrics, profitFactor: 2 },
+    });
+    const breakeven = makeResult({
+      metrics: { ...makeResult().metrics, profitFactor: 1 },
+    });
+    expect(robustnessScore(profitable)).toBeGreaterThan(
+      robustnessScore(breakeven),
+    );
+  });
+
+  it("penalizes small sample sizes", () => {
+    const smallSample = makeResult({ totalTrades: 5 });
+    const largeSample = makeResult({ totalTrades: 100 });
+    expect(robustnessScore(smallSample)).toBeLessThan(
+      robustnessScore(largeSample),
+    );
+  });
+
+  it("clamps the score to [-100, 100]", () => {
+    const extreme = makeResult({
+      totalReturnPct: 500,
+      sharpeRatio: 50,
+      metrics: { ...makeResult().metrics, profitFactor: 100 },
+    });
+    expect(robustnessScore(extreme)).toBeLessThanOrEqual(100);
+    expect(robustnessScore(extreme)).toBeGreaterThan(0);
+
+    const terrible = makeResult({
+      totalReturnPct: -500,
+      maxDrawdownPct: 500,
+      sharpeRatio: -50,
+    });
+    expect(robustnessScore(terrible)).toBeGreaterThanOrEqual(-100);
+    expect(robustnessScore(terrible)).toBeLessThan(0);
   });
 });

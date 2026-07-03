@@ -5,6 +5,7 @@ import type {
   ComposerThresholds,
   ComposerWeights,
   Direction,
+  FundingRate,
   OHLCVInput,
   OrderBookMetricsInput,
   ScalpingSignal,
@@ -17,8 +18,15 @@ import {
   calculateBollingerBands,
   calculateEMA,
   calculateRSI,
+  calculateRSISeries,
+  calculateSMA,
   calculateVolatility,
+  calculateVolumeRatio,
 } from "./indicators.js";
+import {
+  passesDirectionalMarketFilter,
+  passesMarketFilters,
+} from "./market-filter.js";
 
 const defaultWeights: ComposerWeights = {
   spread: 0.18,
@@ -27,7 +35,11 @@ const defaultWeights: ComposerWeights = {
   trend: 0.18,
   liquidity: 0.09,
   rsi: 0.09,
+  rsiPullback: 0,
+  emaPullback: 0,
   regime: 0.11,
+  funding: 0,
+  connorsRsi2: 0,
 };
 
 const defaultThresholds: ComposerThresholds = {
@@ -43,24 +55,45 @@ const defaultThresholds: ComposerThresholds = {
   trendStrongPct: 0.005,
   liquidityMedium: 40,
   liquidityStrong: 70,
+  rsiPeriod: 14,
   rsiOversoldStrong: 30,
   rsiOversoldMedium: 40,
   rsiOverboughtMedium: 60,
   rsiOverboughtStrong: 70,
+  maxBarsInTrade: 0,
   adxStrongTrend: 30,
   adxWeakTrend: 20,
-  atrMaxPctOfPrice: 0.025,
-  bollingerEntryMaxPct: 0.75,
-  bollingerEntryMinPct: 0.25,
+  atrMaxPctOfPrice: 0,
+  bollingerEntryMaxPct: 0,
+  bollingerEntryMinPct: 0,
   minConfidenceSpread: 0.1,
   regimeMode: "trend",
+  breakoutLookback: 20,
+  breakoutVolumeMinRatio: 1.2,
+  breakoutAdxMin: 20,
   trendFilterFastPeriod: 50,
   trendFilterSlowPeriod: 100,
   volumeMinRatio: 0,
   volumeLookback: 20,
   minConfluence: 0,
+  minCategoryConfluence: 0,
   entryCandleConfirm: false,
   momentumConfirmBars: 0,
+  directionalOnly: false,
+  rsiFollowTrend: false,
+  strictAgreement: false,
+  maxSpreadPct: 0,
+  minLiquidity: 0,
+  trendSignalStyle: "slope",
+  trendFastPeriod: 9,
+  trendSlowPeriod: 21,
+  fundingBiasThreshold: 0.0001,
+  useFunding: false,
+  trendFilterPeriod: 200,
+  entryRsiLongThreshold: 10,
+  entryRsiShortThreshold: 90,
+  exitRsiLongThreshold: 60,
+  exitRsiShortThreshold: 40,
 };
 
 export const defaultComposerConfig: ComposerConfig = {
@@ -76,7 +109,11 @@ export function validateWeights(weights: ComposerWeights): boolean {
     weights.trend +
     weights.liquidity +
     weights.rsi +
-    weights.regime;
+    weights.rsiPullback +
+    weights.emaPullback +
+    weights.regime +
+    weights.funding +
+    weights.connorsRsi2;
   return Math.abs(sum - 1.0) <= 0.001;
 }
 
@@ -90,9 +127,17 @@ function isSyntheticInput(
 }
 
 function withoutOrderBookWeights(config: ComposerConfig): ComposerConfig {
+  const enabled = config.enabled;
   const weights = { ...config.weights, spread: 0, imbalance: 0, liquidity: 0 };
   const activeSum =
-    weights.volatility + weights.trend + weights.rsi + weights.regime;
+    weights.volatility +
+    weights.trend +
+    weights.rsi +
+    weights.connorsRsi2 +
+    weights.rsiPullback +
+    weights.emaPullback +
+    weights.regime +
+    weights.funding;
   if (activeSum <= 0) return config;
 
   return {
@@ -104,9 +149,41 @@ function withoutOrderBookWeights(config: ComposerConfig): ComposerConfig {
       volatility: weights.volatility / activeSum,
       trend: weights.trend / activeSum,
       rsi: weights.rsi / activeSum,
+      connorsRsi2: weights.connorsRsi2 / activeSum,
+      rsiPullback: weights.rsiPullback / activeSum,
+      emaPullback: weights.emaPullback / activeSum,
       regime: weights.regime / activeSum,
+      funding: weights.funding / activeSum,
     },
+    enabled: enabled
+      ? { ...enabled, spread: false, imbalance: false, liquidity: false }
+      : undefined,
   };
+}
+
+function applyEnabledWeights(config: ComposerConfig): ComposerConfig {
+  const enabled = config.enabled;
+  if (!enabled) return config;
+
+  const weights = { ...config.weights };
+  let activeSum = 0;
+  for (const key of Object.keys(weights) as Array<keyof ComposerWeights>) {
+    if (enabled[key] === false) weights[key] = 0;
+    activeSum += weights[key];
+  }
+  if (activeSum <= 0) return { ...config, weights };
+
+  for (const key of Object.keys(weights) as Array<keyof ComposerWeights>) {
+    weights[key] /= activeSum;
+  }
+  return { ...config, weights };
+}
+
+function isComponentEnabled(
+  config: ComposerConfig,
+  name: keyof ComposerWeights,
+): boolean {
+  return config.enabled?.[name] !== false;
 }
 
 export function composeSignal(
@@ -114,10 +191,10 @@ export function composeSignal(
   obMetrics: OrderBookMetricsInput,
   config: ComposerConfig = defaultComposerConfig,
 ): ScalpingSignal | null {
+  const enabledConfig = applyEnabledWeights(config);
   const effectiveConfig = isSyntheticInput(ohlcv, obMetrics)
-    ? withoutOrderBookWeights(config)
-    : config;
-
+    ? withoutOrderBookWeights(enabledConfig)
+    : enabledConfig;
   if (!validateWeights(effectiveConfig.weights)) {
     return null;
   }
@@ -128,68 +205,175 @@ export function composeSignal(
   const weights = effectiveConfig.weights;
   const thresholds = effectiveConfig.thresholds;
 
-  if (!passesVolumeFilter(candles, thresholds)) {
+  if (!passesMarketFilters(candles, obMetrics, thresholds)) {
     return null;
   }
 
   const components: SignalComponent[] = [];
+  const filters: SignalComponent[] = [];
 
-  const spreadComponent = buildSpreadComponent(
-    obMetrics,
-    weights.spread,
-    thresholds,
-  );
-  if (spreadComponent) components.push(spreadComponent);
+  if (isComponentEnabled(effectiveConfig, "spread")) {
+    const spreadComponent = buildSpreadComponent(
+      obMetrics,
+      weights.spread,
+      thresholds,
+    );
+    if (spreadComponent) components.push(spreadComponent);
+  }
 
-  const imbalanceComponent = buildImbalanceComponent(
-    obMetrics,
-    weights.imbalance,
-    thresholds,
-  );
-  if (imbalanceComponent) components.push(imbalanceComponent);
+  if (isComponentEnabled(effectiveConfig, "imbalance")) {
+    const imbalanceComponent = buildImbalanceComponent(
+      obMetrics,
+      weights.imbalance,
+      thresholds,
+    );
+    if (imbalanceComponent) components.push(imbalanceComponent);
+  }
 
-  const volatilityComponent = buildVolatilityComponent(
-    candles,
-    weights.volatility,
-    thresholds,
-  );
-  if (volatilityComponent) components.push(volatilityComponent);
+  if (isComponentEnabled(effectiveConfig, "volatility")) {
+    const volatilityComponent = buildVolatilityComponent(
+      candles,
+      weights.volatility,
+      thresholds,
+    );
+    if (volatilityComponent) {
+      if (thresholds.directionalOnly) {
+        if (!passesVolatilityFilter(volatilityComponent, thresholds))
+          return null;
+      } else {
+        components.push(volatilityComponent);
+      }
+    }
+  }
 
-  const trendComponent = buildTrendComponent(
-    candles,
-    weights.trend,
-    thresholds,
-  );
-  if (trendComponent) components.push(trendComponent);
+  if (isComponentEnabled(effectiveConfig, "trend")) {
+    const trendComponent = buildTrendComponent(
+      candles,
+      weights.trend,
+      thresholds,
+    );
+    if (trendComponent) components.push(trendComponent);
+  }
 
-  const liquidityComponent = buildLiquidityComponent(
-    obMetrics,
-    weights.liquidity,
-    thresholds,
-  );
-  if (liquidityComponent) components.push(liquidityComponent);
+  if (isComponentEnabled(effectiveConfig, "liquidity")) {
+    const liquidityComponent = buildLiquidityComponent(
+      obMetrics,
+      weights.liquidity,
+      thresholds,
+    );
+    if (liquidityComponent) {
+      if (thresholds.directionalOnly) {
+        if (!passesLiquidityFilter(liquidityComponent, thresholds)) return null;
+      } else {
+        components.push(liquidityComponent);
+      }
+    }
+  }
 
-  const rsiComponent = buildRsiComponent(candles, weights.rsi, thresholds);
-  if (rsiComponent) components.push(rsiComponent);
+  if (isComponentEnabled(effectiveConfig, "rsi")) {
+    const rsiComponent = buildRsiComponent(candles, weights.rsi, thresholds);
+    if (rsiComponent) components.push(rsiComponent);
+  }
 
-  const regimeComponent = buildRegimeComponent(
-    candles,
-    obMetrics,
-    weights.regime,
-    thresholds,
-  );
-  if (regimeComponent) components.push(regimeComponent);
+  if (isComponentEnabled(effectiveConfig, "connorsRsi2")) {
+    const connorsRsi2Component = buildConnorsRsi2Component(
+      candles,
+      weights.connorsRsi2,
+      thresholds,
+    );
+    if (connorsRsi2Component) components.push(connorsRsi2Component);
+  }
+
+  if (isComponentEnabled(effectiveConfig, "rsiPullback")) {
+    const rsiPullbackComponent = buildRsiPullbackComponent(
+      candles,
+      weights.rsiPullback ?? 0,
+      thresholds,
+    );
+    if (rsiPullbackComponent) components.push(rsiPullbackComponent);
+  }
+
+  if (isComponentEnabled(effectiveConfig, "emaPullback")) {
+    const emaPullbackComponent = buildEmaPullbackComponent(
+      candles,
+      weights.emaPullback ?? 0,
+      thresholds,
+    );
+    if (emaPullbackComponent) components.push(emaPullbackComponent);
+  }
+
+  if (isComponentEnabled(effectiveConfig, "regime")) {
+    const regimeComponent = buildRegimeComponent(
+      candles,
+      obMetrics,
+      weights.regime,
+      thresholds,
+    );
+    if (regimeComponent) components.push(regimeComponent);
+  }
+
+  if (isComponentEnabled(effectiveConfig, "funding") && thresholds.useFunding) {
+    const fundingComponent = buildFundingComponent(
+      candles,
+      obMetrics,
+      weights.funding,
+      thresholds,
+      ohlcv.fundingRates,
+    );
+    if (fundingComponent) components.push(fundingComponent);
+  }
 
   if (components.length === 0) return null;
 
+  const directionalComponents = thresholds.directionalOnly
+    ? components.filter(
+        (c) =>
+          c.name === "trend" ||
+          c.name === "rsi" ||
+          c.name === "connorsRsi2" ||
+          c.name === "rsiPullback" ||
+          c.name === "emaPullback" ||
+          c.name === "regime",
+      )
+    : components;
+
+  if (directionalComponents.length === 0) return null;
+
   const { direction, confidence } = aggregateDirection(
-    components,
+    directionalComponents,
     config.thresholds.minConfidenceSpread,
   );
 
   if (
-    !passesConfluenceFilter(components, direction, thresholds.minConfluence)
+    thresholds.strictAgreement &&
+    !directionalComponents.every(
+      (c) => c.signal === direction || c.signal === "hold",
+    )
   ) {
+    return null;
+  }
+
+  if (
+    !passesConfluenceFilter(
+      directionalComponents,
+      direction,
+      thresholds.minConfluence,
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    !passesCategoryConfluenceFilter(
+      directionalComponents,
+      direction,
+      thresholds.minCategoryConfluence,
+    )
+  ) {
+    return null;
+  }
+
+  if (!passesDirectionalMarketFilter(candles, direction, thresholds)) {
     return null;
   }
 
@@ -344,43 +528,81 @@ function buildVolatilityComponent(
   };
 }
 
+function passesVolatilityFilter(
+  component: SignalComponent,
+  thresholds: ComposerThresholds,
+): boolean {
+  const volatility = component.value;
+  return (
+    volatility >= thresholds.volatilityLowPct &&
+    volatility <= thresholds.volatilityHighPct
+  );
+}
+
 function buildTrendComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
 ): SignalComponent | null {
-  if (candles.length < 30) return null;
+  const fastPeriod = thresholds.trendFastPeriod ?? 9;
+  const slowPeriod = thresholds.trendSlowPeriod ?? 21;
+  const minLength = Math.max(fastPeriod, slowPeriod) + 2;
+  if (candles.length < minLength) return null;
 
   const closes = candles.map((c) => c.close);
-  const emaFast = calculateEMA(closes, 9);
-  const emaSlow = calculateEMA(closes, 21);
+  const emaFast = calculateEMA(closes, fastPeriod);
+  const emaSlow = calculateEMA(closes, slowPeriod);
 
   const lastFast = emaFast[emaFast.length - 1];
   const lastSlow = emaSlow[emaSlow.length - 1];
-  if (Number.isNaN(lastFast) || Number.isNaN(lastSlow) || lastSlow === 0)
+  const prevFast = emaFast[emaFast.length - 2];
+  const prevSlow = emaSlow[emaSlow.length - 2];
+  if (
+    Number.isNaN(lastFast) ||
+    Number.isNaN(lastSlow) ||
+    Number.isNaN(prevFast) ||
+    Number.isNaN(prevSlow) ||
+    lastSlow === 0
+  )
     return null;
 
+  const style = thresholds.trendSignalStyle ?? "slope";
   const diff = (lastFast - lastSlow) / lastSlow;
   let signal: Direction = "hold";
   let strength: SignalStrength = "weak";
 
-  if (diff >= thresholds.trendStrongPct) {
-    signal = "buy";
-    strength = "strong";
-  } else if (diff >= thresholds.trendWeakPct) {
-    signal = "buy";
-    strength = "medium";
-  } else if (diff <= -thresholds.trendStrongPct) {
-    signal = "sell";
-    strength = "strong";
-  } else if (diff <= -thresholds.trendWeakPct) {
-    signal = "sell";
-    strength = "medium";
+  if (style === "cross") {
+    const wasAbove = prevFast > prevSlow;
+    const isAbove = lastFast > lastSlow;
+    if (!wasAbove && isAbove) {
+      signal = "buy";
+      strength = "strong";
+    } else if (wasAbove && !isAbove) {
+      signal = "sell";
+      strength = "strong";
+    }
+  } else {
+    if (diff >= thresholds.trendStrongPct) {
+      signal = "buy";
+      strength = "strong";
+    } else if (diff >= thresholds.trendWeakPct) {
+      signal = "buy";
+      strength = "medium";
+    } else if (diff <= -thresholds.trendStrongPct) {
+      signal = "sell";
+      strength = "strong";
+    } else if (diff <= -thresholds.trendWeakPct) {
+      signal = "sell";
+      strength = "medium";
+    }
   }
 
   return {
     name: "trend",
-    description: "EMA 9 vs EMA 21 slope",
+    description:
+      style === "cross"
+        ? `EMA ${fastPeriod} vs EMA ${slowPeriod} crossover`
+        : `EMA ${fastPeriod} vs EMA ${slowPeriod} slope`,
     value: diff,
     signal,
     strength,
@@ -415,37 +637,235 @@ function buildLiquidityComponent(
   };
 }
 
+function passesLiquidityFilter(
+  component: SignalComponent,
+  thresholds: ComposerThresholds,
+): boolean {
+  return component.value >= thresholds.liquidityMedium;
+}
+
 function buildRsiComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
 ): SignalComponent | null {
-  if (candles.length < 15) return null;
+  const rsiPeriod = thresholds.rsiPeriod ?? 14;
+  if (candles.length < rsiPeriod + 1) return null;
 
-  const rsi = calculateRSI(candles, 14);
+  const rsi = calculateRSI(candles, rsiPeriod);
   if (rsi === null) return null;
+
+  const followTrend =
+    thresholds.rsiFollowTrend && thresholds.regimeMode === "trend";
+  const oversoldStrong = thresholds.rsiOversoldStrong ?? 30;
+  const oversoldMedium = thresholds.rsiOversoldMedium;
+  const overboughtMedium = thresholds.rsiOverboughtMedium;
+  const overboughtStrong = thresholds.rsiOverboughtStrong ?? 70;
 
   let signal: Direction = "hold";
   let strength: SignalStrength = "weak";
 
-  if (rsi < thresholds.rsiOversoldStrong) {
-    signal = "buy";
-    strength = "strong";
-  } else if (rsi < thresholds.rsiOversoldMedium) {
-    signal = "buy";
-    strength = "medium";
-  } else if (rsi > thresholds.rsiOverboughtStrong) {
-    signal = "sell";
-    strength = "strong";
-  } else if (rsi > thresholds.rsiOverboughtMedium) {
-    signal = "sell";
-    strength = "medium";
+  if (followTrend) {
+    if (rsi > overboughtStrong) {
+      signal = "sell";
+      strength = "strong";
+    } else if (rsi > overboughtMedium) {
+      signal = "sell";
+      strength = "medium";
+    } else if (rsi < oversoldStrong) {
+      signal = "buy";
+      strength = "strong";
+    } else if (rsi < oversoldMedium) {
+      signal = "buy";
+      strength = "medium";
+    } else if (rsi >= 50) {
+      signal = "buy";
+      strength = "weak";
+    } else {
+      signal = "sell";
+      strength = "weak";
+    }
+  } else {
+    if (rsi < oversoldStrong) {
+      signal = "buy";
+      strength = "strong";
+    } else if (rsi < oversoldMedium) {
+      signal = "buy";
+      strength = "medium";
+    } else if (rsi > overboughtStrong) {
+      signal = "sell";
+      strength = "strong";
+    } else if (rsi > overboughtMedium) {
+      signal = "sell";
+      strength = "medium";
+    }
   }
 
   return {
     name: "rsi",
-    description: "14-period Relative Strength Index",
+    description: followTrend
+      ? `${rsiPeriod}-period RSI confirming trend direction`
+      : `${rsiPeriod}-period Relative Strength Index`,
     value: rsi,
+    signal,
+    strength,
+    weight,
+  };
+}
+
+function buildConnorsRsi2Component(
+  candles: readonly CandleLike[],
+  weight: number,
+  thresholds: ComposerThresholds,
+): SignalComponent | null {
+  if (weight <= 0) return null;
+
+  const rsiPeriod = 2;
+  const trendFilterPeriod = thresholds.trendFilterPeriod ?? 200;
+  const minLength = Math.max(rsiPeriod + 1, trendFilterPeriod);
+  if (candles.length < minLength) return null;
+
+  const rsi = calculateRSI(candles, rsiPeriod);
+  if (rsi === null) return null;
+
+  const closes = candles.map((c) => c.close);
+  const sma = calculateSMA(closes, trendFilterPeriod);
+  const lastClose = closes[closes.length - 1];
+  const lastSma = sma[sma.length - 1];
+  if (Number.isNaN(lastSma) || lastSma === 0) return null;
+
+  const entryLongThreshold = thresholds.entryRsiLongThreshold ?? 10;
+  const entryShortThreshold = thresholds.entryRsiShortThreshold ?? 90;
+
+  let signal: Direction = "hold";
+  let strength: SignalStrength = "weak";
+
+  if (lastClose > lastSma && rsi < entryLongThreshold) {
+    signal = "buy";
+    strength = rsi < 5 ? "strong" : "medium";
+  } else if (lastClose < lastSma && rsi > entryShortThreshold) {
+    signal = "sell";
+    strength = rsi > 95 ? "strong" : "medium";
+  }
+
+  if (signal === "hold") return null;
+
+  return {
+    name: "connorsRsi2",
+    description: `Larry Connors RSI(2) mean reversion with ${trendFilterPeriod}-period SMA trend filter`,
+    value: rsi,
+    signal,
+    strength,
+    weight,
+  };
+}
+
+function buildRsiPullbackComponent(
+  candles: readonly CandleLike[],
+  weight: number,
+  thresholds: ComposerThresholds,
+): SignalComponent | null {
+  const rsiPeriod = thresholds.rsiPeriod ?? 14;
+  if (weight <= 0 || candles.length < Math.max(20, rsiPeriod + 1)) return null;
+
+  const rsiSeries = calculateRSISeries(candles, rsiPeriod);
+  if (rsiSeries.length < 6) return null;
+
+  const fastPeriod = thresholds.trendFastPeriod ?? 9;
+  const slowPeriod = thresholds.trendSlowPeriod ?? 21;
+  if (candles.length < Math.max(fastPeriod, slowPeriod) + 2) return null;
+
+  const closes = candles.map((c) => c.close);
+  const emaFast = calculateEMA(closes, fastPeriod);
+  const emaSlow = calculateEMA(closes, slowPeriod);
+  const lastFast = emaFast[emaFast.length - 1];
+  const lastSlow = emaSlow[emaSlow.length - 1];
+  const rsi = rsiSeries[rsiSeries.length - 1];
+  const prevRsi = rsiSeries.slice(-6, -1);
+
+  const isUptrend = lastFast > lastSlow;
+  const isDowntrend = lastFast < lastSlow;
+
+  let signal: Direction = "hold";
+  let strength: SignalStrength = "weak";
+
+  if (isUptrend && rsi >= 40 && rsi <= 50 && prevRsi.some((r) => r >= 55)) {
+    signal = "buy";
+    strength = rsi < 45 ? "strong" : "medium";
+  } else if (
+    isDowntrend &&
+    rsi >= 50 &&
+    rsi <= 60 &&
+    prevRsi.some((r) => r <= 45)
+  ) {
+    signal = "sell";
+    strength = rsi > 55 ? "strong" : "medium";
+  }
+
+  if (signal === "hold") return null;
+
+  return {
+    name: "rsiPullback",
+    description: "RSI pullback inside EMA trend",
+    value: rsi,
+    signal,
+    strength,
+    weight,
+  };
+}
+
+function buildEmaPullbackComponent(
+  candles: readonly CandleLike[],
+  weight: number,
+  thresholds: ComposerThresholds,
+): SignalComponent | null {
+  if (weight <= 0 || candles.length < 5) return null;
+
+  const fastPeriod = thresholds.trendFastPeriod ?? 9;
+  const slowPeriod = thresholds.trendSlowPeriod ?? 21;
+  if (candles.length < Math.max(fastPeriod, slowPeriod) + 2) return null;
+
+  const closes = candles.map((c) => c.close);
+  const emaFast = calculateEMA(closes, fastPeriod);
+  const emaSlow = calculateEMA(closes, slowPeriod);
+  const lastFast = emaFast[emaFast.length - 1];
+  const lastSlow = emaSlow[emaSlow.length - 1];
+  const prevFast = emaFast[emaFast.length - 2];
+  const prevClose = candles[candles.length - 2].close;
+  const lastClose = candles[candles.length - 1].close;
+
+  const isUptrend = lastFast > lastSlow;
+  const isDowntrend = lastFast < lastSlow;
+
+  let signal: Direction = "hold";
+  let strength: SignalStrength = "weak";
+
+  // Pullback to the fast EMA inside a trend.
+  if (
+    isUptrend &&
+    prevClose > prevFast &&
+    lastClose <= lastFast &&
+    lastClose > lastSlow
+  ) {
+    signal = "buy";
+    strength = lastClose > (lastFast + lastSlow) / 2 ? "medium" : "strong";
+  } else if (
+    isDowntrend &&
+    prevClose < prevFast &&
+    lastClose >= lastFast &&
+    lastClose < lastSlow
+  ) {
+    signal = "sell";
+    strength = lastClose < (lastFast + lastSlow) / 2 ? "medium" : "strong";
+  }
+
+  if (signal === "hold") return null;
+
+  const distance = Math.abs(lastClose - lastFast) / lastFast;
+  return {
+    name: "emaPullback",
+    description: "Price pullback to fast EMA inside trend",
+    value: distance,
     signal,
     strength,
     weight,
@@ -478,7 +898,7 @@ function buildRegimeComponent(
   const atrPct = midPrice > 0 ? atr / midPrice : 0;
 
   // Skip if volatility is excessive (ATR too large relative to price).
-  if (atrPct > thresholds.atrMaxPctOfPrice) {
+  if (thresholds.atrMaxPctOfPrice > 0 && atrPct > thresholds.atrMaxPctOfPrice) {
     return {
       name: "regime",
       description: "Volatility regime filter",
@@ -511,6 +931,7 @@ function buildRegimeComponent(
   const mode = thresholds.regimeMode ?? "trend";
   let signal: Direction = "hold";
   let strength: SignalStrength = "weak";
+  let volumeRatio: number | null = null;
 
   if (mode === "reversion") {
     // Mean-reversion regime: only fade extremes in the direction of the
@@ -530,6 +951,43 @@ function buildRegimeComponent(
     ) {
       signal = "sell";
       strength = adx > thresholds.adxStrongTrend ? "strong" : "medium";
+    }
+  } else if (mode === "breakout") {
+    // Volume-confirmed breakout regime: enter when price closes outside the
+    // recent range, supported by above-average volume and a trending ADX.
+    const breakoutLookback = thresholds.breakoutLookback ?? 20;
+    if (candles.length >= breakoutLookback + 2) {
+      const current = candles[candles.length - 1];
+      const window = candles.slice(-breakoutLookback - 1, -1);
+      const highestHigh = Math.max(...window.map((c) => c.high));
+      const lowestLow = Math.min(...window.map((c) => c.low));
+      volumeRatio = calculateVolumeRatio(
+        candles,
+        thresholds.volumeLookback ?? 20,
+      );
+      const minAdx = thresholds.breakoutAdxMin ?? 20;
+      const minVolumeRatio = thresholds.breakoutVolumeMinRatio ?? 1.2;
+
+      if (
+        adx !== null &&
+        adx >= minAdx &&
+        volumeRatio !== null &&
+        volumeRatio >= minVolumeRatio
+      ) {
+        if (current.close > highestHigh && allowLong) {
+          signal = "buy";
+          strength =
+            adx > thresholds.adxStrongTrend && volumeRatio > 1.5
+              ? "strong"
+              : "medium";
+        } else if (current.close < lowestLow && allowShort) {
+          signal = "sell";
+          strength =
+            adx > thresholds.adxStrongTrend && volumeRatio > 1.5
+              ? "strong"
+              : "medium";
+        }
+      }
     }
   } else {
     // Trend-strength regime: require ADX, DI lines, Bollinger position, and
@@ -559,8 +1017,56 @@ function buildRegimeComponent(
     description:
       mode === "reversion"
         ? "Bollinger band mean-reversion regime + higher-timeframe trend filter"
-        : "ADX trend strength + Bollinger direction + higher-timeframe trend filter",
-    value: adx,
+        : mode === "breakout"
+          ? "Volume-confirmed breakout regime + higher-timeframe trend filter"
+          : "ADX trend strength + Bollinger direction + higher-timeframe trend filter",
+    value: mode === "breakout" ? (volumeRatio ?? adx) : adx,
+    signal,
+    strength,
+    weight,
+  };
+}
+
+function buildFundingComponent(
+  candles: readonly CandleLike[],
+  _ob: OrderBookMetricsInput,
+  weight: number,
+  thresholds: ComposerThresholds,
+  fundingRates?: readonly FundingRate[],
+): SignalComponent | null {
+  if (weight <= 0 || !thresholds.useFunding) return null;
+  if (!fundingRates || fundingRates.length === 0) return null;
+  if (candles.length === 0) return null;
+
+  const threshold = thresholds.fundingBiasThreshold ?? 0.0001;
+  if (threshold <= 0) return null;
+
+  const lastCandle = candles[candles.length - 1];
+  const lastTime = lastCandle.timestamp.getTime();
+
+  let latest: FundingRate | null = null;
+  for (const rate of fundingRates) {
+    const rateTime = rate.timestamp.getTime();
+    if (
+      rateTime <= lastTime &&
+      (!latest || rateTime > latest.timestamp.getTime())
+    ) {
+      latest = rate;
+    }
+  }
+  if (!latest) return null;
+
+  const rate = latest.fundingRate;
+  if (Math.abs(rate) <= threshold) return null;
+
+  const signal: Direction = rate > threshold ? "sell" : "buy";
+  const strength: SignalStrength =
+    Math.abs(rate) > 3 * threshold ? "strong" : "medium";
+
+  return {
+    name: "funding",
+    description: "Perpetual futures funding-rate contrarian bias",
+    value: rate,
     signal,
     strength,
     weight,
@@ -636,6 +1142,45 @@ function passesConfluenceFilter(
   return agreeing >= minConfluence;
 }
 
+function componentCategory(
+  name: SignalComponent["name"],
+): "leading" | "current" | "lagging" | null {
+  switch (name) {
+    case "rsiPullback":
+    case "emaPullback":
+      return "leading";
+    case "trend":
+    case "imbalance":
+    case "spread":
+    case "liquidity":
+      return "current";
+    case "rsi":
+    case "connorsRsi2":
+    case "volatility":
+    case "regime":
+    case "funding":
+      return "lagging";
+    default:
+      return null;
+  }
+}
+
+function passesCategoryConfluenceFilter(
+  components: readonly SignalComponent[],
+  direction: Direction,
+  minCategoryConfluence = 0,
+): boolean {
+  if (minCategoryConfluence <= 0 || direction === "hold") return true;
+  const categories = new Set<string>();
+  for (const c of components) {
+    if (c.signal === direction) {
+      const cat = componentCategory(c.name);
+      if (cat) categories.add(cat);
+    }
+  }
+  return categories.size >= minCategoryConfluence;
+}
+
 function passesEntryCandleConfirmation(
   candle: CandleLike,
   direction: Direction,
@@ -660,23 +1205,4 @@ function passesMomentumConfirmation(
   if (start === 0) return true;
   const change = (end - start) / start;
   return direction === "buy" ? change > 0 : change < 0;
-}
-
-function passesVolumeFilter(
-  candles: readonly CandleLike[],
-  thresholds: ComposerThresholds,
-): boolean {
-  const minRatio = thresholds.volumeMinRatio ?? 0;
-  if (minRatio <= 0) return true;
-
-  const lookback = thresholds.volumeLookback ?? 20;
-  if (candles.length < lookback + 1) return true;
-
-  const current = candles[candles.length - 1].volume;
-  const recent = candles.slice(-lookback - 1, -1);
-  const avgVolume =
-    recent.reduce((sum, c) => sum + c.volume, 0) / recent.length;
-  if (avgVolume <= 0) return true;
-
-  return current >= avgVolume * minRatio;
 }

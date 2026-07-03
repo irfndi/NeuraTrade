@@ -1,11 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
   calculateADX,
+  calculateAnnualizedVolatility,
   calculateATR,
   calculateBollingerBands,
   calculateEMA,
   calculateRSI,
   calculateVolatility,
+  calculateVolumeRatio,
 } from "./indicators.js";
 import type { CandleLike } from "./types.js";
 
@@ -153,5 +155,56 @@ describe("indicators", () => {
     expect(bb!.middle).toBeGreaterThan(bb!.lower);
     expect(bb!.percentB).toBeGreaterThanOrEqual(0);
     expect(bb!.percentB).toBeLessThanOrEqual(1);
+  });
+
+  it("calculates annualized volatility from log returns", () => {
+    const candles: CandleLike[] = [];
+    let close = 100;
+    for (let i = 0; i < 30; i++) {
+      close *= 1 + Math.sin(i) * 0.02;
+      candles.push(candle(close));
+    }
+    const vol = calculateAnnualizedVolatility(candles, 20, "1h");
+    expect(vol).toBeGreaterThan(0);
+    expect(Number.isFinite(vol)).toBe(true);
+  });
+
+  it("returns zero volatility with insufficient candles", () => {
+    const candles: CandleLike[] = [];
+    let close = 100;
+    for (let i = 0; i < 5; i++) {
+      close *= 1.01;
+      candles.push(candle(close));
+    }
+    expect(calculateAnnualizedVolatility(candles, 20, "1h")).toBe(0);
+  });
+
+  it("calculates volume ratio as current volume over SMA", () => {
+    const candles: CandleLike[] = [];
+    let close = 100;
+    for (let i = 0; i < 21; i++) {
+      close *= 1.001;
+      candles.push({
+        open: close * 0.999,
+        high: close * 1.002,
+        low: close * 0.998,
+        close,
+        volume: 10,
+        timestamp: new Date(Date.now() + i * 60000),
+      });
+    }
+    // Last candle has double the average volume.
+    candles[candles.length - 1] = {
+      ...candles[candles.length - 1],
+      volume: 20,
+    };
+    const ratio = calculateVolumeRatio(candles, 20);
+    expect(ratio).not.toBeNull();
+    expect(ratio!).toBeCloseTo(2, 5);
+  });
+
+  it("returns null volume ratio with insufficient data", () => {
+    const candles = [candle(100), candle(101)];
+    expect(calculateVolumeRatio(candles, 20)).toBeNull();
   });
 });

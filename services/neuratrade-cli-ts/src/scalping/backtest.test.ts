@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { runBacktest } from "./backtest.js";
+import {
+  assessBacktestRealism,
+  calculatePositionValue,
+  normalizeFeePct,
+  runBacktest,
+} from "./backtest.js";
 import { defaultComposerConfig } from "./composer.js";
 import type { CandleLike } from "./types.js";
 
@@ -364,6 +369,37 @@ describe("runBacktest scale-out and atrRiskReward", () => {
     expect(result.trades.some((t) => t.exitReason === "time_stop")).toBe(true);
   });
 
+  it("forces every trade to close within maxBarsInTrade bars", () => {
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 50,
+      takeProfitPct: 50,
+      feePct: 0,
+      minConfidence: 0.1,
+      holdUntilStop: true,
+      maxBarsInTrade: 2,
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    let timeStops = 0;
+    for (const trade of result.trades) {
+      const barsHeld =
+        (trade.exitTime.getTime() - trade.entryTime.getTime()) /
+        (60 * 60 * 1000);
+      expect(barsHeld).toBeLessThanOrEqual(2);
+      if (trade.exitReason === "time_stop") {
+        timeStops++;
+      }
+    }
+    expect(timeStops).toBeGreaterThan(0);
+  });
+
   it("skips entries during loss cooldown", () => {
     const result = runBacktest({
       symbol: "BTC/USDT",
@@ -431,5 +467,372 @@ describe("runBacktest scale-out and atrRiskReward", () => {
 
     expect(result.totalReturnPct).toBeFinite();
     expect(result.maxDrawdownPct).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("volatility-targeted position sizing", () => {
+  const baseOptions = {
+    symbol: "BTC/USDT",
+    exchange: "binance",
+    timeframe: "1h",
+    candles: [],
+    composerConfig: defaultComposerConfig,
+    initialCapital: 10_000,
+    positionSizePct: 100,
+    stopLossPct: 2,
+    takeProfitPct: 4,
+    feePct: 0.1,
+    minConfidence: 0.5,
+  };
+
+  it("scales position down when current volatility exceeds target", () => {
+    const base = calculatePositionValue(10_000, 100, 0.02, 50, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 0,
+    });
+    const targeted = calculatePositionValue(10_000, 100, 0.02, 50, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 25,
+    });
+    expect(targeted).toBe(base * 0.5);
+  });
+
+  it("scales position up when current volatility is below target", () => {
+    const base = calculatePositionValue(10_000, 100, 0.02, 10, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 0,
+      maxPositionSizePct: 300,
+    });
+    const targeted = calculatePositionValue(10_000, 100, 0.02, 10, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 30,
+      maxPositionSizePct: 300,
+    });
+    expect(targeted).toBe(base * 3);
+  });
+
+  it("caps vol-adjusted size by maxPositionSizePct", () => {
+    const targeted = calculatePositionValue(10_000, 100, 0.02, 1, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 100,
+      maxPositionSizePct: 50,
+    });
+    expect(targeted).toBe(5_000);
+  });
+
+  it("does nothing when target is zero", () => {
+    const base = calculatePositionValue(10_000, 100, 0.02, 40, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 0,
+    });
+    const targeted = calculatePositionValue(10_000, 100, 0.02, 40, {
+      ...baseOptions,
+      volatilityTargetAnnualPct: 0,
+    });
+    expect(targeted).toBe(base);
+  });
+});
+
+describe("higher-timeframe signal confluence", () => {
+  it("filters entries when HTF signal confidence threshold is high", () => {
+    const candles = makeCandles(150, 100, "up");
+    const baseline = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles,
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10_000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      htfCandles: candles,
+      htfTrendFastPeriod: 10,
+      htfTrendSlowPeriod: 20,
+    });
+
+    const confluent = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles,
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10_000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      htfCandles: candles,
+      htfTrendFastPeriod: 10,
+      htfTrendSlowPeriod: 20,
+      htfSignalConfidence: 0.99,
+    });
+
+    expect(baseline.totalTrades).toBeGreaterThanOrEqual(0);
+    expect(confluent.totalTrades).toBeLessThanOrEqual(baseline.totalTrades);
+  });
+});
+
+describe("fee convention normalization", () => {
+  it("normalizeFeePct converts a fraction to percent and leaves percent alone", () => {
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    expect(normalizeFeePct(0.001)).toBeCloseTo(0.1);
+    expect(normalizeFeePct(0.05)).toBe(0.05);
+    expect(normalizeFeePct(0.1)).toBe(0.1);
+    expect(normalizeFeePct(0)).toBe(0);
+    console.warn = originalWarn;
+  });
+
+  it("normalizes a fractional fee to percent and charges the same as the equivalent percent", () => {
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    const opts = {
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles: makeCandles(100, 100, "up"),
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      minConfidence: 0.1,
+    } as const;
+    const fractional = runBacktest({ ...opts, feePct: 0.001 });
+    const percent = runBacktest({ ...opts, feePct: 0.1 });
+    expect(fractional.totalFeesPaid).toBeGreaterThan(0);
+    expect(percent.totalFeesPaid).toBeGreaterThan(0);
+    expect(percent.totalFeesPaid).toBeCloseTo(fractional.totalFeesPaid, 0);
+    console.warn = originalWarn;
+  });
+});
+
+describe("maker/taker fee model", () => {
+  const baseOpts = {
+    symbol: "BTC/USDT",
+    exchange: "binance",
+    timeframe: "1h",
+    candles: makeCandles(100, 100, "up"),
+    composerConfig: defaultComposerConfig,
+    initialCapital: 10000,
+    positionSizePct: 100,
+    stopLossPct: 5,
+    takeProfitPct: 10,
+    feePct: 0.05,
+    minConfidence: 0.1,
+  } as const;
+
+  it("market entry fills as taker", () => {
+    const result = runBacktest({
+      ...baseOpts,
+      entryOrderType: "market",
+      slippageBps: 0,
+    });
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.trades.every((t) => t.fillType === "taker")).toBe(true);
+    expect(result.makerFillRate).toBe(0);
+  });
+
+  it("limit entry fills as maker when the bar trades through the limit", () => {
+    const result = runBacktest({
+      ...baseOpts,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 0,
+      makerFeePct: 0.02,
+      slippageBps: 0,
+    });
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.trades.every((t) => t.fillType === "maker")).toBe(true);
+    expect(result.trades.every((t) => t.entryFeePct === 0.02)).toBe(true);
+    expect(result.trades.every((t) => t.exitFeePct === 0.05)).toBe(true);
+    expect(result.makerFillRate).toBe(1);
+  });
+
+  it("maker fill reduces total fees compared to pure taker", () => {
+    const taker = runBacktest({
+      ...baseOpts,
+      entryOrderType: "market",
+      slippageBps: 0,
+    });
+    const maker = runBacktest({
+      ...baseOpts,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 0,
+      makerFeePct: 0.02,
+      slippageBps: 0,
+    });
+    expect(maker.totalFeesPaid).toBeLessThan(taker.totalFeesPaid);
+  });
+
+  it("limit entry with unreachable offset is forfeited", () => {
+    const result = runBacktest({
+      ...baseOpts,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 100,
+      makerFeePct: 0.02,
+      slippageBps: 0,
+    });
+    expect(result.totalTrades).toBe(0);
+    expect(result.makerFillRate ?? 0).toBe(0);
+  });
+
+  it("normalizes a fractional maker fee to percent", () => {
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    const result = runBacktest({
+      ...baseOpts,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 0,
+      makerFeePct: 0.0002,
+      slippageBps: 0,
+    });
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(
+      result.trades.every((t) => Math.abs(t.entryFeePct - 0.02) < 1e-9),
+    ).toBe(true);
+    console.warn = originalWarn;
+  });
+});
+
+describe("observed-price backtest mode", () => {
+  const baseOpts = {
+    symbol: "BTC/USDT",
+    exchange: "binance",
+    timeframe: "1h",
+    candles: makeCandles(100, 100, "up"),
+    composerConfig: defaultComposerConfig,
+    initialCapital: 10000,
+    positionSizePct: 100,
+    stopLossPct: 2,
+    takeProfitPct: 3,
+    feePct: 0,
+    minConfidence: 0.1,
+  } as const;
+
+  it("produces different (more pessimistic) results than intrabar mode", () => {
+    const intrabar = runBacktest({ ...baseOpts, useObservedPrice: false });
+    const observed = runBacktest({
+      ...baseOpts,
+      useObservedPrice: true,
+      slippageBps: 5,
+    });
+    expect(intrabar.totalTrades).toBeGreaterThan(0);
+    expect(observed.totalTrades).toBeGreaterThan(0);
+    expect(
+      observed.totalReturnPct < intrabar.totalReturnPct ||
+        observed.winningTrades < intrabar.winningTrades ||
+        observed.totalTrades !== intrabar.totalTrades,
+    ).toBe(true);
+  });
+
+  it("uses slippage on close without bounding by high/low", () => {
+    const noSlip = runBacktest({ ...baseOpts, useObservedPrice: true });
+    const withSlip = runBacktest({
+      ...baseOpts,
+      useObservedPrice: true,
+      slippageBps: 10,
+    });
+    expect(noSlip.totalTrades).toBeGreaterThan(0);
+    expect(withSlip.totalTrades).toBeGreaterThan(0);
+    expect(withSlip.totalReturnPct).toBeLessThan(noSlip.totalReturnPct);
+  });
+});
+
+describe("assessBacktestRealism", () => {
+  it("flags a 100% win-rate result as unrealistic", () => {
+    const fake: ReturnType<typeof runBacktest> = {
+      symbol: "BTC/USDT",
+      totalTrades: 5,
+      winningTrades: 5,
+      losingTrades: 0,
+      winRate: 1,
+      totalReturnPct: 10,
+      maxDrawdownPct: 0,
+      sharpeRatio: 2,
+      trades: [],
+      totalFeesPaid: 0,
+      totalFundingCost: 0,
+      benchmarkReturnPct: 0,
+      metrics: {
+        profitFactor: 0,
+        expectancy: 0,
+        averageRMultiple: 0,
+        sortinoRatio: 0,
+        calmarRatio: 0,
+        maxConsecutiveLosses: 0,
+        averageTradeDurationHours: 0,
+        timeInMarketPct: 0,
+      },
+      robustnessScore: 0,
+    };
+    const result = assessBacktestRealism(fake);
+    expect(result.ok).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+  });
+
+  it("allows a normal mixed result", () => {
+    const fake: ReturnType<typeof runBacktest> = {
+      symbol: "BTC/USDT",
+      totalTrades: 20,
+      winningTrades: 11,
+      losingTrades: 9,
+      winRate: 0.55,
+      totalReturnPct: 5,
+      maxDrawdownPct: 3,
+      sharpeRatio: 0.8,
+      trades: [],
+      totalFeesPaid: 0,
+      totalFundingCost: 0,
+      benchmarkReturnPct: 0,
+      metrics: {
+        profitFactor: 1.2,
+        expectancy: 0.25,
+        averageRMultiple: 0.1,
+        sortinoRatio: 0.5,
+        calmarRatio: 0.3,
+        maxConsecutiveLosses: 2,
+        averageTradeDurationHours: 1,
+        timeInMarketPct: 10,
+      },
+      robustnessScore: 0,
+    };
+    const result = assessBacktestRealism(fake, { entryOrderType: "market" });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("warns about high maker fill rate on limit entries", () => {
+    const fake: ReturnType<typeof runBacktest> = {
+      symbol: "BTC/USDT",
+      totalTrades: 20,
+      winningTrades: 10,
+      losingTrades: 10,
+      winRate: 0.5,
+      totalReturnPct: 2,
+      maxDrawdownPct: 1,
+      sharpeRatio: 0.5,
+      trades: [],
+      totalFeesPaid: 0,
+      totalFundingCost: 0,
+      benchmarkReturnPct: 0,
+      makerFillRate: 0.98,
+      metrics: {
+        profitFactor: 1,
+        expectancy: 0,
+        averageRMultiple: 0,
+        sortinoRatio: 0,
+        calmarRatio: 0,
+        maxConsecutiveLosses: 0,
+        averageTradeDurationHours: 0,
+        timeInMarketPct: 0,
+      },
+      robustnessScore: 0,
+    };
+    const result = assessBacktestRealism(fake, { entryOrderType: "limit" });
+    expect(result.warnings.length).toBeGreaterThan(0);
   });
 });

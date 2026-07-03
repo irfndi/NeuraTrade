@@ -1,4 +1,5 @@
 import type { BacktestTrade } from "./backtest.js";
+import type { BacktestResult } from "./backtest.js";
 
 /**
  * Extended performance metrics for a backtest result.
@@ -147,4 +148,45 @@ export function computePerformanceMetrics(
     averageTradeDurationHours,
     timeInMarketPct,
   };
+}
+
+/**
+ * Compute a composite robustness score for a backtest result.
+ *
+ * The score blends return, risk-adjusted return, profitability and sample size
+ * into a single number roughly in the range [-100, 100]. Higher is better.
+ *
+ * Formula:
+ *   score = 0.35 * totalReturnPct
+ *         - 0.30 * maxDrawdownPct
+ *         + 12.0 * sharpeRatio
+ *         + 5.0  * (profitFactor - 1)
+ *         + 2.0  * expectancy
+ *         - samplePenalty
+ *
+ * where samplePenalty is 20 when totalTrades < 30, scaled linearly to 0 as
+ * totalTrades goes from 0 to 30. The coefficients are chosen so that a
+ * moderately profitable, controlled backtest scores above 0 and an unrealistic
+ * curve-fit scores below 0.
+ *
+ * The result is clamped to [-100, 100].
+ */
+export function robustnessScore(result: BacktestResult): number {
+  const pf = Number.isFinite(result.metrics.profitFactor)
+    ? result.metrics.profitFactor
+    : 0;
+  const profitFactorTerm = pf > 0 ? 5 * (pf - 1) : 0;
+
+  const samplePenalty =
+    result.totalTrades >= 30 ? 0 : 20 * (1 - result.totalTrades / 30);
+
+  const raw =
+    0.35 * result.totalReturnPct -
+    0.3 * result.maxDrawdownPct +
+    12 * result.sharpeRatio +
+    profitFactorTerm +
+    2 * result.metrics.expectancy -
+    samplePenalty;
+
+  return Math.max(-100, Math.min(100, Number.isNaN(raw) ? 0 : raw));
 }

@@ -39,7 +39,7 @@ export interface SoakOptions {
   readonly volatilityLowFactor: number;
   readonly volatilityHighFactor: number;
   readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
+  readonly regimeMode: "trend" | "reversion" | "breakout";
   readonly composerConfig: ComposerConfig;
   readonly leverage: number;
   readonly marginMode: FuturesMarginMode;

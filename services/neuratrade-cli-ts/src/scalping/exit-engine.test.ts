@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   calculateScaleOutPrice,
   calibrateAtrStopMultiplier,
+  checkRsiExit,
   computeExitLevels,
 } from "./exit-engine.js";
 import type { CandleLike } from "./types.js";
@@ -124,6 +125,30 @@ describe("computeExitLevels", () => {
     expect(mult).toBeGreaterThan(0);
   });
 
+  it("uses per-symbol ATR% stats for adaptive stops", () => {
+    const levels = computeExitLevels(
+      baseOptions({
+        useAdaptiveStops: true,
+        adaptiveStopAtrMultiplier: 1,
+        adaptiveRiskReward: 2,
+        symbolStats: {
+          atr14Pct: 0.02,
+          atrPctMedian: 0.005,
+          atrPct20: 0.003,
+          atrPct80: 0.008,
+          annualizedVolatility: 0.05,
+          adx14: 20,
+          isTrending: false,
+          volumeRatio: 1,
+          sampleSize: 100,
+        },
+      }),
+    );
+    // stop = 100 * (1 - 0.005 * 1) = 99.5; tp = 100 * (1 + 0.005 * 1 * 2) = 101
+    expect(levels.stopLoss).toBeCloseTo(99.5, 5);
+    expect(levels.takeProfit).toBeCloseTo(101, 5);
+  });
+
   it("skips calibration when lookback is zero", () => {
     const mult = calibrateAtrStopMultiplier({
       entryPrice: 100,
@@ -155,5 +180,83 @@ describe("calculateScaleOutPrice", () => {
 
   it("computes -1R for short", () => {
     expect(calculateScaleOutPrice(100, 103, 1, "short")).toBe(97);
+  });
+});
+
+function rsiExitCandles(closes: number[]): CandleLike[] {
+  return closes.map((close, i) => ({
+    open: close,
+    high: close,
+    low: close,
+    close,
+    volume: 10,
+    timestamp: new Date(Date.now() + i * 60000),
+  }));
+}
+
+describe("checkRsiExit", () => {
+  it("exits a long when RSI rises above the long exit level", () => {
+    const candles = rsiExitCandles([100, 110, 120]);
+    expect(
+      checkRsiExit({
+        side: "long",
+        candles,
+        exitRsiPeriod: 2,
+        exitRsiLongLevel: 70,
+        exitRsiShortLevel: 30,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not exit a long when RSI is below the long exit level", () => {
+    const candles = rsiExitCandles([120, 110, 100]);
+    expect(
+      checkRsiExit({
+        side: "long",
+        candles,
+        exitRsiPeriod: 2,
+        exitRsiLongLevel: 70,
+        exitRsiShortLevel: 30,
+      }),
+    ).toBe(false);
+  });
+
+  it("exits a short when RSI falls below the short exit level", () => {
+    const candles = rsiExitCandles([120, 110, 100]);
+    expect(
+      checkRsiExit({
+        side: "short",
+        candles,
+        exitRsiPeriod: 2,
+        exitRsiLongLevel: 70,
+        exitRsiShortLevel: 30,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not exit a short when RSI is above the short exit level", () => {
+    const candles = rsiExitCandles([100, 110, 120]);
+    expect(
+      checkRsiExit({
+        side: "short",
+        candles,
+        exitRsiPeriod: 2,
+        exitRsiLongLevel: 70,
+        exitRsiShortLevel: 30,
+      }),
+    ).toBe(false);
+  });
+
+  it("is disabled when exitRsiPeriod is zero", () => {
+    const candles = rsiExitCandles([100, 110, 120]);
+    expect(
+      checkRsiExit({
+        side: "long",
+        candles,
+        exitRsiPeriod: 0,
+        exitRsiLongLevel: 70,
+        exitRsiShortLevel: 30,
+      }),
+    ).toBe(false);
   });
 });
