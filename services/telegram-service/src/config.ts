@@ -88,9 +88,8 @@ const fromConfigWithFallback = (
     ),
     Effect.catchAll((err) =>
       Effect.sync(() => getEnvWithNeuratradeFallback(key)).pipe(
-        Effect.flatMap(
-          (val): Effect.Effect<string, ConfigError.ConfigError> =>
-            val && val.trim() !== "" ? Effect.succeed(val) : Effect.fail(err),
+        Effect.flatMap((val): Effect.Effect<string, ConfigError.ConfigError> =>
+          val && val.trim() !== "" ? Effect.succeed(val) : Effect.fail(err),
         ),
       ),
     ),
