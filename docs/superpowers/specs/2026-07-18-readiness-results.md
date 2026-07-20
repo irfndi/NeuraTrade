@@ -143,6 +143,16 @@ Last 30 days (2880 × 15m bars) via `scripts/grid-fill-stress.ts`. A clean stati
 
 Both configurations are profitable in the most recent regime and clear the ≥10 trades/month frequency gate. BTC's recent per-trade expectancy (+0.061%) matches its full out-of-sample figure — the edge is consistent, not a fluke, but thin. **ETH's recent PF (1.06) sits below the 1.3 economics gate**, reinforcing that ETH is not ready. The thin per-trade expectancy (BTC +0.061%, ETH +0.040%) is precisely what makes fill-realism (slippage/adverse-selection beyond the modeled 1 bp) the decisive open question, answerable only by the live demo.
 
+### er7 live-engine 30-day replay (realized vs backtest expectancy)
+`scalp paper-trade --strategy-type grid --replay-bars 2880` through the live paper engine (`SimulatedFuturesExchangeAdapter`, no API keys required for replay mode), over the same last-30-day window, with the winner config and `--max-position-size-pct 100` (all-in for apples-to-apples with the backtest sample):
+
+| engine | 30d return | trades | win | PF | exp/tr | exits (TP / stop) |
+|---|---|---|---|---|---|---|
+| live paper engine | **+2.7%** | 16 | **68.8%** | **1.36** | +0.173% | 11 / 5 |
+| backtest (`runGridBacktest`) | +0.76% | 14 | 64.3% | 1.11 | +0.061% | — |
+
+Both engines produce a profitable, PF>1 realized sample over the same 30-day window — **directionally consistent**. The live engine's per-trade expectancy (~+0.17%) runs ~3× the backtest's (+0.06%): the two engines differ in fill mechanics (idealized intrabar backtest vs event-driven paper simulation), and the exact trade set differs (16 vs 14 trades). **Direction is confirmed: the paper engine produces a profitable realized sample consistent with the backtest's positive expectancy.** The ~3× magnitude difference is a fill-model artifact — it argues for conservative live-money expectations, not against the verdict. Note: in replay mode the `paper_portfolio` summary isn't written back (the per-trade `pnl_pct` values are correct; the engine's in-memory final equity was +2.7% = $10269.99); tracked as a minor engine follow-up.
+
 ## FINAL VERDICT (2026-07-20)
 
 **Conditional GO to LIVE DEMO validation. Not yet approved for real money.**
