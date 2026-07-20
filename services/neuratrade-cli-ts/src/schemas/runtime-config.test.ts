@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Either } from "effect";
+import { Result } from "effect";
 import {
   RuntimeConfigSchema,
   decodeRuntimeConfigEither,
@@ -56,10 +56,10 @@ describe("RuntimeConfigSchema", () => {
     };
 
     const result = decodeRuntimeConfigEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const cfg = result.right;
+    if (Result.isSuccess(result)) {
+      const cfg = result.success;
       expect(cfg.server.host).toBe("0.0.0.0");
       expect(cfg.server.port).toBe(8080);
       expect(cfg.database.driver).toBe("sqlite");
@@ -86,10 +86,10 @@ describe("RuntimeConfigSchema", () => {
 
   test("applies defaults when fields are missing", () => {
     const result = decodeRuntimeConfigEither({});
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const cfg = result.right;
+    if (Result.isSuccess(result)) {
+      const cfg = result.success;
       expect(cfg.server.host).toBe("0.0.0.0");
       expect(cfg.server.port).toBe(8080);
       expect(cfg.database.driver).toBe("sqlite");
@@ -133,10 +133,10 @@ describe("RuntimeConfigSchema", () => {
       gateway: { health_timeout_seconds: 300, skip_telegram: true },
     };
     const result = decodeRuntimeConfigEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const cfg = result.right;
+    if (Result.isSuccess(result)) {
+      const cfg = result.success;
       expect(cfg.server.host).toBe("192.168.1.100");
       expect(cfg.server.port).toBe(9090);
       expect(cfg.ai.temperature).toBe(0.3);
@@ -151,31 +151,31 @@ describe("RuntimeConfigSchema", () => {
 
   test("rejects a string instead of an object", () => {
     const result = decodeRuntimeConfigEither("invalid");
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects an array", () => {
     const result = decodeRuntimeConfigEither([]);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects null", () => {
     const result = decodeRuntimeConfigEither(null);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects wrong type for nested field", () => {
     const result = decodeRuntimeConfigEither({
       server: { host: 123 }, // host should be string
     });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects wrong type for boolean field", () => {
     const result = decodeRuntimeConfigEither({
       features: { enable_ai: "yes" }, // should be boolean
     });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   // --- Type compatibility ---

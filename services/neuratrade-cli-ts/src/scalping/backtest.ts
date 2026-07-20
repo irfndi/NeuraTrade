@@ -17,7 +17,7 @@ import {
   calculateRSI,
 } from "./indicators.js";
 import { checkRsiExit, computeExitLevels } from "./exit-engine.js";
-import { computeSymbolStats } from "./symbol-stats.js";
+import { makeCausalSymbolStats } from "./symbol-stats.js";
 import type { SymbolStatistics } from "./symbol-stats.js";
 import {
   computePerformanceMetrics,
@@ -26,36 +26,42 @@ import {
 } from "./performance-metrics.js";
 
 /**
+ * Build the warning message for a fee that looks like a fraction rather than
+ * a percent, or return null when the value already looks like a percent.
+ * Emitted via `Effect.logWarning` at the Effect boundary (see
+ * `BacktestEngine` in `./services.js`) so this module stays side-effect free.
+ */
+export function feeFractionWarning(
+  feePct: number,
+  label: string,
+): string | null {
+  if (feePct > 0 && feePct < 0.01) {
+    const corrected = feePct * 100;
+    return `${label} looks like a fraction (${feePct}); engine expects percent (${corrected}). Multiplying by 100.`;
+  }
+  return null;
+}
+
+/**
  * Normalize a fee input to the percent convention expected by the engine.
  * The engine computes fees as notional * (feePct / 100), so feePct is a
  * percent per side (0.1 = 0.1%). Passing a fraction like 0.001 is a common
  * mistake; this helper detects values in the (0, 0.01) range and converts
- * them to percent, logging a warning.
+ * them to percent.
  */
 export function normalizeFeePct(feePct: number): number {
   if (feePct > 0 && feePct < 0.01) {
-    const corrected = feePct * 100;
-    console.warn(
-      `fee looks like a fraction (${feePct}); engine expects percent (${corrected}). Multiplying by 100.`,
-    );
-    return corrected;
+    return feePct * 100;
   }
   return feePct;
 }
 
 export function normalizeOptionalFeePct(
   feePct: number | undefined,
-  label: string,
+  _label: string,
 ): number | undefined {
   if (feePct === undefined) return undefined;
-  if (feePct > 0 && feePct < 0.01) {
-    const corrected = feePct * 100;
-    console.warn(
-      `${label} looks like a fraction (${feePct}); engine expects percent (${corrected}). Multiplying by 100.`,
-    );
-    return corrected;
-  }
-  return feePct;
+  return normalizeFeePct(feePct);
 }
 
 export function resolveEntryFill(
@@ -348,6 +354,12 @@ export interface BacktestOptions {
    *  compute them internally if needed. */
   readonly symbolStats?: SymbolStatistics;
 
+  /** Historical candles preceding `candles`, used only as context: causal
+   *  symbol statistics and indicator windows see them, but they never
+   *  generate trades. Set by the OOS split path so a split run sees the same
+   *  per-bar context as a continuous full-period run (bd clever-cabin-dt8). */
+  readonly warmupCandles?: readonly CandleLike[];
+
   /** Historical funding rates for the funding bias signal component. */
   readonly fundingRates?: readonly FundingRate[];
 
@@ -388,6 +400,7 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
     const oosResult = runBacktestCore({
       ...options,
       candles: oosCandles,
+      warmupCandles: isCandles,
       recordEquityCurve: options.recordEquityCurve,
     });
     return {
@@ -470,7 +483,7 @@ export function assessBacktestRealism(
   };
 }
 
-function attachMonteCarlo(
+export function attachMonteCarlo(
   result: BacktestResult,
   initialCapital: number,
   iterations: number,
@@ -493,16 +506,46 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
     return emptyResult(options.symbol);
   }
 
-  const symbolStats =
-    options.symbolStats ?? computeSymbolStats(candles, options.timeframe);
+  // Fail fast on bad timestamps: an Invalid Date (or a non-Date) silently
+  // poisons funding accrual, duration metrics, and trade-level analysis
+  // (entryTime/exitTime serialize as null), which is far worse than a throw.
+  for (let i = 0; i < candles.length; i++) {
+    const ts = candles[i].timestamp;
+    if (!(ts instanceof Date) || Number.isNaN(ts.getTime())) {
+      throw new Error(
+        `Invalid candle timestamp for ${options.symbol} at index ${i}: ` +
+          `expected a valid Date, got ${String(ts)}`,
+      );
+    }
+  }
 
-  const composerConfigWithStats: ComposerConfig = {
+  // Causal per-bar symbol stats: each bar's signal and exit levels must see
+  // only data available at that bar. A single whole-series stats object is
+  // look-ahead bias (bd clever-cabin-dt8). The explicit options.symbolStats
+  // override stays static — it exists for tests needing a fixed fixture.
+  //
+  // `warmupCandles` (set by the OOS split path) prepend history so BOTH the
+  // causal symbol stats AND the indicator windows at every trading bar match a
+  // continuous full-period run. `statsSeries` is the warmup-augmented series
+  // and `statsOffset` maps a trading-bar index `i` (into `candles`) to its
+  // position in `statsSeries` (bd clever-cabin-dt8). A run without warmup has
+  // statsOffset=0 and behaves exactly as before — the baseline is preserved.
+  const statsSeries = options.warmupCandles?.length
+    ? [...options.warmupCandles, ...candles]
+    : candles;
+  const statsOffset = statsSeries.length - candles.length;
+  const causalSymbolStats = options.symbolStats
+    ? null
+    : makeCausalSymbolStats(statsSeries, options.timeframe);
+  const statsForBar = (barIndex: number): SymbolStatistics =>
+    options.symbolStats ?? causalSymbolStats!(barIndex + statsOffset);
+  const composerConfigFor = (barStats: SymbolStatistics): ComposerConfig => ({
     ...options.composerConfig,
     thresholds: {
       ...options.composerConfig.thresholds,
-      symbolStats,
+      symbolStats: barStats,
     },
-  };
+  });
 
   const feePct = normalizeFeePct(options.feePct);
   const makerFeePct = normalizeOptionalFeePct(options.makerFeePct, "maker-fee");
@@ -565,8 +608,17 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
 
   // We need a rolling window of candles plus current OB metrics.
   // For backtesting, derive synthetic order-book metrics from the candle.
-  for (let i = 20; i < candles.length - 1; i++) {
-    const window = candles.slice(Math.max(0, i + 1 - 200), i + 1);
+  // The indicator window is read from the warmup-augmented series at
+  // `augIndex` so a split (OOS) run sees the same warmed indicators a
+  // continuous full-period run would (bd clever-cabin-dt8). Trades still only
+  // execute on the actual `candles` (`current`/`next`), never on warmup bars.
+  for (let i = 0; i < candles.length - 1; i++) {
+    const augIndex = i + statsOffset;
+    if (augIndex < 20) continue;
+    const window = statsSeries.slice(
+      Math.max(0, augIndex + 1 - 200),
+      augIndex + 1,
+    );
     const current = candles[i];
     const next = candles[i + 1];
 
@@ -579,7 +631,12 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
       fundingRates: options.fundingRates,
     };
 
-    const signal = composeSignal(ohlcv, obMetrics, composerConfigWithStats);
+    const symbolStats = statsForBar(i);
+    const signal = composeSignal(
+      ohlcv,
+      obMetrics,
+      composerConfigFor(symbolStats),
+    );
     const currentDirection = signal?.direction ?? "hold";
     if (
       currentDirection !== "hold" &&
@@ -1708,7 +1765,7 @@ function chargeFunding(
   return { funding, newLastFundingTime };
 }
 
-function splitCandlesByOos(
+export function splitCandlesByOos(
   candles: readonly CandleLike[],
   oosPct: number,
 ): { is: readonly CandleLike[]; oos: readonly CandleLike[] } {

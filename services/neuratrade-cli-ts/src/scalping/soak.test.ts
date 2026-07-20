@@ -157,9 +157,9 @@ describe("runSoak", () => {
       { symbol: "BTC/USDT", exchange: "binance" },
     ];
     const result = await Effect.runPromise(
-      runSoak(makeOptions(watchlist, 1), failingRunner).pipe(Effect.either),
+      runSoak(makeOptions(watchlist, 1), failingRunner).pipe(Effect.result),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 });

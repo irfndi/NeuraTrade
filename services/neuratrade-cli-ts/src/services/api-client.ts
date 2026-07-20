@@ -146,10 +146,9 @@ export interface ApiClientImpl {
   readonly health: () => Effect.Effect<HealthResponse, ApiClientError>;
 }
 
-export class ApiClient extends Context.Tag("ApiClient")<
-  ApiClient,
-  ApiClientImpl
->() {}
+export class ApiClient extends Context.Service<ApiClient, ApiClientImpl>()(
+  "ApiClient",
+) {}
 
 // ---------------------------------------------------------------------------
 // Internal helpers

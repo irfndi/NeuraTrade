@@ -79,11 +79,7 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
   fetchFundingRates: (exchange, symbol, startTime, endTime, limit) =>
     dispatch(exchange, "fetchFundingRates", () => {
       if (exchange.toLowerCase() === "bitget-futures") {
-        return Effect.fail(
-          new MarketDataError(
-            "Bitget futures funding-rate fetch is not implemented yet",
-          ),
-        );
+        return Bitget.fetchFundingRates(symbol, startTime, endTime, limit);
       }
       return Binance.fetchFundingRates(symbol, startTime, endTime, limit);
     }),

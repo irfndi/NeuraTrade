@@ -6,7 +6,7 @@ import {
   type ResolvedBacktestArgs,
 } from "../scalping/strategy-profile.js";
 import type { CandleLike } from "../scalping/types.js";
-import { Command } from "@effect/cli";
+import { Command } from "./kit/kit.ts";
 import {
   buildCandidate,
   buildPaperTradeComposerConfig,
@@ -33,7 +33,7 @@ import {
   type ValidationRow,
 } from "./scalp.js";
 import { Effect, Layer } from "effect";
-import { BunContext } from "@effect/platform-bun";
+import { BunServices } from "@effect/platform-bun";
 import { PathLive } from "../services/path.js";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
@@ -741,7 +741,7 @@ describe("validate command", () => {
   it("fails gracefully when watchlist does not exist", async () => {
     const result = await Effect.runPromise(
       validateWatchlist({ watchlist: "missing", exchange: "binance" }).pipe(
-        Effect.catchAll((err) => Effect.succeed(err)),
+        Effect.catch((err) => Effect.succeed(err)),
         Effect.provide(PathLive(process.env.NEURATRADE_HOME)),
       ),
     );
@@ -760,7 +760,7 @@ describe("validate command", () => {
 
     const loaded = await Effect.runPromise(
       loadSelectWatchlist(watchlistPath).pipe(
-        Effect.catchAll((err) => Effect.fail(err)),
+        Effect.catch((err) => Effect.fail(err)),
       ),
     );
 
@@ -884,7 +884,7 @@ describe("library command", () => {
       run(["bun", "test", "--list"]).pipe(
         Effect.provide(
           Layer.mergeAll(
-            BunContext.layer,
+            BunServices.layer,
             PathLive(process.env.NEURATRADE_HOME),
           ),
         ),
@@ -957,7 +957,7 @@ describe("walk-forward command", () => {
       ]).pipe(
         Effect.provide(
           Layer.mergeAll(
-            BunContext.layer,
+            BunServices.layer,
             PathLive(process.env.NEURATRADE_HOME),
           ),
         ),

@@ -1,26 +1,39 @@
-import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
-import { Console, Effect, Layer, Option } from "effect";
-import { Database } from "bun:sqlite";
-import * as fs from "node:fs";
+import { Command, Options } from "./kit/kit.ts";
+import { BunServices } from "@effect/platform-bun";
+import { Console, Effect, FileSystem, Layer, Option } from "effect";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
+import { ConfigLive } from "../services/config.js";
+import {
+  SqliteClient,
+  SqliteClientLiveRaw,
+  SqliteError,
+} from "../services/sqlite.js";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
+  MarketDataRepositorySQLite,
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
 import type { CandleLike, ComposerConfig } from "../scalping/types.js";
 import {
+  attachMonteCarlo,
   runBacktest,
+  splitCandlesByOos,
   type BacktestResult,
   type BacktestTrade,
 } from "../scalping/backtest.js";
+import type { GridResult, GridTrade } from "../scalping/grid.js";
+import { computePerformanceMetrics } from "../scalping/performance-metrics.js";
 import {
-  runGridBacktest,
-  type GridResult,
-} from "../scalping/grid.js";
+  BacktestEngine,
+  BacktestEngineLive,
+  ExitEngineLive,
+  SignalComposerLive,
+  StrategyLibrary,
+  StrategyLibraryLive,
+} from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
@@ -65,6 +78,7 @@ import {
 } from "../scalping/soak.js";
 import {
   buildStrategyProfileFromArgs,
+  findSymbolOverride,
   loadStrategyProfile,
   resolveBacktestArgs,
   saveStrategyProfile,
@@ -72,10 +86,12 @@ import {
   type StrategyProfile,
   type StrategyProfileParams,
 } from "../scalping/strategy-profile.js";
+import {
+  evaluateReadiness,
+  formatReadinessReport,
+} from "../scalping/readiness.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
-  listStrategies,
-  buildBacktestArgsFromTemplate,
   buildComposerConfigFromTemplate,
   type StrategyTemplateName,
 } from "../scalping/strategy-library.js";
@@ -414,6 +430,13 @@ const targetRatioOption = Options.float("target-ratio").pipe(
   Options.withDefault(1),
   Options.withDescription(
     "Grid: target distance as a multiple of the grid step (default 1.0)",
+  ),
+);
+
+const chopGateAdxOption = Options.float("chop-gate-adx").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Grid: skip new entries while causal ADX(14) >= this threshold (0 = disabled)",
   ),
 );
 
@@ -945,7 +968,30 @@ const regimeModeOption = Options.choice("regime-mode", [
 );
 
 function makeLayer(home?: string) {
-  return Layer.mergeAll(BunContext.layer, PathLive(home));
+  return Layer.mergeAll(
+    BunServices.layer,
+    PathLive(home),
+    BacktestEngineLive,
+    SignalComposerLive,
+    ExitEngineLive,
+    StrategyLibraryLive,
+  );
+}
+
+/**
+ * Layer for commands that read the market-data SQLite database. On top of
+ * `makeLayer` it provides the runtime config and the scoped `SqliteClient`
+ * (opens the DB via Effect, closes it when the command's scope ends). Uses
+ * the raw open mode — repositories own their schema via ensureTables.
+ */
+function makeDbLayer(home?: string) {
+  const base = makeLayer(home);
+  const config = Layer.provide(ConfigLive(home), base);
+  return Layer.mergeAll(
+    base,
+    config,
+    Layer.provide(SqliteClientLiveRaw, Layer.merge(base, config)),
+  );
 }
 
 function loadProfileIfNeeded(
@@ -1066,6 +1112,7 @@ const backtestOptions = {
   gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
   onlyWithTrend: onlyWithTrendOption,
   targetRatio: targetRatioOption,
+  chopGateAdx: chopGateAdxOption,
   volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
   profile: profileOption,
 };
@@ -1076,13 +1123,21 @@ export const backtestCommand = Command.make(
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
-
-      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      if (Option.isSome(profile)) {
+        const overrideKeys = Object.keys(profile.value.symbols);
+        if (
+          overrideKeys.length > 0 &&
+          findSymbolOverride(profile.value, args.symbol) === undefined
+        ) {
+          yield* Effect.logWarning(
+            `Profile '${args.profile}' defines symbol overrides (${overrideKeys.join(", ")}) but none match ${args.symbol}; using profile defaults only.`,
+          );
+        }
+      }
       const programArgs = Option.isSome(profile)
         ? resolveBacktestArgs(
             profile.value,
@@ -1096,18 +1151,17 @@ export const backtestCommand = Command.make(
       const result = yield* backtestProgram(programArgs).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printBacktestResult(r)),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             const msg = err instanceof Error ? err.message : err.reason;
             yield* Console.error(`backtest failed: ${msg}`);
             return emptyResult(args.symbol);
           }),
         ),
-        Effect.ensuring(Effect.sync(() => db.close())),
       );
 
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription(
     "Backtest deterministic scalping strategy on historical candles",
@@ -1191,6 +1245,7 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
     const path = yield* Path;
+    const engine = yield* BacktestEngine;
 
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
@@ -1230,22 +1285,64 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
 
     const result: BacktestResult =
       args.strategyType === "grid"
-        ? gridResultToBacktestResult(
-            args.symbol,
-            runGridBacktest(candles, {
-              gridStepPct: args.gridStepPct,
-              gridMaxGrids: args.gridMaxGrids,
-              gridPauseAfterLossBars: args.gridPauseAfterLossBars,
-              feePct: args.fee,
-              slippageBps: args.slippageBps,
-              initialCapital: args.capital,
-              trendFilterPeriod: args.trendFilterPeriod,
-              leverage: args.leverage,
-              onlyWithTrend: args.onlyWithTrend,
-              targetRatio: args.targetRatio,
-            }),
-          )
-        : runBacktest({
+        ? yield* Effect.gen(function* () {
+            const runOne = (slice: readonly CandleLike[]) =>
+              engine.runGridBacktest(slice, {
+                gridStepPct: args.gridStepPct,
+                gridMaxGrids: args.gridMaxGrids,
+                gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+                feePct: args.fee,
+                slippageBps: args.slippageBps,
+                initialCapital: args.capital,
+                trendFilterPeriod: args.trendFilterPeriod,
+                leverage: args.leverage,
+                onlyWithTrend: args.onlyWithTrend,
+                targetRatio: args.targetRatio,
+                chopGateAdxThreshold: args.chopGateAdx,
+              });
+            if (args.oosPct > 0) {
+              const { is: isCandles, oos: oosCandles } = splitCandlesByOos(
+                candles,
+                args.oosPct,
+              );
+              if (isCandles.length >= 20 && oosCandles.length >= 20) {
+                const isResult = yield* runOne(isCandles);
+                const oosResult = yield* runOne(oosCandles);
+                const isBt = gridResultToBacktestResult(
+                  args.symbol,
+                  isResult,
+                  isCandles,
+                  args.capital,
+                  args.fee,
+                );
+                const oosBt = gridResultToBacktestResult(
+                  args.symbol,
+                  oosResult,
+                  oosCandles,
+                  args.capital,
+                  args.fee,
+                );
+                return attachMonteCarlo(
+                  { ...isBt, oosResult: oosBt },
+                  args.capital,
+                  args.mcIterations,
+                );
+              }
+            }
+            const full = yield* runOne(candles);
+            return attachMonteCarlo(
+              gridResultToBacktestResult(
+                args.symbol,
+                full,
+                candles,
+                args.capital,
+                args.fee,
+              ),
+              args.capital,
+              args.mcIterations,
+            );
+          })
+        : yield* engine.runBacktest({
             symbol: args.symbol,
             exchange: args.exchange,
             timeframe: args.timeframe,
@@ -1291,7 +1388,8 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
             rsiShortMin: args.rsiShortMin,
             bollingerLongMaxPctB: args.bollingerLongMaxPctB,
             bollingerShortMinPctB: args.bollingerShortMinPctB,
-            recordEquityCurve: args.recordEquityCurve || args.exportTrades.length > 0,
+            recordEquityCurve:
+              args.recordEquityCurve || args.exportTrades.length > 0,
             oosPct: args.oosPct,
             mcIterations: args.mcIterations,
             leverage: args.leverage,
@@ -1318,9 +1416,17 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
 function exportBacktestResults(
   result: import("../scalping/backtest.js").BacktestResult,
   exportPath: string,
-): Effect.Effect<void, Error> {
+): Effect.Effect<void, Error, FileSystem.FileSystem> {
   return Effect.gen(function* () {
-    fs.mkdirSync(dirname(exportPath), { recursive: true });
+    const fsys = yield* FileSystem.FileSystem;
+    yield* fsys
+      .makeDirectory(dirname(exportPath), { recursive: true })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new Error(`Failed to create export directory: ${String(cause)}`),
+        ),
+      );
 
     const tradesHeader =
       "symbol,side,entryTime,exitTime,entryPrice,exitPrice,pnl,pnlPct,exitReason,initialRiskPct\n";
@@ -1441,30 +1547,65 @@ function printBacktestResult(
 function gridResultToBacktestResult(
   symbol: string,
   grid: GridResult,
+  candles: readonly CandleLike[],
+  initialCapital: number,
+  feePct: number,
 ): BacktestResult {
+  const trades: BacktestTrade[] = grid.trades.map(
+    (t: GridTrade, idx: number) => {
+      const entryTime =
+        candles[t.entryBar]?.timestamp ?? candles[0]?.timestamp ?? new Date(0);
+      const exitTime =
+        candles[t.exitBar]?.timestamp ??
+        candles[candles.length - 1]?.timestamp ??
+        new Date(0);
+      return {
+        id: `grid-${idx}`,
+        symbol,
+        side: t.side,
+        entryTime,
+        exitTime,
+        entryPrice: t.entryPrice,
+        exitPrice: t.exitPrice,
+        pnl: t.pnlQuote,
+        pnlPct: t.pnlPct * 100,
+        netPnl: t.pnlQuote,
+        exitReason: t.isLiquidation
+          ? ("liquidation" as const)
+          : t.win
+            ? ("take_profit" as const)
+            : ("stop_loss" as const),
+        initialRiskPct: 0,
+        fillType: "maker" as const,
+        entryFeePct: feePct / 2,
+        exitFeePct: feePct / 2,
+      };
+    },
+  );
+  const first = candles[0]?.timestamp.getTime() ?? 0;
+  const last = candles[candles.length - 1]?.timestamp.getTime() ?? 0;
+  const metrics = computePerformanceMetrics({
+    trades,
+    initialCapital,
+    maxDrawdownPct: grid.maxDrawdownPct,
+    totalReturnPct: grid.totalReturnPct,
+    candleSpanMs: Math.max(0, last - first),
+  });
+  const winningTrades = trades.filter((t) => t.pnlPct > 0).length;
   return {
     symbol,
     totalTrades: grid.totalTrades,
-    winningTrades: Math.round(grid.totalTrades * (grid.winRate / 100)),
-    losingTrades: grid.totalTrades - Math.round(grid.totalTrades * (grid.winRate / 100)),
+    winningTrades,
+    losingTrades: grid.totalTrades - winningTrades,
     winRate: grid.winRate / 100,
     totalReturnPct: grid.totalReturnPct,
     maxDrawdownPct: grid.maxDrawdownPct,
     sharpeRatio: 0,
-    trades: [],
+    trades,
     totalFeesPaid: 0,
     totalFundingCost: 0,
     benchmarkReturnPct: 0,
-    metrics: {
-      profitFactor: grid.profitFactor,
-      expectancy: 0,
-      averageRMultiple: 0,
-      sortinoRatio: 0,
-      calmarRatio: 0,
-      maxConsecutiveLosses: 0,
-      averageTradeDurationHours: 0,
-      timeInMarketPct: 0,
-    },
+    metrics,
     robustnessScore: 0,
   };
 }
@@ -1621,7 +1762,7 @@ function mergeOptimizeArgs(
   args: OptimizeArgs,
   profile: StrategyProfile,
 ): OptimizeArgs {
-  const overrides = profile.symbols[args.symbol] ?? {};
+  const overrides = findSymbolOverride(profile, args.symbol) ?? {};
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] =>
@@ -1750,17 +1891,15 @@ export const optimizeCommand = Command.make(
     gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
+    chopGateAdx: chopGateAdxOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
-
-      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const programArgs = Option.isSome(profile)
@@ -1770,17 +1909,16 @@ export const optimizeCommand = Command.make(
       const result = yield* optimizeProgram(programArgs).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`optimize failed: ${err.reason}`);
             return [];
           }),
         ),
-        Effect.ensuring(Effect.sync(() => db.close())),
       );
 
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription(
     "Grid-search ATR/confidence parameters over historical candles",
@@ -1790,6 +1928,7 @@ export const optimizeCommand = Command.make(
 function optimizeProgram(args: OptimizeArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
+    const engine = yield* BacktestEngine;
 
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
@@ -1842,7 +1981,7 @@ function optimizeProgram(args: OptimizeArgs) {
           conf <= args.confMax + 1e-9;
           conf += args.confStep
         ) {
-          const result = runBacktest({
+          const result = yield* engine.runBacktest({
             symbol: args.symbol,
             exchange: args.exchange,
             timeframe: args.timeframe,
@@ -2142,17 +2281,15 @@ export const scanCommand = Command.make(
     gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
+    chopGateAdx: chopGateAdxOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
-
-      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
@@ -2167,17 +2304,16 @@ export const scanCommand = Command.make(
       const result = yield* scanProgram({ ...mergedArgs, watchlistPath }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printScanResult(r)),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`scan failed: ${err.reason}`);
             return [];
           }),
         ),
-        Effect.ensuring(Effect.sync(() => db.close())),
       );
 
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription(
     "Backtest deterministic scalping across all stored symbols",
@@ -2281,8 +2417,14 @@ function scanSingleExchange(
       if (candles.length < 50) continue;
 
       const result = args.optimize
-        ? optimizeForSymbol(symbol, candles, args, exchange, composerConfig)
-        : runBacktestWithParams(
+        ? yield* optimizeForSymbol(
+            symbol,
+            candles,
+            args,
+            exchange,
+            composerConfig,
+          )
+        : yield* runBacktestWithParams(
             symbol,
             candles,
             args,
@@ -2358,37 +2500,44 @@ function runBacktestWithParams(
     readonly atrTakeProfitMultiplier: number;
     readonly minConfidence: number;
   },
-): BacktestResult & { readonly bestParams?: undefined } {
-  return runBacktest({
-    symbol,
-    exchange,
-    timeframe: args.timeframe,
-    candles,
-    composerConfig,
-    initialCapital: args.capital,
-    positionSizePct: args.positionSize,
-    riskPerTradePct: args.riskPerTrade,
-    maxPositionSizePct: args.maxPositionSize,
-    stopLossPct: args.stopLoss,
-    takeProfitPct: args.takeProfit,
-    feePct: args.fee,
-    minConfidence: params.minConfidence,
-    useAtrStops: args.useAtrStops,
-    atrStopMultiplier: params.atrStopMultiplier,
-    atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
-    atrRiskReward: args.atrRiskReward,
-    scaleOutAtR: args.scaleOutAtR,
-    scaleOutPct: args.scaleOutPct,
-    volatilityLookback: args.volatilityLookback,
-    volatilityLowPct: args.volatilityLowPct,
-    volatilityHighPct: args.volatilityHighPct,
-    volatilityLowFactor: args.volatilityLowFactor,
-    volatilityHighFactor: args.volatilityHighFactor,
-    holdUntilStop: args.holdUntilStop,
-    minAtrPct: args.minAtrPct,
-    isFutures: args.futures,
-    fundingRatePct: args.fundingRatePct,
-    slippageBps: args.slippageBps,
+): Effect.Effect<
+  BacktestResult & { readonly bestParams?: undefined },
+  never,
+  BacktestEngine
+> {
+  return Effect.gen(function* () {
+    const engine = yield* BacktestEngine;
+    return yield* engine.runBacktest({
+      symbol,
+      exchange,
+      timeframe: args.timeframe,
+      candles,
+      composerConfig,
+      initialCapital: args.capital,
+      positionSizePct: args.positionSize,
+      riskPerTradePct: args.riskPerTrade,
+      maxPositionSizePct: args.maxPositionSize,
+      stopLossPct: args.stopLoss,
+      takeProfitPct: args.takeProfit,
+      feePct: args.fee,
+      minConfidence: params.minConfidence,
+      useAtrStops: args.useAtrStops,
+      atrStopMultiplier: params.atrStopMultiplier,
+      atrTakeProfitMultiplier: params.atrTakeProfitMultiplier,
+      atrRiskReward: args.atrRiskReward,
+      scaleOutAtR: args.scaleOutAtR,
+      scaleOutPct: args.scaleOutPct,
+      volatilityLookback: args.volatilityLookback,
+      volatilityLowPct: args.volatilityLowPct,
+      volatilityHighPct: args.volatilityHighPct,
+      volatilityLowFactor: args.volatilityLowFactor,
+      volatilityHighFactor: args.volatilityHighFactor,
+      holdUntilStop: args.holdUntilStop,
+      minAtrPct: args.minAtrPct,
+      isFutures: args.futures,
+      fundingRatePct: args.fundingRatePct,
+      slippageBps: args.slippageBps,
+    });
   });
 }
 
@@ -2402,48 +2551,54 @@ function optimizeForSymbol(
   args: ScanArgs,
   exchange: string,
   composerConfig: ComposerConfig,
-): BacktestResult & {
-  readonly bestParams: {
-    readonly atrStopMultiplier: number;
-    readonly atrTakeProfitMultiplier: number;
-    readonly minConfidence: number;
-  };
-} {
-  let best: BacktestResult | null = null;
-  let bestParams = {
-    atrStopMultiplier: args.atrStopMultiplier,
-    atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
-    minConfidence: args.minConfidence,
-  };
+): Effect.Effect<
+  BacktestResult & {
+    readonly bestParams: {
+      readonly atrStopMultiplier: number;
+      readonly atrTakeProfitMultiplier: number;
+      readonly minConfidence: number;
+    };
+  },
+  never,
+  BacktestEngine
+> {
+  return Effect.gen(function* () {
+    let best: BacktestResult | null = null;
+    let bestParams = {
+      atrStopMultiplier: args.atrStopMultiplier,
+      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+      minConfidence: args.minConfidence,
+    };
 
-  for (const stopMult of SCAN_STOP_MULTS) {
-    for (const tpMult of SCAN_TP_MULTS) {
-      for (const conf of SCAN_CONFIDENCES) {
-        const result = runBacktestWithParams(
-          symbol,
-          candles,
-          args,
-          exchange,
-          composerConfig,
-          {
-            atrStopMultiplier: stopMult,
-            atrTakeProfitMultiplier: tpMult,
-            minConfidence: conf,
-          },
-        );
-        if (!best || result.totalReturnPct > best.totalReturnPct) {
-          best = result;
-          bestParams = {
-            atrStopMultiplier: stopMult,
-            atrTakeProfitMultiplier: tpMult,
-            minConfidence: conf,
-          };
+    for (const stopMult of SCAN_STOP_MULTS) {
+      for (const tpMult of SCAN_TP_MULTS) {
+        for (const conf of SCAN_CONFIDENCES) {
+          const result = yield* runBacktestWithParams(
+            symbol,
+            candles,
+            args,
+            exchange,
+            composerConfig,
+            {
+              atrStopMultiplier: stopMult,
+              atrTakeProfitMultiplier: tpMult,
+              minConfidence: conf,
+            },
+          );
+          if (!best || result.totalReturnPct > best.totalReturnPct) {
+            best = result;
+            bestParams = {
+              atrStopMultiplier: stopMult,
+              atrTakeProfitMultiplier: tpMult,
+              minConfidence: conf,
+            };
+          }
         }
       }
     }
-  }
 
-  return { ...(best ?? emptyScanResult(symbol)), bestParams };
+    return { ...(best ?? emptyScanResult(symbol)), bestParams };
+  });
 }
 
 function emptyScanResult(symbol: string): BacktestResult {
@@ -2617,6 +2772,13 @@ const iterationsOption = Options.integer("iterations").pipe(
   Options.withDescription("Number of iterations to run (0 = infinite)"),
 );
 
+const replayBarsOption = Options.integer("replay-bars").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Grid: replay the last N stored candles one per iteration (0 = live shadow)",
+  ),
+);
+
 const liveOption = Options.boolean("live").pipe(
   Options.withDefault(false),
   Options.withDescription(
@@ -2713,6 +2875,7 @@ export interface WatchlistEntry {
 export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly interval: number;
   readonly iterations: number;
+  readonly replayBars: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
@@ -2733,7 +2896,7 @@ function mergePaperTradeArgs(
   args: PaperTradeArgs,
   profile: StrategyProfile,
 ): PaperTradeArgs {
-  const overrides = profile.symbols[args.symbol] ?? {};
+  const overrides = findSymbolOverride(profile, args.symbol) ?? {};
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] =>
@@ -2900,6 +3063,7 @@ export const paperTradeCommand = Command.make(
     momentumConfirmBars: momentumConfirmBarsOption,
     interval: intervalOption,
     iterations: iterationsOption,
+    replayBars: replayBarsOption,
     live: liveOption,
     apiKey: apiKeyOption,
     apiSecret: apiSecretOption,
@@ -2953,15 +3117,15 @@ export const paperTradeCommand = Command.make(
     gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
+    chopGateAdx: chopGateAdxOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const sqlite = yield* SqliteClient;
+      const db = sqlite.database;
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
@@ -2992,7 +3156,7 @@ export const paperTradeCommand = Command.make(
         ? MarketDataGatewayLive
         : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
-        BunContext.layer,
+        BunServices.layer,
         PathLive(process.env.NEURATRADE_HOME),
         marketDataLayer,
         repoLayer,
@@ -3022,7 +3186,7 @@ export const paperTradeCommand = Command.make(
         entries: watchlist,
       }).pipe(
         Effect.provide(layers),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(
               `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
@@ -3030,11 +3194,10 @@ export const paperTradeCommand = Command.make(
             return undefined;
           }),
         ),
-        Effect.ensuring(Effect.sync(() => db.close())),
       );
 
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription("Run deterministic scalping paper-trading loop"),
 );
@@ -3068,6 +3231,17 @@ function paperTradeProgram(args: PaperTradeArgs) {
 
     const paperRepo = yield* PaperTradingRepository;
     yield* paperRepo.ensureTables();
+
+    if (args.replayBars > 0 && args.strategyType === "grid") {
+      // Replay is an explicit diagnostic: always start the pass fresh so a
+      // stale replay pointer from an earlier session cannot lock the walk
+      // out with "no new replay candle" forever.
+      yield* paperRepo.resetGridState(
+        args.exchange,
+        args.symbol,
+        args.timeframe,
+      );
+    }
 
     const portfolio = yield* paperRepo.getPortfolio();
     const startCapital =
@@ -3202,6 +3376,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
       leverage: args.leverage,
       onlyWithTrend: args.onlyWithTrend,
       targetRatio: args.targetRatio,
+      chopGateAdxThreshold: args.chopGateAdx,
+      replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       isLive: args.live,
       productType,
       marginMode,
@@ -3306,7 +3482,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
       } else {
         const result =
           args.strategyType === "grid"
-            ? yield* runGridIteration(makeGridOptions(args.symbol, args.exchange))
+            ? yield* runGridIteration(
+                makeGridOptions(args.symbol, args.exchange),
+              )
             : args.futures
               ? yield* runFuturesIteration(
                   makeFuturesOptions(args.symbol, args.exchange),
@@ -3449,6 +3627,7 @@ export const soakCommand = Command.make(
     momentumConfirmBars: momentumConfirmBarsOption,
     interval: intervalOption,
     iterations: iterationsOption,
+    replayBars: replayBarsOption,
     live: liveOption,
     apiKey: apiKeyOption,
     apiSecret: apiSecretOption,
@@ -3497,15 +3676,15 @@ export const soakCommand = Command.make(
     gridPauseAfterLossBars: gridPauseAfterLossBarsOption,
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
+    chopGateAdx: chopGateAdxOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const sqlite = yield* SqliteClient;
+      const db = sqlite.database;
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
@@ -3543,7 +3722,7 @@ export const soakCommand = Command.make(
         ? MarketDataGatewayLive
         : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
-        BunContext.layer,
+        BunServices.layer,
         PathLive(process.env.NEURATRADE_HOME),
         marketDataLayer,
         repoLayer,
@@ -3740,7 +3919,7 @@ export const soakCommand = Command.make(
       };
 
       const result = yield* runSoak(soakOptions, runner).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(
               `soak failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -3757,12 +3936,11 @@ export const soakCommand = Command.make(
             };
           }),
         ),
-        Effect.ensuring(Effect.sync(() => db.close())),
       );
 
       yield* printSoakResult(result);
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run multi-ticker paper-trading soak harness"));
 
 const profileNameOption = Options.text("name").pipe(
@@ -4520,7 +4698,10 @@ export function isLiveReady(row: ValidationRow): boolean {
 export function validateWatchlist(args: {
   watchlist: string;
   exchange: string;
-}): Effect.Effect<readonly ValidationRow[], MarketDataRepositoryError> {
+}): Effect.Effect<
+  readonly ValidationRow[],
+  MarketDataRepositoryError | SqliteError
+> {
   return Effect.gen(function* () {
     const path = yield* Path;
     const watchlistPath = resolve(
@@ -4530,10 +4711,9 @@ export function validateWatchlist(args: {
     );
     const entries = yield* loadSelectWatchlist(watchlistPath);
 
-    const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-    const db = new Database(sqlitePath);
-    db.exec("PRAGMA foreign_keys = ON;");
-    const repoLayer = MarketDataRepositorySQLiteLive(db);
+    const sqlite = yield* SqliteClient;
+    const engine = yield* BacktestEngine;
+    const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
     const rows = yield* Effect.gen(function* () {
       const repo = yield* MarketDataRepository;
@@ -4551,7 +4731,7 @@ export function validateWatchlist(args: {
         );
         const isCandles = candles.slice(0, splitIndex);
         const oosCandles = candles.slice(splitIndex);
-        const isResult = runBacktest({
+        const isResult = yield* engine.runBacktest({
           ...backtestArgs,
           candles: isCandles,
           composerConfig: buildBacktestComposerConfig(
@@ -4576,7 +4756,7 @@ export function validateWatchlist(args: {
           recordEquityCurve: false,
           htfCandles: [],
         });
-        const oosResult = runBacktest({
+        const oosResult = yield* engine.runBacktest({
           ...backtestArgs,
           candles: oosCandles,
           composerConfig: buildBacktestComposerConfig(
@@ -4621,13 +4801,10 @@ export function validateWatchlist(args: {
         result.push(row);
       }
       return result;
-    }).pipe(
-      Effect.provide(repoLayer),
-      Effect.ensuring(Effect.sync(() => db.close())),
-    );
+    }).pipe(Effect.provide(repoLayer));
 
     return rows;
-  }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME)));
+  }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME)));
 }
 
 export function buildPaperTradeComposerConfig(args: {
@@ -4691,13 +4868,14 @@ export function buildPaperTradeComposerConfig(args: {
 }
 
 const libraryListCommand = Command.make("list", {}, () =>
-  Effect.sync(() => {
-    const strategies = listStrategies();
+  Effect.gen(function* () {
+    const library = yield* StrategyLibrary;
+    const strategies = yield* library.listStrategies();
     for (const s of strategies) {
-      console.log(`${s.name}: ${s.description}`);
+      yield* Console.log(`${s.name}: ${s.description}`);
     }
     return strategies;
-  }),
+  }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("List available strategy templates"));
 
 const libraryStrategyCommand = Command.make(
@@ -4710,8 +4888,12 @@ const libraryStrategyCommand = Command.make(
     Effect.gen(function* () {
       const template = args.strategy as StrategyTemplateName;
       const baseArgs = args as unknown as ResolvedBacktestArgs;
-      const merged = buildBacktestArgsFromTemplate(template, baseArgs);
-      const config = buildComposerConfigFromTemplate(template);
+      const library = yield* StrategyLibrary;
+      const merged = yield* library.buildBacktestArgsFromTemplate(
+        template,
+        baseArgs,
+      );
+      const config = yield* library.buildComposerConfigFromTemplate(template);
       yield* Console.log(`Strategy: ${template}`);
       yield* Console.log(JSON.stringify(merged, null, 2));
       return config;
@@ -4726,8 +4908,9 @@ export const libraryCommand = Command.make(
   },
   (args) =>
     Effect.gen(function* () {
+      const library = yield* StrategyLibrary;
       if (args.list || Option.isNone(args.strategy)) {
-        const strategies = listStrategies();
+        const strategies = yield* library.listStrategies();
         for (const s of strategies) {
           yield* Console.log(`${s.name}: ${s.description}`);
         }
@@ -4738,8 +4921,11 @@ export const libraryCommand = Command.make(
         () => "meanReversion" as StrategyTemplateName,
       );
       const baseArgs = cliDefaultArgs();
-      const merged = buildBacktestArgsFromTemplate(strategy, baseArgs);
-      const config = buildComposerConfigFromTemplate(strategy);
+      const merged = yield* library.buildBacktestArgsFromTemplate(
+        strategy,
+        baseArgs,
+      );
+      const config = yield* library.buildComposerConfigFromTemplate(strategy);
       yield* Console.log(`Strategy: ${strategy}`);
       yield* Console.log(JSON.stringify(merged, null, 2));
       return config;
@@ -4774,11 +4960,8 @@ export const walkForwardCommand = Command.make(
   },
   (args) =>
     Effect.gen(function* () {
-      const path = yield* Path;
-      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
-      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const resolvedArgs = args as unknown as Omit<
         ResolvedBacktestArgs,
@@ -4821,18 +5004,102 @@ export const walkForwardCommand = Command.make(
           selectBestForSymbol,
           runSelectBacktest,
         });
-      }).pipe(
-        Effect.provide(repoLayer),
-        Effect.ensuring(Effect.sync(() => db.close())),
-      );
+      }).pipe(Effect.provide(repoLayer));
 
       return result;
-    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run walk-forward optimization"));
+
+const minTradesPerMonthOption = Options.integer("min-trades-per-month").pipe(
+  Options.optional,
+  Options.withDescription(
+    "G1 override: minimum in-sample trades per month (default 20 for 5m, 10 otherwise)",
+  ),
+);
+
+export const readinessCommand = Command.make(
+  "readiness",
+  { ...backtestOptions, minTradesPerMonth: minTradesPerMonthOption },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
+      const repo = new MarketDataRepositorySQLite(sqlite.database);
+
+      const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
+      const programArgs = Option.isSome(profile)
+        ? resolveBacktestArgs(
+            profile.value,
+            args.symbol,
+            args.exchange,
+            args.timeframe,
+            args,
+          )
+        : args;
+
+      // Readiness is a gate, not a backtest: OOS + Monte Carlo are mandatory.
+      const gatedArgs = {
+        ...programArgs,
+        oosPct: programArgs.oosPct > 0 ? programArgs.oosPct : 20,
+        mcIterations:
+          programArgs.mcIterations > 0 ? programArgs.mcIterations : 200,
+      };
+
+      const result = yield* backtestProgram(gatedArgs).pipe(
+        Effect.provide(repoLayer),
+      );
+
+      const candles = yield* repo.getCandles({
+        exchange: args.exchange,
+        symbol: args.symbol,
+        timeframe: args.timeframe,
+      });
+      if (candles.length < 2) {
+        return yield* Effect.fail(
+          new Error(
+            `Not enough candles for ${args.exchange}:${args.symbol}:${args.timeframe} to evaluate readiness.`,
+          ),
+        );
+      }
+      const first = candles[0].timestamp.getTime();
+      const last = candles[candles.length - 1].timestamp.getTime();
+      const fullMonths = Math.max(
+        (last - first) / (30.44 * 24 * 60 * 60 * 1000),
+        1e-9,
+      );
+      const inSampleMonths =
+        gatedArgs.oosPct > 0
+          ? fullMonths * (1 - gatedArgs.oosPct / 100)
+          : fullMonths;
+
+      const minTradesPerMonth = Option.isSome(args.minTradesPerMonth)
+        ? args.minTradesPerMonth.value
+        : args.timeframe === "5m"
+          ? 20
+          : 10;
+
+      const report = evaluateReadiness({
+        result,
+        timeframe: args.timeframe,
+        inSampleMonths,
+        thresholds: { minTradesPerMonth },
+      });
+      yield* Console.log(formatReadinessReport(report));
+      if (!report.ready) {
+        return yield* Effect.fail(new Error("readiness gates failed"));
+      }
+      return report;
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Evaluate scalping readiness gates (G1-G4) for a config; exits non-zero when any gate fails",
+  ),
+);
 
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -4845,5 +5112,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     profileCommand,
     libraryCommand,
     walkForwardCommand,
+    readinessCommand,
   ]),
 );

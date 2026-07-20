@@ -47,20 +47,18 @@ export const collectOnce = (
     for (const config of enabled) {
       yield* gateway.fetchTick(config.exchange, config.symbol).pipe(
         Effect.tap((tick) => repo.saveTick(tick)),
-        Effect.tap(() => {
-          collected += 1;
-        }),
-        Effect.timeout(options.fetchTimeoutMs ?? 30000),
-        Effect.catchAll((err) =>
+        Effect.tap(() =>
           Effect.sync(() => {
-            // TODO: wire to Logger service instead of console
-            // eslint-disable-next-line no-console
-            console.error(
-              `collectOnce: ${config.exchange}:${config.symbol} failed — ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
+            collected += 1;
           }),
+        ),
+        Effect.timeout(options.fetchTimeoutMs ?? 30000),
+        Effect.catch((err) =>
+          Effect.logError(
+            `collectOnce: ${config.exchange}:${config.symbol} failed — ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ),
         ),
       );
     }
@@ -80,7 +78,7 @@ export const collectStream = (
   MarketDataCollectorError,
   MarketDataGatewayService | MarketDataRepositoryService
 > =>
-  Stream.repeatEffectWithSchedule(
+  Stream.fromEffectSchedule(
     collectOnce(options),
     Schedule.spaced(options.intervalMs ?? 5000),
   );

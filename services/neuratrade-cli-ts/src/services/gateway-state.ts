@@ -7,7 +7,7 @@
  *   writeGatewayServiceState, markGatewayStopped.
  */
 import { Context, Effect, Layer } from "effect";
-import { FileSystem } from "@effect/platform";
+import { FileSystem } from "effect";
 import { Path } from "./path.ts";
 import type { GatewayState as GatewayStateData } from "../schemas/gateway-state.ts";
 import { decodeGatewayState } from "../schemas/gateway-state.ts";
@@ -70,7 +70,7 @@ export interface GatewayStateService {
 }
 
 export const GatewayState =
-  Context.GenericTag<GatewayStateService>("GatewayState");
+  Context.Service<GatewayStateService>("GatewayState");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,7 +89,7 @@ function readRawJson(
     } catch {
       return null;
     }
-  }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 /** Decode raw JSON into a mutable GatewayState, falling back to defaults. */
@@ -106,7 +106,7 @@ function decodeOrFallback(
       health_timeout_seconds: decoded.health_timeout_seconds,
       services: decoded.services ? { ...decoded.services } : {},
     })),
-    Effect.catchAll(() => Effect.succeed(defaultGatewayState())),
+    Effect.catch(() => Effect.succeed(defaultGatewayState())),
   );
 }
 
@@ -162,10 +162,10 @@ export const GatewayStateLive: Layer.Layer<
         const dir = filePath.substring(0, filePath.lastIndexOf("/"));
         yield* fs
           .makeDirectory(dir, { recursive: true })
-          .pipe(Effect.catchAll(() => Effect.void));
+          .pipe(Effect.catch(() => Effect.void));
         yield* fs
           .writeFileString(filePath, serialized)
-          .pipe(Effect.catchAll(() => Effect.void));
+          .pipe(Effect.catch(() => Effect.void));
       });
 
     const writeMode = (

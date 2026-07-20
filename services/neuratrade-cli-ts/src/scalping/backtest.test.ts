@@ -6,6 +6,7 @@ import {
   runBacktest,
 } from "./backtest.js";
 import { defaultComposerConfig } from "./composer.js";
+import type { FundingRate } from "../market-data/types.js";
 import type { CandleLike } from "./types.js";
 
 function makeCandles(
@@ -142,6 +143,56 @@ describe("backtest futures realism", () => {
     expect(withFunding.totalTrades).toBeGreaterThan(0);
     expect(withFunding.totalFundingCost).toBeGreaterThan(0);
     expect(withFunding.totalReturnPct).toBeLessThan(noFunding.totalReturnPct);
+  });
+
+  it("funding series + constant together keep PnL finite (bd clever-cabin-u1u)", () => {
+    const candles = makeCandles(120, 100, "up");
+    const fundingRates: FundingRate[] = candles.map((c) => ({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      fundingRate: 0.0005,
+      timestamp: c.timestamp,
+    }));
+    const result = runBacktest({
+      ...baseOpts,
+      isFutures: true,
+      fundingRatePct: 0.01,
+      fundingIntervalHours: 1 / 60,
+      fundingRates,
+    });
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(Number.isFinite(result.totalReturnPct)).toBe(true);
+    expect(result.totalFundingCost).toBeGreaterThan(0);
+    for (const trade of result.trades) {
+      expect(Number.isNaN(trade.pnlPct)).toBe(false);
+    }
+  });
+
+  it("enabled funding-bias component with a live series stays finite (bd clever-cabin-u1u)", () => {
+    const candles = makeCandles(120, 100, "up");
+    const fundingRates: FundingRate[] = candles.map((c) => ({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      fundingRate: 0.0005,
+      timestamp: c.timestamp,
+    }));
+    const config = {
+      ...defaultComposerConfig,
+      weights: { ...defaultComposerConfig.weights, funding: 0.3 },
+      thresholds: { ...defaultComposerConfig.thresholds, useFunding: true },
+    };
+    const result = runBacktest({
+      ...baseOpts,
+      composerConfig: config,
+      isFutures: true,
+      fundingRatePct: 0.01,
+      fundingIntervalHours: 1 / 60,
+      fundingRates,
+    });
+    expect(Number.isFinite(result.totalReturnPct)).toBe(true);
+    for (const trade of result.trades) {
+      expect(Number.isNaN(trade.pnlPct)).toBe(false);
+    }
   });
 
   it("benchmark return present", () => {
@@ -695,6 +746,58 @@ describe("maker/taker fee model", () => {
       result.trades.every((t) => Math.abs(t.entryFeePct - 0.02) < 1e-9),
     ).toBe(true);
     console.warn = originalWarn;
+  });
+});
+
+describe("candle timestamp validation", () => {
+  const baseOpts = {
+    symbol: "BTC/USDT",
+    exchange: "binance",
+    timeframe: "1h",
+    composerConfig: defaultComposerConfig,
+    initialCapital: 10000,
+    positionSizePct: 100,
+    stopLossPct: 5,
+    takeProfitPct: 10,
+    feePct: 0.05,
+    minConfidence: 0.1,
+  } as const;
+
+  it("limit-entry trades carry valid Date entry/exit times", () => {
+    const result = runBacktest({
+      ...baseOpts,
+      candles: makeCandles(100, 100, "up"),
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 0,
+      makerFeePct: 0.02,
+      slippageBps: 0,
+    });
+    expect(result.totalTrades).toBeGreaterThan(0);
+    for (const trade of result.trades) {
+      expect(trade.entryTime).toBeInstanceOf(Date);
+      expect(trade.exitTime).toBeInstanceOf(Date);
+      expect(Number.isNaN(trade.entryTime.getTime())).toBe(false);
+      expect(Number.isNaN(trade.exitTime.getTime())).toBe(false);
+    }
+  });
+
+  it("throws on an Invalid Date candle timestamp", () => {
+    const candles = makeCandles(60, 100, "up");
+    candles[30] = { ...candles[30], timestamp: new Date("not-a-date") };
+    expect(() => runBacktest({ ...baseOpts, candles })).toThrow(
+      /invalid candle timestamp/i,
+    );
+  });
+
+  it("throws when a candle timestamp is not a Date", () => {
+    const candles = makeCandles(60, 100, "up");
+    candles[30] = {
+      ...candles[30],
+      timestamp: "2025-01-01T00:00:00Z" as unknown as Date,
+    };
+    expect(() => runBacktest({ ...baseOpts, candles })).toThrow(
+      /invalid candle timestamp/i,
+    );
   });
 });
 

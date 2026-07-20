@@ -75,7 +75,7 @@ export const LocalConfigSchema = S.Struct({
 export type LocalConfig = typeof LocalConfigSchema.Type;
 
 /** Decode an unknown JSON value into LocalConfig (returns Effect). */
-export const decodeLocalConfig = S.decodeUnknown(LocalConfigSchema);
+export const decodeLocalConfig = S.decodeUnknownEffect(LocalConfigSchema);
 
 /** Decode an unknown JSON value, returning Either. */
-export const decodeLocalConfigEither = S.decodeUnknownEither(LocalConfigSchema);
+export const decodeLocalConfigEither = S.decodeUnknownResult(LocalConfigSchema);

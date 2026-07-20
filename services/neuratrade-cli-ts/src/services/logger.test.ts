@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Logger as EffectLogger, LogLevel } from "effect";
+import { Effect, Logger as EffectLogger, LogLevel, References } from "effect";
 import { Logger, LoggerLive } from "./logger";
 
 /**
@@ -20,24 +20,21 @@ function collectLogs(
     annotations: Record<string, unknown>;
   }> = [];
 
-  const collector = EffectLogger.make(({ logLevel, message, annotations }) => {
+  const collector = EffectLogger.make(({ logLevel, message, fiber }) => {
     entries.push({
-      logLevel: logLevel.label,
+      logLevel: logLevel.toUpperCase(),
       message,
-      annotations: Object.fromEntries(annotations),
+      annotations: fiber.getRef(References.CurrentLogAnnotations),
     });
   });
 
-  const loggerLayer = EffectLogger.replace(
-    EffectLogger.defaultLogger,
-    collector,
-  );
-  const minLevel = options?.minimumLogLevel ?? LogLevel.Trace;
+  const loggerLayer = EffectLogger.layer([collector]);
+  const minLevel = options?.minimumLogLevel ?? "Trace";
 
   const runnable = program.pipe(
     Effect.provide(LoggerLive),
     Effect.provide(loggerLayer),
-    EffectLogger.withMinimumLogLevel(minLevel),
+    Effect.provideService(References.MinimumLogLevel, minLevel),
   );
 
   Effect.runSync(runnable);
@@ -90,7 +87,7 @@ describe("Logger service", () => {
         const logger = yield* Logger;
         yield* logger.debug("step completed");
       }),
-      { minimumLogLevel: LogLevel.Debug },
+      { minimumLogLevel: "Debug" },
     );
 
     expect(entries).toHaveLength(1);
@@ -105,7 +102,7 @@ describe("Logger service", () => {
         yield* logger.debug("should not appear");
         yield* logger.info("should appear");
       }),
-      { minimumLogLevel: LogLevel.Info },
+      { minimumLogLevel: "Info" },
     );
 
     expect(entries).toHaveLength(1);

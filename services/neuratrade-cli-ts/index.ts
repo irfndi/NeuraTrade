@@ -1,7 +1,7 @@
-import { Command } from "@effect/cli";
-import { BunContext, BunFileSystem } from "@effect/platform-bun";
-import { Effect, Layer } from "effect";
+import { BunFileSystem, BunRuntime, BunServices } from "@effect/platform-bun";
+import { Config, Effect, Layer } from "effect";
 import { rootCommand } from "./src/cli/index.ts";
+import { runEffect } from "./src/cli/kit/kit.ts";
 import { PathLive } from "./src/services/path.ts";
 import { ConfigLive } from "./src/services/config.ts";
 import { LoggerLive } from "./src/services/logger.ts";
@@ -18,24 +18,23 @@ import {
 import { BitgetConfigLive } from "./src/services/bitget-config.ts";
 import { RateLimiterLive } from "./src/services/rate-limiter.ts";
 
-const cli = Command.run(rootCommand, {
+const cliConfig = {
   name: "NeuraTrade CLI",
   version: "v1.0.0",
-});
+} as const;
 
-function buildApiClientLayer() {
-  const port = process.env.SERVER_PORT || process.env.PORT || "8080";
-  const baseUrl =
-    process.env.NEURATRADE_API_BASE_URL || `http://localhost:${port}`;
-  const apiKey =
-    process.env.NEURATRADE_API_KEY || process.env.ADMIN_API_KEY || "";
+function buildApiClientLayer(baseUrl: string, apiKey: string) {
   return ApiClientLive(baseUrl, apiKey);
 }
 
-function buildRootLayer() {
-  const home = process.env.NEURATRADE_HOME;
+function buildRootLayer(options: {
+  readonly home?: string;
+  readonly apiBaseUrl: string;
+  readonly apiKey: string;
+}) {
+  const home = options.home;
   const base = Layer.mergeAll(
-    BunContext.layer,
+    BunServices.layer,
     BunFileSystem.layer,
     PathLive(home),
     LoggerLive,
@@ -47,7 +46,7 @@ function buildRootLayer() {
   const config = Layer.provide(ConfigLive(home), base);
   const gwState = Layer.provide(GatewayStateLive, base);
   const health = HealthCheckLive;
-  const apiClient = buildApiClientLayer();
+  const apiClient = buildApiClientLayer(options.apiBaseUrl, options.apiKey);
   const bitgetClient = BitgetClientLiveConfig.pipe(
     Layer.provide(RateLimiterLive()),
   );
@@ -67,14 +66,29 @@ function buildRootLayer() {
   return Layer.merge(base, Layer.provide(allServices, base));
 }
 
-const program = cli(process.argv).pipe(Effect.provide(buildRootLayer()));
+/** Read a single env var through the Config module, defaulting to "" when unset. */
+const envOrEmpty = (name: string) =>
+  Config.string(name).pipe(Config.withDefault(""));
 
-Effect.runPromise(program).then(
-  () => {
-    process.exit(0);
-  },
-  (err: unknown) => {
-    console.error(err);
-    process.exit(1);
-  },
-);
+const program = Effect.gen(function* () {
+  // The default ConfigProvider snapshots process.env once at startup, which
+  // matches the previous read-once `process.env` behavior.
+  const serverPort = yield* envOrEmpty("SERVER_PORT");
+  const portEnv = yield* envOrEmpty("PORT");
+  const apiBaseUrlEnv = yield* envOrEmpty("NEURATRADE_API_BASE_URL");
+  const apiKeyEnv = yield* envOrEmpty("NEURATRADE_API_KEY");
+  const adminApiKeyEnv = yield* envOrEmpty("ADMIN_API_KEY");
+  const homeEnv = yield* envOrEmpty("NEURATRADE_HOME");
+
+  const port = serverPort || portEnv || "8080";
+  const baseUrl = apiBaseUrlEnv || `http://localhost:${port}`;
+  const apiKey = apiKeyEnv || adminApiKeyEnv || "";
+  const home = homeEnv || undefined;
+
+  const rootLayer = buildRootLayer({ home, apiBaseUrl: baseUrl, apiKey });
+  return yield* runEffect(rootCommand, process.argv.slice(2), cliConfig).pipe(
+    Effect.provide(rootLayer),
+  );
+});
+
+BunRuntime.runMain(program);

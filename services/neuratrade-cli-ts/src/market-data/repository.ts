@@ -131,7 +131,7 @@ export interface MarketDataRepositoryService {
 }
 
 export const MarketDataRepository =
-  Context.GenericTag<MarketDataRepositoryService>("MarketDataRepository");
+  Context.Service<MarketDataRepositoryService>("MarketDataRepository");
 
 // ---------------------------------------------------------------------------
 // SQLite implementation
@@ -382,7 +382,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(tick.exchange, db);
-      const pairId = yield* getOrCreateTradingPair(tick.symbol, db);
+      const pairId = yield* getOrCreateTradingPair(tick.symbol, exchangeId, db);
 
       const insert = db.query(
         `INSERT INTO market_data (exchange_id, trading_pair_id, price, volume, bid, ask, high_24h, low_24h, volume_24h, timestamp)
@@ -423,7 +423,11 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(candles[0].exchange, db);
-      const pairId = yield* getOrCreateTradingPair(candles[0].symbol, db);
+      const pairId = yield* getOrCreateTradingPair(
+        candles[0].symbol,
+        exchangeId,
+        db,
+      );
 
       const insert = db.query(
         `INSERT OR IGNORE INTO ohlcv_data
@@ -465,7 +469,11 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(query.exchange, db);
-      const pairId = yield* getOrCreateTradingPair(query.symbol, db);
+      const pairId = yield* getOrCreateTradingPair(
+        query.symbol,
+        exchangeId,
+        db,
+      );
 
       const conditions: string[] = [
         "exchange_id = ?",
@@ -534,7 +542,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
 
       return yield* Effect.try({
         try: () => {
@@ -667,7 +675,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
 
       return yield* Effect.try({
         try: () => {
@@ -700,7 +708,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
 
       return yield* Effect.try({
         try: () => {
@@ -839,6 +847,21 @@ function timeframeToMs(timeframe: string): number {
   return value * (multiplier[unit] ?? 60_000);
 }
 
+function tableColumns(db: Database, table: string): ReadonlySet<string> {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as ReadonlyArray<{
+    name: string;
+  }>;
+  return new Set(rows.map((r) => r.name));
+}
+
+function displayName(name: string): string {
+  return name
+    .split(/[-_]/)
+    .filter((p) => p.length > 0)
+    .map((p) => p[0]!.toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
 function getOrCreateExchange(
   name: string,
   db: Database,
@@ -850,9 +873,30 @@ function getOrCreateExchange(
         .get(name) as { id: number } | undefined;
       if (existing) return existing.id;
 
+      // The shared Go backend schema requires display_name and ccxt_id
+      // (NOT NULL, ccxt_id UNIQUE); the slim CLI schema has neither. Adapt
+      // the insert to whichever schema is present.
+      const cols = tableColumns(db, "exchanges");
+      const names = ["name"];
+      const values: Array<string> = [name];
+      if (cols.has("display_name")) {
+        names.push("display_name");
+        values.push(displayName(name));
+      }
+      if (cols.has("ccxt_id")) {
+        names.push("ccxt_id");
+        values.push(name);
+      }
+      if (cols.has("api_url")) {
+        names.push("api_url");
+        values.push("");
+      }
+      const placeholders = names.map(() => "?").join(", ");
       const result = db
-        .query("INSERT INTO exchanges (name, api_url) VALUES (?, ?)")
-        .run(name, "");
+        .query(
+          `INSERT INTO exchanges (${names.join(", ")}) VALUES (${placeholders})`,
+        )
+        .run(...values);
       return Number(result.lastInsertRowid);
     },
     catch: (err) =>
@@ -865,14 +909,36 @@ function getOrCreateExchange(
 
 function getOrCreateTradingPair(
   symbol: string,
+  exchangeId: number,
   db: Database,
 ): Effect.Effect<number, MarketDataRepositoryError, never> {
   return Effect.gen(function* () {
+    // The shared Go backend schema scopes pairs per exchange (exchange_id
+    // NOT NULL, UNIQUE(exchange_id, symbol)); the slim CLI schema keys on
+    // symbol alone. Adapt both lookup and insert to the schema present.
+    const cols = yield* Effect.try({
+      try: () => tableColumns(db, "trading_pairs"),
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Trading pair schema lookup failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+    const hasExchangeScope = cols.has("exchange_id");
+
     const existing = yield* Effect.try({
       try: () =>
-        db
-          .query("SELECT id FROM trading_pairs WHERE symbol = ?")
-          .get(symbol) as { id: number } | undefined,
+        hasExchangeScope
+          ? (db
+              .query(
+                "SELECT id FROM trading_pairs WHERE symbol = ? AND exchange_id = ?",
+              )
+              .get(symbol, exchangeId) as { id: number } | undefined)
+          : (db
+              .query("SELECT id FROM trading_pairs WHERE symbol = ?")
+              .get(symbol) as { id: number } | undefined),
       catch: (err) =>
         new MarketDataRepositoryError(
           `Trading pair lookup failed for ${symbol}: ${
@@ -885,15 +951,22 @@ function getOrCreateTradingPair(
 
     const parts = symbol.split("/");
     const base = parts[0] ?? symbol;
-    const quote = parts[1] ?? "";
+    // Strip the futures settle suffix: "BTC/USDT:USDT" -> quote "USDT".
+    const quote = (parts[1] ?? "").split(":")[0] ?? "";
 
     return yield* Effect.try({
       try: () => {
-        const result = db
-          .query(
-            "INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)",
-          )
-          .run(symbol, base, quote);
+        const result = hasExchangeScope
+          ? db
+              .query(
+                "INSERT INTO trading_pairs (symbol, base_currency, quote_currency, exchange_id) VALUES (?, ?, ?, ?)",
+              )
+              .run(symbol, base, quote, exchangeId)
+          : db
+              .query(
+                "INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)",
+              )
+              .run(symbol, base, quote);
         return Number(result.lastInsertRowid);
       },
       catch: (err) =>

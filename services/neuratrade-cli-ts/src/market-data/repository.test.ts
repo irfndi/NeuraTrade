@@ -129,6 +129,80 @@ describe("MarketDataRepositorySQLite", () => {
     expect(loaded[1].close).toBe(68_000);
   });
 
+  it("works against the shared Go backend schema (display_name/ccxt_id/exchange_id NOT NULL)", async () => {
+    // Mirror the Go backend's fat schema: extra NOT NULL columns that the
+    // CLI's slim ensureTables does not create.
+    db.exec(`
+      CREATE TABLE exchanges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        ccxt_id TEXT NOT NULL UNIQUE,
+        api_url TEXT,
+        status TEXT DEFAULT 'active',
+        has_spot BOOLEAN DEFAULT 1,
+        has_futures BOOLEAN DEFAULT 0,
+        is_active BOOLEAN DEFAULT 1,
+        priority INTEGER DEFAULT 0,
+        last_ping DATETIME,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE trading_pairs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        exchange_id INTEGER NOT NULL,
+        symbol TEXT NOT NULL,
+        base_currency TEXT NOT NULL,
+        quote_currency TEXT NOT NULL,
+        is_active BOOLEAN DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(exchange_id, symbol)
+      );
+    `);
+    await Effect.runPromise(repo.ensureTables());
+
+    const candles: Candle[] = [
+      {
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "5m",
+        open: 66_000,
+        high: 68_000,
+        low: 65_500,
+        close: 67_000,
+        volume: 100,
+        timestamp: new Date("2026-01-01T00:00:00Z"),
+      },
+    ];
+
+    const saved = await Effect.runPromise(repo.saveCandles(candles));
+    expect(saved).toBe(1);
+
+    const exchange = db
+      .query("SELECT display_name, ccxt_id FROM exchanges WHERE name = ?")
+      .get("bitget-futures") as { display_name: string; ccxt_id: string };
+    expect(exchange.display_name).toBe("Bitget Futures");
+    expect(exchange.ccxt_id).toBe("bitget-futures");
+
+    const pair = db
+      .query(
+        "SELECT base_currency, quote_currency FROM trading_pairs WHERE symbol = ?",
+      )
+      .get("BTC/USDT:USDT") as { base_currency: string; quote_currency: string };
+    expect(pair).toEqual({ base_currency: "BTC", quote_currency: "USDT" });
+
+    const loaded = await Effect.runPromise(
+      repo.getCandles({
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "5m",
+      }),
+    );
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].close).toBe(67_000);
+  });
+
   it("respects candle query date range", async () => {
     await Effect.runPromise(repo.ensureTables());
 

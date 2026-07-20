@@ -99,7 +99,7 @@ export function makeSimulatedExchangeAdapter(
           timestamp: new Date(),
         };
       }).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.fail(
             err instanceof ExchangeError
               ? err

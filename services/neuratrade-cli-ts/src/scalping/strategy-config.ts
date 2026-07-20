@@ -1,6 +1,5 @@
 import * as S from "effect/Schema";
-import { Effect } from "effect";
-import * as fs from "fs";
+import { Effect, FileSystem } from "effect";
 import * as path from "path";
 import type {
   ComposerConfig,
@@ -15,257 +14,229 @@ import type {
  * ignored entirely. Params are indicator-specific (e.g. period, threshold).
  */
 export const IndicatorConfigSchema = S.Struct({
-  enabled: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  weight: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  params: S.optional(S.Record({ key: S.String, value: S.Number })).pipe(
-    S.withDecodingDefault(() => ({})),
+  enabled: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(true))),
+  weight: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  params: S.Record(S.String, S.Number).pipe(
+    S.withDecodingDefault(Effect.succeed({})),
   ),
 });
 
 export type IndicatorConfig = typeof IndicatorConfigSchema.Type;
 
 export const IndicatorsConfigSchema = S.Struct({
-  leading: S.optional(
-    S.Record({ key: S.String, value: IndicatorConfigSchema }),
-  ).pipe(
-    S.withDecodingDefault(() => ({
-      rsiPullback: { enabled: false, weight: 0, params: { period: 14 } },
-      emaPullback: { enabled: false, weight: 0, params: { period: 9 } },
-    })),
+  leading: S.Record(S.String, IndicatorConfigSchema).pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        rsiPullback: { enabled: false, weight: 0, params: { period: 14 } },
+        emaPullback: { enabled: false, weight: 0, params: { period: 9 } },
+      }),
+    ),
   ),
-  current: S.optional(
-    S.Record({ key: S.String, value: IndicatorConfigSchema }),
-  ).pipe(
-    S.withDecodingDefault(() => ({
-      trend: {
-        enabled: true,
-        weight: 0.18,
-        params: { fastPeriod: 9, slowPeriod: 21, style: 0 },
-      },
-      imbalance: { enabled: true, weight: 0.22, params: {} },
-      spread: { enabled: true, weight: 0.18, params: {} },
-      liquidity: { enabled: true, weight: 0.09, params: {} },
-    })),
+  current: S.Record(S.String, IndicatorConfigSchema).pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        trend: {
+          enabled: true,
+          weight: 0.18,
+          params: { fastPeriod: 9, slowPeriod: 21, style: 0 },
+        },
+        imbalance: { enabled: true, weight: 0.22, params: {} },
+        spread: { enabled: true, weight: 0.18, params: {} },
+        liquidity: { enabled: true, weight: 0.09, params: {} },
+      }),
+    ),
   ),
-  lagging: S.optional(
-    S.Record({ key: S.String, value: IndicatorConfigSchema }),
-  ).pipe(
-    S.withDecodingDefault(() => ({
-      rsi: { enabled: true, weight: 0.09, params: { period: 14 } },
-      connorsRsi2: { enabled: false, weight: 0, params: {} },
-      volatility: { enabled: true, weight: 0.13, params: {} },
-      regime: { enabled: true, weight: 0.11, params: {} },
-      funding: { enabled: false, weight: 0, params: {} },
-    })),
+  lagging: S.Record(S.String, IndicatorConfigSchema).pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        rsi: { enabled: true, weight: 0.09, params: { period: 14 } },
+        connorsRsi2: { enabled: false, weight: 0, params: {} },
+        volatility: { enabled: true, weight: 0.13, params: {} },
+        regime: { enabled: true, weight: 0.11, params: {} },
+        funding: { enabled: false, weight: 0, params: {} },
+      }),
+    ),
   ),
 });
 
 export type IndicatorsConfig = typeof IndicatorsConfigSchema.Type;
 
 export const SignalRulesConfigSchema = S.Struct({
-  minConfluence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  minCategoryConfluence: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  minConfluence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  minCategoryConfluence: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  minConfidence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.5)),
-  regimeMode: S.optional(S.Literal("trend", "reversion", "breakout")).pipe(
-    S.withDecodingDefault(() => "trend" as const),
+  minConfidence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0.5))),
+  regimeMode: S.Literals(["trend", "reversion", "breakout"]).pipe(
+    S.withDecodingDefault(Effect.succeed("trend" as const)),
   ),
-  breakoutLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  breakoutVolumeMinRatio: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.2),
+  breakoutLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  breakoutVolumeMinRatio: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(1.2)),
   ),
-  breakoutAdxMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  directionalOnly: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  breakoutAdxMin: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  directionalOnly: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  strictAgreement: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  rsiFollowTrend: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  volumeMinRatio: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volumeLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  maxSpreadPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  minLiquidity: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  adxMin: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  atrMinPctOfPrice: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  atrMaxPctOfPrice: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  minEfficiencyRatio: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  bollingerEntryMinPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  bollingerEntryMaxPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  useAdaptiveMarketFilters: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  strictAgreement: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  adaptiveLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(100))),
+  trendFilterFastPeriod: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(50)),
   ),
-  rsiFollowTrend: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  trendFilterSlowPeriod: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(100)),
   ),
-  volumeMinRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volumeLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  maxSpreadPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  minLiquidity: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  adxMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  atrMinPctOfPrice: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  atrMaxPctOfPrice: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  minEfficiencyRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  bollingerEntryMinPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  trendFilterPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(200))),
+  entryRsiLongThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(10)),
   ),
-  bollingerEntryMaxPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  entryRsiShortThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(90)),
   ),
-  useAdaptiveMarketFilters: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  exitRsiLongThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(60)),
   ),
-  adaptiveLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 100)),
-  trendFilterFastPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 50),
+  exitRsiShortThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(40)),
   ),
-  trendFilterSlowPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 100),
+  entryCandleConfirm: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  trendFilterPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 200),
+  momentumConfirmBars: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  signalPersistence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  autoRegimeFilter: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  entryRsiLongThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 10),
+  autoRegimeAdxThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(25)),
   ),
-  entryRsiShortThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 90),
+  sessionStart: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  sessionEnd: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  trendSignalStyle: S.Literals(["slope", "cross"]).pipe(
+    S.withDecodingDefault(Effect.succeed("slope" as const)),
   ),
-  exitRsiLongThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 60),
+  fundingBiasThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.0001)),
   ),
-  exitRsiShortThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 40),
-  ),
-  entryCandleConfirm: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  momentumConfirmBars: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  signalPersistence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  autoRegimeFilter: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  autoRegimeAdxThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 25),
-  ),
-  sessionStart: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  sessionEnd: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  trendSignalStyle: S.optional(S.Literal("slope", "cross")).pipe(
-    S.withDecodingDefault(() => "slope" as const),
-  ),
-  fundingBiasThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.0001),
-  ),
-  useFunding: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
+  useFunding: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
 });
 
 export type SignalRulesConfig = typeof SignalRulesConfigSchema.Type;
 
 export const ExecutionConfigSchema = S.Struct({
-  stopLossPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1.0)),
-  takeProfitPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1.2)),
-  useAtrStops: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  atrStopMultiplier: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.5),
+  stopLossPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1.0))),
+  takeProfitPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1.2))),
+  useAtrStops: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  atrStopMultiplier: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1.5))),
+  atrTakeProfitMultiplier: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(2.5)),
   ),
-  atrTakeProfitMultiplier: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 2.5),
+  atrRiskReward: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  useAdaptiveStops: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  atrRiskReward: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  useAdaptiveStops: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  adaptiveStopAtrMultiplier: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(1.5)),
   ),
-  adaptiveStopAtrMultiplier: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.5),
+  adaptiveRiskReward: S.Number.pipe(S.withDecodingDefault(Effect.succeed(2))),
+  scaleOutAtR: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  scaleOutPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(50))),
+  riskPerTradePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  positionSizePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(100))),
+  maxPositionSizePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(100))),
+  volatilityTargetAnnualPct: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  adaptiveRiskReward: S.optional(S.Number).pipe(S.withDecodingDefault(() => 2)),
-  scaleOutAtR: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  scaleOutPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 50)),
-  riskPerTradePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  positionSizePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 100)),
-  maxPositionSizePct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 100),
+  leverage: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1))),
+  feePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0.1))),
+  makerFeePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  entryOrderType: S.Literals(["market", "limit"]).pipe(
+    S.withDecodingDefault(Effect.succeed("market" as const)),
   ),
-  volatilityTargetAnnualPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  entryLimitOffsetBps: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  slippageBps: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  maxBarsInTrade: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  lossCooldownBars: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  lossConfidencePenalty: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  leverage: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1)),
-  feePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.1)),
-  makerFeePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  entryOrderType: S.optional(S.Literal("market", "limit")).pipe(
-    S.withDecodingDefault(() => "market" as const),
+  lossConfidenceDecay: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  breakevenAtR: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  trailingStopPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  trailingStopAtrMultiplier: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  entryLimitOffsetBps: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  holdUntilStop: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  entryOnClose: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  observedPrice: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  strictRealism: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  minAtrPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  exitRsiPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  exitRsiLongLevel: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  exitRsiShortLevel: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volatilityLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volatilityLowPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  volatilityHighPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(80))),
+  volatilityLowFactor: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.8)),
   ),
-  slippageBps: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  maxBarsInTrade: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  lossCooldownBars: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  lossConfidencePenalty: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  lossConfidenceDecay: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  breakevenAtR: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  trailingStopPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  trailingStopAtrMultiplier: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  holdUntilStop: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  entryOnClose: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  observedPrice: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  strictRealism: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  minAtrPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  exitRsiPeriod: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  exitRsiLongLevel: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  exitRsiShortLevel: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volatilityLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volatilityLowPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  volatilityHighPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 80)),
-  volatilityLowFactor: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.8),
-  ),
-  volatilityHighFactor: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.2),
+  volatilityHighFactor: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(1.2)),
   ),
 });
 
 export type ExecutionConfig = typeof ExecutionConfigSchema.Type;
 
 export const PortfolioConfigSchema = S.Struct({
-  maxOpenPositions: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1)),
-  maxPortfolioHeatPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 100),
+  maxOpenPositions: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1))),
+  maxPortfolioHeatPct: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(100)),
   ),
-  correlationFilter: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  correlationFilter: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  correlationLookback: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 50),
+  correlationLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(50))),
+  correlationThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.8)),
   ),
-  correlationThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.8),
-  ),
-  allowlist: S.optional(S.Array(S.String)).pipe(
-    S.withDecodingDefault(() => []),
-  ),
-  blocklist: S.optional(S.Array(S.String)).pipe(
-    S.withDecodingDefault(() => []),
-  ),
+  allowlist: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
+  blocklist: S.Array(S.String).pipe(S.withDecodingDefault(Effect.succeed([]))),
 });
 
 export type PortfolioConfig = typeof PortfolioConfigSchema.Type;
 
 export const StrategyConfigSchema = S.Struct({
   name: S.optional(S.String),
-  version: S.optional(S.Literal("1")).pipe(S.withDecodingDefault(() => "1")),
-  indicators: S.optional(IndicatorsConfigSchema).pipe(
-    S.withDecodingDefault(defaultIndicatorsConfig),
+  version: S.Literal("1").pipe(S.withDecodingDefault(Effect.succeed("1"))),
+  indicators: IndicatorsConfigSchema.pipe(
+    S.withDecodingDefault(Effect.sync(defaultIndicatorsConfig)),
   ),
-  signalRules: S.optional(SignalRulesConfigSchema).pipe(
-    S.withDecodingDefault(defaultSignalRulesConfig),
+  signalRules: SignalRulesConfigSchema.pipe(
+    S.withDecodingDefault(Effect.sync(defaultSignalRulesConfig)),
   ),
-  execution: S.optional(ExecutionConfigSchema).pipe(
-    S.withDecodingDefault(defaultExecutionConfig),
+  execution: ExecutionConfigSchema.pipe(
+    S.withDecodingDefault(Effect.sync(defaultExecutionConfig)),
   ),
-  portfolio: S.optional(PortfolioConfigSchema).pipe(
-    S.withDecodingDefault(defaultPortfolioConfig),
+  portfolio: PortfolioConfigSchema.pipe(
+    S.withDecodingDefault(Effect.sync(defaultPortfolioConfig)),
   ),
 });
 
 export type StrategyConfig = typeof StrategyConfigSchema.Type;
 
-export const decodeStrategyConfig = S.decodeUnknown(StrategyConfigSchema);
+export const decodeStrategyConfig = S.decodeUnknownEffect(StrategyConfigSchema);
 
 function defaultIndicatorsConfig(): IndicatorsConfig {
   return {
@@ -461,11 +432,21 @@ export function saveStrategyConfig(
   homeDir: string,
   config: StrategyConfig,
   name?: string,
-): Effect.Effect<void, Error> {
+): Effect.Effect<void, Error, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const filePath = configPath(homeDir, name);
     const dir = path.dirname(filePath);
-    yield* Effect.sync(() => fs.mkdirSync(dir, { recursive: true }));
+    const fsys = yield* FileSystem.FileSystem;
+    yield* fsys
+      .makeDirectory(dir, { recursive: true })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new Error(
+              `Failed to create strategy config directory ${dir}: ${String(cause)}`,
+            ),
+        ),
+      );
     const payload = JSON.stringify(config, null, 2);
     yield* Effect.tryPromise({
       try: () => Bun.write(filePath, payload),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Either } from "effect";
+import { Effect, Layer, Result } from "effect";
 import {
   MarketDataGateway,
   type MarketDataGatewayService,
@@ -28,7 +28,10 @@ import {
   type FuturesPaperTradingOptions,
 } from "./futures-engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
+import { ExitEngineLive, SignalComposerLive } from "../scalping/services.js";
 import type { ComposerConfig } from "../scalping/types.js";
+
+const scalpingServiceLayers = Layer.merge(SignalComposerLive, ExitEngineLive);
 
 function makeCandles(
   count: number,
@@ -75,6 +78,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   private trades: PaperTrade[] = [];
 
   ensureTables() {
+    return Effect.void;
+  }
+
+  resetGridState() {
     return Effect.void;
   }
 
@@ -361,6 +368,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
         import("./futures-engine.js").FuturesPaperTradingIterationResult,
         never
@@ -395,6 +403,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
         import("./futures-engine.js").FuturesPaperTradingIterationResult,
         never
@@ -429,6 +438,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
         import("./futures-engine.js").FuturesPaperTradingIterationResult,
         never
@@ -463,6 +473,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
         import("./futures-engine.js").FuturesPaperTradingIterationResult,
         never
@@ -496,6 +507,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
+        Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
         import("./futures-engine.js").FuturesPaperTradingIterationResult,
         never
@@ -556,9 +568,10 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provideService(RiskGuard, riskGuard),
           Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
           Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
-          Effect.either,
+          Effect.provide(scalpingServiceLayers),
+          Effect.result,
         ) as Effect.Effect<
-          Either.Either<
+          Result.Result<
             import("./futures-engine.js").FuturesPaperTradingIterationResult,
             unknown
           >,
@@ -566,9 +579,9 @@ describe("runFuturesPaperTradingIteration", () => {
         >,
       );
 
-      expect(outcome._tag).toBe("Right");
-      if (outcome._tag === "Right") {
-        expect(outcome.right.capital).toBeGreaterThanOrEqual(0);
+      expect(outcome._tag).toBe("Success");
+      if (outcome._tag === "Success") {
+        expect(outcome.success.capital).toBeGreaterThanOrEqual(0);
       }
     }
   });

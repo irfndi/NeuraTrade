@@ -115,4 +115,4 @@ export interface FuturesExchangeAdapterService {
 }
 
 export const FuturesExchangeAdapter =
-  Context.GenericTag<FuturesExchangeAdapterService>("FuturesExchangeAdapter");
+  Context.Service<FuturesExchangeAdapterService>("FuturesExchangeAdapter");

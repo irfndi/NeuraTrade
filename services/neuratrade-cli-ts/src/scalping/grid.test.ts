@@ -73,6 +73,91 @@ describe("runGridBacktest", () => {
     expect(result.totalTrades).toBe(0);
     expect(result.totalReturnPct).toBe(0);
   });
+
+  it("chop gate blocks new entries while the market is trending", () => {
+    // Strong directional drift with pullback wobble: grids would touch, but
+    // ADX is high, so a gated engine must stay out entirely.
+    const candles: CandleLike[] = [];
+    let price = 100;
+    for (let i = 0; i < 400; i++) {
+      const drift = i < 30 ? 0 : 0.005;
+      const wobble = Math.sin(i / 2) * 0.004;
+      price = price * (1 + drift + wobble * 0.2);
+      const open = price * (1 - 0.004);
+      candles.push({
+        open,
+        high: price * 1.006,
+        low: open * 0.994,
+        close: price,
+        volume: 1,
+        timestamp: new Date(i * 15 * 60 * 1000),
+      });
+    }
+
+    const base = {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 96,
+      leverage: 1,
+    };
+    const ungated = runGridBacktest(candles, base);
+    const gated = runGridBacktest(candles, {
+      ...base,
+      chopGateAdxThreshold: 25,
+    });
+
+    expect(ungated.totalTrades).toBeGreaterThan(0);
+    expect(gated.totalTrades).toBe(0);
+  });
+
+  it("chop gate keeps trading in an oscillating (low-ADX) market", () => {
+    const candles = makeOscillatingCandles(300);
+    const result = runGridBacktest(candles, {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 96,
+      leverage: 1,
+      chopGateAdxThreshold: 25,
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.profitFactor).toBeGreaterThan(1);
+  });
+
+  it("records a trade list with bar indices, prices, and pnl", () => {
+    const candles = makeOscillatingCandles(300);
+    const result = runGridBacktest(candles, {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 96,
+      leverage: 1,
+    });
+
+    expect(result.trades.length).toBe(result.totalTrades);
+    for (const t of result.trades) {
+      expect(t.exitBar).toBeGreaterThanOrEqual(t.entryBar);
+      expect(t.entryPrice).toBeGreaterThan(0);
+      expect(t.exitPrice).toBeGreaterThan(0);
+      expect(typeof t.pnlPct).toBe("number");
+      expect(t.win).toBe(t.pnlPct > 0);
+      expect(["long", "short"]).toContain(t.side);
+      expect(typeof t.isLiquidation).toBe("boolean");
+    }
+    const wins = result.trades.filter((t) => t.win).length;
+    expect(wins / result.trades.length).toBeCloseTo(result.winRate / 100, 2);
+  });
 });
 
 describe("findBestGridParams", () => {

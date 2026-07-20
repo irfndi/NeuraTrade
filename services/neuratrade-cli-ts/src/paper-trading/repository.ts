@@ -86,6 +86,17 @@ export interface PaperTradingRepositoryService {
     state: GridPaperState,
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 
+  /**
+   * Delete the persisted grid state for a key. Used when starting an
+   * explicit replay run so a stale replay pointer from an earlier session
+   * cannot lock the walk out ("no new replay candle" forever).
+   */
+  readonly resetGridState: (
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
   readonly recordGridTrade: (
     trade: GridPaperTrade,
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
@@ -95,11 +106,15 @@ export interface PaperTradingRepositoryService {
     symbol: string,
     timeframe: string,
     limit: number,
-  ) => Effect.Effect<readonly GridPaperTrade[], PaperTradingRepositoryError, never>;
+  ) => Effect.Effect<
+    readonly GridPaperTrade[],
+    PaperTradingRepositoryError,
+    never
+  >;
 }
 
 export const PaperTradingRepository =
-  Context.GenericTag<PaperTradingRepositoryService>("PaperTradingRepository");
+  Context.Service<PaperTradingRepositoryService>("PaperTradingRepository");
 
 const ensureTablesSQL = `
 CREATE TABLE IF NOT EXISTS paper_portfolio (
@@ -742,7 +757,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           maxDrawdownPct: row.max_drawdown_pct,
           leverage: row.leverage,
           killed: Boolean(row.killed),
-          lastTimestamp: row.last_timestamp ? new Date(row.last_timestamp) : null,
+          lastTimestamp: row.last_timestamp
+            ? new Date(row.last_timestamp)
+            : null,
           updatedAt: new Date(row.updated_at),
         };
       },
@@ -817,6 +834,28 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
+  resetGridState(
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query(
+            `DELETE FROM grid_paper_state
+             WHERE exchange = ? AND symbol = ? AND timeframe = ?`,
+          )
+          .run(exchange, symbol, timeframe);
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to reset grid paper state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
   recordGridTrade(
     trade: GridPaperTrade,
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
@@ -858,7 +897,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     symbol: string,
     timeframe: string,
     limit: number,
-  ): Effect.Effect<readonly GridPaperTrade[], PaperTradingRepositoryError, never> {
+  ): Effect.Effect<
+    readonly GridPaperTrade[],
+    PaperTradingRepositoryError,
+    never
+  > {
     return Effect.try({
       try: () => {
         const rows = this.db
@@ -891,7 +934,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           exchange: r.exchange,
           symbol: r.symbol,
           timeframe: r.timeframe,
-          side: r.side as GridPaperState["side"] ?? "long",
+          side: (r.side as GridPaperState["side"]) ?? "long",
           entryPrice: r.entry_price,
           exitPrice: r.exit_price,
           capitalBefore: r.capital_before,

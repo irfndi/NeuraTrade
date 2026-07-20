@@ -1,6 +1,5 @@
 import * as S from "effect/Schema";
-import { Effect } from "effect";
-import * as fs from "fs";
+import { Effect, FileSystem } from "effect";
 import * as path from "path";
 
 /**
@@ -33,7 +32,7 @@ const StrategyProfileParamsSchemaRaw = S.Struct({
   holdUntilStop: S.optional(S.Boolean),
   feePct: S.optional(S.Number),
   makerFeePct: S.optional(S.Number),
-  entryOrderType: S.optional(S.Literal("market", "limit")),
+  entryOrderType: S.optional(S.Literals(["market", "limit"])),
   entryLimitOffsetBps: S.optional(S.Number),
   volumeMinRatio: S.optional(S.Number),
   volumeLookback: S.optional(S.Number),
@@ -74,7 +73,7 @@ const StrategyProfileParamsSchemaRaw = S.Struct({
   sessionEnd: S.optional(S.String),
   autoRegimeFilter: S.optional(S.Boolean),
   autoRegimeAdxThreshold: S.optional(S.Number),
-  trendSignalStyle: S.optional(S.Literal("slope", "cross")),
+  trendSignalStyle: S.optional(S.Literals(["slope", "cross"])),
   trendFastPeriod: S.optional(S.Number),
   trendSlowPeriod: S.optional(S.Number),
   directionalOnly: S.optional(S.Boolean),
@@ -87,18 +86,19 @@ const StrategyProfileParamsSchemaRaw = S.Struct({
   exchange: S.optional(S.String),
   defaultSymbol: S.optional(S.String),
   timeframe: S.optional(S.String),
-  regimeMode: S.optional(S.Literal("trend", "reversion", "breakout")),
+  regimeMode: S.optional(S.Literals(["trend", "reversion", "breakout"])),
   breakoutLookback: S.optional(S.Number),
   breakoutVolumeMinRatio: S.optional(S.Number),
   breakoutAdxMin: S.optional(S.Number),
   fundingBiasThreshold: S.optional(S.Number),
   useFunding: S.optional(S.Boolean),
-  strategyType: S.optional(S.Literal("signal", "grid")),
+  strategyType: S.optional(S.Literals(["signal", "grid"])),
   gridStepPct: S.optional(S.Number),
   gridMaxGrids: S.optional(S.Number),
   gridPauseAfterLossBars: S.optional(S.Number),
   onlyWithTrend: S.optional(S.Boolean),
   targetRatio: S.optional(S.Number),
+  chopGateAdx: S.optional(S.Number),
 });
 
 function defaultStrategyProfileParams(): StrategyProfileParams {
@@ -194,6 +194,7 @@ function defaultStrategyProfileParams(): StrategyProfileParams {
     gridPauseAfterLossBars: 0,
     onlyWithTrend: false,
     targetRatio: 1,
+    chopGateAdx: 0,
   };
 }
 
@@ -203,188 +204,167 @@ function defaultStrategyProfileParams(): StrategyProfileParams {
  * etc.).
  */
 const StrategyProfileParamsSchema = S.Struct({
-  minConfidence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  useAtrStops: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  atrStopMultiplier: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  atrTakeProfitMultiplier: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  minConfidence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  useAtrStops: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  atrStopMultiplier: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  atrTakeProfitMultiplier: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  atrRiskReward: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  rsiPeriod: S.optional(S.Number).pipe(S.withDecodingDefault(() => 14)),
-  rsiOversoldStrong: S.optional(S.Number).pipe(S.withDecodingDefault(() => 30)),
-  rsiOverboughtStrong: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 70),
+  atrRiskReward: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  rsiPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(14))),
+  rsiOversoldStrong: S.Number.pipe(S.withDecodingDefault(Effect.succeed(30))),
+  rsiOverboughtStrong: S.Number.pipe(S.withDecodingDefault(Effect.succeed(70))),
+  stopLossPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  takeProfitPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  scaleOutAtR: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  scaleOutPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volatilityLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volatilityLowPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  volatilityHighPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(80))),
+  volatilityLowFactor: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.8)),
   ),
-  stopLossPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  takeProfitPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  scaleOutAtR: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  scaleOutPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volatilityLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volatilityLowPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  volatilityHighPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 80)),
-  volatilityLowFactor: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.8),
+  volatilityHighFactor: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(1.2)),
   ),
-  volatilityHighFactor: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.2),
+  volatilityTargetAnnualPct: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  volatilityTargetAnnualPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  positionSizePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  riskPerTradePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  maxPositionSizePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(100))),
+  minAtrPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  holdUntilStop: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  feePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  makerFeePct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  entryOrderType: S.Literals(["market", "limit"]).pipe(
+    S.withDecodingDefault(Effect.succeed("market" as const)),
   ),
-  positionSizePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  riskPerTradePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  maxPositionSizePct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 100),
+  entryLimitOffsetBps: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volumeMinRatio: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  volumeLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  minConfluence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  entryCandleConfirm: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  minAtrPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  holdUntilStop: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  feePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  makerFeePct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  entryOrderType: S.optional(S.Literal("market", "limit")).pipe(
-    S.withDecodingDefault(() => "market" as const),
+  momentumConfirmBars: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  signalPersistence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  lossConfidencePenalty: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  entryLimitOffsetBps: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  volumeMinRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  volumeLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  minConfluence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  entryCandleConfirm: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  momentumConfirmBars: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  signalPersistence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  lossConfidencePenalty: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  lossConfidenceDecay: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  adxMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
+  lossConfidenceDecay: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  adxMin: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
   htfTimeframe: S.optional(S.String),
-  htfTrendFastPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 50),
+  htfTrendFastPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(50))),
+  htfTrendSlowPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(100))),
+  htfSignalConfidence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  entryPullbackEmaPeriod: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  htfTrendSlowPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 100),
+  entryPullbackMarginPct: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.1)),
   ),
-  htfSignalConfidence: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  minEfficiencyRatio: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  efficiencyRatioPeriod: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(20)),
   ),
-  entryPullbackEmaPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
+  rsiLongMax: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  rsiShortMin: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  bollingerLongMaxPctB: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(-1)),
   ),
-  entryPullbackMarginPct: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.1),
+  bollingerShortMinPctB: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(2)),
   ),
-  minEfficiencyRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  efficiencyRatioPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 20),
+  trendFilterPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(200))),
+  entryRsiLongThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(10)),
   ),
-  rsiLongMax: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  rsiShortMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  bollingerLongMaxPctB: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => -1),
+  entryRsiShortThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(90)),
   ),
-  bollingerShortMinPctB: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 2),
+  exitRsiPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  exitRsiLongLevel: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  exitRsiShortLevel: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  recordEquityCurve: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  trendFilterPeriod: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 200),
+  exportTrades: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  oosPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  mcIterations: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  leverage: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1))),
+  breakevenAtR: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  maxBarsInTrade: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  lossCooldownBars: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  sessionStart: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  sessionEnd: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  autoRegimeFilter: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  entryRsiLongThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 10),
+  autoRegimeAdxThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(25)),
   ),
-  entryRsiShortThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 90),
+  trendSignalStyle: S.Literals(["slope", "cross"]).pipe(
+    S.withDecodingDefault(Effect.succeed("slope" as const)),
   ),
-  exitRsiPeriod: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  exitRsiLongLevel: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  exitRsiShortLevel: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  recordEquityCurve: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  trendFastPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(9))),
+  trendSlowPeriod: S.Number.pipe(S.withDecodingDefault(Effect.succeed(21))),
+  directionalOnly: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  rsiFollowTrend: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  strictAgreement: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  entryOnClose: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  observedPrice: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  realistic: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  strictRealism: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  exchange: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  defaultSymbol: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  timeframe: S.String.pipe(S.withDecodingDefault(Effect.succeed(""))),
+  regimeMode: S.Literals(["trend", "reversion", "breakout"]).pipe(
+    S.withDecodingDefault(Effect.succeed("trend" as const)),
   ),
-  exportTrades: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  oosPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  mcIterations: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  leverage: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1)),
-  breakevenAtR: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  maxBarsInTrade: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  lossCooldownBars: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  sessionStart: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  sessionEnd: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  autoRegimeFilter: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  breakoutLookback: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  breakoutVolumeMinRatio: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(1.2)),
   ),
-  autoRegimeAdxThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 25),
+  breakoutAdxMin: S.Number.pipe(S.withDecodingDefault(Effect.succeed(20))),
+  fundingBiasThreshold: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0.0001)),
   ),
-  trendSignalStyle: S.optional(S.Literal("slope", "cross")).pipe(
-    S.withDecodingDefault(() => "slope" as const),
+  useFunding: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  strategyType: S.Literals(["signal", "grid"]).pipe(
+    S.withDecodingDefault(Effect.succeed("signal" as const)),
   ),
-  trendFastPeriod: S.optional(S.Number).pipe(S.withDecodingDefault(() => 9)),
-  trendSlowPeriod: S.optional(S.Number).pipe(S.withDecodingDefault(() => 21)),
-  directionalOnly: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  gridStepPct: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  gridMaxGrids: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
+  gridPauseAfterLossBars: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(0)),
   ),
-  rsiFollowTrend: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  strictAgreement: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  entryOnClose: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  observedPrice: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  realistic: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  strictRealism: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  exchange: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  defaultSymbol: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  timeframe: S.optional(S.String).pipe(S.withDecodingDefault(() => "")),
-  regimeMode: S.optional(S.Literal("trend", "reversion", "breakout")).pipe(
-    S.withDecodingDefault(() => "trend" as const),
-  ),
-  breakoutLookback: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  breakoutVolumeMinRatio: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 1.2),
-  ),
-  breakoutAdxMin: S.optional(S.Number).pipe(S.withDecodingDefault(() => 20)),
-  fundingBiasThreshold: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0.0001),
-  ),
-  useFunding: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  strategyType: S.optional(S.Literal("signal", "grid")).pipe(
-    S.withDecodingDefault(() => "signal" as const),
-  ),
-  gridStepPct: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  gridMaxGrids: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0)),
-  gridPauseAfterLossBars: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 0),
-  ),
-  onlyWithTrend: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
-  ),
-  targetRatio: S.optional(S.Number).pipe(S.withDecodingDefault(() => 1)),
+  onlyWithTrend: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  targetRatio: S.Number.pipe(S.withDecodingDefault(Effect.succeed(1))),
+  chopGateAdx: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0))),
 });
 
 export type StrategyProfileParams = typeof StrategyProfileParamsSchema.Type;
 
-const SymbolOverrideSchema = S.partial(StrategyProfileParamsSchemaRaw);
+// v3 used `S.partial(StrategyProfileParamsSchemaRaw)`; every field in Raw is
+// already `S.optional`, so the partial schema is identical to Raw itself.
+const SymbolOverrideSchema = StrategyProfileParamsSchemaRaw;
 
 const StrategyProfileSchema = S.Struct({
   name: S.optional(S.String),
-  defaults: S.optional(StrategyProfileParamsSchema).pipe(
-    S.withDecodingDefault(defaultStrategyProfileParams),
+  defaults: StrategyProfileParamsSchema.pipe(
+    S.withDecodingDefault(Effect.sync(defaultStrategyProfileParams)),
   ),
-  symbols: S.optional(
-    S.Record({ key: S.String, value: SymbolOverrideSchema }),
-  ).pipe(S.withDecodingDefault(() => ({}))),
+  symbols: S.Record(S.String, SymbolOverrideSchema).pipe(
+    S.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 
 export type StrategyProfile = typeof StrategyProfileSchema.Type;
 
-export const decodeStrategyProfile = S.decodeUnknown(StrategyProfileSchema);
+export const decodeStrategyProfile = S.decodeUnknownEffect(
+  StrategyProfileSchema,
+);
 
 /**
  * Resolved CLI args shape used by the backtest/optimize/scan commands.
@@ -492,6 +472,7 @@ export interface ResolvedBacktestArgs {
   readonly gridPauseAfterLossBars: number;
   readonly onlyWithTrend?: boolean;
   readonly targetRatio?: number;
+  readonly chopGateAdx?: number;
 }
 
 function profileDir(homeDir: string): string {
@@ -540,10 +521,20 @@ export function saveStrategyProfile(
   homeDir: string,
   profileName: string,
   profile: StrategyProfile,
-): Effect.Effect<void, Error> {
+): Effect.Effect<void, Error, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const dir = profileDir(homeDir);
-    yield* Effect.sync(() => fs.mkdirSync(dir, { recursive: true }));
+    const fsys = yield* FileSystem.FileSystem;
+    yield* fsys
+      .makeDirectory(dir, { recursive: true })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new Error(
+              `Failed to create profile directory ${dir}: ${String(cause)}`,
+            ),
+        ),
+      );
     const filePath = profilePath(homeDir, profileName);
     const payload = JSON.stringify(profile, null, 2);
     yield* Effect.tryPromise({
@@ -554,6 +545,32 @@ export function saveStrategyProfile(
         ),
     });
   });
+}
+
+/**
+ * Look up per-symbol overrides, tolerating the futures settle suffix:
+ * "BTC/USDT:USDT" matches a "BTC/USDT" override key and vice versa.
+ * Returns undefined when no key matches, so callers can warn loudly instead
+ * of silently falling back to profile defaults (bd clever-cabin-3px).
+ */
+export function findSymbolOverride(
+  profile: StrategyProfile,
+  symbol: string,
+): StrategyProfile["symbols"][string] | undefined {
+  const exact = profile.symbols[symbol];
+  if (exact !== undefined) return exact;
+  const stripped = symbol.split(":")[0];
+  if (stripped !== symbol) {
+    const base = profile.symbols[stripped];
+    if (base !== undefined) return base;
+  }
+  // A spot-style query may match a futures-keyed override ("BTC/USDT:USDT").
+  if (!symbol.includes(":")) {
+    for (const key of Object.keys(profile.symbols)) {
+      if (key.split(":")[0] === symbol) return profile.symbols[key];
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -568,7 +585,7 @@ export function resolveBacktestArgs(
   cliArgs: ResolvedBacktestArgs,
 ): ResolvedBacktestArgs {
   const defaults = profile.defaults;
-  const symbolOverride = profile.symbols[symbol] ?? {};
+  const symbolOverride = findSymbolOverride(profile, symbol) ?? {};
 
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
@@ -582,6 +599,7 @@ export function resolveBacktestArgs(
     exchange: defaults.exchange ?? exchange,
     symbol: defaults.defaultSymbol ?? symbol,
     timeframe: get("timeframe") ?? timeframe,
+    regimeMode: get("regimeMode"),
     minConfidence: get("minConfidence"),
     useAtrStops: get("useAtrStops"),
     atrStopMultiplier: get("atrStopMultiplier"),
@@ -668,6 +686,7 @@ export function resolveBacktestArgs(
     gridStepPct: get("gridStepPct") ?? 0,
     gridMaxGrids: get("gridMaxGrids") ?? 0,
     gridPauseAfterLossBars: get("gridPauseAfterLossBars") ?? 0,
+    chopGateAdx: get("chopGateAdx") ?? 0,
   };
 
   // CLI defaults should not override profile values. Only use CLI values that
@@ -772,13 +791,18 @@ export function resolveBacktestArgs(
     gridStepPct: 0,
     gridMaxGrids: 0,
     gridPauseAfterLossBars: 0,
+    chopGateAdx: 0,
   };
 
   const merged = { ...base } as ResolvedBacktestArgs;
   for (const key of Object.keys(cliArgs) as Array<keyof ResolvedBacktestArgs>) {
     const cliValue = cliArgs[key];
     const defaultValue = cliDefaults[key];
-    const hasBaseValue = Object.prototype.hasOwnProperty.call(merged, key);
+    // Undefined base values count as absent: a profile that never set the key
+    // must not block the CLI fill.
+    const hasBaseValue =
+      Object.prototype.hasOwnProperty.call(merged, key) &&
+      (merged as unknown as Record<string, unknown>)[key] !== undefined;
     // If the profile did not provide a value, always fill from CLI (even when
     // it equals the built-in default). If the profile did provide a value, only
     // override when the user explicitly changed the CLI value.
@@ -891,6 +915,7 @@ export function buildStrategyProfileFromArgs(
       gridPauseAfterLossBars: args.gridPauseAfterLossBars,
       onlyWithTrend: args.onlyWithTrend ?? false,
       targetRatio: args.targetRatio ?? 1,
+      chopGateAdx: args.chopGateAdx ?? 0,
     },
     symbols: {},
   };

@@ -54,7 +54,7 @@ function run(
       intendedLeverage,
     }).pipe(
       Effect.map(() => ({ ok: true as const })),
-      Effect.catchAll((err: BitgetFuturesSafetyError) =>
+      Effect.catch((err: BitgetFuturesSafetyError) =>
         Effect.succeed({ ok: false as const, error: err }),
       ),
     ),

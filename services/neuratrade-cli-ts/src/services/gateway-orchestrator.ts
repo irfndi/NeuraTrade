@@ -88,7 +88,7 @@ export interface StatusResult {
 // Context.Tag
 // ---------------------------------------------------------------------------
 
-export class GatewayOrchestrator extends Context.Tag("GatewayOrchestrator")<
+export class GatewayOrchestrator extends Context.Service<
   GatewayOrchestrator,
   {
     readonly start: (
@@ -98,7 +98,7 @@ export class GatewayOrchestrator extends Context.Tag("GatewayOrchestrator")<
     readonly status: () => Effect.Effect<StatusResult, never, never>;
     readonly cleanup: () => Effect.Effect<void, never, never>;
   }
->() {}
+>()("GatewayOrchestrator") {}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -468,7 +468,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
             .stopServiceByPIDFile(svc.name, svc.pidFile, svc.patterns)
             .pipe(
               Effect.map(() => ({ success: true as const })),
-              Effect.catchAll((err) =>
+              Effect.catch((err) =>
                 Effect.succeed({
                   success: false as const,
                   error: err.message,

@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { Candle, OrderBook, Tick } from "../types.js";
+import type { Candle, FundingRate, OrderBook, Tick } from "../types.js";
 import { MarketDataError } from "../gateway.js";
 import {
   toBitgetSymbol,
@@ -150,6 +150,10 @@ export function fetchOHLCV(
 ): Effect.Effect<readonly Candle[], MarketDataError, never> {
   const { symbol: bSymbol, productType } = bitgetSymbol(symbol, marketType);
   const granularity = bitgetGranularity(timeframe, marketType);
+  // Bitget futures /history-candles rejects limit > 200 (error 40053). Clamp
+  // so both the request and the endTime window below stay consistent.
+  const effectiveLimit =
+    marketType === "futures" ? Math.min(limit, 200) : limit;
   const startParam = startTime
     ? (() => {
         const startMs = startTime.getTime();
@@ -158,7 +162,7 @@ export function fetchOHLCV(
         // that paginate through a year of history still issue valid requests.
         const endMs = Math.min(
           Date.now(),
-          startMs + candleWindowMs(timeframe) * limit,
+          startMs + candleWindowMs(timeframe) * effectiveLimit,
         );
         return `&startTime=${startMs}&endTime=${endMs}`;
       })()
@@ -166,8 +170,11 @@ export function fetchOHLCV(
 
   const path =
     marketType === "spot"
-      ? `/api/v2/spot/market/candles?symbol=${bSymbol}&granularity=${granularity}&limit=${limit}${startParam}`
-      : `/api/v2/mix/market/candles?symbol=${bSymbol}&productType=${productType}&granularity=${granularity}&limit=${limit}${startParam}`;
+      ? `/api/v2/spot/market/candles?symbol=${bSymbol}&granularity=${granularity}&limit=${effectiveLimit}${startParam}`
+      : // Futures /candles only serves recent data (older startTimes return an
+        // empty page with code 00000); /history-candles serves both old and
+        // recent windows, which deep backfills rely on.
+        `/api/v2/mix/market/history-candles?symbol=${bSymbol}&productType=${productType}&granularity=${granularity}&limit=${effectiveLimit}${startParam}`;
 
   return Effect.gen(function* () {
     const data =
@@ -279,6 +286,64 @@ export function fetch24hrVolumes(
       volumes[normalized] = asNumber(ticker.quoteVol ?? ticker.quoteVolume);
     }
     return volumes;
+  });
+}
+
+interface BitgetFundingRate {
+  readonly symbol: string;
+  readonly fundingRate: string;
+  readonly fundingTime: string;
+}
+
+const FUNDING_PAGE_SIZE = 100;
+const FUNDING_MAX_PAGES = 50;
+
+/**
+ * Fetch USDT-M futures funding-rate history.
+ *
+ * Funding rates only exist for perpetual futures, so this always uses the
+ * futures symbol mapping regardless of spot/futures callers. Bitget returns
+ * rows newest-first; pagination stops on an empty page, when the oldest row
+ * on a page predates `startTime`, when `limit` rows are accumulated, or at
+ * FUNDING_MAX_PAGES (Bitget itself rejects pageNo > 100).
+ */
+export function fetchFundingRates(
+  symbol: string,
+  startTime?: Date,
+  endTime?: Date,
+  limit = FUNDING_PAGE_SIZE * FUNDING_MAX_PAGES,
+): Effect.Effect<readonly FundingRate[], MarketDataError, never> {
+  const { symbol: bSymbol, productType } = bitgetSymbol(symbol, "futures");
+  const startMs = startTime?.getTime();
+  const endMs = endTime?.getTime();
+
+  return Effect.gen(function* () {
+    const results: FundingRate[] = [];
+    for (let pageNo = 1; pageNo <= FUNDING_MAX_PAGES; pageNo++) {
+      const path =
+        `/api/v2/mix/market/history-fund-rate?symbol=${bSymbol}` +
+        `&productType=${productType}&pageSize=${FUNDING_PAGE_SIZE}&pageNo=${pageNo}`;
+      const batch = yield* getJSON<readonly BitgetFundingRate[]>(path);
+      if (!batch || batch.length === 0) break;
+
+      let oldestOnPage = Number.POSITIVE_INFINITY;
+      for (const r of batch) {
+        const time = Number(r.fundingTime);
+        if (time < oldestOnPage) oldestOnPage = time;
+        if (startMs !== undefined && time < startMs) continue;
+        if (endMs !== undefined && time > endMs) continue;
+        results.push({
+          exchange: "bitget-futures",
+          symbol,
+          fundingRate: asNumber(r.fundingRate),
+          timestamp: new Date(time),
+        });
+      }
+
+      if (results.length >= limit) break;
+      if (startMs !== undefined && oldestOnPage < startMs) break;
+    }
+    return results;
   });
 }
 

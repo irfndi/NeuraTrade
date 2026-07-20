@@ -23,14 +23,14 @@ export const GatewayStateSchema = S.Struct({
   supervised: S.Boolean,
   updated_at: S.String,
   health_timeout_seconds: S.Number,
-  services: S.Record({ key: S.String, value: GatewayServiceRuntimeSchema }),
+  services: S.Record(S.String, GatewayServiceRuntimeSchema),
 });
 
 export type GatewayState = typeof GatewayStateSchema.Type;
 
 /** Decode an unknown JSON value into GatewayState (returns Effect). */
-export const decodeGatewayState = S.decodeUnknown(GatewayStateSchema);
+export const decodeGatewayState = S.decodeUnknownEffect(GatewayStateSchema);
 
 /** Decode an unknown JSON value, returning Either. */
 export const decodeGatewayStateEither =
-  S.decodeUnknownEither(GatewayStateSchema);
+  S.decodeUnknownResult(GatewayStateSchema);

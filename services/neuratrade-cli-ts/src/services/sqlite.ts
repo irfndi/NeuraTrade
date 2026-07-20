@@ -6,8 +6,8 @@
  */
 import * as nodePath from "path";
 import { Database, type Changes, type SQLQueryBindings } from "bun:sqlite";
-import { Context, Data, Effect, Layer } from "effect";
-import { FileSystem } from "@effect/platform";
+import { Context, Data, Effect, Layer, type Scope } from "effect";
+import { FileSystem } from "effect";
 import { Path } from "./path.ts";
 import { RuntimeConfig } from "./config.ts";
 
@@ -26,6 +26,15 @@ export class SqliteError extends Data.TaggedError("SqliteError")<{
 // ---------------------------------------------------------------------------
 
 export interface SqliteClientImpl {
+  /**
+   * Raw `bun:sqlite` handle backing this client.
+   *
+   * Escape hatch for repository layers that still take a `Database`
+   * instance directly (e.g. `MarketDataRepositorySQLiteLive`). The handle is
+   * owned by the `SqliteClientLive` layer scope — callers must not close it.
+   */
+  readonly database: Database;
+
   readonly queryOne: <T>(
     sql: string,
     params?: ReadonlyArray<SQLQueryBindings>,
@@ -49,10 +58,10 @@ export interface SqliteClientImpl {
   readonly close: Effect.Effect<void, never>;
 }
 
-export class SqliteClient extends Context.Tag("SqliteClient")<
+export class SqliteClient extends Context.Service<
   SqliteClient,
   SqliteClientImpl
->() {}
+>()("SqliteClient") {}
 
 // ---------------------------------------------------------------------------
 // Schema bootstrap (matches backend migrations)
@@ -170,28 +179,79 @@ function initSchema(db: Database): Effect.Effect<void, SqliteError> {
 }
 
 // ---------------------------------------------------------------------------
-// Live layer (scoped)
+// Live layers (scoped)
 // ---------------------------------------------------------------------------
 
-export const SqliteClientLive: Layer.Layer<
-  SqliteClient,
+function makeClient(db: Database): SqliteClientImpl {
+  const queryOne = <T>(
+    sql: string,
+    params: ReadonlyArray<SQLQueryBindings> = [],
+  ): Effect.Effect<T | null, SqliteError> =>
+    Effect.try({
+      try: () =>
+        db
+          .query<T, Array<SQLQueryBindings>>(sql)
+          .get(...(params as Array<SQLQueryBindings>)) as T | null,
+      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+    });
+
+  const queryAll = <T>(
+    sql: string,
+    params: ReadonlyArray<SQLQueryBindings> = [],
+  ): Effect.Effect<ReadonlyArray<T>, SqliteError> =>
+    Effect.try({
+      try: () =>
+        db
+          .query<T, Array<SQLQueryBindings>>(sql)
+          .all(...(params as Array<SQLQueryBindings>)) as ReadonlyArray<T>,
+      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+    });
+
+  const execute = (
+    sql: string,
+    params: ReadonlyArray<SQLQueryBindings> = [],
+  ): Effect.Effect<
+    { readonly changes: number; readonly lastInsertRowId: number },
+    SqliteError
+  > =>
+    Effect.try({
+      try: () => runSql(db, sql, params),
+      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+    });
+
+  const exec = (sql: string): Effect.Effect<void, SqliteError> =>
+    Effect.try({
+      try: () => {
+        db.run(sql);
+      },
+      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+    });
+
+  const close = Effect.sync(() => db.close());
+
+  return {
+    database: db,
+    queryOne,
+    queryAll,
+    execute,
+    exec,
+    close,
+  } satisfies SqliteClientImpl;
+}
+
+function openSqliteClient(
+  dbPath: string,
+  options: { readonly initSchema: boolean },
+): Effect.Effect<
+  SqliteClientImpl,
   SqliteError,
-  Path | RuntimeConfig | FileSystem.FileSystem
-> = Layer.scoped(
-  SqliteClient,
-  Effect.gen(function* () {
-    const path = yield* Path;
-    const runtimeConfig = yield* RuntimeConfig;
+  FileSystem.FileSystem | Scope.Scope
+> {
+  return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    const dbPath =
-      runtimeConfig.database.sqlite_path &&
-      runtimeConfig.database.sqlite_path.length > 0
-        ? runtimeConfig.database.sqlite_path
-        : nodePath.join(path.homeDir, "data", "neuratrade.db");
-
     yield* fs.makeDirectory(nodePath.dirname(dbPath), { recursive: true }).pipe(
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         Effect.fail(
           new SqliteError({
             message: `Failed to create data directory: ${String(cause)}`,
@@ -213,64 +273,63 @@ export const SqliteClientLive: Layer.Layer<
       (database) => Effect.sync(() => database.close()),
     );
 
-    yield* initSchema(db);
-
-    const queryOne = <T>(
-      sql: string,
-      params: ReadonlyArray<SQLQueryBindings> = [],
-    ): Effect.Effect<T | null, SqliteError> =>
-      Effect.try({
-        try: () =>
-          db
-            .query<T, Array<SQLQueryBindings>>(sql)
-            .get(...(params as Array<SQLQueryBindings>)) as T | null,
+    if (options.initSchema) {
+      yield* initSchema(db);
+    } else {
+      // Repositories own their schema (ensureTables); only enforce foreign
+      // keys, matching the historical CLI behavior for this open mode.
+      yield* Effect.try({
+        try: () => db.exec("PRAGMA foreign_keys = ON;"),
         catch: (cause) =>
-          new SqliteError({ message: String(cause), sql, cause }),
+          new SqliteError({
+            message: `Failed to set pragmas on ${dbPath}: ${String(cause)}`,
+            cause,
+          }),
       });
+    }
 
-    const queryAll = <T>(
-      sql: string,
-      params: ReadonlyArray<SQLQueryBindings> = [],
-    ): Effect.Effect<ReadonlyArray<T>, SqliteError> =>
-      Effect.try({
-        try: () =>
-          db
-            .query<T, Array<SQLQueryBindings>>(sql)
-            .all(...(params as Array<SQLQueryBindings>)) as ReadonlyArray<T>,
-        catch: (cause) =>
-          new SqliteError({ message: String(cause), sql, cause }),
-      });
+    return makeClient(db);
+  });
+}
 
-    const execute = (
-      sql: string,
-      params: ReadonlyArray<SQLQueryBindings> = [],
-    ): Effect.Effect<
-      { readonly changes: number; readonly lastInsertRowId: number },
-      SqliteError
-    > =>
-      Effect.try({
-        try: () => runSql(db, sql, params),
-        catch: (cause) =>
-          new SqliteError({ message: String(cause), sql, cause }),
-      });
+const resolveDbPath: Effect.Effect<string, never, Path | RuntimeConfig> =
+  Effect.gen(function* () {
+    const path = yield* Path;
+    const runtimeConfig = yield* RuntimeConfig;
+    return runtimeConfig.database.sqlite_path &&
+      runtimeConfig.database.sqlite_path.length > 0
+      ? runtimeConfig.database.sqlite_path
+      : nodePath.join(path.homeDir, "data", "neuratrade.db");
+  });
 
-    const exec = (sql: string): Effect.Effect<void, SqliteError> =>
-      Effect.try({
-        try: () => {
-          db.run(sql);
-        },
-        catch: (cause) =>
-          new SqliteError({ message: String(cause), sql, cause }),
-      });
+export const SqliteClientLive: Layer.Layer<
+  SqliteClient,
+  SqliteError,
+  Path | RuntimeConfig | FileSystem.FileSystem
+> = Layer.effect(
+  SqliteClient,
+  Effect.flatMap(resolveDbPath, (dbPath) =>
+    openSqliteClient(dbPath, { initSchema: true }),
+  ),
+);
 
-    const close = Effect.sync(() => db.close());
-
-    return {
-      queryOne,
-      queryAll,
-      execute,
-      exec,
-      close,
-    } satisfies SqliteClientImpl;
-  }),
+/**
+ * Opens the same database as {@link SqliteClientLive} but WITHOUT running the
+ * backend-migration schema bootstrap — only `PRAGMA foreign_keys = ON`.
+ *
+ * Use this for CLI commands that open databases whose tables were created by
+ * the market-data repository's own (minimal) schema: `SCHEMA_STATEMENTS`
+ * mirrors the Go backend migrations and its `CREATE INDEX` statements are not
+ * compatible with those pre-existing, differently-shaped tables. Repositories
+ * manage their own schema via `ensureTables`, so no bootstrap is needed here.
+ */
+export const SqliteClientLiveRaw: Layer.Layer<
+  SqliteClient,
+  SqliteError,
+  Path | RuntimeConfig | FileSystem.FileSystem
+> = Layer.effect(
+  SqliteClient,
+  Effect.flatMap(resolveDbPath, (dbPath) =>
+    openSqliteClient(dbPath, { initSchema: false }),
+  ),
 );

@@ -1,12 +1,11 @@
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
-import type { ComposerConfig } from "../scalping/types.js";
-import { composeSignal } from "../scalping/composer.js";
+import type { ComposerConfig, ScalpingSignal } from "../scalping/types.js";
 import {
   calculateAnnualizedVolatility,
   calculateATR,
 } from "../scalping/indicators.js";
-import { computeExitLevels } from "../scalping/exit-engine.js";
+import { ExitEngine, SignalComposer } from "../scalping/services.js";
 import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   MarketDataError,
@@ -142,6 +141,8 @@ export function runFuturesPaperTradingIteration(
   | RiskGuardService
   | KillSwitchService
   | CircuitBreakerService
+  | SignalComposer
+  | ExitEngine
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
@@ -149,6 +150,8 @@ export function runFuturesPaperTradingIteration(
     const adapter = yield* FuturesExchangeAdapter;
     const killSwitch = yield* KillSwitch;
     const circuitBreaker = yield* CircuitBreaker;
+    const composer = yield* SignalComposer;
+    const exitEngine = yield* ExitEngine;
 
     yield* repo.ensureTables();
 
@@ -188,7 +191,7 @@ export function runFuturesPaperTradingIteration(
     const currentCandle = candles[candles.length - 1];
     const obMetrics = toOrderBookMetrics(orderBook);
 
-    const signal = composeSignal(
+    const signal = yield* composer.composeSignal(
       {
         exchange: options.exchange,
         symbol: options.symbol,
@@ -365,15 +368,15 @@ export function runFuturesPaperTradingIteration(
           leverage: options.leverage,
           productType: options.productType,
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
 
-      if (riskCheck._tag === "Left") {
+      if (riskCheck._tag === "Failure") {
         yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
         return {
           action: "hold" as const,
           position,
           capital: toNumber(capital),
-          note: `RISK BLOCKED: ${riskCheck.left.violations.join("; ")}`,
+          note: `RISK BLOCKED: ${riskCheck.failure.violations.join("; ")}`,
         };
       }
 
@@ -425,7 +428,7 @@ export function runFuturesPaperTradingIteration(
         stopLoss: stopLossNum,
         takeProfit: takeProfitNum,
         scaleOutPrice,
-      } = computeExitLevels({
+      } = yield* exitEngine.computeExitLevels({
         side,
         entryPrice: filledPriceNum,
         atr,
@@ -487,7 +490,7 @@ export function runFuturesPaperTradingIteration(
 function checkExitReason(
   position: PaperPosition,
   candle: Candle,
-  signal: ReturnType<typeof composeSignal>,
+  signal: ScalpingSignal | null,
   options: FuturesPaperTradingOptions,
 ): "stop_loss" | "take_profit" | "signal" | "scale_out" | null {
   if (!position.scaledOut && position.scaleOutPrice > 0) {
@@ -542,7 +545,7 @@ function fallbackExitPrice(
 
 function shouldExitPosition(
   position: PaperPosition,
-  signal: NonNullable<ReturnType<typeof composeSignal>>,
+  signal: ScalpingSignal,
 ): boolean {
   return (
     (position.side === "long" && signal.direction === "sell") ||
@@ -550,10 +553,7 @@ function shouldExitPosition(
   );
 }
 
-function isEntrySignal(
-  signal: NonNullable<ReturnType<typeof composeSignal>>,
-  minConfidence: number,
-): boolean {
+function isEntrySignal(signal: ScalpingSignal, minConfidence: number): boolean {
   return signal.direction !== "hold" && signal.confidence >= minConfidence;
 }
 

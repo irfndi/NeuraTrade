@@ -114,9 +114,9 @@ describe("Binance gateway", () => {
     mockFetch({ msg: "bad request" }, 400);
 
     const result = await Effect.runPromise(
-      Effect.either(Binance.fetchTick("BTC/USDT")),
+      Effect.result(Binance.fetchTick("BTC/USDT")),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 });

@@ -1,4 +1,4 @@
-import { Command } from "@effect/cli";
+import { Command } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
 import { ApiClient } from "../services/api-client.ts";
 
@@ -8,7 +8,7 @@ export const healthCommand = Command.make("health", {}, () =>
     const result = yield* client
       .health()
       .pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.fail(
             new Error(`Could not reach API: ${err._tag} — ${String(err)}`),
           ),
@@ -31,7 +31,7 @@ export const healthCommand = Command.make("health", {}, () =>
       yield* Console.log(`Checked at: ${result.timestamp}`);
     }
   }).pipe(
-    Effect.catchAll((err) =>
+    Effect.catch((err) =>
       Console.log(`❌ ${err.message}`).pipe(
         Effect.flatMap(() => Effect.fail(err)),
       ),

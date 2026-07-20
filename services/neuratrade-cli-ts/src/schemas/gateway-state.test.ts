@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Either } from "effect";
+import { Result } from "effect";
 import {
   GatewayStateSchema,
   decodeGatewayStateEither,
@@ -33,10 +33,10 @@ describe("GatewayStateSchema", () => {
     };
 
     const result = decodeGatewayStateEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const state = result.right;
+    if (Result.isSuccess(result)) {
+      const state = result.success;
       expect(state.mode).toBe("native");
       expect(state.supervised).toBe(true);
       expect(state.updated_at).toBe("2025-01-15T12:00:00Z");
@@ -69,10 +69,10 @@ describe("GatewayStateSchema", () => {
     };
 
     const result = decodeGatewayStateEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      expect(result.right.services).toEqual({});
+    if (Result.isSuccess(result)) {
+      expect(result.success.services).toEqual({});
     }
   });
 
@@ -80,7 +80,7 @@ describe("GatewayStateSchema", () => {
 
   test("rejects missing required fields", () => {
     const result = decodeGatewayStateEither({ mode: "native" });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects wrong type for mode", () => {
@@ -91,7 +91,7 @@ describe("GatewayStateSchema", () => {
       health_timeout_seconds: 150,
       services: {},
     });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects wrong type for supervised", () => {
@@ -102,7 +102,7 @@ describe("GatewayStateSchema", () => {
       health_timeout_seconds: 150,
       services: {},
     });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects wrong type for services", () => {
@@ -113,17 +113,17 @@ describe("GatewayStateSchema", () => {
       health_timeout_seconds: 150,
       services: "not-a-map",
     });
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects an array", () => {
     const result = decodeGatewayStateEither([]);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects null", () => {
     const result = decodeGatewayStateEither(null);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   // --- Type compatibility ---

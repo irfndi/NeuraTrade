@@ -56,4 +56,4 @@ export interface MarketDataGatewayService {
 }
 
 export const MarketDataGateway =
-  Context.GenericTag<MarketDataGatewayService>("MarketDataGateway");
+  Context.Service<MarketDataGatewayService>("MarketDataGateway");

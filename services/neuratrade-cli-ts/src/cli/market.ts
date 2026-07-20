@@ -1,5 +1,5 @@
-import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
+import { Command, Options } from "./kit/kit.ts";
+import { BunServices } from "@effect/platform-bun";
 import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
 import { resolve } from "node:path";
@@ -95,7 +95,7 @@ const STABLECOIN_BASES = new Set([
 
 function makeLayer(home?: string) {
   return Layer.mergeAll(
-    BunContext.layer,
+    BunServices.layer,
     PathLive(home),
     MarketDataGatewayLive,
   );
@@ -117,8 +117,11 @@ export const fetchCandlesCommand = Command.make(
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
@@ -139,7 +142,7 @@ export const fetchCandlesCommand = Command.make(
         Effect.tap((total) =>
           Console.log(`Fetched and stored ${total} candles`),
         ),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-candles failed: ${err.reason}`);
             return 0;
@@ -325,8 +328,11 @@ export const fetchUniverseCommand = Command.make(
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
@@ -353,7 +359,7 @@ export const fetchUniverseCommand = Command.make(
             `Universe fetch complete: ${summary.symbols.length} symbols, ${summary.totalCandles} candles`,
           ),
         ),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-universe failed: ${err.reason}`);
             return { symbols: [], totalCandles: 0 };
@@ -555,8 +561,11 @@ export const fetchFundingRatesCommand = Command.make(
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
 
@@ -577,7 +586,7 @@ export const fetchFundingRatesCommand = Command.make(
             `Fetched ${r.fetched} funding rates, stored ${r.saved} new rows`,
           ),
         ),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-funding-rates failed: ${err.reason}`);
             return { fetched: 0, saved: 0 };

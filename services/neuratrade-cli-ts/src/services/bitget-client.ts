@@ -394,10 +394,10 @@ export interface BitgetClientImpl {
   }) => Effect.Effect<void, BitgetClientError>;
 }
 
-export class BitgetClient extends Context.Tag("BitgetClient")<
+export class BitgetClient extends Context.Service<
   BitgetClient,
   BitgetClientImpl
->() {}
+>()("BitgetClient") {}
 
 // ---------------------------------------------------------------------------
 // Internal fetch helper

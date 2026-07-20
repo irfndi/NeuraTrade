@@ -44,7 +44,7 @@ function run(
       Effect.map(
         (normalized): GuardRunResult => ({ ok: true, order: normalized }),
       ),
-      Effect.catchAll(
+      Effect.catch(
         (err): Effect.Effect<GuardRunResult, never> =>
           Effect.succeed({ ok: false, error: err }),
       ),

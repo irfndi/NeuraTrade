@@ -1,0 +1,137 @@
+#!/usr/bin/env bun
+/* Dump resolveBacktestArgs output for the maker profile vs the sweep's options. */
+import {
+  loadStrategyProfile,
+  resolveBacktestArgs,
+} from "../src/scalping/strategy-profile.js";
+import { Effect } from "effect";
+import { join } from "node:path";
+
+const home =
+  process.env.NEURATRADE_HOME ?? join(process.env.HOME!, ".neuratrade");
+const profile = await Effect.runPromise(
+  loadStrategyProfile(home, "scalp-btc-15m-maker-r0"),
+);
+
+// Mimic the CLI readiness invocation: only the explicitly-passed flags differ
+// from command defaults (futures, fee 0.06, slippage 2, leverage 1, capital).
+// Every other field sits at its CLI default (reproduced from the backtest options).
+const cliArgs = {
+  exchange: "bitget-futures",
+  symbol: "BTC/USDT:USDT",
+  timeframe: "15m",
+  capital: 10000,
+  positionSize: 100,
+  riskPerTrade: 0,
+  maxPositionSize: 100,
+  stopLoss: 1.5,
+  takeProfit: 3,
+  fee: 0.06,
+  minConfidence: 0.5,
+  useAtrStops: false,
+  atrStopMultiplier: 1.5,
+  atrTakeProfitMultiplier: 2.5,
+  atrRiskReward: 0,
+  scaleOutAtR: 0,
+  scaleOutPct: 50,
+  volatilityLookback: 0,
+  volatilityLowPct: 20,
+  volatilityHighPct: 80,
+  volatilityLowFactor: 0.8,
+  volatilityHighFactor: 1.2,
+  priceOnly: false,
+  noRsi: false,
+  holdUntilStop: false,
+  noTrend: false,
+  regimeMode: "trend",
+  futures: true,
+  fundingRatePct: 0.01,
+  slippageBps: 2,
+  trailingStopPct: 0,
+  trailingStopAtrMultiplier: 0,
+  minAtrPct: 0,
+  adxMin: 0,
+  volumeMinRatio: 0,
+  volumeLookback: 20,
+  minConfluence: 0,
+  entryCandleConfirm: false,
+  signalPersistence: 0,
+  momentumConfirmBars: 0,
+  lossConfidencePenalty: 0,
+  lossConfidenceDecay: 0,
+  htfTimeframe: "",
+  htfTrendFastPeriod: 50,
+  htfTrendSlowPeriod: 200,
+  htfSignalConfidence: 0,
+  entryPullbackEmaPeriod: 0,
+  entryPullbackMarginPct: 0,
+  minEfficiencyRatio: 0,
+  efficiencyRatioPeriod: 14,
+  rsiLongMax: 0,
+  rsiShortMin: 0,
+  bollingerLongMaxPctB: 0,
+  bollingerShortMinPctB: 0,
+  recordEquityCurve: false,
+  exportTrades: "",
+  oosPct: 20,
+  mcIterations: 200,
+  leverage: 1,
+  breakevenAtR: 0,
+  maxBarsInTrade: 0,
+  lossCooldownBars: 0,
+  sessionStart: "",
+  sessionEnd: "",
+  autoRegimeFilter: false,
+  autoRegimeAdxThreshold: 25,
+  trendSignalStyle: "slope",
+  trendFastPeriod: 9,
+  trendSlowPeriod: 21,
+  directionalOnly: false,
+  rsiFollowTrend: false,
+  strictAgreement: false,
+  entryOnClose: false,
+  observedPrice: false,
+  realistic: false,
+  strictRealism: false,
+} as never;
+
+const resolved = resolveBacktestArgs(
+  profile,
+  "BTC/USDT:USDT",
+  "bitget-futures",
+  "15m",
+  cliArgs,
+);
+const interesting = [
+  "minConfidence",
+  "useAtrStops",
+  "atrStopMultiplier",
+  "atrTakeProfitMultiplier",
+  "stopLoss",
+  "takeProfit",
+  "fee",
+  "makerFeePct",
+  "entryOrderType",
+  "entryLimitOffsetBps",
+  "regimeMode",
+  "maxBarsInTrade",
+  "leverage",
+  "fundingRatePct",
+  "slippageBps",
+  "positionSize",
+  "riskPerTrade",
+  "breakevenAtR",
+  "scaleOutAtR",
+  "trailingStopPct",
+  "adxMin",
+  "volumeMinRatio",
+  "minConfluence",
+  "timeframe",
+  "exchange",
+  "symbol",
+];
+for (const k of interesting) {
+  console.log(
+    `${k.padEnd(28)} ${JSON.stringify(resolved[k as keyof typeof resolved])}`,
+  );
+}

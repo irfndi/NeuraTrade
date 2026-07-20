@@ -43,7 +43,7 @@ export interface HealthCheck {
   ) => Effect.Effect<HealthJSONResult, never, never>;
 }
 
-export const HealthCheck = Context.GenericTag<HealthCheck>("HealthCheck");
+export const HealthCheck = Context.Service<HealthCheck>("HealthCheck");
 
 const DEFAULT_INTERVAL_MS = 500;
 
@@ -70,7 +70,7 @@ function probeHTTPOnce(
             }`,
           ),
       }).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.succeed({ _failed: true, error: err } as {
             _failed: true;
             error: Error;
@@ -131,7 +131,7 @@ function probeProcessOnce(
           }`,
         ),
     }).pipe(
-      Effect.catchAll((err) =>
+      Effect.catch((err) =>
         Effect.succeed({
           exitCode: 1,
           stdout: "",
@@ -190,7 +190,7 @@ function probeHealthJSONOnce(
             }`,
           ),
       }).pipe(
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.succeed({ _failed: true, error: err } as {
             _failed: true;
             error: Error;
@@ -217,7 +217,7 @@ function probeHealthJSONOnce(
       const textResult = yield* Effect.tryPromise({
         try: () => outcome.text(),
         catch: () => new Error("Failed to read response body"),
-      }).pipe(Effect.catchAll(() => Effect.succeed("")));
+      }).pipe(Effect.catch(() => Effect.succeed("")));
 
       let parsed: Record<string, unknown> = {};
       try {

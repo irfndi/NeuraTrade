@@ -8,6 +8,7 @@
  */
 
 import type { CandleLike } from "./types.js";
+import { makeCausalSymbolStats } from "./symbol-stats.js";
 
 export interface GridOptions {
   /** Grid step as a percentage of the mid price (e.g. 0.4 = 0.4%). */
@@ -30,6 +31,12 @@ export interface GridOptions {
   readonly onlyWithTrend?: boolean;
   /** Target distance as a multiple of the grid step (default 1.0). */
   readonly targetRatio?: number;
+  /**
+   * Chop gate: when > 0, NEW entries are skipped while the causal ADX(14)
+   * is at or above this threshold (trending market). Open positions keep
+   * their normal exit handling. 0/undefined disables the gate.
+   */
+  readonly chopGateAdxThreshold?: number;
 }
 
 export interface GridSearchSpace {
@@ -38,12 +45,27 @@ export interface GridSearchSpace {
   readonly gridPauseAfterLossBars: readonly number[];
 }
 
+export interface GridTrade {
+  readonly side: "long" | "short";
+  readonly entryBar: number;
+  readonly exitBar: number;
+  readonly entryPrice: number;
+  readonly exitPrice: number;
+  /** Net leveraged return fraction including round-trip fees (e.g. 0.01 = 1%). */
+  readonly pnlPct: number;
+  /** Absolute quote-currency PnL of the trade (negative for losses/liquidation). */
+  readonly pnlQuote: number;
+  readonly win: boolean;
+  readonly isLiquidation: boolean;
+}
+
 export interface GridResult {
   readonly totalReturnPct: number;
   readonly maxDrawdownPct: number;
   readonly winRate: number;
   readonly totalTrades: number;
   readonly profitFactor: number;
+  readonly trades: readonly GridTrade[];
 }
 
 export interface GridWalkForwardWindow {
@@ -83,9 +105,7 @@ function liquidationPrice(
 ): number {
   const l = Math.max(1, leverage);
   if (l <= 1) return 0;
-  return side === "long"
-    ? entryPrice * (1 - 1 / l)
-    : entryPrice * (1 + 1 / l);
+  return side === "long" ? entryPrice * (1 - 1 / l) : entryPrice * (1 + 1 / l);
 }
 
 export function runGridBacktest(
@@ -97,12 +117,21 @@ export function runGridBacktest(
   let maxDrawdown = 0;
   let positionSize = 0;
   let entryPrice = 0;
+  let entryBar = 0;
   let totalWins = 0;
   let totalLosses = 0;
   let grossProfit = 0;
   let grossLoss = 0;
+  const trades: GridTrade[] = [];
   let paused = 0;
   const leverage = Math.max(1, options.leverage ?? 1);
+  const chopGateAdxThreshold = Math.max(0, options.chopGateAdxThreshold ?? 0);
+  const statsProvider =
+    chopGateAdxThreshold > 0
+      ? // The provider's timeframe argument is currently unused (the
+        // annualized-volatility field is always 0, matching batch behavior).
+        makeCausalSymbolStats(candles, "15m")
+      : null;
 
   const startIndex = Math.max(options.trendFilterPeriod, 1);
   for (let i = startIndex; i < candles.length; i++) {
@@ -125,6 +154,14 @@ export function runGridBacktest(
     const slippage = 1 + options.slippageBps / 10000;
 
     if (positionSize === 0) {
+      // Chop gate: trending markets are where grid inventory gets run over;
+      // sit out until ADX says the market is ranging again.
+      if (
+        statsProvider !== null &&
+        statsProvider(i).adx14 >= chopGateAdxThreshold
+      ) {
+        continue;
+      }
       const buyLevel = mid - step;
       const sellLevel = mid + step;
       const onlyWithTrend = options.onlyWithTrend ?? false;
@@ -133,9 +170,11 @@ export function runGridBacktest(
       if (allowLong && c.low <= buyLevel) {
         entryPrice = buyLevel * slippage;
         positionSize = 1;
+        entryBar = i;
       } else if (allowShort && c.high >= sellLevel) {
         entryPrice = sellLevel / slippage;
         positionSize = -1;
+        entryBar = i;
       }
       continue;
     }
@@ -152,8 +191,10 @@ export function runGridBacktest(
           : (entryPrice - exitPrice) / entryPrice;
       const net = pricePnl - fee;
       const leveragedReturn = isLiquidation ? -1 : net * leverage;
+      const capitalBefore = capital;
       const rawCapitalAfter = capital * (1 + leveragedReturn);
       capital = isLiquidation ? 0 : Math.max(0, rawCapitalAfter);
+      const win = !isLiquidation && net >= 0;
       if (isLiquidation || net < 0) {
         totalLosses++;
         grossLoss += Math.abs(leveragedReturn);
@@ -161,6 +202,19 @@ export function runGridBacktest(
         totalWins++;
         grossProfit += leveragedReturn;
       }
+      trades.push({
+        side: exitSide,
+        entryBar,
+        exitBar: i,
+        entryPrice,
+        exitPrice,
+        pnlPct: leveragedReturn,
+        pnlQuote: isLiquidation
+          ? -capitalBefore
+          : capitalBefore * leveragedReturn,
+        win,
+        isLiquidation,
+      });
       positionSize = 0;
       paused = isLiquidation ? 0 : options.gridPauseAfterLossBars;
     };
@@ -200,6 +254,7 @@ export function runGridBacktest(
     totalTrades,
     profitFactor:
       grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
+    trades,
   };
 }
 

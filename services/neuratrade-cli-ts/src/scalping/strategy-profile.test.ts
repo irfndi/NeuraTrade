@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { BunFileSystem } from "@effect/platform-bun";
 import { Effect } from "effect";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
   buildStrategyProfileFromArgs,
+  findSymbolOverride,
   loadStrategyProfile,
   resolveBacktestArgs,
   saveStrategyProfile,
@@ -142,7 +144,11 @@ describe("strategy-profile load/save", () => {
       },
     };
 
-    await Effect.runPromise(saveStrategyProfile(home, "default", profile));
+    await Effect.runPromise(
+      saveStrategyProfile(home, "default", profile).pipe(
+        Effect.provide(BunFileSystem.layer),
+      ),
+    );
     const loaded = await Effect.runPromise(
       loadStrategyProfile(home, "default"),
     );
@@ -158,9 +164,9 @@ describe("strategy-profile load/save", () => {
   it("fails to load a missing profile", async () => {
     const home = tmpHome();
     const result = await Effect.runPromise(
-      Effect.either(loadStrategyProfile(home, "missing")),
+      Effect.result(loadStrategyProfile(home, "missing")),
     );
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
     fs.rmSync(home, { recursive: true, force: true });
   });
 });
@@ -213,6 +219,104 @@ describe("resolveBacktestArgs", () => {
       cli,
     );
     expect(resolved.stopLoss).toBe(3);
+  });
+
+  it("maps regimeMode from the profile when CLI is at the default", () => {
+    const profile: StrategyProfile = {
+      defaults: { regimeMode: "reversion" } as StrategyProfileParams,
+      symbols: {},
+    };
+    const cli = defaultResolvedArgs({ regimeMode: "trend" });
+    const resolved = resolveBacktestArgs(
+      profile,
+      cli.symbol,
+      cli.exchange,
+      cli.timeframe,
+      cli,
+    );
+    expect(resolved.regimeMode).toBe("reversion");
+  });
+
+  it("lets an explicit CLI regimeMode win over the profile", () => {
+    const profile: StrategyProfile = {
+      defaults: { regimeMode: "reversion" } as StrategyProfileParams,
+      symbols: {},
+    };
+    const cli = defaultResolvedArgs({ regimeMode: "breakout" });
+    const resolved = resolveBacktestArgs(
+      profile,
+      cli.symbol,
+      cli.exchange,
+      cli.timeframe,
+      cli,
+    );
+    expect(resolved.regimeMode).toBe("breakout");
+  });
+
+  it("matches spot-keyed overrides for futures symbols (settle suffix stripped)", () => {
+    const profile: StrategyProfile = {
+      defaults: {} as StrategyProfileParams,
+      symbols: {
+        "BTC/USDT": { atrStopMultiplier: 1 },
+      },
+    };
+    const cli = defaultResolvedArgs({ symbol: "BTC/USDT:USDT" });
+    const resolved = resolveBacktestArgs(
+      profile,
+      cli.symbol,
+      cli.exchange,
+      cli.timeframe,
+      cli,
+    );
+    expect(resolved.atrStopMultiplier).toBe(1);
+  });
+
+  it("matches futures-keyed overrides for spot symbols", () => {
+    const profile: StrategyProfile = {
+      defaults: {} as StrategyProfileParams,
+      symbols: {
+        "BTC/USDT:USDT": { atrStopMultiplier: 0.8 },
+      },
+    };
+    const cli = defaultResolvedArgs({ symbol: "BTC/USDT" });
+    const resolved = resolveBacktestArgs(
+      profile,
+      cli.symbol,
+      cli.exchange,
+      cli.timeframe,
+      cli,
+    );
+    expect(resolved.atrStopMultiplier).toBe(0.8);
+  });
+
+  it("prefers exact symbol key over stripped match", () => {
+    const profile: StrategyProfile = {
+      defaults: {} as StrategyProfileParams,
+      symbols: {
+        "BTC/USDT": { atrStopMultiplier: 1 },
+        "BTC/USDT:USDT": { atrStopMultiplier: 0.5 },
+      },
+    };
+    const cli = defaultResolvedArgs({ symbol: "BTC/USDT:USDT" });
+    const resolved = resolveBacktestArgs(
+      profile,
+      cli.symbol,
+      cli.exchange,
+      cli.timeframe,
+      cli,
+    );
+    expect(resolved.atrStopMultiplier).toBe(0.5);
+  });
+
+  it("exposes whether any symbol override matched (for loud warnings)", () => {
+    const profile: StrategyProfile = {
+      defaults: {} as StrategyProfileParams,
+      symbols: { "ETH/USDT": { atrStopMultiplier: 1 } },
+    };
+    expect(findSymbolOverride(profile, "BTC/USDT:USDT")).toBeUndefined();
+    expect(findSymbolOverride(profile, "ETH/USDT:USDT")).toEqual({
+      atrStopMultiplier: 1,
+    });
   });
 
   it("fills defaults from profile for mapped fields", () => {

@@ -35,7 +35,10 @@ import {
   type PaperTradingOptions,
 } from "./engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
+import { ExitEngineLive, SignalComposerLive } from "../scalping/services.js";
 import type { ComposerConfig } from "../scalping/types.js";
+
+const scalpingServiceLayers = Layer.merge(SignalComposerLive, ExitEngineLive);
 
 function makeCandles(
   count: number,
@@ -82,6 +85,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   private trades: PaperTrade[] = [];
 
   ensureTables() {
+    return Effect.void;
+  }
+
+  resetGridState() {
     return Effect.void;
   }
 
@@ -357,6 +364,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -387,6 +395,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -418,6 +427,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -447,6 +457,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 

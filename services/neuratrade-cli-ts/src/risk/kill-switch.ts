@@ -18,7 +18,7 @@ export interface KillSwitchService {
   readonly getReason: () => Effect.Effect<string, KillSwitchError, never>;
 }
 
-export const KillSwitch = Context.GenericTag<KillSwitchService>("KillSwitch");
+export const KillSwitch = Context.Service<KillSwitchService>("KillSwitch");
 
 const ensureTableSQL = `
 CREATE TABLE IF NOT EXISTS risk_kill_switch (

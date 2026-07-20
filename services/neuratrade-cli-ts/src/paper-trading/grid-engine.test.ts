@@ -19,10 +19,7 @@ import {
   type FuturesExchangeAdapterService,
 } from "../exchange/futures-adapter.js";
 import { RiskGuard, type RiskGuardService } from "../risk/guards.js";
-import {
-  KillSwitch,
-  type KillSwitchService,
-} from "../risk/kill-switch.js";
+import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
   CircuitBreaker,
   type CircuitBreakerService,
@@ -64,6 +61,11 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   private gridTrades: GridPaperTrade[] = [];
 
   ensureTables() {
+    return Effect.void;
+  }
+
+  resetGridState() {
+    this.gridState = null;
     return Effect.void;
   }
 
@@ -363,5 +365,71 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("[LIVE]");
     expect(orders.length).toBeGreaterThan(0);
     expect(orders[0].size).toBeGreaterThan(0);
+  });
+
+  it("chop gate blocks entries in a trending market and allows them in chop", async () => {
+    const trendRepo = new InMemoryPaperRepository();
+    const trendCandles = makeCandles(80, 1000, "trendUp");
+    const gatedTrend = await runWithRepo(
+      makeOptions({ chopGateAdxThreshold: 25 }),
+      trendRepo,
+      trendCandles,
+    );
+    expect(gatedTrend.action).toBe("hold");
+    expect(gatedTrend.note).toContain("chop gate active");
+
+    // Low-ADX chop: gentle sine oscillation (ADX ≈ 10, verified vs indicators).
+    const chopCandles: Candle[] = [];
+    for (let i = 0; i < 80; i++) {
+      const close = 1000 * (1 + 0.008 * Math.sin((2 * Math.PI * i) / 8));
+      const open = i === 0 ? close : chopCandles[i - 1].close;
+      chopCandles.push({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        open,
+        high: Math.max(open, close) * 1.0005,
+        low: Math.min(open, close) * 0.9995,
+        close,
+        volume: 10,
+        timestamp: new Date(Date.now() - (80 - i) * 900_000),
+      });
+    }
+    const chopRepo = new InMemoryPaperRepository();
+    let opens = 0;
+    for (let k = 0; k < 10; k++) {
+      const r = await runWithRepo(
+        makeOptions({
+          chopGateAdxThreshold: 25,
+          gridStepPct: 0.5,
+          replayBars: 8,
+        }),
+        chopRepo,
+        chopCandles,
+      );
+      if (r.action === "opened") opens++;
+    }
+    expect(opens).toBeGreaterThan(0);
+  });
+
+  it("chop-gated iterations advance the replay pointer (no stall)", async () => {
+    const repo = new InMemoryPaperRepository();
+    const trendCandles = makeCandles(80, 1000, "trendUp");
+    const opts = makeOptions({ chopGateAdxThreshold: 25, replayBars: 40 });
+
+    await runWithRepo(opts, repo, trendCandles);
+    const first = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(first).not.toBeNull();
+    const firstTs = first!.lastTimestamp?.getTime() ?? 0;
+    expect(firstTs).toBeGreaterThan(0);
+
+    await runWithRepo(opts, repo, trendCandles);
+    const second = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    const secondTs = second!.lastTimestamp?.getTime() ?? 0;
+    expect(secondTs).toBeGreaterThan(firstTs);
   });
 });

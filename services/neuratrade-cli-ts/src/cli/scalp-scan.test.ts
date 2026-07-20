@@ -6,6 +6,7 @@ import {
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import type { Candle } from "../market-data/types.js";
+import { BacktestEngineLive } from "../scalping/services.js";
 import { scanProgram } from "./scalp.js";
 
 function makeCandles(
@@ -158,7 +159,7 @@ describe("scanProgram", () => {
         gridStepPct: 0,
         gridMaxGrids: 0,
         gridPauseAfterLossBars: 0,
-      }).pipe(Effect.provide(repoLayer)),
+      }).pipe(Effect.provide(repoLayer), Effect.provide(BacktestEngineLive)),
     );
 
     expect(results.length).toBe(2);
@@ -293,7 +294,7 @@ describe("scanProgram", () => {
         gridStepPct: 0,
         gridMaxGrids: 0,
         gridPauseAfterLossBars: 0,
-      }).pipe(Effect.provide(repoLayer)),
+      }).pipe(Effect.provide(repoLayer), Effect.provide(BacktestEngineLive)),
     );
 
     const exchanges = new Set(results.map((r) => r.exchange));

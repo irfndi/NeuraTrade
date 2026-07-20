@@ -40,10 +40,10 @@ export interface RateLimiterImpl {
   readonly acquire: (n?: number) => Effect.Effect<void, never>;
 }
 
-export class RateLimiter extends Context.Tag("RateLimiter")<
+export class RateLimiter extends Context.Service<
   RateLimiter,
   RateLimiterImpl
->() {}
+>()("RateLimiter") {}
 
 // ---------------------------------------------------------------------------
 // Internal model

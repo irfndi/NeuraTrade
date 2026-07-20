@@ -4,8 +4,8 @@
  * Supports leverage, margin mode, position mode, order placement and position
  * queries. All commands respect BITGET_USE_SANDBOX for demo trading.
  */
-import { Command, Options } from "@effect/cli";
-import { Console, Effect, Either, Option } from "effect";
+import { Command, Options } from "./kit/kit.ts";
+import { Console, Effect, Option, Result } from "effect";
 import {
   BitgetClient,
   type BitgetMarginMode,
@@ -174,7 +174,7 @@ const contractsCommand = Command.make(
       if (contracts.length > 20) {
         yield* Console.log(`  ... and ${contracts.length - 20} more`);
       }
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("List Bitget futures contracts"));
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ const tickerCommand = Command.make(
       if (ticker.fundingRate !== undefined) {
         yield* Console.log(`  funding: ${ticker.fundingRate}`);
       }
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Fetch Bitget futures ticker"));
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ const balanceCommand = Command.make(
           `  ${b.marginCoin}: available=${b.available} equity=${b.equity} usdtEq=${b.usdtEquity}`,
         );
       }
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Show Bitget futures account balances"));
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ const positionsCommand = Command.make(
           `  ${p.holdSide} ${p.total} ${p.symbol} @ ${p.openPrice} lev=${p.leverage} margin=${p.marginMode} liq=${p.liquidatedPrice}`,
         );
       }
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Show open Bitget futures positions"));
 
 // ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ const leverageCommand = Command.make(
           `✅ Leverage set to ${leverage}x (${mm}) for ${symbol}`,
         );
       }
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(
   Command.withDescription(
     "Get or set leverage (omit --leverage to read current)",
@@ -321,7 +321,7 @@ const marginModeCommand = Command.make(
         marginMode: parseMarginMode(marginMode),
       });
       yield* Console.log(`✅ Margin mode set to ${marginMode} for ${symbol}`);
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Set futures margin mode"));
 
 // ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ const positionModeCommand = Command.make(
       yield* Console.log(
         `✅ Position mode set to ${positionMode} for ${productType}`,
       );
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Set futures position mode"));
 
 // ---------------------------------------------------------------------------
@@ -422,15 +422,15 @@ const orderPlaceCommand = Command.make(
         positions,
         leverageInfo,
         intendedLeverage,
-      }).pipe(Effect.either);
-      if (Either.isLeft(safetyCheck) && !args.force) {
+      }).pipe(Effect.result);
+      if (Result.isFailure(safetyCheck) && !args.force) {
         return yield* Effect.fail(
-          new Error(`safety check failed: ${safetyCheck.left.reason}`),
+          new Error(`safety check failed: ${safetyCheck.failure.reason}`),
         );
       }
-      if (Either.isLeft(safetyCheck) && args.force) {
+      if (Result.isFailure(safetyCheck) && args.force) {
         yield* Console.log(
-          `⚠️  safety check bypassed: ${safetyCheck.left.reason}`,
+          `⚠️  safety check bypassed: ${safetyCheck.failure.reason}`,
         );
       }
 
@@ -477,7 +477,7 @@ const orderPlaceCommand = Command.make(
       yield* Console.log(`  symbol:    ${order.symbol}`);
       yield* Console.log(`  side:      ${order.side}`);
       yield* Console.log(`  status:    ${order.status}`);
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Place a Bitget futures order"));
 
 // ---------------------------------------------------------------------------
@@ -511,7 +511,7 @@ const orderStatusCommand = Command.make(
       yield* Console.log(`  side:   ${order.side}`);
       yield* Console.log(`  size:   ${order.size}`);
       yield* Console.log(`  price:  ${order.price}`);
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Query a Bitget futures order"));
 
 // ---------------------------------------------------------------------------
@@ -541,7 +541,7 @@ const orderCancelCommand = Command.make(
         clientOid: clientOid.trim() || undefined,
       });
       yield* Console.log("✅ Futures order cancel request sent");
-    }).pipe(Effect.catchAll(handleErr)),
+    }).pipe(Effect.catch(handleErr)),
 ).pipe(Command.withDescription("Cancel a Bitget futures order"));
 
 // ---------------------------------------------------------------------------

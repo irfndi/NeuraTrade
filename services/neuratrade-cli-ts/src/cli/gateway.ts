@@ -1,5 +1,5 @@
-import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
+import { Command, Options } from "./kit/kit.ts";
+import { BunServices } from "@effect/platform-bun";
 import { Console, Effect, Layer } from "effect";
 import { PathLive } from "../services/path.ts";
 import { ConfigLive, resolvedConfigEffect } from "../services/config.ts";
@@ -22,7 +22,7 @@ const supervisedFlag = Options.boolean("supervised").pipe(
 );
 
 function makeLayer(home?: string) {
-  const base = Layer.mergeAll(BunContext.layer, PathLive(home), LoggerLive);
+  const base = Layer.mergeAll(BunServices.layer, PathLive(home), LoggerLive);
   const config = Layer.provide(ConfigLive(home), base);
   const pidFile = Layer.provide(PidFileLive, base);
   const health = HealthCheckLive;
@@ -57,7 +57,7 @@ const startCommand = Command.make(
         `🏥 Health Check: http://localhost:${config.server.port}/health`,
       );
     }).pipe(
-      Effect.catchAll((err) =>
+      Effect.catch((err) =>
         Console.log(`❌ Gateway start failed: ${err.message}`).pipe(
           Effect.flatMap(() => Effect.fail(err)),
         ),
