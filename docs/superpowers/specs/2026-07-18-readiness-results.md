@@ -108,6 +108,19 @@ The single 80/20 OOS (last ~2.4 months) looks marginal, but that is a **recent-r
 
 **The one thing backtesting cannot resolve is fill PROBABILITY** (queue position / adverse selection): realistic maker fills would skew toward filling the losers and missing the gentle-bounce winners. This is strictly worse than the optimistic "touched=filled" model and is **not backtestable from OHLC** — it can only be proven with live order fills.
 
+### Adverse-selection fill model — a backtest bound on fill realism
+To quantify that unbacktestable risk, the grid engine now carries a parametric maker-fill model (`src/scalping/grid.ts`): `makerFillProb` (probability a touched level actually fills — queue risk), `adverseSelection` (fills skew toward the loss-prone touch: a bar that closes *through* the entry level fills for certain, while a recovered wick fills only at the base probability), and `takerExitFeePct` (stops/liquidations pay the taker fee; entries and take-profits stay maker). Stress on the BTC 15m winner:
+
+| fill model | OOS return | OOS PF | OOS exp/tr | OOS win | WF profitable | WF mean ret/45d |
+|---|---|---|---|---|---|---|
+| optimistic (full fill, symmetric fee) | +1.53% | 1.11 | +0.061% | 64.3% | 5/5 | +5.12% |
+| full fill + taker stops | +1.12% | 1.08 | +0.047% | 64.3% | 5/5 | +4.87% |
+| 0.7 uniform fill + taker | +2.75% | 1.30 | +0.150% | 68.4% | 5/5 | +2.88% |
+| 0.7 **adverse** fill + taker | **−3.26%** | **0.82** | −0.120% | 57.7% | **3/5** | +1.24% |
+| 0.5 **adverse** fill + taker | −1.74% | 0.90 | −0.062% | 60.0% | **2/5** | +0.77% |
+
+**Finding:** the edge is **robust to ordinary frictions** — slippage, a random/queue fill-rate haircut, and taker stop fees all keep it profitable (first three rows, 5/5 windows). The kill-shot is **adverse selection**: when realised fills skew toward the loss-prone touches (the realistic risk for passive maker orders), the edge flips negative (OOS −3.26%, PF 0.82). The strategy survives *cost* but not *adverse fill selection*. The single lever deciding real-money viability is therefore the **magnitude of adverse selection in real fills** — unmeasurable from OHLC, only a live order book reveals it. This is modeled + tested (`grid.test.ts`: adverse selection shifts realized fills toward losers; taker fees reduce returns), and `scripts/grid-fill-stress.ts` reproduces the matrix above.
+
 ### Position sizing (`positionFraction`, PR 2/N)
 Added `positionFraction` (0..1, default 1 = all-in) to the grid engine. It scales the equity curve and drawdown with the fraction while leaving per-trade edge metrics (win rate / PF / expectancy) invariant — sizing controls **absolute risk**, not the edge (Calmar/PF unchanged). Evidence:
 
@@ -139,10 +152,10 @@ Both configurations are profitable in the most recent regime and clear the ≥10
 - The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only config with an edge. It passes all readiness gates and is **walk-forward robust (5/5 windows, survives 10bp slippage)** — a real, modest, regime-dependent mean-reversion edge that harvests chop and sits out trends.
 
 **What is NOT proven:**
-- **Fill realism.** The edge assumes "touched = filled" maker fills with no queue/adverse-selection modeling. Realistic maker fills could erode or erase the +0.06–0.17%/trade expectancy. This is decisive and **only provable with live fills**.
+- **Adverse-selection magnitude in real fills.** The edge survives everything backtesting *can* model — slippage to 10bp, taker stop fees, and a random/queue fill-rate haircut all keep it profitable (walk-forward 5/5). But the adverse-selection fill model shows the edge goes **negative** when fills skew toward the loss-prone touches (OOS PF 0.82). Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
 
 **Recommendation:**
-1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. Confirm: orders open AND close within the hold envelope, guards engage, and **realized fill rate + expectancy track the backtest within the MC band**. If realized fills/expectancy collapse (queue/adverse-selection), this is a **NO-GO** for this strategy class on majors — the honest, correct outcome.
+1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The sharp sign-off test: **measure the realized per-trade win rate and expectancy of filled orders.** If the realized win rate tracks the backtest's full-fill figure (~64%) with non-negative expectancy, adverse selection is benign → **GO** to a small real-money test account. If the realized win rate collapses toward the adverse-model figure (~58%) with negative expectancy, fills are adversely selected → **NO-GO** for this strategy class on majors (the honest, correct outcome). Also confirm orders open AND close within the hold envelope and the risk guards engage.
 2. If the demo holds: a **small real-money test account** at the conservative fraction, hard risk limits (max DD ~5%, daily loss ~2%, kill switch), and continuous monitoring. Scale only with sustained live evidence.
 3. Treat ETH as **not ready** (thin OOS edge) and BTC as the single candidate until the demo proves otherwise.
 
@@ -178,5 +191,5 @@ bun run index.ts scalp paper-trade \
 
 Conservative fraction 0.5 (`--max-position-size-pct 50`), risk guards on, ~15-min iteration cadence over a ≥ 7-day / ≥ 50-trade window. Record realized fill-rate, expectancy, and DD, then compare against the backtest within its Monte-Carlo band for sign-off. **This live demo is the decisive fill-realism proof** that backtesting cannot provide; it gates any real-money decision.
 
-**Status:** dt8/u1u/91b QA-closed (tests green); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed; er7 (demo soak) **pending user's demo keys**; position sizing landed (PR 2/N). Foundation = PR #472, sizing = PR #473.
+**Status:** dt8/u1u/91b QA-closed (tests green; 706/706 package suite); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed. Maker-fill realism modeled + stressed: edge survives slippage/taker-fees/queue fill-rate but is fragile to adverse selection (verdict refined above). Position sizing landed (backtest `positionFraction`; live `--max-position-size-pct`, provably equivalent). Foundation = PR #472, sizing = PR #473, verdict + fill realism = PR #474. **er7:** deterministic 30-day sample captured; the decisive live-demo soak remains **pending the user's Bitget demo keys**.
 
