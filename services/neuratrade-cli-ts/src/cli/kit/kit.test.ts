@@ -480,7 +480,11 @@ describe("kit: property tests", () => {
         provided: fc.boolean(),
         textValue: fc.stringMatching(/^[a-zA-Z0-9][a-zA-Z0-9 ./:_-]{0,15}$/),
         intValue: fc.integer({ min: -10_000, max: 10_000 }),
-        floatValue: fc.float({ noNaN: true }),
+        floatValue: fc
+          .float({ noNaN: true })
+          // String(-0) === "0", so -0 cannot round-trip a CLI parse; normalize
+          // it away so the round-trip property holds for every generated float.
+          .map((v) => (Object.is(v, -0) ? 0 : v)),
         choices: fc
           .array(fc.stringMatching(/^[a-z][a-z0-9]{0,5}$/), {
             minLength: 1,
