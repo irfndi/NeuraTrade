@@ -37,6 +37,14 @@ export interface GridOptions {
    * their normal exit handling. 0/undefined disables the gate.
    */
   readonly chopGateAdxThreshold?: number;
+  /**
+   * Fraction of equity (0..1) allocated as notional to each grid position.
+   * Default 1 = all-in. Below 1, the equity curve and drawdown scale down
+   * while per-trade edge metrics (win rate / profit factor / expectancy from
+   * pnlPct) are unchanged — used to tame drawdown (e.g. ETH 15m) and size
+   * capital across positions.
+   */
+  readonly positionFraction?: number;
 }
 
 export interface GridSearchSpace {
@@ -126,6 +134,10 @@ export function runGridBacktest(
   let paused = 0;
   const leverage = Math.max(1, options.leverage ?? 1);
   const chopGateAdxThreshold = Math.max(0, options.chopGateAdxThreshold ?? 0);
+  const positionFraction = Math.max(
+    0,
+    Math.min(1, options.positionFraction ?? 1),
+  );
   const statsProvider =
     chopGateAdxThreshold > 0
       ? // The provider's timeframe argument is currently unused (the
@@ -192,8 +204,14 @@ export function runGridBacktest(
       const net = pricePnl - fee;
       const leveragedReturn = isLiquidation ? -1 : net * leverage;
       const capitalBefore = capital;
-      const rawCapitalAfter = capital * (1 + leveragedReturn);
-      capital = isLiquidation ? 0 : Math.max(0, rawCapitalAfter);
+      // positionFraction sizes the EQUITY allocated to the trade. Per-trade
+      // edge metrics (win / PF / expectancy from pnlPct) stay sizing-invariant;
+      // only the equity curve and drawdown scale with the fraction. At the
+      // default fraction = 1 this reproduces the original all-in behavior.
+      const equityReturn = isLiquidation
+        ? -positionFraction
+        : positionFraction * leveragedReturn;
+      capital = Math.max(0, capitalBefore * (1 + equityReturn));
       const win = !isLiquidation && net >= 0;
       if (isLiquidation || net < 0) {
         totalLosses++;
@@ -209,9 +227,7 @@ export function runGridBacktest(
         entryPrice,
         exitPrice,
         pnlPct: leveragedReturn,
-        pnlQuote: isLiquidation
-          ? -capitalBefore
-          : capitalBefore * leveragedReturn,
+        pnlQuote: capitalBefore * equityReturn,
         win,
         isLiquidation,
       });

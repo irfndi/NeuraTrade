@@ -142,3 +142,84 @@ for (const slip of [1, 2, 3, 5, 8, 10]) {
       `${maxDd.toFixed(2).padStart(9)} ${String(trades).padStart(7)}`,
   );
 }
+
+// ---- Position sizing: fraction of equity per grid position (Layer 2) ----
+// Demonstrates that sizing scales the equity curve + drawdown down while
+// per-trade edge metrics (win / PF / expectancy) stay invariant, so absolute
+// risk exposure is controllable without changing the measured edge.
+console.log("\n=== Position sizing sweep (fraction of equity per grid) ===");
+const db2 = new Database(join(home, "data", "neuratrade.db"), {
+  readonly: true,
+});
+function load(sym: string, tf: string): Candle[] {
+  const rs = db2
+    .query(
+      `SELECT o.open_price, o.high_price, o.low_price, o.close_price, o.volume, o.timestamp
+       FROM ohlcv_data o JOIN exchanges e ON e.id=o.exchange_id JOIN trading_pairs tp ON tp.id=o.trading_pair_id
+       WHERE e.name = ? AND tp.symbol = ? AND o.timeframe = ? ORDER BY o.timestamp ASC`,
+    )
+    .all(exchange, sym, tf) as Array<{
+    open_price: number;
+    high_price: number;
+    low_price: number;
+    close_price: number;
+    volume: number;
+    timestamp: string;
+  }>;
+  return rs.map((r) => ({
+    exchange,
+    symbol: sym,
+    timeframe: tf,
+    open: r.open_price,
+    high: r.high_price,
+    low: r.low_price,
+    close: r.close_price,
+    volume: r.volume,
+    timestamp: new Date(
+      r.timestamp.endsWith("Z")
+        ? r.timestamp
+        : r.timestamp.replace(" ", "T") + "Z",
+    ),
+  }));
+}
+
+const ethConfig = {
+  feePct: 0.02,
+  slippageBps: 1,
+  trendFilterPeriod: 0,
+  leverage: 1,
+  onlyWithTrend: false,
+  targetRatio: 1.5,
+  chopGateAdxThreshold: 25,
+  initialCapital: 10_000,
+  gridStepPct: 0.75,
+  gridMaxGrids: 3,
+  gridPauseAfterLossBars: 12,
+};
+const ethCandles = load("ETH/USDT:USDT", "15m");
+const ethSplit = splitCandlesByOos(ethCandles, 20);
+
+console.log(
+  "ETH 15m (gated: step 0.75, grids 3, tgtR 1.5, pause 12, gate 25):",
+);
+for (const frac of [1, 0.75, 0.5, 0.3]) {
+  const isR = runGridBacktest(ethSplit.is, {
+    ...ethConfig,
+    positionFraction: frac,
+  });
+  const oosR = runGridBacktest(ethSplit.oos, {
+    ...ethConfig,
+    positionFraction: frac,
+  });
+  console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+}
+
+console.log(
+  "\nBTC 15m (winner: step 1, grids 1.5, tgtR 1, pause 12, gate 30):",
+);
+for (const frac of [1, 0.75, 0.5, 0.3]) {
+  const isR = runGridBacktest(is, { ...winner, positionFraction: frac });
+  const oosR = runGridBacktest(oos, { ...winner, positionFraction: frac });
+  console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+}
+db2.close();
