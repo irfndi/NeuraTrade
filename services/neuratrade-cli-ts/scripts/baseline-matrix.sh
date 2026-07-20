@@ -14,9 +14,12 @@ SYMBOLS=("BTC/USDT:USDT" "ETH/USDT:USDT")
 TIMEFRAMES=("5m" "15m")
 
 run_case() {
-  local name="$1"; shift
-  local symbol="$1"; shift
-  local timeframe="$1"; shift
+  local name="$1"
+  shift
+  local symbol="$1"
+  shift
+  local timeframe="$1"
+  shift
   echo "=== ${name} ${symbol} ${timeframe} ==="
   bun run index.ts scalp backtest \
     --exchange bitget-futures \

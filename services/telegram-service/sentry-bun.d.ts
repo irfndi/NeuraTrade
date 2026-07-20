@@ -22,8 +22,7 @@ declare module "@sentry/bun" {
     tracesSampleRate?: number;
     attachStacktrace?: boolean;
     integrations?:
-      | Integration[]
-      | ((integrations: Integration[]) => Integration[]);
+      Integration[] | ((integrations: Integration[]) => Integration[]);
     beforeSend?: (
       event: Event,
       hint?: EventHint,
