@@ -120,6 +120,16 @@ Added `positionFraction` (0..1, default 1 = all-in) to the grid engine. It scale
 
 ETH's drawdown drops below the 15% gate at fraction 0.5 (its OOS PF 1.32 already clears the 1.3 economics gate); the BTC winner is unchanged at fraction 1 and halves its DD at 0.5.
 
+### Recent 30-day realized sample (`er7` — deterministic, read-only, key-independent)
+Last 30 days (2880 × 15m bars) via `scripts/grid-fill-stress.ts`. A clean statistical anchor; the live-fill demo is the decisive complement.
+
+| asset | 30d return | trades | freq | win | PF | exp/tr | DD |
+|---|---|---|---|---|---|---|---|
+| BTC 15m winner | +0.76% | 14 | 14.0/mo | 64.3% | 1.11 | +0.061% | 3.7% |
+| ETH 15m gated | +0.72% | 26 | 26.0/mo | 69.2% | **1.06** | +0.040% | 8.3% |
+
+Both configurations are profitable in the most recent regime and clear the ≥10 trades/month frequency gate. BTC's recent per-trade expectancy (+0.061%) matches its full out-of-sample figure — the edge is consistent, not a fluke, but thin. **ETH's recent PF (1.06) sits below the 1.3 economics gate**, reinforcing that ETH is not ready. The thin per-trade expectancy (BTC +0.061%, ETH +0.040%) is precisely what makes fill-realism (slippage/adverse-selection beyond the modeled 1 bp) the decisive open question, answerable only by the live demo.
+
 ## FINAL VERDICT (2026-07-20)
 
 **Conditional GO to LIVE DEMO validation. Not yet approved for real money.**
@@ -145,7 +155,15 @@ ETH's drawdown drops below the 15% gate at fraction 0.5 (its OOS PF 1.32 already
 - [ ] Sign-off: demo realized expectancy ≥ ~0 net of REAL fees/slippage before any real money.
 
 ### Demo invocation (Bitget PAPTRADING — run once demo keys are in `.env`)
-With `BITGET_USE_SANDBOX=true` and the Bitget demo credentials (API key / secret / passphrase):
+With your Bitget **demo** (PAPTRADING) credentials:
+
+```bash
+export BITGET_API_KEY=<demo api key>
+export BITGET_API_SECRET=<demo api secret>
+export BITGET_PASSPHRASE=<demo passphrase>
+export BITGET_USE_SANDBOX=true   # client auto-sends the PAPTRADING=1 header (no real funds at risk)
+```
+
 
 ```bash
 bun run index.ts scalp paper-trade \

@@ -222,4 +222,28 @@ for (const frac of [1, 0.75, 0.5, 0.3]) {
   const oosR = runGridBacktest(oos, { ...winner, positionFraction: frac });
   console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
 }
+
+// ---- Recent 30-day realized sample (clever-cabin-er7 statistical sample) ----
+// Deterministic backtest over the LAST 30 days (2880 x 15m bars), read-only,
+// comparing recent-regime realized stats to the full-backtest expectancy. The
+// live-engine demo (real fills) is the decisive complement; this is the clean,
+// key-independent statistical anchor.
+console.log(
+  "\n=== Recent 30-day realized sample (last 2880 bars, deterministic) ===",
+);
+const RECENT = 2880;
+const recentSets: ReadonlyArray<readonly [string, typeof candles, typeof winner]> = [
+  ["BTC 15m winner", candles.slice(-RECENT), winner],
+  ["ETH 15m gated", ethCandles.slice(-RECENT), ethConfig],
+];
+for (const [label, recent, cfg] of recentSets) {
+  const r = runGridBacktest(recent, cfg);
+  const days = Math.max(1, Math.round(recent.length / 96));
+  console.log(
+    `${label.padEnd(16)} (${days}d) ret ${r.totalReturnPct.toFixed(2).padStart(7)}% ` +
+      `tr ${String(r.totalTrades).padStart(4)} (${((r.totalTrades * 30) / days).toFixed(1)}/mo) ` +
+      `win ${r.winRate.toFixed(1).padStart(5)}% PF ${r.profitFactor.toFixed(2).padStart(5)} ` +
+      `exp ${expectancyPct(r).toFixed(3).padStart(7)}%/tr DD ${r.maxDrawdownPct.toFixed(1).padStart(5)}%`,
+  );
+}
 db2.close();
