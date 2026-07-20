@@ -3,11 +3,7 @@ import { TelegramConfigPartial } from "./config";
 
 // Error types for API classification
 export type ApiErrorType =
-  | "auth_failed"
-  | "not_found"
-  | "server_error"
-  | "network_error"
-  | "unknown";
+  "auth_failed" | "not_found" | "server_error" | "network_error" | "unknown";
 
 export interface ApiError {
   type: ApiErrorType;
