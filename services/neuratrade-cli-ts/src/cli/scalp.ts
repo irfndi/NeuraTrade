@@ -3222,6 +3222,16 @@ export function validateLiveExecutionMarket(
   return undefined;
 }
 
+export function validateLiveSandboxMode(
+  live: boolean,
+  sandboxValue: string | undefined,
+): string | undefined {
+  if (live && sandboxValue !== "true" && sandboxValue !== "1") {
+    return "live execution is disabled until BITGET_USE_SANDBOX=true is configured for the demo gate";
+  }
+  return undefined;
+}
+
 export function validateLiveExecutionStrategy(
   live: boolean,
   strategyType: "signal" | "grid",
@@ -3342,6 +3352,13 @@ function paperTradeProgram(args: PaperTradeArgs) {
     );
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
+    }
+    const liveSandboxError = validateLiveSandboxMode(
+      args.live,
+      process.env.BITGET_USE_SANDBOX,
+    );
+    if (liveSandboxError !== undefined) {
+      return yield* Effect.fail(new Error(liveSandboxError));
     }
     const liveStrategyError = validateLiveExecutionStrategy(
       args.live,

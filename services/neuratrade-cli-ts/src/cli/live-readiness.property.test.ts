@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fc from "fast-check";
 import {
   validateLiveGridConfiguration,
+  validateLiveSandboxMode,
   type LiveGridConfiguration,
 } from "./scalp.js";
 
@@ -43,6 +44,26 @@ describe("validated live grid profile properties", () => {
         },
       ),
       { numRuns: 6 },
+    );
+  });
+
+  it("requires the exchange sandbox for every live execution", () => {
+    fc.assert(
+      fc.property(
+        fc.option(fc.string(), { nil: undefined }),
+        (sandboxValue) => {
+          const sandboxEnabled =
+            sandboxValue === "true" || sandboxValue === "1";
+          const result = validateLiveSandboxMode(true, sandboxValue);
+          if (sandboxEnabled) {
+            expect(result).toBeUndefined();
+          } else {
+            expect(result).toBeDefined();
+          }
+          expect(validateLiveSandboxMode(false, sandboxValue)).toBeUndefined();
+        },
+      ),
+      { numRuns: 100 },
     );
   });
 });

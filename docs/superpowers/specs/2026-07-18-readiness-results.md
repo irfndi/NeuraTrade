@@ -312,6 +312,20 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   unapproved. The longer history increases evidence, but does not clear the
   confidence or real-fill gates for either symbol.
 
+## Iteration 16 — true rolling walk-forward review (2026-08-02)
+
+- `scripts/grid-walkforward.ts` was rerun on the complete 70,079-candle BTC
+  history with 120-day training and 45-day test windows (13 windows).
+- Pass A, re-optimizing inside the fixed parameter neighborhood, returned
+  **−46.92%** in aggregate, only **23%** profitable windows, and **18.22%**
+  maximum drawdown across 206 trades.
+- Pass B, holding the published BTC candidate fixed, was profitable in only
+  **6/13** windows, with **−0.41%** mean window return, **13.06%** worst
+  drawdown, and 229 trades.
+- This is stronger evidence than the earlier 5-window result and removes any
+  basis for calling the candidate robust. The next safe experiment is the
+  exchange demo soak, not a real-money order.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
@@ -319,7 +333,8 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - The ETH gated grid also has a positive historical point estimate, but its
   confidence interval crosses zero and its current tail misses the PF gate;
   it is not approved for live execution. The live CLI deliberately permits
-  only the BTC candidate while the demo evidence is pending.
+  only the BTC candidate, and only in the exchange sandbox while the demo
+  evidence is pending.
 
 **What is NOT proven:**
 
@@ -329,13 +344,14 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 
 **Recommendation:**
 
-1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The sharp sign-off test: **measure the realized per-trade win rate, expectancy, and bootstrap lower bound of filled orders.** Require non-negative expectancy, a non-negative confidence lower bound, and no adverse-selection signature before any real-money test. If the realized win rate tracks the backtest's full-fill figure (~64%), adverse selection is benign → **GO** to a small real-money test account. If it collapses toward the adverse-model figure (~58%) with negative expectancy → **NO-GO**.
-2. If the demo holds: a **small real-money test account** at the conservative fraction, hard risk limits (max DD ~5%, daily loss ~2%, kill switch), and continuous monitoring. Scale only with sustained live evidence.
-3. Treat ETH as **not ready** (thin OOS edge) and BTC as the single candidate until the demo proves otherwise.
+1. Proceed only to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The live CLI now requires `BITGET_USE_SANDBOX=true` or `1`, so credentials cannot accidentally turn this path into a real-money order. The sharp sign-off test: **measure the realized per-trade win rate, expectancy, and bootstrap lower bound of filled orders.**
+2. Do not approve real money from backtest evidence alone. A real-money review requires a passing demo gate, a non-negative confidence lower bound after real fees and slippage, and a forward/rolling validation review that accepts the observed adverse-selection profile.
+3. Treat ETH as **not ready** and BTC as the single sandbox candidate until those conditions are met.
 
 ### Real-money handoff checklist
 
 - [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`); the PAPTRADING routing header is now wire-tested end to end in both backend private paths.
+- [x] The `scalp paper-trade --live` path fails closed unless `BITGET_USE_SANDBOX=true` or `1` is set.
 - [x] Live execution rejects directional signals, unvalidated grid profiles, and venue mismatches before exchange I/O.
 - [x] Backend fills are identity-correlated and fail closed on malformed or economically impossible confirmations.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
