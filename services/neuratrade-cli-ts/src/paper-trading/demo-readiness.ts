@@ -1,11 +1,13 @@
 import type { Money } from "../utils/money.js";
 import { money } from "../utils/money.js";
 import type { GridPaperTrade } from "./types.js";
+import { bootstrapMeanConfidenceInterval } from "./expectancy-confidence.js";
 
 export interface DemoSoakThresholds {
   readonly minimumTrades: number;
   readonly minimumDurationDays: number;
   readonly minimumExpectancyPct: Money;
+  readonly minimumExpectancyLowerBoundPct?: Money;
   readonly maximumDrawdownPct: Money;
 }
 
@@ -14,6 +16,8 @@ export interface DemoSoakReport {
   readonly tradeCount: number;
   readonly durationDays: number;
   readonly expectancyPct: Money;
+  readonly expectancyLowerBoundPct: Money;
+  readonly expectancyUpperBoundPct: Money;
   readonly profitFactor: Money | null;
   readonly maximumDrawdownPct: Money;
   readonly failures: readonly string[];
@@ -26,6 +30,8 @@ export function serializeDemoSoakReport(report: DemoSoakReport): string {
     tradeCount: report.tradeCount,
     durationDays: report.durationDays,
     expectancyPct: report.expectancyPct.toString(),
+    expectancyLowerBoundPct: report.expectancyLowerBoundPct.toString(),
+    expectancyUpperBoundPct: report.expectancyUpperBoundPct.toString(),
     profitFactor: report.profitFactor?.toString() ?? null,
     maximumDrawdownPct: report.maximumDrawdownPct.toString(),
     failures: report.failures,
@@ -81,6 +87,14 @@ export function evaluateDemoSoak(
     completeLiveTrades.length > 0
       ? totalPnl.div(completeLiveTrades.length)
       : money(0);
+  const expectancyConfidence =
+    completeLiveTrades.length > 0
+      ? bootstrapMeanConfidenceInterval(
+          completeLiveTrades.map((trade) => trade.realizedPnlPct ?? money(0)),
+        )
+      : undefined;
+  const expectancyLowerBoundPct = expectancyConfidence?.lowerBound ?? money(0);
+  const expectancyUpperBoundPct = expectancyConfidence?.upperBound ?? money(0);
   const grossProfit = completeLiveTrades.reduce(
     (sum, trade) =>
       trade.realizedPnlPct?.greaterThan(0)
@@ -131,6 +145,12 @@ export function evaluateDemoSoak(
   if (expectancyPct.lessThan(thresholds.minimumExpectancyPct)) {
     failures.push("expectancy is below the minimum");
   }
+  if (
+    thresholds.minimumExpectancyLowerBoundPct !== undefined &&
+    expectancyLowerBoundPct.lessThan(thresholds.minimumExpectancyLowerBoundPct)
+  ) {
+    failures.push("expectancy confidence lower bound is below the minimum");
+  }
   if (maximumDrawdownPct.greaterThan(thresholds.maximumDrawdownPct)) {
     failures.push("drawdown is above the maximum");
   }
@@ -140,6 +160,8 @@ export function evaluateDemoSoak(
     tradeCount: trades.length,
     durationDays: soakDurationDays,
     expectancyPct,
+    expectancyLowerBoundPct,
+    expectancyUpperBoundPct,
     profitFactor,
     maximumDrawdownPct,
     failures,

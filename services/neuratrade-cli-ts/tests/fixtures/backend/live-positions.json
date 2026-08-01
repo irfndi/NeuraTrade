@@ -1,0 +1,21 @@
+{
+  "exchange": "bitget",
+  "positions": [
+    {
+      "id": "position-1",
+      "symbol": "BTC/USDT",
+      "side": "long",
+      "product_type": "USDT-FUTURES",
+      "margin_mode": "crossed",
+      "leverage": 5,
+      "quantity": "0.1",
+      "available": "0.1",
+      "entry_price": "70000",
+      "liquidation_price": "0",
+      "unrealized_pnl": "10",
+      "margin_coin": "USDT"
+    }
+  ],
+  "count": 1,
+  "timestamp": "2026-08-02T00:00:00.000Z"
+}

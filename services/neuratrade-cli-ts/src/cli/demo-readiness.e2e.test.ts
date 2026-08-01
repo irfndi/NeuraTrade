@@ -93,12 +93,51 @@ async function seedPartialTrade(home: string): Promise<void> {
   db.close();
 }
 
+async function seedPositiveButUncertainTrades(home: string): Promise<void> {
+  const dataDir = join(home, "data");
+  await mkdir(dataDir, { recursive: true });
+  const db = new Database(join(dataDir, "neuratrade.db"));
+  const repository = new PaperTradingRepositorySQLite(db);
+  await Effect.runPromise(repository.ensureTables());
+  for (let index = 0; index < 50; index++) {
+    const realizedPnlPct = index === 0 ? "-4" : "0.1";
+    const openedAt = new Date(Date.UTC(2026, 0, 1 + index / 4));
+    await Effect.runPromise(
+      repository.recordGridTrade({
+        id: `e2e-uncertain-${index}`,
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "15m",
+        side: "long",
+        entryPrice: money("70000"),
+        exitPrice: money("70010"),
+        capitalBefore: money("1000"),
+        capitalAfter: money("1000"),
+        pnlPct: money(realizedPnlPct),
+        exitReason: "target",
+        openedAt,
+        closedAt: new Date(openedAt.getTime() + 60 * 60 * 1000),
+        fillSource: "live",
+        entryOrderId: `entry-uncertain-${index}`,
+        exitOrderId: `exit-uncertain-${index}`,
+        entryFilledQty: money("0.01"),
+        exitFilledQty: money("0.01"),
+        entryFee: money("0.01"),
+        exitFee: money("0.01"),
+        realizedPnlPct: money(realizedPnlPct),
+      }),
+    );
+  }
+  db.close();
+}
+
 describe("demo-readiness CLI", () => {
   it("exposes threshold controls through the real command surface", async () => {
     const result = await runCli(["scalp", "demo-readiness", "--help"]);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("--min-trades");
+    expect(result.stdout).toContain("--min-expectancy-lower-bound-pct");
     expect(result.stdout).toContain("--max-drawdown-pct");
   }, 15_000);
 
@@ -124,6 +163,33 @@ describe("demo-readiness CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('"status":"PASS"');
       expect(result.stdout).toContain('"expectancyPct":"0.2"');
+      expect(result.stdout).toContain('"expectancyLowerBoundPct":"0.2"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("fails a positive average when the confidence lower bound remains negative", async () => {
+    const home = await mkdtemp(join(tmpdir(), "neuratrade-demo-uncertain-"));
+    try {
+      await seedPositiveButUncertainTrades(home);
+      const result = await runCli(
+        [
+          "scalp",
+          "demo-readiness",
+          "--min-expectancy-pct",
+          "0",
+          "--min-expectancy-lower-bound-pct",
+          "0",
+        ],
+        home,
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toContain('"expectancyPct":"0.018"');
+      expect(result.stdout).toContain(
+        "expectancy confidence lower bound is below the minimum",
+      );
     } finally {
       await rm(home, { recursive: true, force: true });
     }

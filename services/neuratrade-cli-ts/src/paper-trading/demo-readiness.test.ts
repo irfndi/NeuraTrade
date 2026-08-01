@@ -11,6 +11,7 @@ const thresholds: DemoSoakThresholds = {
   minimumTrades: 50,
   minimumDurationDays: 7,
   minimumExpectancyPct: money(0),
+  minimumExpectancyLowerBoundPct: money(0),
   maximumDrawdownPct: money(15),
 };
 
@@ -52,6 +53,7 @@ describe("evaluateDemoSoak", () => {
     expect(report.tradeCount).toBe(50);
     expect(report.durationDays).toBeGreaterThanOrEqual(7);
     expect(report.expectancyPct.toString()).toBe("0.2");
+    expect(report.expectancyLowerBoundPct.toString()).toBe("0.2");
     expect(report.failures).toEqual([]);
   });
 
@@ -66,6 +68,22 @@ describe("evaluateDemoSoak", () => {
     expect(report.passed).toBe(false);
     expect(report.expectancyPct.toString()).toBe("-0.1");
     expect(report.failures).toContain("expectancy is below the minimum");
+  });
+
+  it("rejects a positive point estimate without a positive confidence bound", () => {
+    const report = evaluateDemoSoak(
+      Array.from({ length: 50 }, (_, index) =>
+        makeTrade(index, index === 0 ? "-4" : "0.10"),
+      ),
+      thresholds,
+    );
+
+    expect(report.expectancyPct.greaterThan(0)).toBe(true);
+    expect(report.expectancyLowerBoundPct.lessThan(0)).toBe(true);
+    expect(report.passed).toBe(false);
+    expect(report.failures).toContain(
+      "expectancy confidence lower bound is below the minimum",
+    );
   });
 
   it("rejects insufficient duration, count, and missing live fill evidence", () => {
@@ -95,6 +113,7 @@ describe("evaluateDemoSoak", () => {
 
     expect(output).toContain('"status":"PASS"');
     expect(output).toContain('"expectancyPct":"0.2"');
+    expect(output).toContain('"expectancyLowerBoundPct":"0.2"');
     expect(output).toContain('"profitFactor":null');
   });
 

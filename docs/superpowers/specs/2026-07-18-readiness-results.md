@@ -241,18 +241,52 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   Bitget credentials are not configured. Profitability remains unproven in
   exchange fills.
 
+## Iteration 12 — statistical expectancy confidence gate (2026-08-02)
+
+- Demo-readiness now reports a deterministic Decimal bootstrap interval for
+  realized per-trade expectancy and can require its lower bound to clear a
+  configured threshold. The CLI defaults that lower-bound threshold to zero,
+  so a positive average alone cannot produce a demo PASS.
+- Unit coverage includes constant, deterministic-seed, invalid-input, and
+  fast-check bounded-sample cases. CLI E2E coverage verifies the new option
+  and persisted live-fill output. A real HTTP integration fixture exercises
+  the backend-gated adapter's position and filled-order paths over a Bun
+  server, including auth headers and decimal response parsing.
+- On the fixed BTC OOS sample (28 trades), the optimistic point estimate is
+  **+0.061%/trade**, but the deterministic 95% interval is **−0.383% to
+  +0.504%**. The taker-stop interval is **−0.404% to +0.497%**; the adverse
+  maker case is **−0.120%/trade** with interval **−0.605% to +0.365%**.
+  Therefore the candidate remains statistically unproven and real-fill
+  evidence is still required.
+
+## Iteration 13 — current public-data refresh (2026-08-02)
+
+- The Bitget public futures candle store was refreshed without credentials:
+  1,510 new BTC 15m candles were added, extending the dataset to
+  2026-08-01 18:45 UTC (36,549 candles total).
+- On the refreshed fixed-candidate OOS (28 trades), the optimistic result is
+  **+4.05%**, PF **1.30**, win rate **67.9%**, expectancy **+0.149%/trade**,
+  but the 95% bootstrap interval is **−0.296% to +0.591%**.
+- The latest 30-day tail is **−0.28%**, 5 trades, 60.0% win rate, PF **0.92**,
+  and expectancy **−0.049%/trade**. This current-tail result reinforces that
+  the strategy is regime-dependent and not proven profitable today.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
-- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only config with an edge. It passes all readiness gates and is **walk-forward robust (5/5 windows, survives 10bp slippage)** — a real, modest, regime-dependent mean-reversion edge that harvests chop and sits out trends.
+- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only positive candidate. It has a positive point estimate and is **walk-forward robust (5/5 windows, survives 10bp slippage)**, but its 28-trade OOS confidence interval still crosses zero.
 
 **What is NOT proven:**
 
 - **Adverse-selection magnitude in real fills.** The edge survives everything backtesting _can_ model — slippage to 10bp, taker stop fees, and a random/queue fill-rate haircut all keep it profitable (walk-forward 5/5). But the adverse-selection fill model shows the edge goes **negative** when fills skew toward the loss-prone touches (OOS PF 0.82). Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
+- **Statistical confirmation of the optimistic OOS estimate.** Its 95% bootstrap lower bound is negative because the sample contains only 28 trades. More historical data or a qualifying demo sample is needed before calling the edge proven.
+- **Current-tail profitability.** The refreshed latest 30-day sample is negative
+  and contains only five trades; it is a warning signal, not a basis for a
+  real-money order.
 
 **Recommendation:**
 
-1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The sharp sign-off test: **measure the realized per-trade win rate and expectancy of filled orders.** If the realized win rate tracks the backtest's full-fill figure (~64%) with non-negative expectancy, adverse selection is benign → **GO** to a small real-money test account. If the realized win rate collapses toward the adverse-model figure (~58%) with negative expectancy, fills are adversely selected → **NO-GO** for this strategy class on majors (the honest, correct outcome). Also confirm orders open AND close within the hold envelope and the risk guards engage.
+1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The sharp sign-off test: **measure the realized per-trade win rate, expectancy, and bootstrap lower bound of filled orders.** Require non-negative expectancy, a non-negative confidence lower bound, and no adverse-selection signature before any real-money test. If the realized win rate tracks the backtest's full-fill figure (~64%), adverse selection is benign → **GO** to a small real-money test account. If it collapses toward the adverse-model figure (~58%) with negative expectancy → **NO-GO**.
 2. If the demo holds: a **small real-money test account** at the conservative fraction, hard risk limits (max DD ~5%, daily loss ~2%, kill switch), and continuous monitoring. Scale only with sustained live evidence.
 3. Treat ETH as **not ready** (thin OOS edge) and BTC as the single candidate until the demo proves otherwise.
 
@@ -261,6 +295,7 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`); the PAPTRADING routing header is now wire-tested end to end in both backend private paths.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
 - [ ] Demo soak ≥ 50 trades / ≥ 7 days; realized fill-rate, expectancy, and DD recorded vs backtest (within MC band).
+- [ ] Demo expectancy 95% bootstrap lower bound ≥ 0% after real fees and slippage.
 - [ ] Risk guards live: `maxDrawdownPct`, `maxDailyLossPct`, per-trade position cap, kill switch; circuit breaker.
 - [ ] Money math `decimal.js` (already), no `float64` for PnL (already).
 - [ ] Sign-off: demo realized expectancy ≥ ~0 net of REAL fees/slippage before any real money.
@@ -283,6 +318,7 @@ credentials or live flags:
 bun run index.ts scalp demo-readiness \
   --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m \
   --min-trades 50 --min-duration-days 7 --min-expectancy-pct 0 \
+  --min-expectancy-lower-bound-pct 0 \
   --max-drawdown-pct 15
 ```
 

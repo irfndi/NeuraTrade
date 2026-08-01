@@ -37,6 +37,14 @@ const commandOptions = {
     Options.withDefault("0"),
     Options.withDescription("Minimum realized expectancy per trade in percent"),
   ),
+  minimumExpectancyLowerBoundPct: Options.text(
+    "min-expectancy-lower-bound-pct",
+  ).pipe(
+    Options.withDefault("0"),
+    Options.withDescription(
+      "Minimum bootstrap confidence lower bound for expectancy in percent",
+    ),
+  ),
   maximumDrawdownPct: Options.text("max-drawdown-pct").pipe(
     Options.withDefault("15"),
     Options.withDescription("Maximum realized drawdown in percent"),
@@ -48,6 +56,7 @@ function validateArgs(args: {
   readonly minimumTrades: number;
   readonly minimumDurationDays: number;
   readonly minimumExpectancyPct: string;
+  readonly minimumExpectancyLowerBoundPct: string;
   readonly maximumDrawdownPct: string;
 }): Effect.Effect<void, Error> {
   return Effect.try({
@@ -61,6 +70,9 @@ function validateArgs(args: {
       }
       if (money(args.minimumExpectancyPct).isNaN()) {
         throw new Error("--min-expectancy-pct must be a decimal");
+      }
+      if (money(args.minimumExpectancyLowerBoundPct).isNaN()) {
+        throw new Error("--min-expectancy-lower-bound-pct must be a decimal");
       }
       if (money(args.maximumDrawdownPct).isNegative()) {
         throw new Error("--max-drawdown-pct cannot be negative");
@@ -90,6 +102,9 @@ export function makeDemoReadinessCommand(
         minimumTrades: args.minimumTrades,
         minimumDurationDays: args.minimumDurationDays,
         minimumExpectancyPct: money(args.minimumExpectancyPct),
+        minimumExpectancyLowerBoundPct: money(
+          args.minimumExpectancyLowerBoundPct,
+        ),
         maximumDrawdownPct: money(args.maximumDrawdownPct),
       });
       yield* Console.log(serializeDemoSoakReport(report));
