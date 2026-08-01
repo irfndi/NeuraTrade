@@ -770,7 +770,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         const row = this.db
           .query(
             `SELECT COUNT(*) AS count
-             FROM paper_trades
+             FROM (
+               SELECT closed_at FROM paper_trades
+               UNION ALL
+               SELECT closed_at FROM grid_paper_trades
+             ) AS all_paper_trades
              WHERE date(closed_at) = date(?)`,
           )
           .get(date.toISOString()) as { count: number } | null;
@@ -791,16 +795,35 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   > {
     return Effect.try({
       try: () => {
-        const rows = this.db
+        const paperRows = this.db
           .query(
             `SELECT COALESCE(pnl_decimal, CAST(pnl AS TEXT)) AS pnl_value
              FROM paper_trades
              WHERE date(closed_at) = date('now')`,
           )
           .all() as Array<{ pnl_value: string }>;
-        return rows.reduce(
+        const gridRows = this.db
+          .query(
+            `SELECT
+               COALESCE(capital_after_decimal, CAST(capital_after AS TEXT)) AS capital_after_value,
+               COALESCE(capital_before_decimal, CAST(capital_before AS TEXT)) AS capital_before_value
+             FROM grid_paper_trades
+             WHERE date(closed_at) = date('now')`,
+          )
+          .all() as Array<{
+          capital_after_value: string;
+          capital_before_value: string;
+        }>;
+        const paperPnl = paperRows.reduce(
           (total, row) => total.plus(new Decimal(row.pnl_value)),
           new Decimal(0),
+        );
+        return gridRows.reduce(
+          (total, row) =>
+            total
+              .plus(new Decimal(row.capital_after_value))
+              .minus(new Decimal(row.capital_before_value)),
+          paperPnl,
         );
       },
       catch: (err) =>

@@ -206,6 +206,14 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   +2.78% at 10 bp. The adverse-selection stress remains negative at -3.26%
   OOS / PF 0.82, so the real-fill question remains unresolved.
 
+## Iteration 9 — grid risk accounting parity (2026-08-02)
+
+- Daily trade counts and realized PnL now include `grid_paper_trades`, so the
+  live grid path cannot bypass the configured max-trades or daily-loss guards.
+- Grid exits now record their realized capital delta in the persistent circuit
+  breaker before the next entry decision. Unit coverage verifies both controls
+  on live-grid iterations and SQLite-backed repository accounting.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.

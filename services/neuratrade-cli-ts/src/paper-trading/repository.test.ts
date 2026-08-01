@@ -124,4 +124,36 @@ describe("PaperTradingRepositorySQLite", () => {
     );
     db.close();
   });
+
+  it("includes closed grid trades in daily risk accounting", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    const closedAt = new Date();
+    const trade: GridPaperTrade = {
+      id: "grid-risk-1",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      side: "long",
+      entryPrice: money("70000"),
+      exitPrice: money("70100"),
+      capitalBefore: money("1000"),
+      capitalAfter: money("1002"),
+      pnlPct: money("0.2"),
+      exitReason: "target",
+      openedAt: new Date(closedAt.getTime() - 3_600_000),
+      closedAt,
+    };
+
+    await Effect.runPromise(repository.ensureTables());
+    await Effect.runPromise(repository.recordGridTrade(trade));
+
+    expect(
+      await Effect.runPromise(repository.countTradesForDate(closedAt)),
+    ).toBe(1);
+    expect(
+      (await Effect.runPromise(repository.getTodayRealizedPnl())).toString(),
+    ).toBe("2");
+    db.close();
+  });
 });

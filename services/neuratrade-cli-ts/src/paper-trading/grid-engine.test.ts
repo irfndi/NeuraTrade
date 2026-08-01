@@ -18,7 +18,7 @@ import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../exchange/futures-adapter.js";
-import { RiskGuard, type RiskGuardService } from "../risk/guards.js";
+import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
   CircuitBreaker,
@@ -100,7 +100,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   countTradesForDate() {
-    return Effect.succeed(0);
+    return Effect.succeed(this.gridTrades.length);
   }
 
   getTodayRealizedPnl() {
@@ -264,12 +264,15 @@ function makeKillSwitch(): KillSwitchService {
   };
 }
 
-function makeCircuitBreaker(): CircuitBreakerService {
+function makeCircuitBreaker(records: number[] = []): CircuitBreakerService {
   return {
     isOpen: () => Effect.succeed(false),
     getReason: () => Effect.succeed(""),
     currentDailyLossPct: () => Effect.succeed(0),
-    recordTradeResult: () => Effect.void,
+    recordTradeResult: (realizedPnl) =>
+      Effect.sync(() => {
+        records.push(realizedPnl);
+      }),
     reset: () => Effect.void,
   };
 }
@@ -299,6 +302,8 @@ function runWithRepo(
   repo: PaperTradingRepositoryService,
   candles: Candle[],
   adapter?: FuturesExchangeAdapterService,
+  riskGuard: RiskGuardService = makeRiskGuard(),
+  circuitBreaker: CircuitBreakerService = makeCircuitBreaker(),
 ) {
   return runGridPaperTradingIteration(options).pipe(
     Effect.provide(
@@ -306,9 +311,9 @@ function runWithRepo(
         Layer.succeed(MarketDataGateway, makeGateway(candles)),
         Layer.succeed(PaperTradingRepository, repo),
         Layer.succeed(FuturesExchangeAdapter, adapter ?? makeFuturesAdapter()),
-        Layer.succeed(RiskGuard, makeRiskGuard()),
+        Layer.succeed(RiskGuard, riskGuard),
         Layer.succeed(KillSwitch, makeKillSwitch()),
-        Layer.succeed(CircuitBreaker, makeCircuitBreaker()),
+        Layer.succeed(CircuitBreaker, circuitBreaker),
       ),
     ),
     Effect.runPromise,
@@ -395,6 +400,67 @@ describe("grid paper engine", () => {
     expect(trades[0]?.entryOrderId).toBe("live");
     expect(trades[0]?.exitOrderId).toBe("close");
     expect(trades[0]?.realizedPnlPct).toBeDefined();
+  });
+
+  it("applies the daily trade-count risk gate to live grid entries", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.recordGridTrade({
+        id: "risk-limit-trade",
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        side: "long",
+        entryPrice: money(1000),
+        exitPrice: money(1010),
+        capitalBefore: money(20),
+        capitalAfter: money(20.1),
+        pnlPct: money(0.5),
+        exitReason: "target",
+        openedAt: new Date(Date.now() - 3_600_000),
+        closedAt: new Date(),
+      }),
+    );
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const tradeLimitGuard: RiskGuardService = {
+      check: ({ tradesTodayCount }) =>
+        tradesTodayCount > 0
+          ? Effect.fail(
+              new RiskError("trade limit reached", ["daily trade limit"]),
+            )
+          : Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      tradeLimitGuard,
+    );
+
+    expect(result.note).toContain("RISK BLOCKED");
+    expect(orders).toHaveLength(0);
+  });
+
+  it("records realized grid closes in the circuit breaker", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter();
+    const records: number[] = [];
+    const options = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    for (let iteration = 0; iteration < 10; iteration++) {
+      await runWithRepo(
+        options,
+        repo,
+        makeCandles(20, 1000, "oscillate"),
+        adapter,
+        makeRiskGuard(),
+        makeCircuitBreaker(records),
+      );
+    }
+
+    expect(records.length).toBeGreaterThan(0);
   });
 
   it("does not clear a live position when the close has no exchange fill", async () => {

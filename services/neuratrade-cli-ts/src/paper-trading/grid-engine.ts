@@ -469,6 +469,10 @@ export function runGridPaperTradingIteration(
           exitFill,
         );
         yield* repo.recordGridTrade(close.trade);
+        yield* circuitBreaker.recordTradeResult(
+          toNumber(close.capitalAfter.minus(s.capital)),
+          toNumber(startOfDayCapital),
+        );
         return { ...close, exitPrice };
       });
     };
@@ -523,6 +527,7 @@ export function runGridPaperTradingIteration(
 
       if (entrySide !== null) {
         if (isLive) {
+          const tradesTodayCount = yield* repo.countTradesForDate(new Date());
           const riskGuard = yield* RiskGuard;
           const riskCheck = yield* riskGuard
             .check({
@@ -531,7 +536,7 @@ export function runGridPaperTradingIteration(
               peakCapital: toNumber(state.peakCapital),
               startOfDayCapital: toNumber(startOfDayCapital),
               dailyRealizedPnl: toNumber(todayPnl),
-              tradesTodayCount: 0,
+              tradesTodayCount,
               positionValue: toNumber(
                 state.capital.times(state.maxPositionPct / 100),
               ),
