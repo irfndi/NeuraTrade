@@ -370,6 +370,13 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 	return bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID
 }
 
+func bitgetSecretEnvOverride() string {
+	if value := strings.TrimSpace(os.Getenv("BITGET_SECRET")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv("BITGET_API_SECRET"))
+}
+
 func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
 	if db == nil || strings.TrimSpace(chatID) == "" || strings.TrimSpace(provider) == "" {
 		return false
@@ -886,7 +893,7 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 	if val := strings.TrimSpace(os.Getenv("BITGET_API_KEY")); val != "" {
 		bitgetAPIKey = val
 	}
-	if val := strings.TrimSpace(os.Getenv("BITGET_SECRET")); val != "" {
+	if val := bitgetSecretEnvOverride(); val != "" {
 		bitgetSecret = val
 	}
 	if val := strings.TrimSpace(os.Getenv("BITGET_PASSPHRASE")); val != "" {

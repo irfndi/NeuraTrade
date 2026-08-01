@@ -835,6 +835,13 @@ func TestGetEnvOrDefault(t *testing.T) {
 	})
 }
 
+func TestBitgetSecretEnvOverrideUsesAPISecretAlias(t *testing.T) {
+	t.Setenv("BITGET_SECRET", "")
+	t.Setenv("BITGET_API_SECRET", "api-secret")
+
+	require.Equal(t, "api-secret", bitgetSecretEnvOverride())
+}
+
 func TestParseAIProviderChain(t *testing.T) {
 	t.Run("returns default chain when no env set", func(t *testing.T) {
 		key := "NEURATRADE_AI_PROVIDER_CHAIN"

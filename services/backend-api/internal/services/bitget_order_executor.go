@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type BitgetOrderExecutor struct {
 	baseURL             string
 	notificationService *NotificationService
 	chatID              string
+	isDemo              bool
 	walletBalance       float64
 	httpClient          *http.Client
 	leverageMu          sync.Mutex
@@ -44,6 +46,7 @@ func NewBitgetOrderExecutor(apiKey, apiSecret, passphrase string) *BitgetOrderEx
 		apiSecret:  apiSecret,
 		passphrase: passphrase,
 		baseURL:    "https://api.bitget.com",
+		isDemo:     strings.EqualFold(strings.TrimSpace(os.Getenv("BITGET_USE_SANDBOX")), "true") || strings.TrimSpace(os.Getenv("BITGET_USE_SANDBOX")) == "1",
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -1031,6 +1034,9 @@ func (e *BitgetOrderExecutor) doRequest(ctx context.Context, method, endpoint st
 	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
 	req.Header.Set("ACCESS-PASSPHRASE", e.passphrase)
 	req.Header.Set("locale", "en-US")
+	if e.isDemo {
+		req.Header.Set("PAPTRADING", "1")
+	}
 
 	// Execute request
 	resp, err := e.httpClient.Do(req)

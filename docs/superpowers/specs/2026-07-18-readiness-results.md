@@ -133,6 +133,18 @@ Added `positionFraction` (0..1, default 1 = all-in) to the grid engine. It scale
 
 ETH's drawdown drops below the 15% gate at fraction 0.5 (its OOS PF 1.32 already clears the 1.3 economics gate); the BTC winner is unchanged at fraction 1 and halves its DD at 0.5.
 
+## Iteration 6 — demo routing hardening (2026-08-01)
+
+- Fixed the demo execution boundary: `BITGET_USE_SANDBOX=true` now sends
+  `PAPTRADING=1` from the Go Bitget order executor and from the Go private
+  order/balance lookups used by the risk-gated live bridge.
+- The backend now accepts the documented `BITGET_API_SECRET` name as well as
+  the legacy `BITGET_SECRET` alias.
+- Added wire-level regression coverage for demo order placement, order detail,
+  and balance requests. No demo credentials or real orders were used.
+- The ≥50-trade/≥7-day demo soak remains pending; simulated replay and
+  historical backtests are not substituted for exchange fills.
+
 ### Recent 30-day realized sample (`er7` — deterministic, read-only, key-independent)
 Last 30 days (2880 × 15m bars) via `scripts/grid-fill-stress.ts`. A clean statistical anchor; the live-fill demo is the decisive complement.
 
@@ -170,7 +182,7 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 3. Treat ETH as **not ready** (thin OOS edge) and BTC as the single candidate until the demo proves otherwise.
 
 ### Real-money handoff checklist
-- [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`), `BITGET_USE_SANDBOX` PAPTRADING header confirmed.
+- [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`); the PAPTRADING routing header is now wire-tested end to end in both backend private paths.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
 - [ ] Demo soak ≥ 50 trades / ≥ 7 days; realized fill-rate, expectancy, and DD recorded vs backtest (within MC band).
 - [ ] Risk guards live: `maxDrawdownPct`, `maxDailyLossPct`, per-trade position cap, kill switch; circuit breaker.
@@ -202,4 +214,3 @@ bun run index.ts scalp paper-trade \
 Conservative fraction 0.5 (`--max-position-size-pct 50`), risk guards on, ~15-min iteration cadence over a ≥ 7-day / ≥ 50-trade window. Record realized fill-rate, expectancy, and DD, then compare against the backtest within its Monte-Carlo band for sign-off. **This live demo is the decisive fill-realism proof** that backtesting cannot provide; it gates any real-money decision.
 
 **Status:** dt8/u1u/91b QA-closed (tests green; 706/706 package suite); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed. Maker-fill realism modeled + stressed: edge survives slippage/taker-fees/queue fill-rate but is fragile to adverse selection (verdict refined above). Position sizing landed (backtest `positionFraction`; live `--max-position-size-pct`, provably equivalent). Foundation = PR #472, sizing = PR #473, verdict + fill realism = PR #474. **er7:** deterministic 30-day sample captured; the decisive live-demo soak remains **pending the user's Bitget demo keys**.
-

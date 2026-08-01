@@ -80,6 +80,7 @@ type NativeCCXTService struct {
 	timeout       time.Duration
 	retryAttempts int
 	rateLimiter   *rateLimiter
+	isDemo        bool
 	// Scalping fallback controls are loaded once at construction for deterministic behavior.
 	fallbackMaxSymbolsPerCycle int
 	fallbackCycleBudget        time.Duration
@@ -142,9 +143,19 @@ func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTS
 		credentials:                make(map[string]config.ExchangeCredentials),
 		timeout:                    timeout,
 		retryAttempts:              retryAttempts,
+		isDemo:                     bitgetDemoEnabled(),
 		fallbackMaxSymbolsPerCycle: fallbackCfg.maxSymbolsPerCycle,
 		fallbackCycleBudget:        fallbackCfg.cycleBudget,
 		fallbackPerSymbolTimeout:   fallbackCfg.perSymbolTimeout,
+	}
+}
+
+func bitgetDemoEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BITGET_USE_SANDBOX"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1967,6 +1978,9 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	req.Header.Set("ACCESS-TIMESTAMP", fmt.Sprintf("%d", timestamp))
 	req.Header.Set("ACCESS-PASSPHRASE", conn.Passphrase)
 	req.Header.Set("locale", "en-US")
+	if s.isDemo {
+		req.Header.Set("PAPTRADING", "1")
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -3280,6 +3294,9 @@ func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.E
 	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
 	req.Header.Set("ACCESS-PASSPHRASE", creds.Passphrase)
 	req.Header.Set("locale", "en-US")
+	if s.isDemo {
+		req.Header.Set("PAPTRADING", "1")
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
