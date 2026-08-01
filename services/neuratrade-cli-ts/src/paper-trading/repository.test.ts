@@ -99,6 +99,12 @@ describe("PaperTradingRepositorySQLite", () => {
       entryFee: money("0.12345678901234567890"),
       exitFee: money("0.23456789012345678901"),
       realizedPnlPct: money("0.164321"),
+      strategyConfigFingerprint: "a".repeat(64),
+      cohortId: "cohort-1",
+      candidateLockAt: new Date("2026-07-01T00:00:00.000Z"),
+      datasetCutoffAt: new Date("2026-07-31T23:45:00.000Z"),
+      entryOpenedAt: new Date("2026-08-01T00:00:00.000Z"),
+      executionEnvironment: "bitget-demo",
     };
 
     await Effect.runPromise(repository.ensureTables());
@@ -122,6 +128,20 @@ describe("PaperTradingRepositorySQLite", () => {
     expect(loaded[0]?.realizedPnlPct?.toString()).toBe(
       trade.realizedPnlPct?.toString(),
     );
+    expect(loaded[0]?.strategyConfigFingerprint).toBe(
+      trade.strategyConfigFingerprint,
+    );
+    expect(loaded[0]?.cohortId).toBe(trade.cohortId);
+    expect(loaded[0]?.candidateLockAt?.toISOString()).toBe(
+      trade.candidateLockAt?.toISOString(),
+    );
+    expect(loaded[0]?.datasetCutoffAt?.toISOString()).toBe(
+      trade.datasetCutoffAt?.toISOString(),
+    );
+    expect(loaded[0]?.entryOpenedAt?.toISOString()).toBe(
+      trade.entryOpenedAt?.toISOString(),
+    );
+    expect(loaded[0]?.executionEnvironment).toBe(trade.executionEnvironment);
     db.close();
   });
 

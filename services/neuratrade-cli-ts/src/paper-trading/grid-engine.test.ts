@@ -27,6 +27,10 @@ import {
 } from "../risk/circuit-breaker.js";
 import { money } from "../utils/money.js";
 import { ExchangeError } from "../exchange/adapter.js";
+import {
+  DEFAULT_STRATEGY_MANIFEST,
+  fingerprintStrategyManifest,
+} from "../scalping/real-money-readiness.js";
 
 function makeCandles(
   count: number,
@@ -316,6 +320,23 @@ function makeOptions(
   } as GridPaperTradingOptions;
 }
 
+function liveTestFingerprint(options: GridPaperTradingOptions): string {
+  return fingerprintStrategyManifest({
+    ...DEFAULT_STRATEGY_MANIFEST,
+    exchange: "bitget-live",
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    gridStepPct: options.gridStepPct.toString(),
+    gridMaxGrids: options.gridMaxGrids.toString(),
+    gridPauseAfterLossBars: options.gridPauseAfterLossBars.toString(),
+    positionFraction: (options.maxPositionPct / 100).toString(),
+    feePct: options.feePct.toString(),
+    slippageBps: options.slippageBps.toString(),
+    trendFilterPeriod: options.trendFilterPeriod.toString(),
+    adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
+  });
+}
+
 function runWithRepo(
   options: GridPaperTradingOptions,
   repo: PaperTradingRepositoryService,
@@ -399,6 +420,42 @@ describe("grid paper engine", () => {
     expect(state?.entryFillSource).toBe("live");
     expect(state?.entryOrderId).toBe("live");
     expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(orders[0].size, 12);
+  });
+
+  it("refuses to resume a legacy open state without provenance", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
   });
 
   it("records both live order fills when a live grid trade closes", async () => {
@@ -545,6 +602,14 @@ describe("grid paper engine", () => {
         entryFilledQty: money("0.02"),
         entryFee: money(0),
         entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true }),
+        ),
+        cohortId: "test-live-cohort",
+        candidateLockAt: new Date("2026-01-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-01-01T00:00:00.000Z"),
+        entryOpenedAt: new Date("2026-01-01T00:15:00.000Z"),
+        executionEnvironment: "bitget-live",
         gridStepPct: 1,
         gridMaxGrids: 2,
         gridPauseAfterLossBars: 0,
@@ -652,6 +717,14 @@ describe("grid paper engine", () => {
         entryFilledQty: money("0.01"),
         entryFee: money("0.01"),
         entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true, leverage: 10 }),
+        ),
+        cohortId: "test-liquidation-cohort",
+        candidateLockAt: new Date("2026-08-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-08-01T00:00:00.000Z"),
+        entryOpenedAt: openedAt,
+        executionEnvironment: "bitget-live",
         gridStepPct: 1,
         gridMaxGrids: 2,
         gridPauseAfterLossBars: 0,

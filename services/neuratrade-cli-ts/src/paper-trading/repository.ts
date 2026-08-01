@@ -197,6 +197,12 @@ CREATE TABLE IF NOT EXISTS grid_paper_state (
   entry_fee REAL,
   entry_fee_decimal TEXT,
   entry_fill_source TEXT,
+  strategy_config_fingerprint TEXT,
+  cohort_id TEXT,
+  candidate_lock_at DATETIME,
+  dataset_cutoff_at DATETIME,
+  entry_opened_at DATETIME,
+  execution_environment TEXT,
   grid_step_pct REAL NOT NULL,
   grid_max_grids INTEGER NOT NULL,
   grid_pause_after_loss_bars INTEGER NOT NULL,
@@ -243,6 +249,12 @@ CREATE TABLE IF NOT EXISTS grid_paper_trades (
   exit_fee_decimal TEXT,
   realized_pnl_pct REAL,
   realized_pnl_pct_decimal TEXT,
+  strategy_config_fingerprint TEXT,
+  cohort_id TEXT,
+  candidate_lock_at DATETIME,
+  dataset_cutoff_at DATETIME,
+  entry_opened_at DATETIME,
+  execution_environment TEXT,
   exit_reason TEXT NOT NULL,
   opened_at DATETIME NOT NULL,
   closed_at DATETIME NOT NULL
@@ -296,6 +308,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "grid_paper_state entry_filled_qty REAL",
           "grid_paper_state entry_fee REAL",
           "grid_paper_state entry_fill_source TEXT",
+          "grid_paper_state strategy_config_fingerprint TEXT",
+          "grid_paper_state cohort_id TEXT",
+          "grid_paper_state candidate_lock_at DATETIME",
+          "grid_paper_state dataset_cutoff_at DATETIME",
+          "grid_paper_state entry_opened_at DATETIME",
+          "grid_paper_state execution_environment TEXT",
           "grid_paper_trades fill_source TEXT",
           "grid_paper_trades entry_order_id TEXT",
           "grid_paper_trades entry_client_oid TEXT",
@@ -306,6 +324,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "grid_paper_trades entry_fee REAL",
           "grid_paper_trades exit_fee REAL",
           "grid_paper_trades realized_pnl_pct REAL",
+          "grid_paper_trades strategy_config_fingerprint TEXT",
+          "grid_paper_trades cohort_id TEXT",
+          "grid_paper_trades candidate_lock_at DATETIME",
+          "grid_paper_trades dataset_cutoff_at DATETIME",
+          "grid_paper_trades entry_opened_at DATETIME",
+          "grid_paper_trades execution_environment TEXT",
         ]) {
           const [table, column, type] = tableColumn.split(" ");
           addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -892,6 +916,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     COALESCE(entry_filled_qty_decimal, CAST(entry_filled_qty AS TEXT)) AS entry_filled_qty_value,
                     COALESCE(entry_fee_decimal, CAST(entry_fee AS TEXT)) AS entry_fee_value,
                     entry_fill_source,
+                    strategy_config_fingerprint, cohort_id, candidate_lock_at,
+                    dataset_cutoff_at, entry_opened_at, execution_environment,
                     grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
                     fee_pct, slippage_bps, trend_filter_period, max_position_pct,
                     max_drawdown_pct, leverage, killed, last_timestamp, updated_at
@@ -912,6 +938,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           entry_filled_qty_value: string | null;
           entry_fee_value: string | null;
           entry_fill_source: "simulated" | "live" | null;
+          strategy_config_fingerprint: string | null;
+          cohort_id: string | null;
+          candidate_lock_at: string | null;
+          dataset_cutoff_at: string | null;
+          entry_opened_at: string | null;
+          execution_environment: "bitget-demo" | "bitget-live" | null;
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
@@ -946,6 +978,19 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             ? new Decimal(row.entry_fee_value)
             : undefined,
           entryFillSource: row.entry_fill_source ?? undefined,
+          strategyConfigFingerprint:
+            row.strategy_config_fingerprint ?? undefined,
+          cohortId: row.cohort_id ?? undefined,
+          candidateLockAt: row.candidate_lock_at
+            ? new Date(row.candidate_lock_at)
+            : undefined,
+          datasetCutoffAt: row.dataset_cutoff_at
+            ? new Date(row.dataset_cutoff_at)
+            : undefined,
+          entryOpenedAt: row.entry_opened_at
+            ? new Date(row.entry_opened_at)
+            : undefined,
+          executionEnvironment: row.execution_environment ?? undefined,
           gridStepPct: row.grid_step_pct,
           gridMaxGrids: row.grid_max_grids,
           gridPauseAfterLossBars: row.grid_pause_after_loss_bars,
@@ -981,10 +1026,14 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
              (exchange, symbol, timeframe, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
               entry_price, entry_price_decimal, entry_order_id, entry_client_oid, entry_filled_qty,
               entry_filled_qty_decimal, entry_fee, entry_fee_decimal, entry_fill_source,
+              strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
+              entry_opened_at, execution_environment,
               grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
               fee_pct, slippage_bps, trend_filter_period, max_position_pct,
               max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
                capital = excluded.capital,
                peak_capital = excluded.peak_capital,
@@ -1001,6 +1050,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                entry_fee = excluded.entry_fee,
                entry_fee_decimal = excluded.entry_fee_decimal,
                entry_fill_source = excluded.entry_fill_source,
+               strategy_config_fingerprint = excluded.strategy_config_fingerprint,
+               cohort_id = excluded.cohort_id,
+               candidate_lock_at = excluded.candidate_lock_at,
+               dataset_cutoff_at = excluded.dataset_cutoff_at,
+               entry_opened_at = excluded.entry_opened_at,
+               execution_environment = excluded.execution_environment,
                grid_step_pct = excluded.grid_step_pct,
                grid_max_grids = excluded.grid_max_grids,
                grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
@@ -1033,6 +1088,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             state.entryFee ? toNumber(state.entryFee) : null,
             state.entryFee?.toString() ?? null,
             state.entryFillSource ?? null,
+            state.strategyConfigFingerprint ?? null,
+            state.cohortId ?? null,
+            state.candidateLockAt?.toISOString() ?? null,
+            state.datasetCutoffAt?.toISOString() ?? null,
+            state.entryOpenedAt?.toISOString() ?? null,
+            state.executionEnvironment ?? null,
             state.gridStepPct,
             state.gridMaxGrids,
             state.gridPauseAfterLossBars,
@@ -1092,8 +1153,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
               entry_client_oid, exit_order_id, exit_client_oid, entry_filled_qty,
               entry_filled_qty_decimal, exit_filled_qty, exit_filled_qty_decimal,
               entry_fee, entry_fee_decimal, exit_fee, exit_fee_decimal,
-              realized_pnl_pct, realized_pnl_pct_decimal, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              realized_pnl_pct, realized_pnl_pct_decimal,
+              strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
+              entry_opened_at, execution_environment, exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             trade.id,
@@ -1126,6 +1189,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             trade.exitFee?.toString() ?? null,
             trade.realizedPnlPct ? toNumber(trade.realizedPnlPct) : null,
             trade.realizedPnlPct?.toString() ?? null,
+            trade.strategyConfigFingerprint ?? null,
+            trade.cohortId ?? null,
+            trade.candidateLockAt?.toISOString() ?? null,
+            trade.datasetCutoffAt?.toISOString() ?? null,
+            trade.entryOpenedAt?.toISOString() ?? null,
+            trade.executionEnvironment ?? null,
             trade.exitReason,
             trade.openedAt.toISOString(),
             trade.closedAt.toISOString(),
@@ -1165,6 +1234,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     COALESCE(entry_fee_decimal, CAST(entry_fee AS TEXT)) AS entry_fee_value,
                     COALESCE(exit_fee_decimal, CAST(exit_fee AS TEXT)) AS exit_fee_value,
                     COALESCE(realized_pnl_pct_decimal, CAST(realized_pnl_pct AS TEXT)) AS realized_pnl_pct_value,
+                    strategy_config_fingerprint, cohort_id, candidate_lock_at,
+                    dataset_cutoff_at, entry_opened_at, execution_environment,
                     exit_reason, opened_at, closed_at
              FROM grid_paper_trades
              WHERE exchange = ? AND symbol = ? AND timeframe = ?
@@ -1192,6 +1263,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           entry_fee_value: string | null;
           exit_fee_value: string | null;
           realized_pnl_pct_value: string | null;
+          strategy_config_fingerprint: string | null;
+          cohort_id: string | null;
+          candidate_lock_at: string | null;
+          dataset_cutoff_at: string | null;
+          entry_opened_at: string | null;
+          execution_environment: "bitget-demo" | "bitget-live" | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -1226,6 +1303,18 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           realizedPnlPct: r.realized_pnl_pct_value
             ? new Decimal(r.realized_pnl_pct_value)
             : undefined,
+          strategyConfigFingerprint: r.strategy_config_fingerprint ?? undefined,
+          cohortId: r.cohort_id ?? undefined,
+          candidateLockAt: r.candidate_lock_at
+            ? new Date(r.candidate_lock_at)
+            : undefined,
+          datasetCutoffAt: r.dataset_cutoff_at
+            ? new Date(r.dataset_cutoff_at)
+            : undefined,
+          entryOpenedAt: r.entry_opened_at
+            ? new Date(r.entry_opened_at)
+            : undefined,
+          executionEnvironment: r.execution_environment ?? undefined,
           exitReason: r.exit_reason as GridPaperTrade["exitReason"],
           openedAt: new Date(r.opened_at),
           closedAt: new Date(r.closed_at),

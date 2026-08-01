@@ -337,6 +337,34 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - This improves execution safety but does not change the profitability verdict:
   there are still no exchange demo fills and no real-money approval.
 
+## Iteration 18 — read-only real-money evidence gate (2026-08-02)
+
+- The TypeScript CLI now has a separate `scalp real-money-readiness` entrypoint
+  that opens SQLite read-only, never initializes schema, never reads exchange
+  credentials, and never constructs an exchange adapter. Missing databases or
+  readiness columns return machine-readable `ERROR`/2; unsafe or insufficient
+  evidence returns `FAIL`/1.
+- The pure evaluator reports nine required gates: prospective evidence,
+  historical robustness, confidence, execution parity, adverse stress,
+  provenance, data quality, freshness, and tightening-only thresholds. Its
+  candidate fingerprint is deterministic and excludes secrets, timestamps, and
+  process state.
+- New grid fills persist entry-time fingerprint, cohort, candidate-lock time,
+  dataset cutoff, entry-opened time, and execution environment. Legacy open
+  states without a fingerprint are refused on resume rather than silently
+  relabeled. Closed trades copy the entry provenance unchanged.
+- Unit, fast-check property, SQLite integration, fixture-helper, and spawned
+  CLI E2E tests cover deterministic statistics, malformed/gapped/stale candles,
+  provenance round trips, read-only behavior, JSON `FAIL`/1 versus `ERROR`/2,
+  help/version isolation, and rejection of the test-only parity fixture at the
+  production boundary.
+- This gate does **not** turn synthetic fixtures into profitability evidence.
+  The current public BTC result remains FAIL: optimistic OOS is positive but its
+  confidence lower bound crosses zero, adverse-maker stress is negative, and
+  only 6/13 fixed rolling windows are profitable. The existing legacy database
+  intentionally returns `ERROR` until the additive provenance migration has
+  been applied by the writer path; the read-only command does not mutate it.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
@@ -367,6 +395,7 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - [x] Backend fills are identity-correlated and fail closed on malformed or economically impossible confirmations.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
 - [ ] Demo soak ≥ 50 trades / ≥ 7 days; realized fill-rate, expectancy, and DD recorded vs backtest (within MC band).
+- [ ] `scalp real-money-readiness` returns `FAIL`/1 or `ERROR`/2 for the current unproven cohort; it must not be used as a live-order switch.
 - [ ] Demo expectancy 95% bootstrap lower bound ≥ 0% after real fees and slippage.
 - [ ] Risk guards live: `maxDrawdownPct`, `maxDailyLossPct`, per-trade position cap, kill switch; circuit breaker.
 - [ ] Money math `decimal.js` (already), no `float64` for PnL (already).

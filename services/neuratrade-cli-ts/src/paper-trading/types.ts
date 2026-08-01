@@ -57,6 +57,12 @@ export interface GridPaperState {
   readonly entryFilledQty?: Money;
   readonly entryFee?: Money;
   readonly entryFillSource?: "simulated" | "live";
+  readonly strategyConfigFingerprint?: string;
+  readonly cohortId?: string;
+  readonly candidateLockAt?: Date;
+  readonly datasetCutoffAt?: Date;
+  readonly entryOpenedAt?: Date;
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
@@ -96,4 +102,10 @@ export interface GridPaperTrade {
   readonly entryFee?: Money;
   readonly exitFee?: Money;
   readonly realizedPnlPct?: Money;
+  readonly strategyConfigFingerprint?: string;
+  readonly cohortId?: string;
+  readonly candidateLockAt?: Date;
+  readonly datasetCutoffAt?: Date;
+  readonly entryOpenedAt?: Date;
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
 }

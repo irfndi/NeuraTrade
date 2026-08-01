@@ -45,6 +45,11 @@ import type {
   GridPaperTrade,
 } from "./types.js";
 import { reconcileLivePosition } from "./live-position-reconciliation.js";
+import {
+  DEFAULT_STRATEGY_MANIFEST,
+  fingerprintStrategyManifest,
+  type StrategyManifest,
+} from "../scalping/real-money-readiness.js";
 
 export interface GridPaperTradingOptions {
   readonly exchange: string;
@@ -86,6 +91,7 @@ export interface GridPaperTradingOptions {
   readonly productType?: FuturesProductType;
   /** Futures margin mode required for live orders. */
   readonly marginMode?: FuturesMarginMode;
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
 }
 
 export interface GridPaperTradingIterationResult {
@@ -133,6 +139,26 @@ function liquidationPrice(
     : entryPrice.times(1 + 1 / l);
 }
 
+function strategyManifestFor(
+  options: GridPaperTradingOptions,
+  executionEnvironment: "bitget-demo" | "bitget-live",
+): StrategyManifest {
+  return {
+    ...DEFAULT_STRATEGY_MANIFEST,
+    exchange: executionEnvironment,
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    gridStepPct: options.gridStepPct.toString(),
+    gridMaxGrids: options.gridMaxGrids.toString(),
+    gridPauseAfterLossBars: options.gridPauseAfterLossBars.toString(),
+    positionFraction: (options.maxPositionPct / 100).toString(),
+    feePct: options.feePct.toString(),
+    slippageBps: options.slippageBps.toString(),
+    trendFilterPeriod: options.trendFilterPeriod.toString(),
+    adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
+  };
+}
+
 type GridFillEvidence = Pick<
   FuturesOrderFill,
   "orderId" | "clientOid" | "filledQty" | "fee"
@@ -164,6 +190,12 @@ export function runGridPaperTradingIteration(
 
     yield* repo.ensureTables();
 
+    const executionEnvironment =
+      options.executionEnvironment ??
+      (options.isLive ? "bitget-live" : "bitget-demo");
+    const strategyFingerprint = fingerprintStrategyManifest(
+      strategyManifestFor(options, executionEnvironment),
+    );
     let state: GridPaperState = (yield* repo.getGridState(
       options.exchange,
       options.symbol,
@@ -190,6 +222,23 @@ export function runGridPaperTradingIteration(
       lastTimestamp: null,
       updatedAt: new Date(),
     };
+
+    if (
+      state.side !== null &&
+      state.strategyConfigFingerprint !== strategyFingerprint
+    ) {
+      const reason =
+        "READINESS PROVENANCE MISMATCH: refusing to resume grid position";
+      state = { ...state, killed: true, updatedAt: new Date() };
+      yield* repo.saveGridState(state);
+      return {
+        action: "hold" as const,
+        side: state.side,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
+        note: reason,
+      };
+    }
 
     if (state.killed) {
       return {
@@ -421,6 +470,12 @@ export function runGridPaperTradingIteration(
         entryFee: entryEvidence?.fee,
         exitFee: exitFill?.fee,
         realizedPnlPct,
+        strategyConfigFingerprint: state.strategyConfigFingerprint,
+        cohortId: state.cohortId,
+        candidateLockAt: state.candidateLockAt,
+        datasetCutoffAt: state.datasetCutoffAt,
+        entryOpenedAt: state.entryOpenedAt,
+        executionEnvironment: state.executionEnvironment,
       };
       return {
         trade,
@@ -617,6 +672,12 @@ export function runGridPaperTradingIteration(
                 entryFilledQty: fill.filledQty,
                 entryFee: fill.fee,
                 entryFillSource: "live",
+                strategyConfigFingerprint: strategyFingerprint,
+                cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+                candidateLockAt: current.timestamp,
+                datasetCutoffAt: current.timestamp,
+                entryOpenedAt: new Date(),
+                executionEnvironment,
                 updatedAt: new Date(),
                 lastTimestamp: current.timestamp,
               };
@@ -636,6 +697,12 @@ export function runGridPaperTradingIteration(
             entryFilledQty: size,
             entryFee: money(0),
             entryFillSource: "simulated",
+            strategyConfigFingerprint: strategyFingerprint,
+            cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+            candidateLockAt: current.timestamp,
+            datasetCutoffAt: current.timestamp,
+            entryOpenedAt: current.timestamp,
+            executionEnvironment,
             updatedAt: new Date(),
             lastTimestamp: current.timestamp,
           };

@@ -3552,6 +3552,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
       chopGateAdxThreshold: args.chopGateAdx,
       replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       isLive: args.live,
+      executionEnvironment:
+        args.live &&
+        process.env.BITGET_USE_SANDBOX !== "true" &&
+        process.env.BITGET_USE_SANDBOX !== "1"
+          ? "bitget-live"
+          : "bitget-demo",
       productType,
       marginMode,
     });
