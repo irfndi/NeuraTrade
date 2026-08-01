@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import { Effect } from "effect";
 import {
   BitgetFuturesGuardError,
@@ -146,5 +147,32 @@ describe("BitgetFuturesGuards", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toContain("mismatch");
+  });
+
+  it("fails closed for malformed decimal market inputs", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom("size", "lastPrice", "leverage"),
+        fc.constantFrom("", "NaN", "Infinity", "1e-3", "--1"),
+        async (field, value) => {
+          const order = {
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES" as const,
+            side: "buy" as const,
+            orderType: "market" as const,
+            size: field === "size" ? value : "0.001",
+          };
+          const result = await run(
+            order,
+            field === "leverage" ? value : "10",
+            field === "lastPrice" ? value : "65000",
+          );
+          expect(result.ok).toBe(false);
+          if (result.ok) return;
+          expect(result.error).toBeInstanceOf(BitgetFuturesGuardError);
+        },
+      ),
+      { numRuns: 20 },
+    );
   });
 });

@@ -326,6 +326,17 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   basis for calling the candidate robust. The next safe experiment is the
   exchange demo soak, not a real-money order.
 
+## Iteration 17 — malformed-order fail-closed audit (2026-08-02)
+
+- Fuzz-style coverage found that malformed decimal strings such as `1e-3`,
+  `NaN`, and `Infinity` could previously reach futures BigInt arithmetic and
+  throw before returning a typed guard failure.
+- Both the live-order safety boundary and the futures margin/notional guard now
+  reject malformed decimal inputs explicitly. Unit and property coverage
+  exercises order size, limit price, leverage, and market price values.
+- This improves execution safety but does not change the profitability verdict:
+  there are still no exchange demo fills and no real-money approval.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
