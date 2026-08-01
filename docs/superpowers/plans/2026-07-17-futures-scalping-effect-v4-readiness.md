@@ -6,13 +6,13 @@
 
 **Architecture:** Bun + `effect@4` (pinned beta). Hand-rolled CLI kit replaces `@effect/cli` (no v4 release exists). Strategy/backtest core converted from plain TS to Effect services. Bitget raw-REST client gains futures funding-rate fetch. Readiness = explicit gates checked by a new `scalp readiness` command.
 
-**Tech Stack:** Bun 1.4, TypeScript 6, `effect@4.0.0-beta.98`, `@effect/platform-bun@4.0.0-beta.98`, `bun:sqlite`, `decimal.js`, `fast-check`, bun test.
+**Tech Stack:** Bun 1.4, TypeScript 6, `effect@4.0.0-beta.102`, `@effect/platform-bun@4.0.0-beta.102`, `bun:sqlite`, `decimal.js`, `fast-check`, bun test.
 
 **Spec:** `docs/superpowers/specs/2026-07-17-futures-scalping-ts-effect-v4-design.md`
 
 ## Global Constraints
 
-- `effect` pinned EXACTLY to `4.0.0-beta.98` (no `^`). Same for `@effect/platform-bun`.
+- `effect` pinned EXACTLY to `4.0.0-beta.102` (no `^`). Same for `@effect/platform-bun`.
 - No v3-line deps remain: `@effect/cli`, `@effect/platform`, `@effect/printer*` must all be removed from `package.json`.
 - Money math uses `decimal.js` (`src/utils/money.ts`) — never raw float for PnL/fee math.
 - All IO wrapped in `Effect.try` / `Effect.tryPromise` / services; no bare `new Database`, `fs.*`, `process.env`, `console.*` inside Effect code.
@@ -81,8 +81,8 @@ Order matters: deps first, then mechanical codemods, then CLI kit, then strategy
 
 ### Task 1.1: Dependency swap
 
-- [ ] **Step 1:** In `services/neuratrade-cli-ts/package.json`: set `effect` to exactly `4.0.0-beta.98`, `@effect/platform-bun` to exactly `4.0.0-beta.98`; DELETE `@effect/cli`, `@effect/platform`, `@effect/platform-node` (if present). Run `bun install`.
-- [ ] **Step 2:** `bun pm ls | grep effect` — verify only `effect@4.0.0-beta.98` and `@effect/platform-bun@4.0.0-beta.98` (+ transitive `@effect/platform-node-shared@4.0.0-beta.98`).
+- [ ] **Step 1:** In `services/neuratrade-cli-ts/package.json`: set `effect` to exactly `4.0.0-beta.102`, `@effect/platform-bun` to exactly `4.0.0-beta.102`; DELETE `@effect/cli`, `@effect/platform`, `@effect/platform-node` (if present). Run `bun install`.
+- [ ] **Step 2:** `bun pm ls | grep effect` — verify only `effect@4.0.0-beta.102` and `@effect/platform-bun@4.0.0-beta.102` (+ transitive `@effect/platform-node-shared@4.0.0-beta.102`).
 - [ ] Expected: typecheck massively red — that is fine until Task 1.6 completes. Keep tasks moving; do not commit mid-breakage.
 
 ### Task 1.2: Codemod — imports and `Context.Tag` → `Context.Service`

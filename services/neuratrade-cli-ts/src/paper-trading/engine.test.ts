@@ -37,6 +37,7 @@ import {
 import { defaultComposerConfig } from "../scalping/composer.js";
 import { ExitEngineLive, SignalComposerLive } from "../scalping/services.js";
 import type { ComposerConfig } from "../scalping/types.js";
+import { Decimal, money } from "../utils/money.js";
 
 const scalpingServiceLayers = Layer.merge(SignalComposerLive, ExitEngineLive);
 
@@ -79,8 +80,8 @@ function makeOrderBook(price: number): OrderBook {
 }
 
 class InMemoryPaperRepository implements PaperTradingRepositoryService {
-  private capital = 10_000;
-  private peakCapital = 10_000;
+  private capital = money(10_000);
+  private peakCapital = money(10_000);
   private position: PaperPosition | null = null;
   private trades: PaperTrade[] = [];
 
@@ -104,17 +105,19 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   closePosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     exitReason: PaperTrade["exitReason"],
     closedAt: Date,
   ) {
     return Effect.sync(() => {
       const priceDiff =
         position.side === "long"
-          ? exitPrice - position.entryPrice
-          : position.entryPrice - exitPrice;
-      const pnl = priceDiff * position.size;
-      const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
+          ? exitPrice.minus(position.entryPrice)
+          : position.entryPrice.minus(exitPrice);
+      const pnl = priceDiff.times(position.size);
+      const pnlPct = pnl
+        .div(position.entryPrice.times(position.size))
+        .times(100);
       const trade: PaperTrade = {
         id: `paper-trade-${Date.now()}`,
         exchange: position.exchange,
@@ -138,20 +141,20 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   scaleOutPosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     scaleOutPct: number,
     closedAt: Date,
   ) {
     return Effect.sync(() => {
       const pct = Math.max(0, Math.min(100, scaleOutPct));
-      const partialSize = position.size * (pct / 100);
-      const remainingSize = position.size - partialSize;
+      const partialSize = position.size.times(pct / 100);
+      const remainingSize = position.size.minus(partialSize);
       const priceDiff =
         position.side === "long"
-          ? exitPrice - position.entryPrice
-          : position.entryPrice - exitPrice;
-      const pnl = priceDiff * partialSize;
-      const pnlPct = (pnl / (position.entryPrice * partialSize)) * 100;
+          ? exitPrice.minus(position.entryPrice)
+          : position.entryPrice.minus(exitPrice);
+      const pnl = priceDiff.times(partialSize);
+      const pnlPct = pnl.div(position.entryPrice.times(partialSize)).times(100);
       const trade: PaperTrade = {
         id: `paper-trade-${Date.now()}`,
         exchange: position.exchange,
@@ -186,7 +189,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
-  setPortfolio(capital: number, peakCapital: number) {
+  setPortfolio(capital: Decimal, peakCapital: Decimal) {
     return Effect.sync(() => {
       this.capital = capital;
       this.peakCapital = peakCapital;
@@ -202,10 +205,12 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getTodayRealizedPnl() {
-    return Effect.succeed(this.trades.reduce((sum, t) => sum + t.pnl, 0));
+    return Effect.succeed(
+      this.trades.reduce((sum, t) => sum.plus(t.pnl), money(0)),
+    );
   }
 
-  getStartOfDayCapital(_date: Date, currentCapital: number) {
+  getStartOfDayCapital(_date: Date, currentCapital: Decimal) {
     return Effect.succeed(currentCapital);
   }
 

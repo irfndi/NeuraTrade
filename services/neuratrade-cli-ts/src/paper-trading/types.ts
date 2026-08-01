@@ -1,9 +1,4 @@
-/**
- * Paper-trading domain types for deterministic scalping.
- *
- * All monetary values are plain numbers for speed; real-money trading must
- * switch to BigDecimal/decimal.js before going live.
- */
+import type { Money } from "../utils/money.js";
 
 export type PaperPositionSide = "long" | "short";
 
@@ -13,15 +8,15 @@ export interface PaperPosition {
   readonly symbol: string;
   readonly timeframe: string;
   readonly side: PaperPositionSide;
-  readonly entryPrice: number;
-  readonly size: number;
-  readonly stopLoss: number;
-  readonly takeProfit: number;
+  readonly entryPrice: Money;
+  readonly size: Money;
+  readonly stopLoss: Money;
+  readonly takeProfit: Money;
   readonly openedAt: Date;
   readonly signalId: string;
-  readonly capitalAtEntry?: number;
+  readonly capitalAtEntry?: Money;
   readonly scaledOut: boolean;
-  readonly scaleOutPrice: number;
+  readonly scaleOutPrice: Money;
 }
 
 export interface PaperTrade {
@@ -30,19 +25,19 @@ export interface PaperTrade {
   readonly symbol: string;
   readonly timeframe: string;
   readonly side: PaperPositionSide;
-  readonly entryPrice: number;
-  readonly exitPrice: number;
-  readonly size: number;
-  readonly pnl: number;
-  readonly pnlPct: number;
+  readonly entryPrice: Money;
+  readonly exitPrice: Money;
+  readonly size: Money;
+  readonly pnl: Money;
+  readonly pnlPct: Money;
   readonly exitReason: "signal" | "stop_loss" | "take_profit" | "scale_out";
   readonly openedAt: Date;
   readonly closedAt: Date;
 }
 
 export interface PaperPortfolio {
-  readonly capital: number;
-  readonly peakCapital: number;
+  readonly capital: Money;
+  readonly peakCapital: Money;
   readonly position: PaperPosition | null;
 }
 
@@ -52,11 +47,11 @@ export interface GridPaperState {
   readonly exchange: string;
   readonly symbol: string;
   readonly timeframe: string;
-  readonly capital: number;
-  readonly peakCapital: number;
+  readonly capital: Money;
+  readonly peakCapital: Money;
   readonly paused: number;
   readonly side: GridPaperPositionSide | null;
-  readonly entryPrice: number;
+  readonly entryPrice: Money;
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
@@ -78,11 +73,11 @@ export interface GridPaperTrade {
   readonly symbol: string;
   readonly timeframe: string;
   readonly side: GridPaperPositionSide;
-  readonly entryPrice: number;
-  readonly exitPrice: number;
-  readonly capitalBefore: number;
-  readonly capitalAfter: number;
-  readonly pnlPct: number;
+  readonly entryPrice: Money;
+  readonly exitPrice: Money;
+  readonly capitalBefore: Money;
+  readonly capitalAfter: Money;
+  readonly pnlPct: Money;
   readonly exitReason: "target" | "stop" | "liquidation";
   readonly openedAt: Date;
   readonly closedAt: Date;

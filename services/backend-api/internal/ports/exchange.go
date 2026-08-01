@@ -128,6 +128,8 @@ type OrderRequest struct {
 	TakeProfit decimal.Decimal // For TP/SL orders
 	ReduceOnly bool
 	PostOnly   bool
+	Leverage   decimal.Decimal
+	ChatID     string
 }
 
 // OrderResult represents the result of placing an order.
@@ -142,6 +144,7 @@ type OrderResult struct {
 	Filled       decimal.Decimal
 	Price        decimal.Decimal
 	AveragePrice decimal.Decimal
+	Fee          decimal.Decimal
 	Status       OrderStatus
 	Timestamp    time.Time
 }

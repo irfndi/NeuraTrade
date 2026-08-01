@@ -80,6 +80,8 @@ make coverage-check
 - `NEURATRADE_SCALPING_SYMBOL_LOSS_STREAK_BUDGET=2`: Consecutive per-symbol losses allowed before the symbol is temporarily paused.
 - `NEURATRADE_SCALPING_MAX_CONCURRENT_POSITIONS=3`: Default concurrent managed-position cap for scalping entries.
 - `NEURATRADE_SCALPING_MICRO_MAX_CONCURRENT_POSITIONS=1`: Micro-account concurrent managed-position cap. Keep this conservative unless paper/testnet soak and collateral checks support raising it.
+- `NEURATRADE_LIVE_MAX_ORDER_NOTIONAL`: Required positive USDT cap for the TS CLI live-order endpoint; the endpoint stays disabled when unset.
+- TS live scalping is futures-only and routes through the backend RiskActor/ExecutionActor gate. The backend reads the live USDT balance and reconciles exchange quantity, average price, status, and fee before returning a fill; spot `--live` exits closed.
 
 ## License
 

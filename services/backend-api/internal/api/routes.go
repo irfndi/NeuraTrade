@@ -976,6 +976,16 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 	integratedHandlers.SetPortfolioSafetyService(portfolioSafety)
 	questEngine.SetOperationalModeService(opModeService)
 
+	var liveExecution *riskGatedLiveExecution
+	if sqlDB != nil && liveOrderExecutor != nil {
+		liveExecution, err = newRiskGatedLiveExecution(ctx, sqlDB, orderExecutor, sharedKillSwitch, sharedSafeMode, liveGuard, ccxtService)
+		if err != nil {
+			zaplogrus.Warnf("TS live execution endpoint disabled: %v", err)
+		} else {
+			zaplogrus.Infof("TS live execution endpoint wired through RiskActor and ExecutionActor")
+		}
+	}
+
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
 	if sqlDB != nil {
@@ -1483,6 +1493,14 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
 		}
 
+		if liveExecution != nil {
+			liveExecutionRoutes := v1.Group("/execution")
+			liveExecutionRoutes.Use(adminMiddleware.RequireAdminAuth())
+			{
+				liveExecutionRoutes.POST("/futures/order", liveExecution.placeFuturesOrder)
+			}
+		}
+
 		// Paper trading readiness endpoints
 		if dbPool, ok := db.(database.DBPool); ok {
 			readinessHandler := handlers.NewReadinessHandler(dbPool)
@@ -1656,6 +1674,9 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 
 	// Return cleanup function for WebSocket handler and other resources
 	return func() {
+		if liveExecution != nil {
+			liveExecution.close()
+		}
 		if webSocketHandler != nil {
 			webSocketHandler.Stop()
 		}

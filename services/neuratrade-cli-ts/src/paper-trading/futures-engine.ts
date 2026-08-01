@@ -79,31 +79,32 @@ export interface FuturesPaperTradingIterationResult {
 }
 
 function calculateFuturesNotionalValue(
-  capital: number,
-  entryPrice: number,
+  capital: Decimal,
+  entryPrice: Decimal,
   stopDistancePct: number,
   currentVolatility: number,
   options: FuturesPaperTradingOptions,
-): number {
+): Decimal {
   // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
-  const maxNotionalByRiskCap =
-    capital * ((options.maxPositionSizePct ?? 100) / 100);
+  const maxNotionalByRiskCap = capital.times(
+    (options.maxPositionSizePct ?? 100) / 100,
+  );
 
-  let baseNotional: number;
+  let baseNotional: Decimal;
   if (
     options.riskPerTradePct &&
     options.riskPerTradePct > 0 &&
     stopDistancePct > 0
   ) {
-    const riskAmount = capital * (options.riskPerTradePct / 100);
-    baseNotional = riskAmount / stopDistancePct;
+    const riskAmount = capital.times(options.riskPerTradePct / 100);
+    baseNotional = riskAmount.div(stopDistancePct);
   } else {
     // Fallback to legacy margin allocation.
-    const allocatedMargin = capital * (options.positionSizePct / 100);
-    const marginPerContract = entryPrice / options.leverage;
-    const feePerContract = entryPrice * (options.feePct / 100);
-    const size = allocatedMargin / (marginPerContract + feePerContract);
-    baseNotional = size * entryPrice;
+    const allocatedMargin = capital.times(options.positionSizePct / 100);
+    const marginPerContract = entryPrice.div(options.leverage);
+    const feePerContract = entryPrice.times(options.feePct / 100);
+    const size = allocatedMargin.div(marginPerContract.plus(feePerContract));
+    baseNotional = size.times(entryPrice);
   }
 
   if (
@@ -111,11 +112,13 @@ function calculateFuturesNotionalValue(
     options.volatilityTargetAnnualPct > 0 &&
     currentVolatility > 0
   ) {
-    baseNotional *= options.volatilityTargetAnnualPct / currentVolatility;
+    baseNotional = baseNotional.times(
+      options.volatilityTargetAnnualPct / currentVolatility,
+    );
   }
 
-  const maxNotionalByMargin = capital * options.leverage;
-  return Math.min(baseNotional, maxNotionalByRiskCap, maxNotionalByMargin);
+  const maxNotionalByMargin = capital.times(options.leverage);
+  return Decimal.min(baseNotional, maxNotionalByRiskCap, maxNotionalByMargin);
 }
 
 /**
@@ -156,11 +159,10 @@ export function runFuturesPaperTradingIteration(
     yield* repo.ensureTables();
 
     const portfolio = yield* repo.getPortfolio();
-    let capital =
-      portfolio.capital <= 0
-        ? money(options.initialCapital)
-        : money(portfolio.capital);
-    let peakCapital = Decimal.max(money(portfolio.peakCapital), capital);
+    let capital = portfolio.capital.lessThanOrEqualTo(0)
+      ? money(options.initialCapital)
+      : portfolio.capital;
+    let peakCapital = Decimal.max(portfolio.peakCapital, capital);
 
     let position = yield* repo.getOpenPosition(
       options.exchange,
@@ -205,7 +207,7 @@ export function runFuturesPaperTradingIteration(
     const todayPnl = yield* repo.getTodayRealizedPnl();
     const startOfDayCapital = yield* repo.getStartOfDayCapital(
       new Date(),
-      toNumber(capital),
+      capital,
     );
 
     // Exit existing position first.
@@ -228,12 +230,12 @@ export function runFuturesPaperTradingIteration(
           options.scaleOutPct,
           currentCandle.timestamp,
         );
-        const closeFee = money(exitPrice)
+        const closeFee = exitPrice
           .times(scaleOut.trade.size)
           .times(options.feePct / 100);
-        capital = capital.plus(money(scaleOut.trade.pnl)).minus(closeFee);
+        capital = capital.plus(scaleOut.trade.pnl).minus(closeFee);
         peakCapital = Decimal.max(peakCapital, capital);
-        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+        yield* repo.setPortfolio(capital, peakCapital);
         position = scaleOut.updatedPosition;
         yield* repo.saveOpenPosition(position);
 
@@ -253,18 +255,17 @@ export function runFuturesPaperTradingIteration(
           marginMode: options.marginMode,
           leverage: options.leverage,
           size: position.size,
+          price: money(currentCandle.close),
         });
 
-        let exitPrice: number;
+        let exitPrice: Decimal;
         let closeFee: Decimal;
         if (fill) {
-          exitPrice = fill.filledPrice;
+          exitPrice = money(fill.filledPrice);
           closeFee = money(fill.fee);
         } else {
           exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
-          closeFee = money(exitPrice)
-            .times(position.size)
-            .times(options.feePct / 100);
+          closeFee = exitPrice.times(position.size).times(options.feePct / 100);
         }
 
         const trade = yield* repo.closePosition(
@@ -274,11 +275,14 @@ export function runFuturesPaperTradingIteration(
           currentCandle.timestamp,
         );
 
-        capital = capital.plus(money(trade.pnl)).minus(closeFee);
+        capital = capital.plus(trade.pnl).minus(closeFee);
         peakCapital = Decimal.max(peakCapital, capital);
-        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+        yield* repo.setPortfolio(capital, peakCapital);
 
-        yield* circuitBreaker.recordTradeResult(trade.pnl, startOfDayCapital);
+        yield* circuitBreaker.recordTradeResult(
+          toNumber(trade.pnl),
+          toNumber(startOfDayCapital),
+        );
 
         return {
           action: "closed" as const,
@@ -324,13 +328,13 @@ export function runFuturesPaperTradingIteration(
       );
 
       const notionalValue = calculateFuturesNotionalValue(
-        toNumber(capital),
-        entryPriceNum,
+        capital,
+        entryPrice,
         stopDistancePct,
         currentVolatility,
         options,
       );
-      const size = notionalValue / entryPriceNum;
+      const size = notionalValue.div(entryPrice);
 
       if (yield* killSwitch.isEngaged()) {
         const reason = yield* killSwitch.getReason();
@@ -359,10 +363,10 @@ export function runFuturesPaperTradingIteration(
           isLive: options.isLive,
           capital: toNumber(capital),
           peakCapital: toNumber(peakCapital),
-          startOfDayCapital,
-          dailyRealizedPnl: todayPnl,
+          startOfDayCapital: toNumber(startOfDayCapital),
+          dailyRealizedPnl: toNumber(todayPnl),
           tradesTodayCount,
-          positionValue: notionalValue,
+          positionValue: toNumber(notionalValue),
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
           leverage: options.leverage,
@@ -371,7 +375,7 @@ export function runFuturesPaperTradingIteration(
         .pipe(Effect.result);
 
       if (riskCheck._tag === "Failure") {
-        yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+        yield* repo.setPortfolio(capital, peakCapital);
         return {
           action: "hold" as const,
           position,
@@ -396,10 +400,11 @@ export function runFuturesPaperTradingIteration(
         symbol: options.symbol,
         side: signal.direction as "buy" | "sell",
         type: "market",
-        size: Number(size.toFixed(8)),
+        size,
         productType: options.productType,
         marginMode: options.marginMode,
         leverage: options.leverage,
+        price: money(currentCandle.close),
       });
 
       const filledPrice = money(fill.filledPrice);
@@ -454,18 +459,18 @@ export function runFuturesPaperTradingIteration(
         symbol: options.symbol,
         timeframe: options.timeframe,
         side,
-        entryPrice: fill.filledPrice,
-        size: fill.filledQty,
-        stopLoss: toNumber(stopLoss, 8),
-        takeProfit: toNumber(takeProfit, 8),
+        entryPrice: filledPrice,
+        size: money(fill.filledQty),
+        stopLoss,
+        takeProfit,
         openedAt: new Date(),
         signalId: signal.id,
         scaledOut: false,
-        scaleOutPrice: scaleOutPrice ?? 0,
+        scaleOutPrice: money(scaleOutPrice ?? 0),
       };
 
       yield* repo.saveOpenPosition(newPosition);
-      yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+      yield* repo.setPortfolio(capital, peakCapital);
 
       return {
         action: "opened" as const,
@@ -475,7 +480,7 @@ export function runFuturesPaperTradingIteration(
       };
     }
 
-    yield* repo.setPortfolio(toNumber(capital), toNumber(peakCapital));
+    yield* repo.setPortfolio(capital, peakCapital);
     return {
       action: "hold" as const,
       position,
@@ -493,20 +498,26 @@ function checkExitReason(
   signal: ScalpingSignal | null,
   options: FuturesPaperTradingOptions,
 ): "stop_loss" | "take_profit" | "signal" | "scale_out" | null {
-  if (!position.scaledOut && position.scaleOutPrice > 0) {
+  if (!position.scaledOut && position.scaleOutPrice.greaterThan(0)) {
     if (position.side === "long") {
-      if (candle.high >= position.scaleOutPrice) return "scale_out";
+      if (money(candle.high).greaterThanOrEqualTo(position.scaleOutPrice))
+        return "scale_out";
     } else {
-      if (candle.low <= position.scaleOutPrice) return "scale_out";
+      if (money(candle.low).lessThanOrEqualTo(position.scaleOutPrice))
+        return "scale_out";
     }
   }
 
   if (position.side === "long") {
-    if (candle.low <= position.stopLoss) return "stop_loss";
-    if (candle.high >= position.takeProfit) return "take_profit";
+    if (money(candle.low).lessThanOrEqualTo(position.stopLoss))
+      return "stop_loss";
+    if (money(candle.high).greaterThanOrEqualTo(position.takeProfit))
+      return "take_profit";
   } else {
-    if (candle.high >= position.stopLoss) return "stop_loss";
-    if (candle.low <= position.takeProfit) return "take_profit";
+    if (money(candle.high).greaterThanOrEqualTo(position.stopLoss))
+      return "stop_loss";
+    if (money(candle.low).lessThanOrEqualTo(position.takeProfit))
+      return "take_profit";
   }
 
   if (
@@ -524,23 +535,24 @@ function fallbackExitPrice(
   position: PaperPosition,
   candle: Candle,
   reason: "stop_loss" | "take_profit" | "signal" | "scale_out",
-): number {
+): Decimal {
+  const open = money(candle.open);
   if (reason === "stop_loss") {
     return position.side === "long"
-      ? Math.min(candle.open, position.stopLoss)
-      : Math.max(candle.open, position.stopLoss);
+      ? Decimal.min(open, position.stopLoss)
+      : Decimal.max(open, position.stopLoss);
   }
   if (reason === "take_profit") {
     return position.side === "long"
-      ? Math.max(candle.open, position.takeProfit)
-      : Math.min(candle.open, position.takeProfit);
+      ? Decimal.max(open, position.takeProfit)
+      : Decimal.min(open, position.takeProfit);
   }
   if (reason === "scale_out") {
     return position.side === "long"
-      ? Math.max(candle.open, position.scaleOutPrice)
-      : Math.min(candle.open, position.scaleOutPrice);
+      ? Decimal.max(open, position.scaleOutPrice)
+      : Decimal.min(open, position.scaleOutPrice);
   }
-  return candle.close;
+  return money(candle.close);
 }
 
 function shouldExitPosition(

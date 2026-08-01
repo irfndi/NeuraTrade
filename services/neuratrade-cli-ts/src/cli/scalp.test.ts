@@ -23,6 +23,7 @@ import {
   selectBestForSymbol,
   selectWinner,
   validateWatchlist,
+  validateLiveExecutionMarket,
   walkForwardCommand,
   buildValidateBacktestArgs,
   type OptimizeArgs,
@@ -32,6 +33,18 @@ import {
   type SelectWatchlistEntry,
   type ValidationRow,
 } from "./scalp.js";
+
+describe("live execution market guard", () => {
+  it("rejects the un-gated spot live path", () => {
+    expect(validateLiveExecutionMarket(true, false)).toContain(
+      "live spot execution is disabled",
+    );
+  });
+
+  it("allows the backend-gated futures path", () => {
+    expect(validateLiveExecutionMarket(true, true)).toBeUndefined();
+  });
+});
 import { Effect, Layer } from "effect";
 import { BunServices } from "@effect/platform-bun";
 import { PathLive } from "../services/path.js";

@@ -24,6 +24,7 @@ import {
   CircuitBreaker,
   type CircuitBreakerService,
 } from "../risk/circuit-breaker.js";
+import { money } from "../utils/money.js";
 
 function makeCandles(
   count: number,
@@ -86,7 +87,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getPortfolio() {
-    return Effect.succeed({ capital: 20, peakCapital: 20 });
+    return Effect.succeed({ capital: money(20), peakCapital: money(20) });
   }
 
   setPortfolio() {
@@ -102,10 +103,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getTodayRealizedPnl() {
-    return Effect.succeed(0);
+    return Effect.succeed(money(0));
   }
 
-  getStartOfDayCapital(_date: Date, currentCapital: number) {
+  getStartOfDayCapital(_date: Date, currentCapital: ReturnType<typeof money>) {
     return Effect.succeed(currentCapital);
   }
 
@@ -171,9 +172,9 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
         side: "buy",
         productType: "USDT-FUTURES",
         marginMode: "isolated",
-        filledQty: 0,
-        filledPrice: 1000,
-        fee: 0,
+        filledQty: money(0),
+        filledPrice: money(1000),
+        fee: money(0),
         timestamp: new Date(),
       }),
     closePosition: () => Effect.succeed(null),
@@ -181,10 +182,10 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
-        available: 10_000,
-        locked: 0,
-        equity: 10_000,
-        usdtEquity: 10_000,
+        available: money(10_000),
+        locked: money(0),
+        equity: money(10_000),
+        usdtEquity: money(10_000),
       }),
     setLeverage: () => Effect.void,
     setMarginMode: () => Effect.void,
@@ -202,7 +203,7 @@ function makeTrackingFuturesAdapter(): {
   const adapter: FuturesExchangeAdapterService = {
     placeOrder: (req) =>
       Effect.sync(() => {
-        orders.push({ side: req.side, size: req.size });
+        orders.push({ side: req.side, size: req.size.toNumber() });
         return {
           orderId: "live",
           symbol: req.symbol,
@@ -210,14 +211,14 @@ function makeTrackingFuturesAdapter(): {
           productType: req.productType,
           marginMode: req.marginMode,
           filledQty: req.size,
-          filledPrice: 1000,
-          fee: 0,
+          filledPrice: money(1000),
+          fee: money(0),
           timestamp: new Date(),
         };
       }),
     closePosition: (req) =>
       Effect.sync(() => {
-        closes.push({ side: req.side, size: req.size });
+        closes.push({ side: req.side, size: req.size.toNumber() });
         return {
           orderId: "close",
           symbol: req.symbol,
@@ -225,8 +226,8 @@ function makeTrackingFuturesAdapter(): {
           productType: req.productType,
           marginMode: req.marginMode,
           filledQty: req.size,
-          filledPrice: 1000,
-          fee: 0,
+          filledPrice: money(1000),
+          fee: money(0),
           timestamp: new Date(),
         };
       }),
@@ -234,10 +235,10 @@ function makeTrackingFuturesAdapter(): {
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
-        available: 10_000,
-        locked: 0,
-        equity: 10_000,
-        usdtEquity: 10_000,
+        available: money(10_000),
+        locked: money(0),
+        equity: money(10_000),
+        usdtEquity: money(10_000),
       }),
     setLeverage: () => Effect.void,
     setMarginMode: () => Effect.void,

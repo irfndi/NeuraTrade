@@ -96,6 +96,7 @@ type OrderIntent struct {
 	UpdatedAt       time.Time
 	FilledAmount    decimal.Decimal
 	FillPrice       decimal.Decimal
+	Fee             decimal.Decimal
 	RejectReason    string
 	AttemptCount    int
 	LastAuditHash   string
@@ -432,6 +433,7 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 	intent.Status = result.Status
 	intent.FilledAmount = result.Filled
 	intent.FillPrice = result.AveragePrice
+	intent.Fee = result.Fee
 	intent.UpdatedAt = time.Now()
 
 	if a.liveGuard != nil {

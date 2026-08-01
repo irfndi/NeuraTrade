@@ -21,6 +21,7 @@ import {
   type FuturesProductType,
 } from "../exchange/futures-adapter.js";
 import { ExchangeError } from "../exchange/adapter.js";
+import { Decimal, money, toNumber } from "../utils/money.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import {
   KillSwitch,
@@ -109,24 +110,25 @@ function makeId(): string {
 }
 
 function orderSizeContracts(
-  capital: number,
+  capital: Decimal,
   maxPositionPct: number,
-  entryPrice: number,
-): number {
-  if (entryPrice <= 0) return 0;
-  const allocation = capital * (maxPositionPct / 100);
-  const size = allocation / entryPrice;
-  return Math.max(0, Number(size.toFixed(8)));
+  entryPrice: Decimal,
+): Decimal {
+  if (entryPrice.lessThanOrEqualTo(0)) return money(0);
+  const allocation = capital.times(maxPositionPct / 100);
+  return Decimal.max(0, allocation.div(entryPrice));
 }
 
 function liquidationPrice(
   side: GridPaperPositionSide,
-  entryPrice: number,
+  entryPrice: Decimal,
   leverage: number,
-): number {
+): Decimal {
   const l = Math.max(1, leverage);
-  if (l <= 1) return 0;
-  return side === "long" ? entryPrice * (1 - 1 / l) : entryPrice * (1 + 1 / l);
+  if (l <= 1) return money(0);
+  return side === "long"
+    ? entryPrice.times(1 - 1 / l)
+    : entryPrice.times(1 + 1 / l);
 }
 
 export function runGridPaperTradingIteration(
@@ -155,43 +157,39 @@ export function runGridPaperTradingIteration(
 
     yield* repo.ensureTables();
 
-    let state = yield* repo.getGridState(
+    let state: GridPaperState = (yield* repo.getGridState(
       options.exchange,
       options.symbol,
       options.timeframe,
-    );
-
-    if (!state) {
-      state = {
-        exchange: options.exchange,
-        symbol: options.symbol,
-        timeframe: options.timeframe,
-        capital: options.initialCapital,
-        peakCapital: options.initialCapital,
-        paused: 0,
-        side: null,
-        entryPrice: 0,
-        gridStepPct: options.gridStepPct,
-        gridMaxGrids: options.gridMaxGrids,
-        gridPauseAfterLossBars: options.gridPauseAfterLossBars,
-        feePct: options.feePct,
-        slippageBps: options.slippageBps,
-        trendFilterPeriod: options.trendFilterPeriod,
-        maxPositionPct: options.maxPositionPct,
-        maxDrawdownPct: options.maxDrawdownPct,
-        leverage: options.leverage,
-        killed: false,
-        lastTimestamp: null,
-        updatedAt: new Date(),
-      };
-    }
+    )) ?? {
+      exchange: options.exchange,
+      symbol: options.symbol,
+      timeframe: options.timeframe,
+      capital: money(options.initialCapital),
+      peakCapital: money(options.initialCapital),
+      paused: 0,
+      side: null,
+      entryPrice: money(0),
+      gridStepPct: options.gridStepPct,
+      gridMaxGrids: options.gridMaxGrids,
+      gridPauseAfterLossBars: options.gridPauseAfterLossBars,
+      feePct: options.feePct,
+      slippageBps: options.slippageBps,
+      trendFilterPeriod: options.trendFilterPeriod,
+      maxPositionPct: options.maxPositionPct,
+      maxDrawdownPct: options.maxDrawdownPct,
+      leverage: options.leverage ?? 1,
+      killed: false,
+      lastTimestamp: null,
+      updatedAt: new Date(),
+    };
 
     if (state.killed) {
       return {
         action: "hold" as const,
         side: state.side,
-        capital: state.capital,
-        peakCapital: state.peakCapital,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
         note: "kill switch active",
       };
     }
@@ -216,8 +214,8 @@ export function runGridPaperTradingIteration(
       return {
         action: "hold" as const,
         side: state.side,
-        capital: state.capital,
-        peakCapital: state.peakCapital,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
         note: `insufficient candles (${candles.length}/${minCandles})`,
       };
     }
@@ -234,8 +232,8 @@ export function runGridPaperTradingIteration(
           return {
             action: "hold" as const,
             side: state.side,
-            capital: state.capital,
-            peakCapital: state.peakCapital,
+            capital: toNumber(state.capital),
+            peakCapital: toNumber(state.peakCapital),
             note: "no new replay candle",
           };
         }
@@ -250,8 +248,8 @@ export function runGridPaperTradingIteration(
       return {
         action: "hold" as const,
         side: state.side,
-        capital: state.capital,
-        peakCapital: state.peakCapital,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
         note: "trend filter not ready",
       };
     }
@@ -266,8 +264,8 @@ export function runGridPaperTradingIteration(
         return {
           action: "hold" as const,
           side: state.side,
-          capital: state.capital,
-          peakCapital: state.peakCapital,
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
           note: `KILL SWITCH ENGAGED: ${reason}`,
         };
       }
@@ -277,8 +275,8 @@ export function runGridPaperTradingIteration(
         return {
           action: "hold" as const,
           side: state.side,
-          capital: state.capital,
-          peakCapital: state.peakCapital,
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
           note: `CIRCUIT BREAKER OPEN: ${reason}`,
         };
       }
@@ -295,14 +293,14 @@ export function runGridPaperTradingIteration(
       return {
         action: "hold" as const,
         side: state.side,
-        capital: state.capital,
-        peakCapital: state.peakCapital,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
         note: `paused (${state.paused} bars remaining)`,
       };
     }
 
-    const mid = current.open;
-    const step = mid * (options.gridStepPct / 100);
+    const mid = money(current.open);
+    const step = mid.times(options.gridStepPct / 100);
     const slippageFactor = 1 + options.slippageBps / 10000;
     const fee = (options.feePct / 100) * 2;
 
@@ -316,35 +314,39 @@ export function runGridPaperTradingIteration(
 
     const closeTrade = (
       side: GridPaperPositionSide,
-      entryPrice: number,
-      exitPrice: number,
+      entryPrice: Decimal,
+      exitPrice: Decimal,
       exitReason: GridPaperTrade["exitReason"],
-      stateCapital: number,
-      peakCapital: number,
+      stateCapital: Decimal,
+      peakCapital: Decimal,
       maxPositionPct: number,
       leverage: number,
       openedAt: Date,
     ): {
       readonly trade: GridPaperTrade;
-      readonly capitalAfter: number;
-      readonly peakCapital: number;
+      readonly capitalAfter: Decimal;
+      readonly peakCapital: Decimal;
     } => {
       const pricePnl =
         side === "long"
-          ? (exitPrice - entryPrice) / entryPrice
-          : (entryPrice - exitPrice) / entryPrice;
-      const net = pricePnl - fee;
+          ? exitPrice.minus(entryPrice).div(entryPrice)
+          : entryPrice.minus(exitPrice).div(entryPrice);
+      const net = pricePnl.minus(fee);
       const allocationFactor = maxPositionPct / 100;
       const leveragedReturn =
-        exitReason === "liquidation" ? -1 : net * leverage;
-      const rawCapitalAfter =
-        stateCapital * (1 + leveragedReturn * allocationFactor);
+        exitReason === "liquidation" ? money(-1) : net.times(leverage);
+      const rawCapitalAfter = stateCapital.times(
+        money(1).plus(leveragedReturn.times(allocationFactor)),
+      );
       const capitalAfter =
         exitReason === "liquidation"
-          ? stateCapital * (1 - allocationFactor)
-          : Math.max(stateCapital * (1 - allocationFactor), rawCapitalAfter);
+          ? stateCapital.times(1 - allocationFactor)
+          : Decimal.max(
+              stateCapital.times(1 - allocationFactor),
+              rawCapitalAfter,
+            );
       const pnlPct =
-        exitReason === "liquidation" ? -100 : leveragedReturn * 100;
+        exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
       const trade: GridPaperTrade = {
         id: makeId(),
         exchange: options.exchange,
@@ -363,23 +365,16 @@ export function runGridPaperTradingIteration(
       return {
         trade,
         capitalAfter,
-        peakCapital: Math.max(peakCapital, capitalAfter),
+        peakCapital: Decimal.max(peakCapital, capitalAfter),
       };
     };
 
     const closeGridPosition = (
       side: GridPaperPositionSide,
       exitReason: GridPaperTrade["exitReason"],
-      theoreticalExitPrice: number,
+      theoreticalExitPrice: Decimal,
     ) => {
-      if (state === null) {
-        return Effect.fail(
-          new PaperTradingRepositoryError(
-            "closeGridPosition called with null state",
-          ),
-        );
-      }
-      const s = state!;
+      const s = state;
       return Effect.gen(function* () {
         let exitPrice = theoreticalExitPrice;
         if (isLive && exitReason !== "liquidation") {
@@ -388,7 +383,7 @@ export function runGridPaperTradingIteration(
             s.maxPositionPct,
             s.entryPrice,
           );
-          if (size > 0) {
+          if (size.greaterThan(0)) {
             const fill = yield* adapter.closePosition({
               symbol: options.symbol,
               side: side === "long" ? "sell" : "buy",
@@ -396,9 +391,10 @@ export function runGridPaperTradingIteration(
               marginMode,
               leverage: s.leverage,
               size,
+              price: theoreticalExitPrice,
             });
             if (fill) {
-              exitPrice = fill.filledPrice;
+              exitPrice = money(fill.filledPrice);
             }
           }
         }
@@ -441,26 +437,29 @@ export function runGridPaperTradingIteration(
           return {
             action: "hold" as const,
             side: state.side,
-            capital: state.capital,
-            peakCapital: state.peakCapital,
+            capital: toNumber(state.capital),
+            peakCapital: toNumber(state.peakCapital),
             note: `chop gate active (ADX ${stats.adx14.toFixed(1)} >= ${chopGateAdxThreshold})`,
           };
         }
       }
-      const buyLevel = mid - step;
-      const sellLevel = mid + step;
+      const buyLevel = mid.minus(step);
+      const sellLevel = mid.plus(step);
       const onlyWithTrend = options.onlyWithTrend ?? false;
       const allowLong = !onlyWithTrend || current.close > trend;
       const allowShort = !onlyWithTrend || current.close < trend;
 
       let entrySide: GridPaperPositionSide | null = null;
-      let theoreticalEntryPrice = 0;
-      if (allowLong && current.low <= buyLevel) {
+      let theoreticalEntryPrice = money(0);
+      if (allowLong && money(current.low).lessThanOrEqualTo(buyLevel)) {
         entrySide = "long";
-        theoreticalEntryPrice = buyLevel * slippageFactor;
-      } else if (allowShort && current.high >= sellLevel) {
+        theoreticalEntryPrice = buyLevel.times(slippageFactor);
+      } else if (
+        allowShort &&
+        money(current.high).greaterThanOrEqualTo(sellLevel)
+      ) {
         entrySide = "short";
-        theoreticalEntryPrice = sellLevel / slippageFactor;
+        theoreticalEntryPrice = sellLevel.div(slippageFactor);
       }
 
       if (entrySide !== null) {
@@ -469,12 +468,14 @@ export function runGridPaperTradingIteration(
           const riskCheck = yield* riskGuard
             .check({
               isLive: true,
-              capital: state.capital,
-              peakCapital: state.peakCapital,
-              startOfDayCapital,
-              dailyRealizedPnl: todayPnl,
+              capital: toNumber(state.capital),
+              peakCapital: toNumber(state.peakCapital),
+              startOfDayCapital: toNumber(startOfDayCapital),
+              dailyRealizedPnl: toNumber(todayPnl),
               tradesTodayCount: 0,
-              positionValue: state.capital * (state.maxPositionPct / 100),
+              positionValue: toNumber(
+                state.capital.times(state.maxPositionPct / 100),
+              ),
               symbol: options.symbol,
               side: entrySide === "long" ? "buy" : "sell",
               leverage: state.leverage,
@@ -489,7 +490,7 @@ export function runGridPaperTradingIteration(
               state.maxPositionPct,
               theoreticalEntryPrice,
             );
-            if (size <= 0) {
+            if (size.lessThanOrEqualTo(0)) {
               note = `RISK BLOCKED ${entrySide}: computed size zero`;
             } else {
               yield* adapter.setLeverage(
@@ -511,11 +512,12 @@ export function runGridPaperTradingIteration(
                 productType,
                 marginMode,
                 leverage: state.leverage,
+                price: theoreticalEntryPrice,
               });
               state = {
                 ...state,
                 side: entrySide,
-                entryPrice: fill.filledPrice,
+                entryPrice: money(fill.filledPrice),
                 updatedAt: new Date(),
                 lastTimestamp: current.timestamp,
               };
@@ -534,20 +536,20 @@ export function runGridPaperTradingIteration(
         }
       }
     } else if (state.side === "long") {
-      const target = state.entryPrice + step * targetRatio;
-      const stop = state.entryPrice - step * options.gridMaxGrids;
+      const target = state.entryPrice.plus(step.times(targetRatio));
+      const stop = state.entryPrice.minus(step.times(options.gridMaxGrids));
       const liq = liquidationPrice("long", state.entryPrice, state.leverage);
 
-      if (liq > 0 && current.low <= liq) {
+      if (liq.greaterThan(0) && money(current.low).lessThanOrEqualTo(liq)) {
         const close = yield* closeGridPosition(
           "long",
           "liquidation",
-          liq * slippageFactor,
+          liq.times(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: 0,
@@ -556,16 +558,16 @@ export function runGridPaperTradingIteration(
           lastTimestamp: current.timestamp,
         };
         note = `liquidated long @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
-      } else if (current.high >= target) {
+      } else if (money(current.high).greaterThanOrEqualTo(target)) {
         const close = yield* closeGridPosition(
           "long",
           "target",
-          target / slippageFactor,
+          target.div(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: 0,
@@ -573,16 +575,16 @@ export function runGridPaperTradingIteration(
           lastTimestamp: current.timestamp,
         };
         note = `${isLive ? "[LIVE] " : ""}closed long target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      } else if (current.low <= stop) {
+      } else if (money(current.low).lessThanOrEqualTo(stop)) {
         const close = yield* closeGridPosition(
           "long",
           "stop",
-          stop * slippageFactor,
+          stop.times(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: options.gridPauseAfterLossBars,
@@ -592,20 +594,20 @@ export function runGridPaperTradingIteration(
         note = `${isLive ? "[LIVE] " : ""}closed long stop @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
       }
     } else if (state.side === "short") {
-      const target = state.entryPrice - step * targetRatio;
-      const stop = state.entryPrice + step * options.gridMaxGrids;
+      const target = state.entryPrice.minus(step.times(targetRatio));
+      const stop = state.entryPrice.plus(step.times(options.gridMaxGrids));
       const liq = liquidationPrice("short", state.entryPrice, state.leverage);
 
-      if (liq > 0 && current.high >= liq) {
+      if (liq.greaterThan(0) && money(current.high).greaterThanOrEqualTo(liq)) {
         const close = yield* closeGridPosition(
           "short",
           "liquidation",
-          liq / slippageFactor,
+          liq.div(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: 0,
@@ -614,16 +616,16 @@ export function runGridPaperTradingIteration(
           lastTimestamp: current.timestamp,
         };
         note = `liquidated short @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
-      } else if (current.low <= target) {
+      } else if (money(current.low).lessThanOrEqualTo(target)) {
         const close = yield* closeGridPosition(
           "short",
           "target",
-          target * slippageFactor,
+          target.times(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: 0,
@@ -631,16 +633,16 @@ export function runGridPaperTradingIteration(
           lastTimestamp: current.timestamp,
         };
         note = `${isLive ? "[LIVE] " : ""}closed short target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      } else if (current.high >= stop) {
+      } else if (money(current.high).greaterThanOrEqualTo(stop)) {
         const close = yield* closeGridPosition(
           "short",
           "stop",
-          stop / slippageFactor,
+          stop.div(slippageFactor),
         );
         state = {
           ...state,
           side: null,
-          entryPrice: 0,
+          entryPrice: money(0),
           capital: close.capitalAfter,
           peakCapital: close.peakCapital,
           paused: options.gridPauseAfterLossBars,
@@ -658,11 +660,13 @@ export function runGridPaperTradingIteration(
     };
 
     // Realized-drawdown kill switch.
-    const drawdownPct =
-      state.peakCapital > 0
-        ? ((state.peakCapital - state.capital) / state.peakCapital) * 100
-        : 0;
-    if (drawdownPct >= state.maxDrawdownPct && state.maxDrawdownPct < 100) {
+    const drawdownPct = state.peakCapital.greaterThan(0)
+      ? state.peakCapital.minus(state.capital).div(state.peakCapital).times(100)
+      : money(0);
+    if (
+      drawdownPct.greaterThanOrEqualTo(state.maxDrawdownPct) &&
+      state.maxDrawdownPct < 100
+    ) {
       state = { ...state, killed: true };
       note =
         note === "no action"
@@ -682,8 +686,8 @@ export function runGridPaperTradingIteration(
             ? "opened"
             : "hold",
       side: state.side,
-      capital: state.capital,
-      peakCapital: state.peakCapital,
+      capital: toNumber(state.capital),
+      peakCapital: toNumber(state.peakCapital),
       note,
     };
   });

@@ -9,6 +9,7 @@ import {
   type FuturesExchangeAdapterService,
 } from "../futures-adapter.js";
 import { makeBitgetFuturesAdapter } from "./bitget-futures.js";
+import { money } from "../../utils/money.js";
 
 let calls: string[] = [];
 
@@ -192,7 +193,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
           symbol: "BTC/USDT:USDT",
           side: "buy",
           type: "market",
-          size: 0.1,
+          size: money(0.1),
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
@@ -203,7 +204,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
     expect(fill.orderId).toBe("fut-1");
     expect(fill.symbol).toBe("BTC/USDT:USDT");
     expect(fill.side).toBe("buy");
-    expect(fill.filledQty).toBe(0.1);
+    expect(fill.filledQty.toNumber()).toBe(0.1);
     expect(calls).toContain("placeFuturesOrder:BTCUSDT:buy:no");
   });
 
@@ -217,7 +218,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
 
     expect(position).not.toBeNull();
     expect(position?.side).toBe("long");
-    expect(position?.quantity).toBe(0.5);
+    expect(position?.quantity.toNumber()).toBe(0.5);
     expect(position?.leverage).toBe(10);
   });
 
@@ -229,8 +230,8 @@ describe("BitgetFuturesExchangeAdapter", () => {
       }),
     );
 
-    expect(balance.available).toBe(5000);
-    expect(balance.equity).toBe(6000);
+    expect(balance.available.toNumber()).toBe(5000);
+    expect(balance.equity.toNumber()).toBe(6000);
   });
 
   it("closes a position with a reduce-only order", async () => {
@@ -243,7 +244,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
-          size: 0.5,
+          size: money(0.5),
         });
       }),
     );

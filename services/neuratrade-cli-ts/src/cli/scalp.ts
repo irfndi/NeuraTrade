@@ -39,11 +39,15 @@ import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-reposito
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
-import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
+import {
+  BackendRiskGatedFuturesExchangeAdapterLive,
+  backendRiskGatedFuturesConfigFromEnv,
+} from "../exchange/adapters/backend-risk-gated-futures.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
 import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
+import { Decimal, money } from "../utils/money.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,
@@ -57,15 +61,7 @@ import {
   type GridPaperTradingOptions,
   type GridPaperTradingIterationResult,
 } from "../paper-trading/grid-engine.js";
-import {
-  BitgetClientLiveConfig,
-  type BitgetProductType,
-} from "../services/bitget-client.js";
-import { BitgetConfigLive } from "../services/bitget-config.js";
-import {
-  RateLimiterLive,
-  bitgetRateLimiterConfig,
-} from "../services/rate-limiter.js";
+import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLiteLive,
@@ -3211,6 +3207,16 @@ function parseMarginMode(value: string): FuturesMarginMode {
   );
 }
 
+export function validateLiveExecutionMarket(
+  live: boolean,
+  futures: boolean,
+): string | undefined {
+  if (live && !futures) {
+    return "live spot execution is disabled; use --futures for the backend risk-gated path";
+  }
+  return undefined;
+}
+
 function parseProductType(value: string): BitgetProductType {
   if (
     value === "USDT-FUTURES" ||
@@ -3226,6 +3232,13 @@ function parseProductType(value: string): BitgetProductType {
 
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
+    const liveMarketError = validateLiveExecutionMarket(
+      args.live,
+      args.futures,
+    );
+    if (liveMarketError !== undefined) {
+      return yield* Effect.fail(new Error(liveMarketError));
+    }
     const repo = yield* MarketDataRepository;
     yield* repo.ensureTables();
 
@@ -3244,11 +3257,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
     }
 
     const portfolio = yield* paperRepo.getPortfolio();
-    const startCapital =
-      portfolio.capital <= 0 ? args.capital : portfolio.capital;
+    const startCapital = portfolio.capital.lessThanOrEqualTo(0)
+      ? money(args.capital)
+      : portfolio.capital;
     yield* paperRepo.setPortfolio(
       startCapital,
-      Math.max(portfolio.peakCapital, startCapital),
+      Decimal.max(portfolio.peakCapital, startCapital),
     );
 
     const composerConfig = buildBacktestComposerConfig(
@@ -3390,15 +3404,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
         })
       : SimulatedExchangeAdapterLive();
     const futuresAdapterLayer = args.live
-      ? Layer.provide(
-          BitgetFuturesExchangeAdapterLive,
-          Layer.provide(
-            BitgetClientLiveConfig,
-            Layer.merge(
-              BitgetConfigLive,
-              RateLimiterLive(bitgetRateLimiterConfig),
-            ),
-          ),
+      ? BackendRiskGatedFuturesExchangeAdapterLive(
+          backendRiskGatedFuturesConfigFromEnv(),
         )
       : SimulatedFuturesExchangeAdapterLive();
 
@@ -3691,6 +3698,14 @@ export const soakCommand = Command.make(
         ? mergeSoakArgs(args as unknown as SoakArgs, profile.value)
         : (args as unknown as SoakArgs);
 
+      const liveMarketError = validateLiveExecutionMarket(
+        mergedArgs.live,
+        mergedArgs.futures,
+      );
+      if (liveMarketError !== undefined) {
+        return yield* Effect.fail(new Error(liveMarketError));
+      }
+
       const watchlistPath = resolve(path.homeDir, "data", mergedArgs.watchlist);
       const watchlistEntries = yield* loadSoakWatchlist(watchlistPath);
 
@@ -3740,15 +3755,8 @@ export const soakCommand = Command.make(
           })
         : SimulatedExchangeAdapterLive();
       const futuresAdapterLayer = mergedArgs.live
-        ? Layer.provide(
-            BitgetFuturesExchangeAdapterLive,
-            Layer.provide(
-              BitgetClientLiveConfig,
-              Layer.merge(
-                BitgetConfigLive,
-                RateLimiterLive(bitgetRateLimiterConfig),
-              ),
-            ),
+        ? BackendRiskGatedFuturesExchangeAdapterLive(
+            backendRiskGatedFuturesConfigFromEnv(),
           )
         : SimulatedFuturesExchangeAdapterLive();
 

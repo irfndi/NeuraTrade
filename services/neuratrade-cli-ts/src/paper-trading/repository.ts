@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { Database } from "bun:sqlite";
-import { Decimal } from "../utils/money.js";
+import { Decimal, toNumber } from "../utils/money.js";
 import type {
   GridPaperState,
   GridPaperTrade,
@@ -34,13 +34,13 @@ export interface PaperTradingRepositoryService {
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
   readonly closePosition: (
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     exitReason: PaperTrade["exitReason"],
     closedAt: Date,
   ) => Effect.Effect<PaperTrade, PaperTradingRepositoryError, never>;
   readonly scaleOutPosition: (
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     scaleOutPct: number,
     closedAt: Date,
   ) => Effect.Effect<
@@ -49,13 +49,13 @@ export interface PaperTradingRepositoryService {
     never
   >;
   readonly getPortfolio: () => Effect.Effect<
-    { readonly capital: number; readonly peakCapital: number },
+    { readonly capital: Decimal; readonly peakCapital: Decimal },
     PaperTradingRepositoryError,
     never
   >;
   readonly setPortfolio: (
-    capital: number,
-    peakCapital: number,
+    capital: Decimal,
+    peakCapital: Decimal,
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
   readonly listRecentTrades: (
     limit: number,
@@ -66,15 +66,15 @@ export interface PaperTradingRepositoryService {
   ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
 
   readonly getTodayRealizedPnl: () => Effect.Effect<
-    number,
+    Decimal,
     PaperTradingRepositoryError,
     never
   >;
 
   readonly getStartOfDayCapital: (
     date: Date,
-    currentCapital: number,
-  ) => Effect.Effect<number, PaperTradingRepositoryError, never>;
+    currentCapital: Decimal,
+  ) => Effect.Effect<Decimal, PaperTradingRepositoryError, never>;
 
   readonly getGridState: (
     exchange: string,
@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS paper_portfolio (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   capital REAL NOT NULL,
   peak_capital REAL NOT NULL,
+  capital_decimal TEXT,
+  peak_capital_decimal TEXT,
   updated_at DATETIME NOT NULL
 );
 
@@ -134,10 +136,15 @@ CREATE TABLE IF NOT EXISTS paper_positions (
   size REAL NOT NULL,
   stop_loss REAL NOT NULL,
   take_profit REAL NOT NULL,
+  entry_price_decimal TEXT,
+  size_decimal TEXT,
+  stop_loss_decimal TEXT,
+  take_profit_decimal TEXT,
   opened_at DATETIME NOT NULL,
   signal_id TEXT NOT NULL,
   scaled_out INTEGER NOT NULL DEFAULT 0,
-  scale_out_price REAL NOT NULL DEFAULT 0
+  scale_out_price REAL NOT NULL DEFAULT 0,
+  scale_out_price_decimal TEXT
 );
 
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -151,6 +158,11 @@ CREATE TABLE IF NOT EXISTS paper_trades (
   size REAL NOT NULL,
   pnl REAL NOT NULL,
   pnl_pct REAL NOT NULL,
+  entry_price_decimal TEXT,
+  exit_price_decimal TEXT,
+  size_decimal TEXT,
+  pnl_decimal TEXT,
+  pnl_pct_decimal TEXT,
   exit_reason TEXT NOT NULL,
   opened_at DATETIME NOT NULL,
   closed_at DATETIME NOT NULL
@@ -162,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_trades_closed_at ON paper_trades(closed_at 
 CREATE TABLE IF NOT EXISTS paper_start_of_day_capital (
   date TEXT PRIMARY KEY,
   start_capital REAL NOT NULL,
+  start_capital_decimal TEXT,
   updated_at DATETIME NOT NULL
 );
 
@@ -171,9 +184,12 @@ CREATE TABLE IF NOT EXISTS grid_paper_state (
   timeframe TEXT NOT NULL,
   capital REAL NOT NULL,
   peak_capital REAL NOT NULL,
+  capital_decimal TEXT,
+  peak_capital_decimal TEXT,
   paused INTEGER NOT NULL DEFAULT 0,
   side TEXT,
   entry_price REAL,
+  entry_price_decimal TEXT,
   grid_step_pct REAL NOT NULL,
   grid_max_grids INTEGER NOT NULL,
   grid_pause_after_loss_bars INTEGER NOT NULL,
@@ -200,6 +216,11 @@ CREATE TABLE IF NOT EXISTS grid_paper_trades (
   capital_before REAL NOT NULL,
   capital_after REAL NOT NULL,
   pnl_pct REAL NOT NULL,
+  entry_price_decimal TEXT,
+  exit_price_decimal TEXT,
+  capital_before_decimal TEXT,
+  capital_after_decimal TEXT,
+  pnl_pct_decimal TEXT,
   exit_reason TEXT NOT NULL,
   opened_at DATETIME NOT NULL,
   closed_at DATETIME NOT NULL
@@ -247,6 +268,32 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         addColumn(
           "ALTER TABLE grid_paper_state ADD COLUMN leverage REAL NOT NULL DEFAULT 1",
         );
+        for (const tableColumn of [
+          "paper_portfolio capital_decimal TEXT",
+          "paper_portfolio peak_capital_decimal TEXT",
+          "paper_positions entry_price_decimal TEXT",
+          "paper_positions size_decimal TEXT",
+          "paper_positions stop_loss_decimal TEXT",
+          "paper_positions take_profit_decimal TEXT",
+          "paper_positions scale_out_price_decimal TEXT",
+          "paper_trades entry_price_decimal TEXT",
+          "paper_trades exit_price_decimal TEXT",
+          "paper_trades size_decimal TEXT",
+          "paper_trades pnl_decimal TEXT",
+          "paper_trades pnl_pct_decimal TEXT",
+          "paper_start_of_day_capital start_capital_decimal TEXT",
+          "grid_paper_state capital_decimal TEXT",
+          "grid_paper_state peak_capital_decimal TEXT",
+          "grid_paper_state entry_price_decimal TEXT",
+          "grid_paper_trades entry_price_decimal TEXT",
+          "grid_paper_trades exit_price_decimal TEXT",
+          "grid_paper_trades capital_before_decimal TEXT",
+          "grid_paper_trades capital_after_decimal TEXT",
+          "grid_paper_trades pnl_pct_decimal TEXT",
+        ]) {
+          const [table, column, type] = tableColumn.split(" ");
+          addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        }
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -264,7 +311,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const row = this.db
           .query(
-            `SELECT id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id, scaled_out, scale_out_price
+            `SELECT id, exchange, symbol, timeframe, side,
+                    COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    COALESCE(size_decimal, CAST(size AS TEXT)) AS size_value,
+                    COALESCE(stop_loss_decimal, CAST(stop_loss AS TEXT)) AS stop_loss_value,
+                    COALESCE(take_profit_decimal, CAST(take_profit AS TEXT)) AS take_profit_value,
+                    opened_at, signal_id, scaled_out,
+                    COALESCE(scale_out_price_decimal, CAST(scale_out_price AS TEXT)) AS scale_out_price_value
              FROM paper_positions
              WHERE exchange = ? AND symbol = ?`,
           )
@@ -274,14 +327,14 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: string;
           timeframe: string;
           side: string;
-          entry_price: number;
-          size: number;
-          stop_loss: number;
-          take_profit: number;
+          entry_price_value: string;
+          size_value: string;
+          stop_loss_value: string;
           opened_at: string;
           signal_id: string;
           scaled_out: number;
-          scale_out_price: number;
+          take_profit_value: string;
+          scale_out_price_value: string;
         } | null;
 
         if (!row) return null;
@@ -292,14 +345,14 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: row.symbol,
           timeframe: row.timeframe,
           side: row.side as PaperPosition["side"],
-          entryPrice: row.entry_price,
-          size: row.size,
-          stopLoss: row.stop_loss,
-          takeProfit: row.take_profit,
+          entryPrice: new Decimal(row.entry_price_value),
+          size: new Decimal(row.size_value),
+          stopLoss: new Decimal(row.stop_loss_value),
+          takeProfit: new Decimal(row.take_profit_value),
           openedAt: new Date(row.opened_at),
           signalId: row.signal_id,
           scaledOut: Boolean(row.scaled_out),
-          scaleOutPrice: row.scale_out_price,
+          scaleOutPrice: new Decimal(row.scale_out_price_value),
         };
       },
       catch: (err) =>
@@ -318,8 +371,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db
           .query(
             `INSERT OR REPLACE INTO paper_positions
-             (id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit, opened_at, signal_id, scaled_out, scale_out_price)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit,
+             entry_price_decimal, size_decimal, stop_loss_decimal, take_profit_decimal,
+             opened_at, signal_id, scaled_out, scale_out_price, scale_out_price_decimal)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             position.id,
@@ -327,14 +382,19 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             position.symbol,
             position.timeframe,
             position.side,
-            position.entryPrice,
-            position.size,
-            position.stopLoss,
-            position.takeProfit,
+            toNumber(position.entryPrice),
+            toNumber(position.size),
+            toNumber(position.stopLoss),
+            toNumber(position.takeProfit),
+            position.entryPrice.toString(),
+            position.size.toString(),
+            position.stopLoss.toString(),
+            position.takeProfit.toString(),
             position.openedAt.toISOString(),
             position.signalId,
             position.scaledOut ? 1 : 0,
-            position.scaleOutPrice,
+            toNumber(position.scaleOutPrice),
+            position.scaleOutPrice.toString(),
           );
       },
       catch: (err) =>
@@ -347,22 +407,21 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
 
   closePosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     exitReason: PaperTrade["exitReason"],
     closedAt: Date,
   ): Effect.Effect<PaperTrade, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
-        const entryPrice = new Decimal(position.entryPrice);
-        const exitPriceDec = new Decimal(exitPrice);
-        const size = new Decimal(position.size);
+        const entryPrice = position.entryPrice;
+        const exitPriceDec = exitPrice;
+        const size = position.size;
         const priceDiff =
           position.side === "long"
             ? exitPriceDec.minus(entryPrice)
             : entryPrice.minus(exitPriceDec);
         const pnl = priceDiff.times(size);
-        const pnlPct = pnl.div(entryPrice.times(size)).times(100).toNumber();
-        const pnlNum = pnl.toNumber();
+        const pnlPct = pnl.div(entryPrice.times(size)).times(100);
         const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         // Wrap trade insertion and position deletion in a transaction so the
@@ -370,8 +429,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db.transaction(() => {
           const insert = this.db.query(
             `INSERT INTO paper_trades
-             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct,
+              entry_price_decimal, exit_price_decimal, size_decimal, pnl_decimal, pnl_pct_decimal,
+              exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           );
           insert.run(
             tradeId,
@@ -379,11 +440,16 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             position.symbol,
             position.timeframe,
             position.side,
-            position.entryPrice,
-            exitPrice,
-            position.size,
-            pnlNum,
-            pnlPct,
+            toNumber(position.entryPrice),
+            toNumber(exitPrice),
+            toNumber(position.size),
+            toNumber(pnl),
+            toNumber(pnlPct),
+            position.entryPrice.toString(),
+            exitPrice.toString(),
+            position.size.toString(),
+            pnl.toString(),
+            pnlPct.toString(),
             exitReason,
             position.openedAt.toISOString(),
             closedAt.toISOString(),
@@ -403,7 +469,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           entryPrice: position.entryPrice,
           exitPrice,
           size: position.size,
-          pnl: pnlNum,
+          pnl,
           pnlPct,
           exitReason,
           openedAt: position.openedAt,
@@ -420,7 +486,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
 
   scaleOutPosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     scaleOutPct: number,
     closedAt: Date,
   ): Effect.Effect<
@@ -431,33 +497,29 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     return Effect.try({
       try: () => {
         const pct = Math.max(0, Math.min(100, scaleOutPct));
-        const partialSize = new Decimal(position.size).times(pct / 100);
+        const partialSize = position.size.times(pct / 100);
         if (partialSize.lessThanOrEqualTo(0)) {
           throw new Error("scale-out size must be positive");
         }
 
-        const entryPrice = new Decimal(position.entryPrice);
-        const exitPriceDec = new Decimal(exitPrice);
+        const entryPrice = position.entryPrice;
+        const exitPriceDec = exitPrice;
         const priceDiff =
           position.side === "long"
             ? exitPriceDec.minus(entryPrice)
             : entryPrice.minus(exitPriceDec);
         const pnl = priceDiff.times(partialSize);
-        const pnlPct = pnl
-          .div(entryPrice.times(partialSize))
-          .times(100)
-          .toNumber();
-        const pnlNum = pnl.toNumber();
-        const remainingSize = new Decimal(position.size)
-          .minus(partialSize)
-          .toNumber();
+        const pnlPct = pnl.div(entryPrice.times(partialSize)).times(100);
+        const remainingSize = position.size.minus(partialSize);
         const tradeId = `paper-trade-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         this.db.transaction(() => {
           const insert = this.db.query(
             `INSERT INTO paper_trades
-             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct,
+              entry_price_decimal, exit_price_decimal, size_decimal, pnl_decimal, pnl_pct_decimal,
+              exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           );
           insert.run(
             tradeId,
@@ -465,11 +527,16 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             position.symbol,
             position.timeframe,
             position.side,
-            position.entryPrice,
-            exitPrice,
-            partialSize.toNumber(),
-            pnlNum,
-            pnlPct,
+            toNumber(position.entryPrice),
+            toNumber(exitPrice),
+            toNumber(partialSize),
+            toNumber(pnl),
+            toNumber(pnlPct),
+            position.entryPrice.toString(),
+            exitPrice.toString(),
+            partialSize.toString(),
+            pnl.toString(),
+            pnlPct.toString(),
             "scale_out",
             position.openedAt.toISOString(),
             closedAt.toISOString(),
@@ -478,10 +545,16 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           this.db
             .query(
               `UPDATE paper_positions
-               SET size = ?, stop_loss = ?, scaled_out = 1
+               SET size = ?, stop_loss = ?, size_decimal = ?, stop_loss_decimal = ?, scaled_out = 1
                WHERE id = ?`,
             )
-            .run(remainingSize, position.entryPrice, position.id);
+            .run(
+              toNumber(remainingSize),
+              toNumber(position.entryPrice),
+              remainingSize.toString(),
+              position.entryPrice.toString(),
+              position.id,
+            );
         })();
 
         const trade: PaperTrade = {
@@ -492,8 +565,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           side: position.side,
           entryPrice: position.entryPrice,
           exitPrice,
-          size: partialSize.toNumber(),
-          pnl: pnlNum,
+          size: partialSize,
+          pnl,
           pnlPct,
           exitReason: "scale_out",
           openedAt: position.openedAt,
@@ -516,7 +589,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   }
 
   getPortfolio(): Effect.Effect<
-    { readonly capital: number; readonly peakCapital: number },
+    { readonly capital: Decimal; readonly peakCapital: Decimal },
     PaperTradingRepositoryError,
     never
   > {
@@ -524,13 +597,21 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const row = this.db
           .query(
-            "SELECT capital, peak_capital FROM paper_portfolio WHERE id = 1",
+            `SELECT COALESCE(capital_decimal, CAST(capital AS TEXT)) AS capital_value,
+                    COALESCE(peak_capital_decimal, CAST(peak_capital AS TEXT)) AS peak_capital_value
+             FROM paper_portfolio WHERE id = 1`,
           )
-          .get() as { capital: number; peak_capital: number } | null;
+          .get() as {
+          capital_value: string;
+          peak_capital_value: string;
+        } | null;
 
         return row
-          ? { capital: row.capital, peakCapital: row.peak_capital }
-          : { capital: 10_000, peakCapital: 10_000 };
+          ? {
+              capital: new Decimal(row.capital_value),
+              peakCapital: new Decimal(row.peak_capital_value),
+            }
+          : { capital: new Decimal(10_000), peakCapital: new Decimal(10_000) };
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -541,21 +622,30 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   }
 
   setPortfolio(
-    capital: number,
-    peakCapital: number,
+    capital: Decimal,
+    peakCapital: Decimal,
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         this.db
           .query(
-            `INSERT INTO paper_portfolio (id, capital, peak_capital, updated_at)
-             VALUES (1, ?, ?, ?)
+            `INSERT INTO paper_portfolio
+             (id, capital, peak_capital, capital_decimal, peak_capital_decimal, updated_at)
+             VALUES (1, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                capital = excluded.capital,
                peak_capital = excluded.peak_capital,
+               capital_decimal = excluded.capital_decimal,
+               peak_capital_decimal = excluded.peak_capital_decimal,
                updated_at = excluded.updated_at`,
           )
-          .run(capital, peakCapital, new Date().toISOString());
+          .run(
+            toNumber(capital),
+            toNumber(peakCapital),
+            capital.toString(),
+            peakCapital.toString(),
+            new Date().toISOString(),
+          );
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -572,7 +662,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const rows = this.db
           .query(
-            `SELECT id, exchange, symbol, timeframe, side, entry_price, exit_price, size, pnl, pnl_pct, exit_reason, opened_at, closed_at
+            `SELECT id, exchange, symbol, timeframe, side,
+                    COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    COALESCE(exit_price_decimal, CAST(exit_price AS TEXT)) AS exit_price_value,
+                    COALESCE(size_decimal, CAST(size AS TEXT)) AS size_value,
+                    COALESCE(pnl_decimal, CAST(pnl AS TEXT)) AS pnl_value,
+                    COALESCE(pnl_pct_decimal, CAST(pnl_pct AS TEXT)) AS pnl_pct_value,
+                    exit_reason, opened_at, closed_at
              FROM paper_trades
              ORDER BY closed_at DESC
              LIMIT ?`,
@@ -583,11 +679,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: string;
           timeframe: string;
           side: string;
-          entry_price: number;
-          exit_price: number;
-          size: number;
-          pnl: number;
-          pnl_pct: number;
+          entry_price_value: string;
+          exit_price_value: string;
+          size_value: string;
+          pnl_value: string;
+          pnl_pct_value: string;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -599,11 +695,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: r.symbol,
           timeframe: r.timeframe,
           side: r.side as PaperPosition["side"],
-          entryPrice: r.entry_price,
-          exitPrice: r.exit_price,
-          size: r.size,
-          pnl: r.pnl,
-          pnlPct: r.pnl_pct,
+          entryPrice: new Decimal(r.entry_price_value),
+          exitPrice: new Decimal(r.exit_price_value),
+          size: new Decimal(r.size_value),
+          pnl: new Decimal(r.pnl_value),
+          pnlPct: new Decimal(r.pnl_pct_value),
           exitReason: r.exit_reason as PaperTrade["exitReason"],
           openedAt: new Date(r.opened_at),
           closedAt: new Date(r.closed_at),
@@ -640,20 +736,23 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   }
 
   getTodayRealizedPnl(): Effect.Effect<
-    number,
+    Decimal,
     PaperTradingRepositoryError,
     never
   > {
     return Effect.try({
       try: () => {
-        const row = this.db
+        const rows = this.db
           .query(
-            `SELECT COALESCE(SUM(pnl), 0) AS pnl
+            `SELECT COALESCE(pnl_decimal, CAST(pnl AS TEXT)) AS pnl_value
              FROM paper_trades
              WHERE date(closed_at) = date('now')`,
           )
-          .get() as { pnl: number } | null;
-        return row?.pnl ?? 0;
+          .all() as Array<{ pnl_value: string }>;
+        return rows.reduce(
+          (total, row) => total.plus(new Decimal(row.pnl_value)),
+          new Decimal(0),
+        );
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -665,28 +764,34 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
 
   getStartOfDayCapital(
     date: Date,
-    currentCapital: number,
-  ): Effect.Effect<number, PaperTradingRepositoryError, never> {
+    currentCapital: Decimal,
+  ): Effect.Effect<Decimal, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         const dateKey = date.toISOString().slice(0, 10);
         const row = this.db
           .query(
-            "SELECT start_capital FROM paper_start_of_day_capital WHERE date = ?",
+            `SELECT COALESCE(start_capital_decimal, CAST(start_capital AS TEXT)) AS start_capital_value
+             FROM paper_start_of_day_capital WHERE date = ?`,
           )
-          .get(dateKey) as { start_capital: number } | null;
-        if (row) {
-          return row.start_capital;
-        }
+          .get(dateKey) as { start_capital_value: string } | null;
+        if (row) return new Decimal(row.start_capital_value);
         this.db
           .query(
-            `INSERT INTO paper_start_of_day_capital (date, start_capital, updated_at)
-             VALUES (?, ?, ?)
+            `INSERT INTO paper_start_of_day_capital
+             (date, start_capital, start_capital_decimal, updated_at)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT(date) DO UPDATE SET
                start_capital = excluded.start_capital,
+               start_capital_decimal = excluded.start_capital_decimal,
                updated_at = excluded.updated_at`,
           )
-          .run(dateKey, currentCapital, new Date().toISOString());
+          .run(
+            dateKey,
+            toNumber(currentCapital),
+            currentCapital.toString(),
+            new Date().toISOString(),
+          );
         return currentCapital;
       },
       catch: (err) =>
@@ -706,8 +811,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const row = this.db
           .query(
-            `SELECT exchange, symbol, timeframe, capital, peak_capital, paused, side,
-                    entry_price, grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+            `SELECT exchange, symbol, timeframe,
+                    COALESCE(capital_decimal, CAST(capital AS TEXT)) AS capital_value,
+                    COALESCE(peak_capital_decimal, CAST(peak_capital AS TEXT)) AS peak_capital_value,
+                    paused, side,
+                    COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
                     fee_pct, slippage_bps, trend_filter_period, max_position_pct,
                     max_drawdown_pct, leverage, killed, last_timestamp, updated_at
              FROM grid_paper_state
@@ -717,11 +826,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           exchange: string;
           symbol: string;
           timeframe: string;
-          capital: number;
-          peak_capital: number;
+          capital_value: string;
+          peak_capital_value: string;
           paused: number;
           side: string | null;
-          entry_price: number | null;
+          entry_price_value: string | null;
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
@@ -742,11 +851,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           exchange: row.exchange,
           symbol: row.symbol,
           timeframe: row.timeframe,
-          capital: row.capital,
-          peakCapital: row.peak_capital,
+          capital: new Decimal(row.capital_value),
+          peakCapital: new Decimal(row.peak_capital_value),
           paused: row.paused,
           side: (row.side as GridPaperState["side"]) ?? null,
-          entryPrice: row.entry_price ?? 0,
+          entryPrice: new Decimal(row.entry_price_value ?? 0),
           gridStepPct: row.grid_step_pct,
           gridMaxGrids: row.grid_max_grids,
           gridPauseAfterLossBars: row.grid_pause_after_loss_bars,
@@ -779,17 +888,20 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db
           .query(
             `INSERT INTO grid_paper_state
-             (exchange, symbol, timeframe, capital, peak_capital, paused, side,
-              entry_price, grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+             (exchange, symbol, timeframe, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
+              entry_price, entry_price_decimal, grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
               fee_pct, slippage_bps, trend_filter_period, max_position_pct,
               max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
                capital = excluded.capital,
                peak_capital = excluded.peak_capital,
+               capital_decimal = excluded.capital_decimal,
+               peak_capital_decimal = excluded.peak_capital_decimal,
                paused = excluded.paused,
                side = excluded.side,
                entry_price = excluded.entry_price,
+               entry_price_decimal = excluded.entry_price_decimal,
                grid_step_pct = excluded.grid_step_pct,
                grid_max_grids = excluded.grid_max_grids,
                grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
@@ -807,11 +919,14 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             state.exchange,
             state.symbol,
             state.timeframe,
-            state.capital,
-            state.peakCapital,
+            toNumber(state.capital),
+            toNumber(state.peakCapital),
+            state.capital.toString(),
+            state.peakCapital.toString(),
             state.paused,
             state.side,
-            state.entryPrice,
+            toNumber(state.entryPrice),
+            state.entryPrice.toString(),
             state.gridStepPct,
             state.gridMaxGrids,
             state.gridPauseAfterLossBars,
@@ -865,8 +980,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           .query(
             `INSERT INTO grid_paper_trades
              (id, exchange, symbol, timeframe, side, entry_price, exit_price,
-              capital_before, capital_after, pnl_pct, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              capital_before, capital_after, pnl_pct,
+              entry_price_decimal, exit_price_decimal, capital_before_decimal,
+              capital_after_decimal, pnl_pct_decimal, exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             trade.id,
@@ -874,11 +991,16 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             trade.symbol,
             trade.timeframe,
             trade.side,
-            trade.entryPrice,
-            trade.exitPrice,
-            trade.capitalBefore,
-            trade.capitalAfter,
-            trade.pnlPct,
+            toNumber(trade.entryPrice),
+            toNumber(trade.exitPrice),
+            toNumber(trade.capitalBefore),
+            toNumber(trade.capitalAfter),
+            toNumber(trade.pnlPct),
+            trade.entryPrice.toString(),
+            trade.exitPrice.toString(),
+            trade.capitalBefore.toString(),
+            trade.capitalAfter.toString(),
+            trade.pnlPct.toString(),
             trade.exitReason,
             trade.openedAt.toISOString(),
             trade.closedAt.toISOString(),
@@ -906,8 +1028,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const rows = this.db
           .query(
-            `SELECT id, exchange, symbol, timeframe, side, entry_price, exit_price,
-                    capital_before, capital_after, pnl_pct, exit_reason, opened_at, closed_at
+            `SELECT id, exchange, symbol, timeframe, side,
+                    COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    COALESCE(exit_price_decimal, CAST(exit_price AS TEXT)) AS exit_price_value,
+                    COALESCE(capital_before_decimal, CAST(capital_before AS TEXT)) AS capital_before_value,
+                    COALESCE(capital_after_decimal, CAST(capital_after AS TEXT)) AS capital_after_value,
+                    COALESCE(pnl_pct_decimal, CAST(pnl_pct AS TEXT)) AS pnl_pct_value,
+                    exit_reason, opened_at, closed_at
              FROM grid_paper_trades
              WHERE exchange = ? AND symbol = ? AND timeframe = ?
              ORDER BY closed_at DESC
@@ -919,11 +1046,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: string;
           timeframe: string;
           side: string;
-          entry_price: number;
-          exit_price: number;
-          capital_before: number;
-          capital_after: number;
-          pnl_pct: number;
+          entry_price_value: string;
+          exit_price_value: string;
+          capital_before_value: string;
+          capital_after_value: string;
+          pnl_pct_value: string;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -935,11 +1062,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           symbol: r.symbol,
           timeframe: r.timeframe,
           side: (r.side as GridPaperState["side"]) ?? "long",
-          entryPrice: r.entry_price,
-          exitPrice: r.exit_price,
-          capitalBefore: r.capital_before,
-          capitalAfter: r.capital_after,
-          pnlPct: r.pnl_pct,
+          entryPrice: new Decimal(r.entry_price_value),
+          exitPrice: new Decimal(r.exit_price_value),
+          capitalBefore: new Decimal(r.capital_before_value),
+          capitalAfter: new Decimal(r.capital_after_value),
+          pnlPct: new Decimal(r.pnl_pct_value),
           exitReason: r.exit_reason as GridPaperTrade["exitReason"],
           openedAt: new Date(r.opened_at),
           closedAt: new Date(r.closed_at),

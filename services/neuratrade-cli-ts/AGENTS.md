@@ -4,7 +4,7 @@
 
 `services/neuratrade-cli-ts/` is the TypeScript/Effect-TS port of `cmd/neuratrade-cli`. It is a process manager and control interface for the NeuraTrade platform, and the home of the futures scalping engine (signal composer, backtester, optimizer, paper trading) targeting Bitget USDT-M perpetuals.
 
-**The entire package runs on Effect v4** (`effect@4.0.0-beta.98`, pinned exactly) + `@effect/platform-bun@4.0.0-beta.98`. There is no `@effect/cli` and no `@effect/platform` (v3) — the CLI is a hand-rolled kit and platform services come from core `effect`.
+**The entire package runs on Effect v4** (`effect@4.0.0-beta.102`, pinned exactly) + `@effect/platform-bun@4.0.0-beta.102`. There is no `@effect/cli` and no `@effect/platform` (v3) — the CLI is a hand-rolled kit and platform services come from core `effect`.
 
 ## STRUCTURE
 
@@ -94,6 +94,7 @@ Thresholds live in `src/scalping/readiness.ts` (`defaultReadinessThresholds`). T
 - Bitget live-order commands require `--force` to bypass the safety gate (`src/services/bitget-futures-safety.ts`); demo/paper mode uses `BITGET_USE_SANDBOX=true` (PAPTRADING=1 header).
 - Live risk defaults: `maxPositionSizePct=10`, `maxDailyLossPct=2`, `maxDrawdownPct=5`, `maxTradesPerDay=10`, `minCapital=100`; circuit breaker default 2% daily loss. Paper mode defaults are permissive.
 - Position-size and PnL math in `src/paper-trading/` uses `decimal.js` via `src/utils/money.ts`.
+- `scalp --live` is futures-only. Futures orders go through the Go backend risk and execution actors; the CLI rejects spot live mode rather than using the direct Binance adapter.
 
 ## CONVENTIONS
 

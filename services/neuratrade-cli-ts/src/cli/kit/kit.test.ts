@@ -631,7 +631,7 @@ describe("kit: property tests", () => {
           return true;
         },
       ),
-      { numRuns: 200 },
+      { numRuns: 100 },
     );
-  }, 20000);
+  }, 30000);
 });

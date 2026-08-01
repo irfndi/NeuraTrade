@@ -54,6 +54,45 @@ func TestNativeCCXTService_InitializePreservesConfiguredCredentials(t *testing.T
 	}
 }
 
+func TestNativeCCXTService_FetchOrder_BitgetReturnsClosedOrderDetails(t *testing.T) {
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://bitget.test",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+	service.credentials["bitget"] = config.ExchangeCredentials{
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/api/v2/mix/order/detail" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.URL.Query().Get("orderId") != "order-123" || req.URL.Query().Get("symbol") != "BTCUSDT" {
+				t.Fatalf("unexpected query: %s", req.URL.RawQuery)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"code":"00000","msg":"success","data":{"orderId":"order-123","clientOid":"client-123","symbol":"BTCUSDT","side":"buy","orderType":"market","state":"filled","price":"100.123456789012345678","size":"0.2","baseVolume":"0.2","quoteVolume":"20.0246913578024691356","cTime":"1710000000000","uTime":"1710000001000"}}`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	response, err := service.FetchOrder(context.Background(), "bitget", "order-123", "BTC/USDT")
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	assert.Equal(t, "order-123", response.Order.ID)
+	assert.Equal(t, "closed", response.Order.Status)
+	assert.Equal(t, "0.2", response.Order.Filled.String())
+	assert.Equal(t, "20.0246913578024691356", response.Order.Cost.String())
+}
+
 func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	t.Parallel()
 
