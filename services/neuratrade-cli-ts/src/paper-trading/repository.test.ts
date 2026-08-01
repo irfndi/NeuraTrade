@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { money } from "../utils/money.js";
 import { PaperTradingRepositorySQLite } from "./repository.js";
-import type { PaperPosition } from "./types.js";
+import type { GridPaperTrade, PaperPosition } from "./types.js";
 
 describe("PaperTradingRepositorySQLite", () => {
   it("round-trips monetary values without SQLite REAL precision loss", async () => {
@@ -69,6 +69,59 @@ describe("PaperTradingRepositorySQLite", () => {
         repository.getOpenPosition(position.exchange, position.symbol),
       ),
     ).toBeNull();
+    db.close();
+  });
+
+  it("round-trips live grid fill evidence", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    const trade: GridPaperTrade = {
+      id: "grid-live-1",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      side: "long",
+      entryPrice: money("70000.12345678901234567890"),
+      exitPrice: money("70100.98765432109876543210"),
+      capitalBefore: money("1000.12345678901234567890"),
+      capitalAfter: money("1002.12345678901234567890"),
+      pnlPct: money("0.2"),
+      exitReason: "target",
+      openedAt: new Date("2026-08-01T00:00:00.000Z"),
+      closedAt: new Date("2026-08-01T01:00:00.000Z"),
+      fillSource: "live",
+      entryOrderId: "entry-1",
+      entryClientOid: "client-entry-1",
+      exitOrderId: "exit-1",
+      exitClientOid: "client-exit-1",
+      entryFilledQty: money("0.01234567890123456789"),
+      exitFilledQty: money("0.01234567890123456789"),
+      entryFee: money("0.12345678901234567890"),
+      exitFee: money("0.23456789012345678901"),
+      realizedPnlPct: money("0.164321"),
+    };
+
+    await Effect.runPromise(repository.ensureTables());
+    await Effect.runPromise(repository.recordGridTrade(trade));
+    const loaded = await Effect.runPromise(
+      repository.listRecentGridTrades(
+        trade.exchange,
+        trade.symbol,
+        trade.timeframe,
+        1,
+      ),
+    );
+
+    expect(loaded[0]?.fillSource).toBe("live");
+    expect(loaded[0]?.entryOrderId).toBe(trade.entryOrderId);
+    expect(loaded[0]?.exitOrderId).toBe(trade.exitOrderId);
+    expect(loaded[0]?.entryFilledQty?.toString()).toBe(
+      trade.entryFilledQty?.toString(),
+    );
+    expect(loaded[0]?.exitFee?.toString()).toBe(trade.exitFee?.toString());
+    expect(loaded[0]?.realizedPnlPct?.toString()).toBe(
+      trade.realizedPnlPct?.toString(),
+    );
     db.close();
   });
 });

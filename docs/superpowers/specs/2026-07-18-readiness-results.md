@@ -51,18 +51,18 @@ Honest (IS/OOS split) sweeps:
   Config: step 1%, grids 1.5, targetRatio 1.0, trendFilter off, pause-after-loss 12, chop-gate ADX 30,
   maker fee 0.02%/side, slippage 1bp, leverage 1.
 
-  | Gate | Target | Actual |
-  |---|---|---|
-  | G1a IS frequency | ≥10 tr/mo | 11.3 tr/mo (108/9.6mo) PASS |
-  | G1b OOS trades | ≥10 | 28 PASS |
-  | G2a win rate | ≥50% | 68.52% PASS |
-  | G2b profit factor | ≥1.3 | 1.359 PASS |
-  | G2c expectancy | >0 | +0.169%/trade PASS |
-  | G3a OOS return | ≥0% | +1.53% PASS |
-  | G3b OOS maxDD | ≤15% | 3.65% PASS |
-  | G3c MC p95 DD | ≤20% | 11.49% PASS |
-  | G3d MC ruin | ≤5% | 0.00% PASS |
-  | G4 avg duration | ≤4h | 3.35h PASS |
+  | Gate              | Target    | Actual                      |
+  | ----------------- | --------- | --------------------------- |
+  | G1a IS frequency  | ≥10 tr/mo | 11.3 tr/mo (108/9.6mo) PASS |
+  | G1b OOS trades    | ≥10       | 28 PASS                     |
+  | G2a win rate      | ≥50%      | 68.52% PASS                 |
+  | G2b profit factor | ≥1.3      | 1.359 PASS                  |
+  | G2c expectancy    | >0        | +0.169%/trade PASS          |
+  | G3a OOS return    | ≥0%       | +1.53% PASS                 |
+  | G3b OOS maxDD     | ≤15%      | 3.65% PASS                  |
+  | G3c MC p95 DD     | ≤20%      | 11.49% PASS                 |
+  | G3d MC ruin       | ≤5%       | 0.00% PASS                  |
+  | G4 avg duration   | ≤4h       | 3.35h PASS                  |
 
 - ETH 15m: 0 pass, but top gated config (step 0.75, grids 3, tgtR 1.5, pause 12, gate 25) is
   OOS-robust: IS +50.4%, **OOS +10.77% PF 1.32**, 57 OOS trades — fails floors only on
@@ -72,8 +72,8 @@ Honest (IS/OOS split) sweeps:
 ## Iteration 4 — anti-overfit + demo validation (2026-07-18)
 
 - [x] **Walk-forward on the BTC winner** (scripts/grid-walkforward.ts):
-  Pass A (re-optimized per window, neighborhood): aggregate +8.93%, 60% profitable windows, maxDD 8.3%.
-  Pass B (fixed winner config): **5/5 profitable windows**, mean +5.12%/window, worst DD 5.98%, 105 trades.
+      Pass A (re-optimized per window, neighborhood): aggregate +8.93%, 60% profitable windows, maxDD 8.3%.
+      Pass B (fixed winner config): **5/5 profitable windows**, mean +5.12%/window, worst DD 5.98%, 105 trades.
 - [x] **Live-loop replay smokes** (paper engine on real bitget-futures data):
   - Found + fixed two replay bugs: stale-pointer lockout (CLI now resets grid state at replay start
     via new `resetGridState`) and chop-gate pointer stall (gate path never persisted lastTimestamp;
@@ -88,6 +88,7 @@ Honest (IS/OOS split) sweeps:
 ## Iteration 5 — maker-fill honesty audit + position sizing (2026-07-20)
 
 ### The honesty fixes (bd clever-cabin-dt8 / u1u / 91b) are CLOSED and tested
+
 - **dt8 (look-ahead)**: `runBacktest` now uses causal per-bar symbol stats (`makeCausalSymbolStats`) and threads `warmupCandles` into BOTH the stats and the **indicator window + loop start**, so an IS/OOS split is faithful to a continuous full-period run by construction (not by coincidence). Verified: FULL ≡ IS+OOS-compounded and the baseline is unchanged (FULL 217 trades / +0.09% = IS +4.26% × OOS −4.00%). Regression test in `causal-stats.test.ts`.
 - **u1u (funding NaN)**: `fundingRates` (signal input) and `fundingRatePct` (cost) are orthogonal; the funding-bias component is guarded (disabled by default, null when unmatchable). No NaN path exists. Two regression tests added.
 - **91b (null timestamps)**: Invalid-Date guard forces valid `entryTime`/`exitTime` on maker/limit fills (throws on a bad candle). Tested.
@@ -95,41 +96,44 @@ Honest (IS/OOS split) sweeps:
 - Full package: 700/700 tests pass.
 
 ### Maker-fill realism stress (`scripts/grid-fill-stress.ts`) — the crux
+
 The grid's whole edge is maker fills modeled as "touched = 100% filled @ slippageBps, round-trip fee = 2× per-side". Slippage sensitivity on the fixed BTC 15m winner:
 
 | slip | OOS return | OOS PF | OOS exp/tr | walk-forward (5 windows) profitable | mean ret/45d | worst DD |
-|---|---|---|---|---|---|---|
-| 1bp | +1.53% | 1.11 | +0.061% | 5/5 | +5.12% | 5.98% |
-| 3bp | +0.46% | 1.04 | +0.024% | 5/5 | +4.21% | 5.91% |
-| 5bp | +0.31% | 1.03 | +0.018% | 5/5 | +3.55% | 5.83% |
-| 10bp | −0.03% | 1.01 | +0.005% | **5/5** | **+2.78%** | 5.64% |
+| ---- | ---------- | ------ | ---------- | ----------------------------------- | ------------ | -------- |
+| 1bp  | +1.53%     | 1.11   | +0.061%    | 5/5                                 | +5.12%       | 5.98%    |
+| 3bp  | +0.46%     | 1.04   | +0.024%    | 5/5                                 | +4.21%       | 5.91%    |
+| 5bp  | +0.31%     | 1.03   | +0.018%    | 5/5                                 | +3.55%       | 5.83%    |
+| 10bp | −0.03%     | 1.01   | +0.005%    | **5/5**                             | **+2.78%**   | 5.64%    |
 
 The single 80/20 OOS (last ~2.4 months) looks marginal, but that is a **recent-regime artifact**: the **walk-forward (5 rolling 45-day OOS windows across the full year) is 5/5 profitable at every slippage level, even 10bp** (+2.78%/45d, worst DD 5.64%). The strategy has a real, modest, **regime-dependent** edge that survives realistic slippage.
 
 **The one thing backtesting cannot resolve is fill PROBABILITY** (queue position / adverse selection): realistic maker fills would skew toward filling the losers and missing the gentle-bounce winners. This is strictly worse than the optimistic "touched=filled" model and is **not backtestable from OHLC** — it can only be proven with live order fills.
 
 ### Adverse-selection fill model — a backtest bound on fill realism
-To quantify that unbacktestable risk, the grid engine now carries a parametric maker-fill model (`src/scalping/grid.ts`): `makerFillProb` (probability a touched level actually fills — queue risk), `adverseSelection` (fills skew toward the loss-prone touch: a bar that closes *through* the entry level fills for certain, while a recovered wick fills only at the base probability), and `takerExitFeePct` (stops/liquidations pay the taker fee; entries and take-profits stay maker). Stress on the BTC 15m winner:
 
-| fill model | OOS return | OOS PF | OOS exp/tr | OOS win | WF profitable | WF mean ret/45d |
-|---|---|---|---|---|---|---|
-| optimistic (full fill, symmetric fee) | +1.53% | 1.11 | +0.061% | 64.3% | 5/5 | +5.12% |
-| full fill + taker stops | +1.12% | 1.08 | +0.047% | 64.3% | 5/5 | +4.87% |
-| 0.7 uniform fill + taker | +2.75% | 1.30 | +0.150% | 68.4% | 5/5 | +2.88% |
-| 0.7 **adverse** fill + taker | **−3.26%** | **0.82** | −0.120% | 57.7% | **3/5** | +1.24% |
-| 0.5 **adverse** fill + taker | −1.74% | 0.90 | −0.062% | 60.0% | **2/5** | +0.77% |
+To quantify that unbacktestable risk, the grid engine now carries a parametric maker-fill model (`src/scalping/grid.ts`): `makerFillProb` (probability a touched level actually fills — queue risk), `adverseSelection` (fills skew toward the loss-prone touch: a bar that closes _through_ the entry level fills for certain, while a recovered wick fills only at the base probability), and `takerExitFeePct` (stops/liquidations pay the taker fee; entries and take-profits stay maker). Stress on the BTC 15m winner:
 
-**Finding:** the edge is **robust to ordinary frictions** — slippage, a random/queue fill-rate haircut, and taker stop fees all keep it profitable (first three rows, 5/5 windows). The kill-shot is **adverse selection**: when realised fills skew toward the loss-prone touches (the realistic risk for passive maker orders), the edge flips negative (OOS −3.26%, PF 0.82). The strategy survives *cost* but not *adverse fill selection*. The single lever deciding real-money viability is therefore the **magnitude of adverse selection in real fills** — unmeasurable from OHLC, only a live order book reveals it. This is modeled + tested (`grid.test.ts`: adverse selection shifts realized fills toward losers; taker fees reduce returns), and `scripts/grid-fill-stress.ts` reproduces the matrix above.
+| fill model                            | OOS return | OOS PF   | OOS exp/tr | OOS win | WF profitable | WF mean ret/45d |
+| ------------------------------------- | ---------- | -------- | ---------- | ------- | ------------- | --------------- |
+| optimistic (full fill, symmetric fee) | +1.53%     | 1.11     | +0.061%    | 64.3%   | 5/5           | +5.12%          |
+| full fill + taker stops               | +1.12%     | 1.08     | +0.047%    | 64.3%   | 5/5           | +4.87%          |
+| 0.7 uniform fill + taker              | +2.75%     | 1.30     | +0.150%    | 68.4%   | 5/5           | +2.88%          |
+| 0.7 **adverse** fill + taker          | **−3.26%** | **0.82** | −0.120%    | 57.7%   | **3/5**       | +1.24%          |
+| 0.5 **adverse** fill + taker          | −1.74%     | 0.90     | −0.062%    | 60.0%   | **2/5**       | +0.77%          |
+
+**Finding:** the edge is **robust to ordinary frictions** — slippage, a random/queue fill-rate haircut, and taker stop fees all keep it profitable (first three rows, 5/5 windows). The kill-shot is **adverse selection**: when realised fills skew toward the loss-prone touches (the realistic risk for passive maker orders), the edge flips negative (OOS −3.26%, PF 0.82). The strategy survives _cost_ but not _adverse fill selection_. The single lever deciding real-money viability is therefore the **magnitude of adverse selection in real fills** — unmeasurable from OHLC, only a live order book reveals it. This is modeled + tested (`grid.test.ts`: adverse selection shifts realized fills toward losers; taker fees reduce returns), and `scripts/grid-fill-stress.ts` reproduces the matrix above.
 
 ### Position sizing (`positionFraction`, PR 2/N)
+
 Added `positionFraction` (0..1, default 1 = all-in) to the grid engine. It scales the equity curve and drawdown with the fraction while leaving per-trade edge metrics (win rate / PF / expectancy) invariant — sizing controls **absolute risk**, not the edge (Calmar/PF unchanged). Evidence:
 
-| asset | fraction | IS return | IS DD | OOS PF | OOS win | OOS exp |
-|---|---|---|---|---|---|---|
-| ETH 15m (gated) | 1.0 | +50.4% | 21.1% | 1.32 | 73.7% | +0.191% |
-| ETH 15m (gated) | 0.5 | +23.7% | **11.0%** | 1.32 | 73.7% | +0.191% |
-| BTC 15m (winner) | 1.0 | +20.3% | 7.8% | 1.11 | 64.3% | +0.061% |
-| BTC 15m (winner) | 0.5 | +9.9% | **3.9%** | 1.11 | 64.3% | +0.061% |
+| asset            | fraction | IS return | IS DD     | OOS PF | OOS win | OOS exp |
+| ---------------- | -------- | --------- | --------- | ------ | ------- | ------- |
+| ETH 15m (gated)  | 1.0      | +50.4%    | 21.1%     | 1.32   | 73.7%   | +0.191% |
+| ETH 15m (gated)  | 0.5      | +23.7%    | **11.0%** | 1.32   | 73.7%   | +0.191% |
+| BTC 15m (winner) | 1.0      | +20.3%    | 7.8%      | 1.11   | 64.3%   | +0.061% |
+| BTC 15m (winner) | 0.5      | +9.9%     | **3.9%**  | 1.11   | 64.3%   | +0.061% |
 
 ETH's drawdown drops below the 15% gate at fraction 0.5 (its OOS PF 1.32 already clears the 1.3 economics gate); the BTC winner is unchanged at fraction 1 and halves its DD at 0.5.
 
@@ -146,22 +150,24 @@ ETH's drawdown drops below the 15% gate at fraction 0.5 (its OOS PF 1.32 already
   historical backtests are not substituted for exchange fills.
 
 ### Recent 30-day realized sample (`er7` — deterministic, read-only, key-independent)
+
 Last 30 days (2880 × 15m bars) via `scripts/grid-fill-stress.ts`. A clean statistical anchor; the live-fill demo is the decisive complement.
 
-| asset | 30d return | trades | freq | win | PF | exp/tr | DD |
-|---|---|---|---|---|---|---|---|
-| BTC 15m winner | +0.76% | 14 | 14.0/mo | 64.3% | 1.11 | +0.061% | 3.7% |
-| ETH 15m gated | +0.72% | 26 | 26.0/mo | 69.2% | **1.06** | +0.040% | 8.3% |
+| asset          | 30d return | trades | freq    | win   | PF       | exp/tr  | DD   |
+| -------------- | ---------- | ------ | ------- | ----- | -------- | ------- | ---- |
+| BTC 15m winner | +0.76%     | 14     | 14.0/mo | 64.3% | 1.11     | +0.061% | 3.7% |
+| ETH 15m gated  | +0.72%     | 26     | 26.0/mo | 69.2% | **1.06** | +0.040% | 8.3% |
 
 Both configurations are profitable in the most recent regime and clear the ≥10 trades/month frequency gate. BTC's recent per-trade expectancy (+0.061%) matches its full out-of-sample figure — the edge is consistent, not a fluke, but thin. **ETH's recent PF (1.06) sits below the 1.3 economics gate**, reinforcing that ETH is not ready. The thin per-trade expectancy (BTC +0.061%, ETH +0.040%) is precisely what makes fill-realism (slippage/adverse-selection beyond the modeled 1 bp) the decisive open question, answerable only by the live demo.
 
 ### er7 live-engine 30-day replay (realized vs backtest expectancy)
+
 `scalp paper-trade --strategy-type grid --replay-bars 2880` through the live paper engine (`SimulatedFuturesExchangeAdapter`, no API keys required for replay mode), over the same last-30-day window, with the winner config and `--max-position-size-pct 100` (all-in for apples-to-apples with the backtest sample):
 
-| engine | 30d return | trades | win | PF | exp/tr | exits (TP / stop) |
-|---|---|---|---|---|---|---|
-| live paper engine | **+2.7%** | 16 | **68.8%** | **1.36** | +0.173% | 11 / 5 |
-| backtest (`runGridBacktest`) | +0.76% | 14 | 64.3% | 1.11 | +0.061% | — |
+| engine                       | 30d return | trades | win       | PF       | exp/tr  | exits (TP / stop) |
+| ---------------------------- | ---------- | ------ | --------- | -------- | ------- | ----------------- |
+| live paper engine            | **+2.7%**  | 16     | **68.8%** | **1.36** | +0.173% | 11 / 5            |
+| backtest (`runGridBacktest`) | +0.76%     | 14     | 64.3%     | 1.11     | +0.061% | —                 |
 
 Both engines produce a profitable, PF>1 realized sample over the same 30-day window — **directionally consistent**. The live engine's per-trade expectancy (~+0.17%) runs ~3× the backtest's (+0.06%): the two engines differ in fill mechanics (idealized intrabar backtest vs event-driven paper simulation), and the exact trade set differs (16 vs 14 trades). **Direction is confirmed: the paper engine produces a profitable realized sample consistent with the backtest's positive expectancy.** The ~3× magnitude difference is a fill-model artifact — it argues for conservative live-money expectations, not against the verdict. Note: in replay mode the `paper_portfolio` summary isn't written back (the per-trade `pnl_pct` values are correct; the engine's in-memory final equity was +2.7% = $10269.99); tracked as a minor engine follow-up.
 
@@ -169,19 +175,36 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 
 **Conditional GO to LIVE DEMO validation. Not yet approved for real money.**
 
+## Iteration 7 — persisted live-fill evidence and demo gate (2026-08-02)
+
+- Live grid state and trade rows now persist entry/exit order IDs, client IDs,
+  filled quantities, exchange fees, fill provenance, and realized PnL after
+  fees. Decimal shadow columns preserve exact values across SQLite round-trips.
+- `evaluateDemoSoak` is covered by positive, adverse-selection, insufficient,
+  and incomplete-fill fixtures. It requires the configured trade count and
+  duration, complete live fill evidence on every trade, non-negative realized
+  expectancy, and a drawdown ceiling before reporting a pass.
+- This is an evaluator and evidence-integrity improvement, not demo evidence:
+  the repository still contains no real Bitget demo fills and no real-money
+  order has been placed.
+
 **What is proven (backtest, honest protocol):**
+
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
 - The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only config with an edge. It passes all readiness gates and is **walk-forward robust (5/5 windows, survives 10bp slippage)** — a real, modest, regime-dependent mean-reversion edge that harvests chop and sits out trends.
 
 **What is NOT proven:**
-- **Adverse-selection magnitude in real fills.** The edge survives everything backtesting *can* model — slippage to 10bp, taker stop fees, and a random/queue fill-rate haircut all keep it profitable (walk-forward 5/5). But the adverse-selection fill model shows the edge goes **negative** when fills skew toward the loss-prone touches (OOS PF 0.82). Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
+
+- **Adverse-selection magnitude in real fills.** The edge survives everything backtesting _can_ model — slippage to 10bp, taker stop fees, and a random/queue fill-rate haircut all keep it profitable (walk-forward 5/5). But the adverse-selection fill model shows the edge goes **negative** when fills skew toward the loss-prone touches (OOS PF 0.82). Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
 
 **Recommendation:**
+
 1. Proceed to a **Bitget PAPTRADING (demo) soak** of the BTC 15m grid winner at a conservative `positionFraction` (e.g. 0.3–0.5), ≥ 50 trades / ≥ 7 days, with the risk guards on. The sharp sign-off test: **measure the realized per-trade win rate and expectancy of filled orders.** If the realized win rate tracks the backtest's full-fill figure (~64%) with non-negative expectancy, adverse selection is benign → **GO** to a small real-money test account. If the realized win rate collapses toward the adverse-model figure (~58%) with negative expectancy, fills are adversely selected → **NO-GO** for this strategy class on majors (the honest, correct outcome). Also confirm orders open AND close within the hold envelope and the risk guards engage.
 2. If the demo holds: a **small real-money test account** at the conservative fraction, hard risk limits (max DD ~5%, daily loss ~2%, kill switch), and continuous monitoring. Scale only with sustained live evidence.
 3. Treat ETH as **not ready** (thin OOS edge) and BTC as the single candidate until the demo proves otherwise.
 
 ### Real-money handoff checklist
+
 - [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`); the PAPTRADING routing header is now wire-tested end to end in both backend private paths.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
 - [ ] Demo soak ≥ 50 trades / ≥ 7 days; realized fill-rate, expectancy, and DD recorded vs backtest (within MC band).
@@ -190,6 +213,7 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - [ ] Sign-off: demo realized expectancy ≥ ~0 net of REAL fees/slippage before any real money.
 
 ### Demo invocation (Bitget PAPTRADING — run once demo keys are in `.env`)
+
 With your Bitget **demo** (PAPTRADING) credentials:
 
 ```bash
@@ -198,7 +222,6 @@ export BITGET_API_SECRET=<demo api secret>
 export BITGET_PASSPHRASE=<demo passphrase>
 export BITGET_USE_SANDBOX=true   # client auto-sends the PAPTRADING=1 header (no real funds at risk)
 ```
-
 
 ```bash
 bun run index.ts scalp paper-trade \

@@ -190,6 +190,13 @@ CREATE TABLE IF NOT EXISTS grid_paper_state (
   side TEXT,
   entry_price REAL,
   entry_price_decimal TEXT,
+  entry_order_id TEXT,
+  entry_client_oid TEXT,
+  entry_filled_qty REAL,
+  entry_filled_qty_decimal TEXT,
+  entry_fee REAL,
+  entry_fee_decimal TEXT,
+  entry_fill_source TEXT,
   grid_step_pct REAL NOT NULL,
   grid_max_grids INTEGER NOT NULL,
   grid_pause_after_loss_bars INTEGER NOT NULL,
@@ -221,6 +228,21 @@ CREATE TABLE IF NOT EXISTS grid_paper_trades (
   capital_before_decimal TEXT,
   capital_after_decimal TEXT,
   pnl_pct_decimal TEXT,
+  fill_source TEXT,
+  entry_order_id TEXT,
+  entry_client_oid TEXT,
+  exit_order_id TEXT,
+  exit_client_oid TEXT,
+  entry_filled_qty REAL,
+  entry_filled_qty_decimal TEXT,
+  exit_filled_qty REAL,
+  exit_filled_qty_decimal TEXT,
+  entry_fee REAL,
+  entry_fee_decimal TEXT,
+  exit_fee REAL,
+  exit_fee_decimal TEXT,
+  realized_pnl_pct REAL,
+  realized_pnl_pct_decimal TEXT,
   exit_reason TEXT NOT NULL,
   opened_at DATETIME NOT NULL,
   closed_at DATETIME NOT NULL
@@ -269,6 +291,26 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "ALTER TABLE grid_paper_state ADD COLUMN leverage REAL NOT NULL DEFAULT 1",
         );
         for (const tableColumn of [
+          "grid_paper_state entry_order_id TEXT",
+          "grid_paper_state entry_client_oid TEXT",
+          "grid_paper_state entry_filled_qty REAL",
+          "grid_paper_state entry_fee REAL",
+          "grid_paper_state entry_fill_source TEXT",
+          "grid_paper_trades fill_source TEXT",
+          "grid_paper_trades entry_order_id TEXT",
+          "grid_paper_trades entry_client_oid TEXT",
+          "grid_paper_trades exit_order_id TEXT",
+          "grid_paper_trades exit_client_oid TEXT",
+          "grid_paper_trades entry_filled_qty REAL",
+          "grid_paper_trades exit_filled_qty REAL",
+          "grid_paper_trades entry_fee REAL",
+          "grid_paper_trades exit_fee REAL",
+          "grid_paper_trades realized_pnl_pct REAL",
+        ]) {
+          const [table, column, type] = tableColumn.split(" ");
+          addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        }
+        for (const tableColumn of [
           "paper_portfolio capital_decimal TEXT",
           "paper_portfolio peak_capital_decimal TEXT",
           "paper_positions entry_price_decimal TEXT",
@@ -285,11 +327,18 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "grid_paper_state capital_decimal TEXT",
           "grid_paper_state peak_capital_decimal TEXT",
           "grid_paper_state entry_price_decimal TEXT",
+          "grid_paper_state entry_filled_qty_decimal TEXT",
+          "grid_paper_state entry_fee_decimal TEXT",
           "grid_paper_trades entry_price_decimal TEXT",
           "grid_paper_trades exit_price_decimal TEXT",
           "grid_paper_trades capital_before_decimal TEXT",
           "grid_paper_trades capital_after_decimal TEXT",
           "grid_paper_trades pnl_pct_decimal TEXT",
+          "grid_paper_trades entry_filled_qty_decimal TEXT",
+          "grid_paper_trades exit_filled_qty_decimal TEXT",
+          "grid_paper_trades entry_fee_decimal TEXT",
+          "grid_paper_trades exit_fee_decimal TEXT",
+          "grid_paper_trades realized_pnl_pct_decimal TEXT",
         ]) {
           const [table, column, type] = tableColumn.split(" ");
           addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -816,6 +865,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     COALESCE(peak_capital_decimal, CAST(peak_capital AS TEXT)) AS peak_capital_value,
                     paused, side,
                     COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    entry_order_id, entry_client_oid,
+                    COALESCE(entry_filled_qty_decimal, CAST(entry_filled_qty AS TEXT)) AS entry_filled_qty_value,
+                    COALESCE(entry_fee_decimal, CAST(entry_fee AS TEXT)) AS entry_fee_value,
+                    entry_fill_source,
                     grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
                     fee_pct, slippage_bps, trend_filter_period, max_position_pct,
                     max_drawdown_pct, leverage, killed, last_timestamp, updated_at
@@ -831,6 +884,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           paused: number;
           side: string | null;
           entry_price_value: string | null;
+          entry_order_id: string | null;
+          entry_client_oid: string | null;
+          entry_filled_qty_value: string | null;
+          entry_fee_value: string | null;
+          entry_fill_source: "simulated" | "live" | null;
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
@@ -856,6 +914,15 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           paused: row.paused,
           side: (row.side as GridPaperState["side"]) ?? null,
           entryPrice: new Decimal(row.entry_price_value ?? 0),
+          entryOrderId: row.entry_order_id ?? undefined,
+          entryClientOid: row.entry_client_oid ?? undefined,
+          entryFilledQty: row.entry_filled_qty_value
+            ? new Decimal(row.entry_filled_qty_value)
+            : undefined,
+          entryFee: row.entry_fee_value
+            ? new Decimal(row.entry_fee_value)
+            : undefined,
+          entryFillSource: row.entry_fill_source ?? undefined,
           gridStepPct: row.grid_step_pct,
           gridMaxGrids: row.grid_max_grids,
           gridPauseAfterLossBars: row.grid_pause_after_loss_bars,
@@ -889,10 +956,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           .query(
             `INSERT INTO grid_paper_state
              (exchange, symbol, timeframe, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
-              entry_price, entry_price_decimal, grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+              entry_price, entry_price_decimal, entry_order_id, entry_client_oid, entry_filled_qty,
+              entry_filled_qty_decimal, entry_fee, entry_fee_decimal, entry_fill_source,
+              grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
               fee_pct, slippage_bps, trend_filter_period, max_position_pct,
               max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
                capital = excluded.capital,
                peak_capital = excluded.peak_capital,
@@ -902,6 +971,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                side = excluded.side,
                entry_price = excluded.entry_price,
                entry_price_decimal = excluded.entry_price_decimal,
+               entry_order_id = excluded.entry_order_id,
+               entry_client_oid = excluded.entry_client_oid,
+               entry_filled_qty = excluded.entry_filled_qty,
+               entry_filled_qty_decimal = excluded.entry_filled_qty_decimal,
+               entry_fee = excluded.entry_fee,
+               entry_fee_decimal = excluded.entry_fee_decimal,
+               entry_fill_source = excluded.entry_fill_source,
                grid_step_pct = excluded.grid_step_pct,
                grid_max_grids = excluded.grid_max_grids,
                grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
@@ -927,6 +1003,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             state.side,
             toNumber(state.entryPrice),
             state.entryPrice.toString(),
+            state.entryOrderId ?? null,
+            state.entryClientOid ?? null,
+            state.entryFilledQty ? toNumber(state.entryFilledQty) : null,
+            state.entryFilledQty?.toString() ?? null,
+            state.entryFee ? toNumber(state.entryFee) : null,
+            state.entryFee?.toString() ?? null,
+            state.entryFillSource ?? null,
             state.gridStepPct,
             state.gridMaxGrids,
             state.gridPauseAfterLossBars,
@@ -982,8 +1065,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
              (id, exchange, symbol, timeframe, side, entry_price, exit_price,
               capital_before, capital_after, pnl_pct,
               entry_price_decimal, exit_price_decimal, capital_before_decimal,
-              capital_after_decimal, pnl_pct_decimal, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              capital_after_decimal, pnl_pct_decimal, fill_source, entry_order_id,
+              entry_client_oid, exit_order_id, exit_client_oid, entry_filled_qty,
+              entry_filled_qty_decimal, exit_filled_qty, exit_filled_qty_decimal,
+              entry_fee, entry_fee_decimal, exit_fee, exit_fee_decimal,
+              realized_pnl_pct, realized_pnl_pct_decimal, exit_reason, opened_at, closed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             trade.id,
@@ -1001,6 +1088,21 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             trade.capitalBefore.toString(),
             trade.capitalAfter.toString(),
             trade.pnlPct.toString(),
+            trade.fillSource ?? null,
+            trade.entryOrderId ?? null,
+            trade.entryClientOid ?? null,
+            trade.exitOrderId ?? null,
+            trade.exitClientOid ?? null,
+            trade.entryFilledQty ? toNumber(trade.entryFilledQty) : null,
+            trade.entryFilledQty?.toString() ?? null,
+            trade.exitFilledQty ? toNumber(trade.exitFilledQty) : null,
+            trade.exitFilledQty?.toString() ?? null,
+            trade.entryFee ? toNumber(trade.entryFee) : null,
+            trade.entryFee?.toString() ?? null,
+            trade.exitFee ? toNumber(trade.exitFee) : null,
+            trade.exitFee?.toString() ?? null,
+            trade.realizedPnlPct ? toNumber(trade.realizedPnlPct) : null,
+            trade.realizedPnlPct?.toString() ?? null,
             trade.exitReason,
             trade.openedAt.toISOString(),
             trade.closedAt.toISOString(),
@@ -1034,6 +1136,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     COALESCE(capital_before_decimal, CAST(capital_before AS TEXT)) AS capital_before_value,
                     COALESCE(capital_after_decimal, CAST(capital_after AS TEXT)) AS capital_after_value,
                     COALESCE(pnl_pct_decimal, CAST(pnl_pct AS TEXT)) AS pnl_pct_value,
+                    fill_source, entry_order_id, entry_client_oid, exit_order_id, exit_client_oid,
+                    COALESCE(entry_filled_qty_decimal, CAST(entry_filled_qty AS TEXT)) AS entry_filled_qty_value,
+                    COALESCE(exit_filled_qty_decimal, CAST(exit_filled_qty AS TEXT)) AS exit_filled_qty_value,
+                    COALESCE(entry_fee_decimal, CAST(entry_fee AS TEXT)) AS entry_fee_value,
+                    COALESCE(exit_fee_decimal, CAST(exit_fee AS TEXT)) AS exit_fee_value,
+                    COALESCE(realized_pnl_pct_decimal, CAST(realized_pnl_pct AS TEXT)) AS realized_pnl_pct_value,
                     exit_reason, opened_at, closed_at
              FROM grid_paper_trades
              WHERE exchange = ? AND symbol = ? AND timeframe = ?
@@ -1051,6 +1159,16 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           capital_before_value: string;
           capital_after_value: string;
           pnl_pct_value: string;
+          fill_source: "simulated" | "live" | null;
+          entry_order_id: string | null;
+          entry_client_oid: string | null;
+          exit_order_id: string | null;
+          exit_client_oid: string | null;
+          entry_filled_qty_value: string | null;
+          exit_filled_qty_value: string | null;
+          entry_fee_value: string | null;
+          exit_fee_value: string | null;
+          realized_pnl_pct_value: string | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -1067,6 +1185,24 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           capitalBefore: new Decimal(r.capital_before_value),
           capitalAfter: new Decimal(r.capital_after_value),
           pnlPct: new Decimal(r.pnl_pct_value),
+          fillSource: r.fill_source ?? undefined,
+          entryOrderId: r.entry_order_id ?? undefined,
+          entryClientOid: r.entry_client_oid ?? undefined,
+          exitOrderId: r.exit_order_id ?? undefined,
+          exitClientOid: r.exit_client_oid ?? undefined,
+          entryFilledQty: r.entry_filled_qty_value
+            ? new Decimal(r.entry_filled_qty_value)
+            : undefined,
+          exitFilledQty: r.exit_filled_qty_value
+            ? new Decimal(r.exit_filled_qty_value)
+            : undefined,
+          entryFee: r.entry_fee_value
+            ? new Decimal(r.entry_fee_value)
+            : undefined,
+          exitFee: r.exit_fee_value ? new Decimal(r.exit_fee_value) : undefined,
+          realizedPnlPct: r.realized_pnl_pct_value
+            ? new Decimal(r.realized_pnl_pct_value)
+            : undefined,
           exitReason: r.exit_reason as GridPaperTrade["exitReason"],
           openedAt: new Date(r.opened_at),
           closedAt: new Date(r.closed_at),

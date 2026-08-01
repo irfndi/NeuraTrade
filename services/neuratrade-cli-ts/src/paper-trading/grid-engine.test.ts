@@ -366,6 +366,33 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("[LIVE]");
     expect(orders.length).toBeGreaterThan(0);
     expect(orders[0].size).toBeGreaterThan(0);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.entryFillSource).toBe("live");
+    expect(state?.entryOrderId).toBe("live");
+    expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(orders[0].size, 12);
+  });
+
+  it("records both live order fills when a live grid trade closes", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter();
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    for (let i = 0; i < 10; i++) {
+      await runWithRepo(opts, repo, candles, adapter);
+    }
+
+    const trades = await Effect.runPromise(
+      repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+    );
+    expect(closes.length).toBeGreaterThan(0);
+    expect(trades.length).toBeGreaterThan(0);
+    expect(trades[0]?.fillSource).toBe("live");
+    expect(trades[0]?.entryOrderId).toBe("live");
+    expect(trades[0]?.exitOrderId).toBe("close");
+    expect(trades[0]?.realizedPnlPct).toBeDefined();
   });
 
   it("chop gate blocks entries in a trending market and allows them in chop", async () => {

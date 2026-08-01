@@ -52,6 +52,11 @@ export interface GridPaperState {
   readonly paused: number;
   readonly side: GridPaperPositionSide | null;
   readonly entryPrice: Money;
+  readonly entryOrderId?: string;
+  readonly entryClientOid?: string;
+  readonly entryFilledQty?: Money;
+  readonly entryFee?: Money;
+  readonly entryFillSource?: "simulated" | "live";
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
@@ -81,4 +86,14 @@ export interface GridPaperTrade {
   readonly exitReason: "target" | "stop" | "liquidation";
   readonly openedAt: Date;
   readonly closedAt: Date;
+  readonly fillSource?: "simulated" | "live";
+  readonly entryOrderId?: string;
+  readonly entryClientOid?: string;
+  readonly exitOrderId?: string;
+  readonly exitClientOid?: string;
+  readonly entryFilledQty?: Money;
+  readonly exitFilledQty?: Money;
+  readonly entryFee?: Money;
+  readonly exitFee?: Money;
+  readonly realizedPnlPct?: Money;
 }

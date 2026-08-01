@@ -17,6 +17,7 @@ import {
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
+  type FuturesOrderFill,
   type FuturesMarginMode,
   type FuturesProductType,
 } from "../exchange/futures-adapter.js";
@@ -130,6 +131,11 @@ function liquidationPrice(
     ? entryPrice.times(1 - 1 / l)
     : entryPrice.times(1 + 1 / l);
 }
+
+type GridFillEvidence = Pick<
+  FuturesOrderFill,
+  "orderId" | "clientOid" | "filledQty" | "fee"
+>;
 
 export function runGridPaperTradingIteration(
   options: GridPaperTradingOptions,
@@ -322,6 +328,8 @@ export function runGridPaperTradingIteration(
       maxPositionPct: number,
       leverage: number,
       openedAt: Date,
+      entryEvidence: GridFillEvidence | null,
+      exitFill: FuturesOrderFill | null,
     ): {
       readonly trade: GridPaperTrade;
       readonly capitalAfter: Decimal;
@@ -347,6 +355,17 @@ export function runGridPaperTradingIteration(
             );
       const pnlPct =
         exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
+      const realizedPnlPct =
+        entryEvidence !== null && exitFill !== null
+          ? leveragedReturn
+              .times(100)
+              .minus(
+                entryEvidence.fee
+                  .plus(exitFill.fee)
+                  .div(stateCapital)
+                  .times(100),
+              )
+          : undefined;
       const trade: GridPaperTrade = {
         id: makeId(),
         exchange: options.exchange,
@@ -361,6 +380,17 @@ export function runGridPaperTradingIteration(
         exitReason,
         openedAt,
         closedAt: new Date(),
+        fillSource:
+          entryEvidence !== null && exitFill !== null ? "live" : "simulated",
+        entryOrderId: entryEvidence?.orderId,
+        entryClientOid: entryEvidence?.clientOid,
+        exitOrderId: exitFill?.orderId,
+        exitClientOid: exitFill?.clientOid,
+        entryFilledQty: entryEvidence?.filledQty,
+        exitFilledQty: exitFill?.filledQty,
+        entryFee: entryEvidence?.fee,
+        exitFee: exitFill?.fee,
+        realizedPnlPct,
       };
       return {
         trade,
@@ -377,6 +407,7 @@ export function runGridPaperTradingIteration(
       const s = state;
       return Effect.gen(function* () {
         let exitPrice = theoreticalExitPrice;
+        let exitFill: FuturesOrderFill | null = null;
         if (isLive && exitReason !== "liquidation") {
           const size = orderSizeContracts(
             s.capital,
@@ -395,6 +426,7 @@ export function runGridPaperTradingIteration(
             });
             if (fill) {
               exitPrice = money(fill.filledPrice);
+              exitFill = fill;
             }
           }
         }
@@ -408,6 +440,18 @@ export function runGridPaperTradingIteration(
           s.maxPositionPct,
           s.leverage,
           s.updatedAt,
+          s.entryFillSource === "live" &&
+            s.entryOrderId &&
+            s.entryFilledQty &&
+            s.entryFee
+            ? {
+                orderId: s.entryOrderId,
+                clientOid: s.entryClientOid,
+                filledQty: s.entryFilledQty,
+                fee: s.entryFee,
+              }
+            : null,
+          exitFill,
         );
         yield* repo.recordGridTrade(close.trade);
         return { ...close, exitPrice };
@@ -518,6 +562,11 @@ export function runGridPaperTradingIteration(
                 ...state,
                 side: entrySide,
                 entryPrice: money(fill.filledPrice),
+                entryOrderId: fill.orderId,
+                entryClientOid: fill.clientOid,
+                entryFilledQty: fill.filledQty,
+                entryFee: fill.fee,
+                entryFillSource: "live",
                 updatedAt: new Date(),
                 lastTimestamp: current.timestamp,
               };
@@ -525,10 +574,18 @@ export function runGridPaperTradingIteration(
             }
           }
         } else {
+          const size = orderSizeContracts(
+            state.capital,
+            state.maxPositionPct,
+            theoreticalEntryPrice,
+          );
           state = {
             ...state,
             side: entrySide,
             entryPrice: theoreticalEntryPrice,
+            entryFilledQty: size,
+            entryFee: money(0),
+            entryFillSource: "simulated",
             updatedAt: new Date(),
             lastTimestamp: current.timestamp,
           };
