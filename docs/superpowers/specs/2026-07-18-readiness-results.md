@@ -262,8 +262,8 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 ## Iteration 13 — current public-data refresh (2026-08-02)
 
 - The Bitget public futures candle store was refreshed without credentials:
-  1,510 new BTC 15m candles were added, extending the dataset to
-  2026-08-01 18:45 UTC (36,549 candles total).
+  1,511 new BTC 15m candles were added, extending the dataset to
+  2026-08-01 19:00 UTC (36,550 candles total).
 - On the refreshed fixed-candidate OOS (28 trades), the optimistic result is
   **+4.05%**, PF **1.30**, win rate **67.9%**, expectancy **+0.149%/trade**,
   but the 95% bootstrap interval is **−0.296% to +0.591%**.
@@ -271,10 +271,38 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   and expectancy **−0.049%/trade**. This current-tail result reinforces that
   the strategy is regime-dependent and not proven profitable today.
 
+## Iteration 14 — live-profile hardening and cross-symbol confidence (2026-08-02)
+
+- The live CLI now rejects the dead directional signal strategy and requires
+  the exact validated BTC 15m grid profile before it can reach an exchange:
+  Bitget futures, 1% step, 1.5 grids, 12-bar loss pause, ADX 30 chop gate,
+  0.02% maker fee, 1bp slippage, no trend filter, 1x leverage, and explicit
+  risk caps of at most 50% position, 5% drawdown, and 2% daily loss. Live grid
+  watchlists and the multi-symbol soak surface are disabled until more than
+  this single candidate has evidence.
+- Futures market data is normalized to `bitget-futures` when the generic CLI
+  default is still `binance`, preventing a market-data/execution venue split.
+  Paper/live execution errors now propagate to a non-zero CLI exit instead of
+  being printed and treated as success.
+- The backend-gated fill boundary now correlates intent IDs, verifies symbol
+  and side identity, rejects non-positive quantity/price and negative fees,
+  and preserves the requested product/margin metadata. Reconciliation also
+  checks product type, margin mode, leverage, entry price, and available
+  quantity before allowing a live iteration to continue.
+- The statistical command now validates both stored candidates. ETH's fixed
+  OOS is +10.77%, PF 1.32, 57 trades, expectancy +0.191%, but its 95%
+  bootstrap interval is −0.219% to +0.546%; its latest 30-day PF is 1.06.
+  BTC's interval and latest-tail warning remain unchanged. Neither candidate
+  clears the confidence gate or has real exchange-fill evidence.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
 - The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only positive candidate. It has a positive point estimate and is **walk-forward robust (5/5 windows, survives 10bp slippage)**, but its 28-trade OOS confidence interval still crosses zero.
+- The ETH gated grid also has a positive historical point estimate, but its
+  confidence interval crosses zero and its current tail misses the PF gate;
+  it is not approved for live execution. The live CLI deliberately permits
+  only the BTC candidate while the demo evidence is pending.
 
 **What is NOT proven:**
 
@@ -293,6 +321,8 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 ### Real-money handoff checklist
 
 - [ ] Bitget demo API keys in `.env` (`BITGET_USE_SANDBOX=true`); the PAPTRADING routing header is now wire-tested end to end in both backend private paths.
+- [x] Live execution rejects directional signals, unvalidated grid profiles, and venue mismatches before exchange I/O.
+- [x] Backend fills are identity-correlated and fail closed on malformed or economically impossible confirmations.
 - [x] Live grid sizing already wired: the live engine exposes `maxPositionPct` (= `positionFraction` × 100) via `--max-position-size-pct` (default 100 = all-in); the backtest engine's new `positionFraction` is provably equivalent (identical capital/PnL formula for normal closes and liquidations). Backtest and live sizing are consistent.
 - [ ] Demo soak ≥ 50 trades / ≥ 7 days; realized fill-rate, expectancy, and DD recorded vs backtest (within MC band).
 - [ ] Demo expectancy 95% bootstrap lower bound ≥ 0% after real fees and slippage.

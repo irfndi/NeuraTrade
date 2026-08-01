@@ -73,7 +73,7 @@ try {
   }));
   const { oos } = splitCandlesByOos(candles, 20);
   const recentCandles = candles.slice(-2_880);
-  const winner: GridOptions = {
+  const btcWinner: GridOptions = {
     feePct: 0.02,
     slippageBps: 1,
     trendFilterPeriod: 0,
@@ -86,6 +86,24 @@ try {
     gridMaxGrids: 1.5,
     gridPauseAfterLossBars: 12,
   };
+  const ethWinner: GridOptions = {
+    ...btcWinner,
+    targetRatio: 1.5,
+    chopGateAdxThreshold: 25,
+    gridStepPct: 0.75,
+    gridMaxGrids: 3,
+  };
+  const winner =
+    symbol === "BTC/USDT:USDT"
+      ? btcWinner
+      : symbol === "ETH/USDT:USDT"
+        ? ethWinner
+        : undefined;
+  if (winner === undefined) {
+    throw new Error(
+      `no validated grid candidate is configured for ${symbol}; use BTC/USDT:USDT or ETH/USDT:USDT`,
+    );
+  }
   const cases: ReadonlyArray<readonly [string, GridOptions]> = [
     ["optimistic", winner],
     ["taker-stops", { ...winner, takerExitFeePct: 0.06 }],

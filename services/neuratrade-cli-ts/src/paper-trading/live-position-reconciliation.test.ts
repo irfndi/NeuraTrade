@@ -74,6 +74,32 @@ describe("reconcileLivePosition", () => {
     ).toEqual({ kind: "matched" });
   });
 
+  it("rejects a same-size position with mismatched account contract state", () => {
+    const quantity = money("0.01");
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      makePosition("long", quantity),
+      {
+        productType: "COIN-FUTURES",
+        marginMode: "isolated",
+        leverage: 3,
+        entryPrice: money("70000"),
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "exchange product type USDT-FUTURES differs from expected COIN-FUTURES",
+    });
+  });
+
   it("rejects every generated quantity mismatch", () => {
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 1_000_000 }), (rawQuantity) => {

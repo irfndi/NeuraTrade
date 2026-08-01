@@ -24,6 +24,11 @@ import {
   selectWinner,
   validateWatchlist,
   validateLiveExecutionMarket,
+  validateLiveExecutionStrategy,
+  resolveFuturesMarketExchange,
+  validateLiveGridConfiguration,
+  validateLiveGridWatchlist,
+  validateLiveSoakExecution,
   walkForwardCommand,
   buildValidateBacktestArgs,
   type OptimizeArgs,
@@ -43,6 +48,69 @@ describe("live execution market guard", () => {
 
   it("allows the backend-gated futures path", () => {
     expect(validateLiveExecutionMarket(true, true)).toBeUndefined();
+  });
+
+  it("rejects the unproven directional signal path for live execution", () => {
+    expect(validateLiveExecutionStrategy(true, "signal")).toContain(
+      "live directional signal execution is disabled",
+    );
+    expect(validateLiveExecutionStrategy(true, "grid")).toBeUndefined();
+    expect(validateLiveExecutionStrategy(false, "signal")).toBeUndefined();
+  });
+
+  it("routes default futures market data to the Bitget futures gateway", () => {
+    expect(resolveFuturesMarketExchange("binance", true)).toBe(
+      "bitget-futures",
+    );
+    expect(resolveFuturesMarketExchange("bitget-futures", true)).toBe(
+      "bitget-futures",
+    );
+    expect(resolveFuturesMarketExchange("binance", false)).toBe("binance");
+  });
+
+  it("accepts only the validated BTC grid profile for live execution", () => {
+    const config = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      productType: "USDT-FUTURES",
+      gridStepPct: 1,
+      gridMaxGrids: 1.5,
+      gridPauseAfterLossBars: 12,
+      feePct: 0.02,
+      slippageBps: 1,
+      trendFilterPeriod: 0,
+      onlyWithTrend: false,
+      targetRatio: 1,
+      chopGateAdx: 30,
+      leverage: 1,
+      maxPositionSizePct: 50,
+      maxDrawdownPct: 5,
+      maxDailyLossPct: 2,
+    };
+
+    expect(validateLiveGridConfiguration(config)).toBeUndefined();
+    expect(
+      validateLiveGridConfiguration({ ...config, gridStepPct: 0.5 }),
+    ).toContain("validated BTC 15m grid");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxPositionSizePct: 51 }),
+    ).toContain("50%");
+  });
+
+  it("disables the directional multi-symbol live soak surface", () => {
+    expect(validateLiveSoakExecution(true)).toContain("live soak is disabled");
+    expect(validateLiveSoakExecution(false)).toBeUndefined();
+  });
+
+  it("disables live grid watchlists that can substitute unvalidated symbols", () => {
+    expect(
+      validateLiveGridWatchlist(true, "grid", [{ symbol: "ETH/USDT:USDT" }]),
+    ).toContain("live grid watchlists are disabled");
+    expect(validateLiveGridWatchlist(true, "grid", [])).toBeUndefined();
+    expect(
+      validateLiveGridWatchlist(false, "grid", [{ symbol: "ETH/USDT:USDT" }]),
+    ).toBeUndefined();
   });
 });
 import { Effect, Layer } from "effect";

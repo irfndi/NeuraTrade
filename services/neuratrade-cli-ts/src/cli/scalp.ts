@@ -3183,13 +3183,10 @@ export const paperTradeCommand = Command.make(
         entries: watchlist,
       }).pipe(
         Effect.provide(layers),
-        Effect.catch((err) =>
-          Effect.gen(function* () {
-            yield* Console.error(
-              `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
-            );
-            return undefined;
-          }),
+        Effect.tapError((err) =>
+          Console.error(
+            `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
+          ),
         ),
       );
 
@@ -3208,12 +3205,105 @@ function parseMarginMode(value: string): FuturesMarginMode {
   );
 }
 
+export function resolveFuturesMarketExchange(
+  exchange: string,
+  futures: boolean,
+): string {
+  return futures && exchange === "binance" ? "bitget-futures" : exchange;
+}
+
 export function validateLiveExecutionMarket(
   live: boolean,
   futures: boolean,
 ): string | undefined {
   if (live && !futures) {
     return "live spot execution is disabled; use --futures for the backend risk-gated path";
+  }
+  return undefined;
+}
+
+export function validateLiveExecutionStrategy(
+  live: boolean,
+  strategyType: "signal" | "grid",
+): string | undefined {
+  if (live && strategyType === "signal") {
+    return "live directional signal execution is disabled; use --strategy-type grid";
+  }
+  return undefined;
+}
+
+export interface LiveGridConfiguration {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly productType: string;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly feePct: number;
+  readonly slippageBps: number;
+  readonly trendFilterPeriod: number;
+  readonly onlyWithTrend: boolean;
+  readonly targetRatio: number;
+  readonly chopGateAdx: number;
+  readonly leverage: number;
+  readonly maxPositionSizePct: number;
+  readonly maxDrawdownPct: number;
+  readonly maxDailyLossPct: number;
+}
+
+export function validateLiveGridConfiguration(
+  config: LiveGridConfiguration,
+): string | undefined {
+  const validatedCandidate =
+    config.exchange === "bitget-futures" &&
+    config.symbol === "BTC/USDT:USDT" &&
+    config.timeframe === "15m" &&
+    config.productType === "USDT-FUTURES" &&
+    config.gridStepPct === 1 &&
+    config.gridMaxGrids === 1.5 &&
+    config.gridPauseAfterLossBars === 12 &&
+    config.feePct === 0.02 &&
+    config.slippageBps === 1 &&
+    config.trendFilterPeriod === 0 &&
+    !config.onlyWithTrend &&
+    config.targetRatio === 1 &&
+    config.chopGateAdx === 30 &&
+    config.leverage === 1;
+  if (!validatedCandidate) {
+    return "live grid must use the validated BTC 15m grid candidate";
+  }
+  if (config.maxPositionSizePct <= 0 || config.maxPositionSizePct > 50) {
+    return "live grid max position size must be between 0% and 50%";
+  }
+  if (config.maxDrawdownPct <= 0 || config.maxDrawdownPct > 5) {
+    return "live grid max drawdown must be between 0% and 5%";
+  }
+  if (config.maxDailyLossPct <= 0 || config.maxDailyLossPct > 2) {
+    return "live grid max daily loss must be between 0% and 2%";
+  }
+  return undefined;
+}
+
+export function validateLiveGridWatchlist(
+  live: boolean,
+  strategyType: "signal" | "grid",
+  entries: readonly Pick<WatchlistEntry, "symbol">[] | undefined,
+): string | undefined {
+  if (
+    live &&
+    strategyType === "grid" &&
+    entries !== undefined &&
+    entries.length > 0
+  ) {
+    return "live grid watchlists are disabled; run the validated BTC candidate directly";
+  }
+  return undefined;
+}
+
+export function validateLiveSoakExecution(live: boolean): string | undefined {
+  if (live) {
+    return "live soak is disabled; use scalp paper-trade --strategy-type grid";
   }
   return undefined;
 }
@@ -3233,12 +3323,57 @@ function parseProductType(value: string): BitgetProductType {
 
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
+    const strategyType = args.strategyType ?? "signal";
     const liveMarketError = validateLiveExecutionMarket(
       args.live,
       args.futures,
     );
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
+    }
+    const liveStrategyError = validateLiveExecutionStrategy(
+      args.live,
+      strategyType,
+    );
+    if (liveStrategyError !== undefined) {
+      return yield* Effect.fail(new Error(liveStrategyError));
+    }
+    const liveGridWatchlistError = validateLiveGridWatchlist(
+      args.live,
+      strategyType,
+      args.entries,
+    );
+    if (liveGridWatchlistError !== undefined) {
+      return yield* Effect.fail(new Error(liveGridWatchlistError));
+    }
+    const marginMode = parseMarginMode(args.marginMode);
+    const productType = parseProductType(args.productType);
+    if (args.live && strategyType === "grid") {
+      const liveGridError = validateLiveGridConfiguration({
+        exchange: resolveFuturesMarketExchange(args.exchange, true),
+        symbol: args.symbol,
+        timeframe: args.timeframe,
+        productType,
+        gridStepPct: args.gridStepPct,
+        gridMaxGrids: args.gridMaxGrids,
+        gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+        feePct: args.fee,
+        slippageBps: args.slippageBps,
+        trendFilterPeriod: args.trendFilterPeriod,
+        onlyWithTrend: args.onlyWithTrend ?? false,
+        targetRatio: args.targetRatio ?? 0,
+        chopGateAdx: args.chopGateAdx ?? 0,
+        leverage: args.leverage,
+        maxPositionSizePct: Option.getOrElse(
+          args.maxPositionSizePct,
+          () => 100,
+        ),
+        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+        maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
+      });
+      if (liveGridError !== undefined) {
+        return yield* Effect.fail(new Error(liveGridError));
+      }
     }
     const repo = yield* MarketDataRepository;
     yield* repo.ensureTables();
@@ -3321,20 +3456,14 @@ function paperTradeProgram(args: PaperTradeArgs) {
       volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
     });
 
-    const marginMode = parseMarginMode(args.marginMode);
-    const productType = parseProductType(args.productType);
     // Futures data and execution both live on Bitget in this port; default the
     // market-data exchange to bitget-futures unless the operator overrides it.
-    const defaultFuturesExchange =
-      args.futures && args.exchange === "binance"
-        ? "bitget-futures"
-        : args.exchange;
     const makeFuturesOptions = (
       symbol: string,
       exchangeOverride: string,
       overrides?: Partial<FuturesPaperTradingOptions>,
     ): FuturesPaperTradingOptions => ({
-      exchange: exchangeOverride ?? defaultFuturesExchange,
+      exchange: resolveFuturesMarketExchange(exchangeOverride, true),
       symbol,
       timeframe: args.timeframe,
       composerConfig,
@@ -3376,7 +3505,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       symbol: string,
       exchange: string,
     ): GridPaperTradingOptions => ({
-      exchange,
+      exchange: resolveFuturesMarketExchange(exchange, true),
       symbol,
       timeframe: args.timeframe,
       gridStepPct: args.gridStepPct,
@@ -3705,6 +3834,10 @@ export const soakCommand = Command.make(
       );
       if (liveMarketError !== undefined) {
         return yield* Effect.fail(new Error(liveMarketError));
+      }
+      const liveSoakError = validateLiveSoakExecution(mergedArgs.live);
+      if (liveSoakError !== undefined) {
+        return yield* Effect.fail(new Error(liveSoakError));
       }
 
       const watchlistPath = resolve(path.homeDir, "data", mergedArgs.watchlist);

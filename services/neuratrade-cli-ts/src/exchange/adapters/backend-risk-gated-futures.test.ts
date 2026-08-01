@@ -86,6 +86,117 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
     expect(fill.fee.toString()).toBe("1e-20");
   });
 
+  it("fails closed when a filled response does not match the requested symbol", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () =>
+        new Response(
+          JSON.stringify({
+            ...liveOrderFilledFixture,
+            symbol: "ETH/USDT:USDT",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "market",
+            size: money("0.1"),
+            price: money("70000"),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 5,
+          })
+          .pipe(Effect.result);
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("fails closed when a filled response has no positive quantity", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () =>
+        new Response(
+          JSON.stringify({ ...liveOrderFilledFixture, filled_qty: "0" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "market",
+            size: money("0.1"),
+            price: money("70000"),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 5,
+          })
+          .pipe(Effect.result);
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("keeps requested product and margin metadata on a confirmed fill", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () =>
+        new Response(JSON.stringify(liveOrderFilledFixture), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const fill = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money("0.1"),
+          price: money("70000"),
+          productType: "COIN-FUTURES",
+          marginMode: "isolated",
+          leverage: 5,
+          clientOid: "intent-1",
+        });
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(fill.productType).toBe("COIN-FUTURES");
+    expect(fill.marginMode).toBe("isolated");
+  });
+
   it("reads the exchange position through the backend gate", async () => {
     let requestedUrl = "";
     Object.defineProperty(globalThis, "fetch", {

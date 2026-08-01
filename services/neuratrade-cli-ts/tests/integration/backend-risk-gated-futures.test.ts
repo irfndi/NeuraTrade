@@ -102,6 +102,7 @@ describe("backend-gated futures HTTP integration", () => {
             productType: "USDT-FUTURES",
             marginMode: "crossed",
             leverage: 1,
+            clientOid: "intent-1",
           });
         }).pipe(Effect.provide(layer)),
       );

@@ -108,13 +108,14 @@ function makeAdapter(
         );
       }
       const price = request.price;
+      const intentId = request.clientOid ?? crypto.randomUUID();
 
       const response = yield* Effect.tryPromise({
         try: () =>
           ky.post(`${baseUrl}/api/v1/execution/futures/order`, {
             headers: { "X-API-Key": config.apiKey },
             json: {
-              intent_id: request.clientOid ?? crypto.randomUUID(),
+              intent_id: intentId,
               chat_id: config.chatId,
               exchange:
                 request.productType === "USDT-FUTURES"
@@ -172,7 +173,46 @@ function makeAdapter(
           ),
         );
       }
-      return toFill(payload);
+      if (payload.intent_id !== intentId) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `backend live execution intent mismatch (${payload.intent_id})`,
+          ),
+        );
+      }
+      if (
+        comparableSymbol(payload.symbol) !== comparableSymbol(request.symbol) ||
+        payload.side !== request.side
+      ) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `backend live execution fill identity mismatch for ${request.symbol}`,
+          ),
+        );
+      }
+      const filledQty = money(payload.filled_qty);
+      const filledPrice = money(payload.filled_price);
+      const fee = money(payload.fee);
+      if (filledQty.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            "backend live execution returned zero filled quantity",
+          ),
+        );
+      }
+      if (filledPrice.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            "backend live execution returned non-positive fill price",
+          ),
+        );
+      }
+      if (fee.lessThan(0)) {
+        return yield* Effect.fail(
+          new ExchangeError("backend live execution returned negative fee"),
+        );
+      }
+      return toFill(payload, request);
     });
 
   const getPosition = (
@@ -292,14 +332,17 @@ function makeAdapter(
   return service;
 }
 
-function toFill(payload: OrderResponse): FuturesOrderFill {
+function toFill(
+  payload: OrderResponse,
+  request: FuturesOrderRequest,
+): FuturesOrderFill {
   return {
     orderId: payload.order_id,
     clientOid: payload.client_id,
     symbol: payload.symbol,
     side: payload.side,
-    productType: "USDT-FUTURES",
-    marginMode: "crossed",
+    productType: request.productType,
+    marginMode: request.marginMode,
     filledQty: money(payload.filled_qty),
     filledPrice: money(payload.filled_price),
     fee: money(payload.fee),

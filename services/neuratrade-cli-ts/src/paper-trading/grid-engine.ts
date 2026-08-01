@@ -269,6 +269,12 @@ export function runGridPaperTradingIteration(
       const reconciliation = reconcileLivePosition(
         state,
         yield* adapter.getPosition(options.symbol, productType),
+        {
+          productType,
+          marginMode,
+          leverage: state.leverage,
+          entryPrice: state.entryPrice,
+        },
       );
       if (reconciliation.kind === "mismatch") {
         const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
