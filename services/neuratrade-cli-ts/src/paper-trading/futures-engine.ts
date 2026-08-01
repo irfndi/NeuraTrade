@@ -219,6 +219,14 @@ export function runFuturesPaperTradingIteration(
         options,
       );
       if (exitReason === "scale_out") {
+        if (options.isLive) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              "live futures scale-out is disabled until exchange-fill reconciliation is implemented",
+            ),
+          );
+        }
+
         const exitPrice = fallbackExitPrice(
           position,
           currentCandle,
@@ -257,6 +265,14 @@ export function runFuturesPaperTradingIteration(
           size: position.size,
           price: money(currentCandle.close),
         });
+
+        if (!fill && options.isLive) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              "live futures close returned no exchange fill; preserving the local position",
+            ),
+          );
+        }
 
         let exitPrice: Decimal;
         let closeFee: Decimal;
@@ -326,6 +342,18 @@ export function runFuturesPaperTradingIteration(
         options.volatilityLookback,
         options.timeframe,
       );
+
+      if (options.minAtrPct > 0) {
+        const atrPct = atr && entryPriceNum > 0 ? atr / entryPriceNum : 0;
+        if (atrPct < options.minAtrPct / 100) {
+          return {
+            action: "hold" as const,
+            position,
+            capital: toNumber(capital),
+            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
+          };
+        }
+      }
 
       const notionalValue = calculateFuturesNotionalValue(
         capital,
@@ -410,19 +438,6 @@ export function runFuturesPaperTradingIteration(
       const filledPrice = money(fill.filledPrice);
       const openFee = money(fill.fee);
       capital = capital.minus(openFee);
-
-      if (options.minAtrPct > 0) {
-        const entryPriceNum = toNumber(filledPrice, 8);
-        const atrPct = atr && entryPriceNum > 0 ? atr / entryPriceNum : 0;
-        if (atrPct < options.minAtrPct / 100) {
-          return {
-            action: "hold" as const,
-            position,
-            capital: toNumber(capital),
-            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
-          };
-        }
-      }
 
       const stopMult = options.atrStopMultiplier;
       const tpMult = options.atrTakeProfitMultiplier;

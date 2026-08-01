@@ -7,6 +7,7 @@ import {
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
+import { ExchangeError } from "../exchange/adapter.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
@@ -351,6 +352,27 @@ function makeOptions(
   };
 }
 
+function makeOpenPosition(
+  overrides: Partial<PaperPosition> = {},
+): PaperPosition {
+  return {
+    id: "position-1",
+    exchange: "bitget-futures",
+    symbol: "BTC/USDT:USDT",
+    timeframe: "1h",
+    side: "long",
+    entryPrice: money(100),
+    size: money(1),
+    stopLoss: money(90),
+    takeProfit: money(110),
+    openedAt: new Date(Date.now() - 3_600_000),
+    signalId: "signal-1",
+    scaledOut: false,
+    scaleOutPrice: money(0),
+    ...overrides,
+  };
+}
+
 describe("runFuturesPaperTradingIteration", () => {
   it("opens a leveraged long position", async () => {
     const repo = new InMemoryPaperRepository();
@@ -522,6 +544,143 @@ describe("runFuturesPaperTradingIteration", () => {
     expect(result.action).toBe("hold");
     expect(result.note).toContain("CIRCUIT BREAKER OPEN");
     expect(result.position).toBeNull();
+  });
+
+  it("fails closed when a live close returns no exchange fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition();
+    Effect.runSync(repo.saveOpenPosition(position));
+    const simulatedAdapter = makeFuturesAdapter();
+    const adapter = {
+      ...simulatedAdapter,
+      closePosition: () => Effect.succeed(null),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, adapter),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<
+          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          never
+        >,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect(
+      Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
+    ).toEqual(position);
+    expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("rejects live scale-out until it has exchange-fill reconciliation", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition({
+      scaleOutPrice: money(100),
+    });
+    Effect.runSync(repo.saveOpenPosition(position));
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, makeFuturesAdapter()),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<
+          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          never
+        >,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect(
+      Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
+    ).toEqual(position);
+    expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("checks minimum ATR before placing a live entry order", async () => {
+    const repo = new InMemoryPaperRepository();
+    const simulatedAdapter = makeFuturesAdapter();
+    const adapter = {
+      ...simulatedAdapter,
+      placeOrder: () =>
+        Effect.fail(
+          new ExchangeError("unexpected entry order in low volatility"),
+        ),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        isLive: true,
+        minAtrPct: 100,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, makeGateway(100)),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("LOW VOLATILITY");
+    expect(result.position).toBeNull();
+    expect(result.capital).toBe(10_000);
   });
 
   it("survives random volatile candle sequences without crashing", async () => {
