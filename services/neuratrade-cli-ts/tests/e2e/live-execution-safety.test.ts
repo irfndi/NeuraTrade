@@ -3,18 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-async function runPaperTrade(
+async function runCli(
   home: string,
   args: readonly string[],
 ): Promise<{ readonly exitCode: number; readonly output: string }> {
-  const proc = Bun.spawn(
-    ["bun", "run", "index.ts", "scalp", "paper-trade", ...args],
-    {
-      env: { ...process.env, NEURATRADE_HOME: home },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
+  const proc = Bun.spawn(["bun", "run", "index.ts", ...args], {
+    env: { ...process.env, NEURATRADE_HOME: home },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -27,7 +24,9 @@ describe("live execution safety", () => {
   it("fails before any market request for the disabled signal strategy", async () => {
     const home = await mkdtemp(join(tmpdir(), "neuratrade-live-signal-"));
     try {
-      const result = await runPaperTrade(home, [
+      const result = await runCli(home, [
+        "scalp",
+        "paper-trade",
         "--live",
         "--futures",
         "--strategy-type",
@@ -48,7 +47,9 @@ describe("live execution safety", () => {
   it("returns a non-zero exit when the grid live configuration is invalid", async () => {
     const home = await mkdtemp(join(tmpdir(), "neuratrade-live-config-"));
     try {
-      const result = await runPaperTrade(home, [
+      const result = await runCli(home, [
+        "scalp",
+        "paper-trade",
         "--live",
         "--futures",
         "--strategy-type",
@@ -69,7 +70,9 @@ describe("live execution safety", () => {
   it("rejects an unvalidated grid profile before contacting the exchange", async () => {
     const home = await mkdtemp(join(tmpdir(), "neuratrade-live-grid-"));
     try {
-      const result = await runPaperTrade(home, [
+      const result = await runCli(home, [
+        "scalp",
+        "paper-trade",
         "--live",
         "--futures",
         "--strategy-type",
@@ -82,6 +85,26 @@ describe("live execution safety", () => {
       expect(result.output).toContain(
         "live grid must use the validated BTC 15m grid candidate",
       );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("fails before loading a watchlist for the disabled live soak surface", async () => {
+    const home = await mkdtemp(join(tmpdir(), "neuratrade-live-soak-"));
+    try {
+      const result = await runCli(home, [
+        "scalp",
+        "soak",
+        "--live",
+        "--futures",
+        "--watchlist",
+        "missing-watchlist.json",
+      ]);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("live soak is disabled");
+      expect(result.output).not.toContain("Failed to load soak watchlist");
     } finally {
       await rm(home, { recursive: true, force: true });
     }

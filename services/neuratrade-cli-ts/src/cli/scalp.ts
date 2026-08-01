@@ -3273,13 +3273,25 @@ export function validateLiveGridConfiguration(
   if (!validatedCandidate) {
     return "live grid must use the validated BTC 15m grid candidate";
   }
-  if (config.maxPositionSizePct <= 0 || config.maxPositionSizePct > 50) {
+  if (
+    !Number.isFinite(config.maxPositionSizePct) ||
+    config.maxPositionSizePct <= 0 ||
+    config.maxPositionSizePct > 50
+  ) {
     return "live grid max position size must be between 0% and 50%";
   }
-  if (config.maxDrawdownPct <= 0 || config.maxDrawdownPct > 5) {
+  if (
+    !Number.isFinite(config.maxDrawdownPct) ||
+    config.maxDrawdownPct <= 0 ||
+    config.maxDrawdownPct > 5
+  ) {
     return "live grid max drawdown must be between 0% and 5%";
   }
-  if (config.maxDailyLossPct <= 0 || config.maxDailyLossPct > 2) {
+  if (
+    !Number.isFinite(config.maxDailyLossPct) ||
+    config.maxDailyLossPct <= 0 ||
+    config.maxDailyLossPct > 2
+  ) {
     return "live grid max daily loss must be between 0% and 2%";
   }
   return undefined;

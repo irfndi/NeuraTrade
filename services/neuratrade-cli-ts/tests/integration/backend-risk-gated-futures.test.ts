@@ -12,7 +12,7 @@ interface RequestLog {
   readonly apiKey: string | null;
 }
 
-function startBackendFixture(): {
+function startBackendFixture(orderResponse: unknown = liveOrderFilledFixture): {
   readonly server: Bun.Server<undefined>;
   readonly requests: RequestLog[];
 } {
@@ -39,7 +39,7 @@ function startBackendFixture(): {
         request.method === "POST" &&
         url.pathname === "/api/v1/execution/futures/order"
       ) {
-        return new Response(JSON.stringify(liveOrderFilledFixture), {
+        return new Response(JSON.stringify(orderResponse), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -112,6 +112,44 @@ describe("backend-gated futures HTTP integration", () => {
       expect(fixture.requests[0]?.method).toBe("POST");
       expect(fixture.requests[0]?.path).toBe("/api/v1/execution/futures/order");
       expect(fixture.requests[0]?.apiKey).toBe("integration-admin-key");
+    } finally {
+      fixture.server.stop(true);
+    }
+  });
+
+  it("fails closed when a real HTTP server returns a different intent", async () => {
+    const fixture = startBackendFixture({
+      ...liveOrderFilledFixture,
+      intent_id: "different-intent",
+    });
+    try {
+      const layer = BackendRiskGatedFuturesExchangeAdapterLive({
+        baseUrl: fixture.server.url.toString(),
+        apiKey: "integration-admin-key",
+        chatId: "integration-chat",
+        timeoutMs: 2_000,
+      });
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* FuturesExchangeAdapter;
+          return yield* adapter
+            .placeOrder({
+              symbol: "BTC/USDT:USDT",
+              side: "buy",
+              type: "market",
+              size: money("0.01"),
+              price: money("70000"),
+              productType: "USDT-FUTURES",
+              marginMode: "crossed",
+              leverage: 1,
+              clientOid: "intent-1",
+            })
+            .pipe(Effect.result);
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(result._tag).toBe("Failure");
+      expect(fixture.requests).toHaveLength(1);
     } finally {
       fixture.server.stop(true);
     }

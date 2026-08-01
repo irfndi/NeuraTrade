@@ -295,10 +295,27 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   BTC's interval and latest-tail warning remain unchanged. Neither candidate
   clears the confidence gate or has real exchange-fill evidence.
 
+## Iteration 15 — two-year public-data extension (2026-08-02)
+
+- Public Bitget history was extended to 70,079 15m candles for BTC and ETH,
+  adding roughly another year of data without exchange credentials.
+- BTC's fixed candidate now has 54 OOS trades, **+14.67%** return, PF **1.61**,
+  and expectancy **+0.260%/trade**. The 95% bootstrap interval is still
+  **−0.060% to +0.536%**; taker-stop stress is +13.97% with a −0.076% lower
+  bound, while the 70% adverse-maker stress is **−1.41%**, PF **0.96**.
+- On 13 rolling 45-day windows, BTC is profitable in only 6/13 windows at 1bp
+  slippage and 3/13 at 10bp; the mean fixed-config window return is negative.
+  The earlier 5/5 walk-forward result was therefore too narrow to call robust.
+- ETH's fixed candidate now has 117 OOS trades, **+18.21%** return, PF **1.25**,
+  and expectancy **+0.154%/trade**, but its interval remains **−0.131% to
+  +0.414%** and its latest 30-day tail is **−2.28%**, PF **0.87**. It remains
+  unapproved. The longer history increases evidence, but does not clear the
+  confidence or real-fill gates for either symbol.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
-- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the only positive candidate. It has a positive point estimate and is **walk-forward robust (5/5 windows, survives 10bp slippage)**, but its 28-trade OOS confidence interval still crosses zero.
+- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the strongest candidate. It has a positive point estimate, but the extended 54-trade OOS confidence interval still crosses zero and rolling-window performance is inconsistent.
 - The ETH gated grid also has a positive historical point estimate, but its
   confidence interval crosses zero and its current tail misses the PF gate;
   it is not approved for live execution. The live CLI deliberately permits
@@ -306,11 +323,9 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 
 **What is NOT proven:**
 
-- **Adverse-selection magnitude in real fills.** The edge survives everything backtesting _can_ model — slippage to 10bp, taker stop fees, and a random/queue fill-rate haircut all keep it profitable (walk-forward 5/5). But the adverse-selection fill model shows the edge goes **negative** when fills skew toward the loss-prone touches (OOS PF 0.82). Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
-- **Statistical confirmation of the optimistic OOS estimate.** Its 95% bootstrap lower bound is negative because the sample contains only 28 trades. More historical data or a qualifying demo sample is needed before calling the edge proven.
-- **Current-tail profitability.** The refreshed latest 30-day sample is negative
-  and contains only five trades; it is a warning signal, not a basis for a
-  real-money order.
+- **Adverse-selection magnitude in real fills.** The extended BTC result remains positive under symmetric slippage and taker-stop fees, but the 70% adverse-maker model is negative (PF 0.96), and only 6/13 rolling windows are profitable at 1bp. Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
+- **Statistical confirmation of the optimistic OOS estimate.** The 95% bootstrap lower bound remains negative even after extending to 54 BTC trades and 117 ETH trades. A qualifying demo sample is needed before calling the edge proven.
+- **Current-tail profitability.** BTC's latest 30-day sample remains negative in the statistical validator (five trades); ETH's extended-data tail is also negative (20 trades). These are warnings, not a basis for a real-money order.
 
 **Recommendation:**
 
