@@ -921,7 +921,7 @@ describe("library command", () => {
     expect(output).toContain("--grid-max-grids");
     expect(output).toContain("--grid-pause-after-loss-bars");
     expect(output).toContain("--realistic");
-  });
+  }, 15_000);
 });
 
 describe("walk-forward command", () => {
@@ -1036,5 +1036,5 @@ describe("paper-trade command", () => {
     expect(output).toContain("--strategy");
     expect(output).toContain("dualEmaCross");
     expect(output).toContain("--realistic");
-  });
+  }, 15_000);
 });

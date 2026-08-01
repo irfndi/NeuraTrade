@@ -1,4 +1,6 @@
 import { Effect, Layer } from "effect";
+import ky from "ky";
+import { z } from "zod";
 import { ExchangeError } from "../adapter.js";
 import {
   FuturesExchangeAdapter,
@@ -16,19 +18,35 @@ interface BackendRiskGatedConfig {
   readonly timeoutMs?: number;
 }
 
-interface OrderResponse {
-  readonly intent_id: string;
-  readonly order_id: string;
-  readonly client_id: string;
-  readonly exchange: string;
-  readonly symbol: string;
-  readonly side: "buy" | "sell";
-  readonly filled_qty: string;
-  readonly filled_price: string;
-  readonly fee: string;
-  readonly status: string;
-  readonly timestamp: string;
-}
+const decimalText = z.string().min(1).refine(
+  (value) => {
+    try {
+      return money(value).isFinite();
+    } catch {
+      return false;
+    }
+  },
+  "must be a finite decimal",
+);
+
+const orderResponseSchema = z.object({
+  intent_id: z.string().min(1),
+  order_id: z.string().min(1),
+  client_id: z.string().min(1),
+  exchange: z.string().min(1),
+  symbol: z.string().min(1),
+  side: z.enum(["buy", "sell"]),
+  filled_qty: decimalText,
+  filled_price: decimalText,
+  fee: decimalText,
+  status: z.string().min(1),
+  timestamp: z.string().refine(
+    (value) => !Number.isNaN(Date.parse(value)),
+    "must be an ISO timestamp",
+  ),
+});
+
+type OrderResponse = z.infer<typeof orderResponseSchema>;
 
 function makeAdapter(
   config: BackendRiskGatedConfig,
@@ -54,14 +72,9 @@ function makeAdapter(
 
       const response = yield* Effect.tryPromise({
         try: () =>
-          fetch(`${baseUrl}/api/v1/execution/futures/order`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-Key": config.apiKey,
-            },
-            signal: AbortSignal.timeout(timeoutMs),
-            body: JSON.stringify({
+          ky.post(`${baseUrl}/api/v1/execution/futures/order`, {
+            headers: { "X-API-Key": config.apiKey },
+            json: {
               intent_id: request.clientOid ?? crypto.randomUUID(),
               chat_id: config.chatId,
               exchange:
@@ -79,7 +92,10 @@ function makeAdapter(
               reduce_only: request.reduceOnly ?? false,
               portfolio_value: price.times(request.size).toString(),
               current_position: "0",
-            }),
+            },
+            retry: { limit: 0 },
+            timeout: timeoutMs,
+            throwHttpErrors: false,
           }),
         catch: (error) =>
           new ExchangeError(
@@ -101,10 +117,13 @@ function makeAdapter(
         );
       }
       const payload = yield* Effect.tryPromise({
-        try: () => response.json() as Promise<OrderResponse>,
+        try: async () => {
+          const body: unknown = await response.json();
+          return orderResponseSchema.parse(body);
+        },
         catch: (error) =>
           new ExchangeError(
-            `backend live execution returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+            `backend live execution returned invalid response: ${error instanceof Error ? error.message : String(error)}`,
           ),
       });
       if (payload.status !== "filled") {

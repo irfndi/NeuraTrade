@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { money } from "../../utils/money.js";
 import { FuturesExchangeAdapter } from "../futures-adapter.js";
 import { BackendRiskGatedFuturesExchangeAdapterLive } from "./backend-risk-gated-futures.js";
+import liveOrderFilledFixture from "../../../tests/fixtures/backend/live-order-filled.json";
 
 const originalFetch = globalThis.fetch;
 
@@ -42,25 +43,15 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
     let requestBody: Record<string, string | boolean> | undefined;
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
-      value: async (_input: RequestInfo | URL, init?: RequestInit) => {
-        requestBody = JSON.parse(String(init?.body)) as Record<
-          string,
-          string | boolean
-        >;
+      value: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const body: unknown = JSON.parse(await request.text());
+        if (typeof body !== "object" || body === null) {
+          throw new Error("expected a JSON object request body");
+        }
+        requestBody = body as Record<string, string | boolean>;
         return new Response(
-          JSON.stringify({
-            intent_id: "intent-1",
-            order_id: "exchange-1",
-            client_id: "client-1",
-            exchange: "bitget-futures",
-            symbol: "BTC/USDT:USDT",
-            side: "buy",
-            filled_qty: "0.00012345678901234567890",
-            filled_price: "70000.12345678901234567890",
-            fee: "0.00000000000000000001",
-            status: "filled",
-            timestamp: "2026-08-01T00:00:00.000Z",
-          }),
+          JSON.stringify(liveOrderFilledFixture),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       },
@@ -114,6 +105,54 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
             timestamp: "2026-08-01T00:00:00.000Z",
           }),
           { status: 202, headers: { "Content-Type": "application/json" } },
+        ),
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "market",
+            size: money("0.1"),
+            price: money("70000"),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 5,
+          })
+          .pipe(Effect.result);
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("fails closed when a filled response is missing required identity fields", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () =>
+        new Response(
+          JSON.stringify({
+            intent_id: "intent-malformed",
+            order_id: "",
+            client_id: "client-malformed",
+            exchange: "bitget-futures",
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            filled_qty: "0.1",
+            filled_price: "70000",
+            fee: "0",
+            status: "filled",
+            timestamp: "2026-08-01T00:00:00.000Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
         ),
     });
 
