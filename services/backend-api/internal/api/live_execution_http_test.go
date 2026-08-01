@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -100,6 +102,49 @@ func TestLiveExecutionHTTPReturnsObservedFill(t *testing.T) {
 	require.Equal(t, "100.1", response.FilledPrice)
 	require.Equal(t, "0.0123", response.Fee)
 	require.Equal(t, "filled", response.Status)
+}
+
+func TestLiveExecutionHTTPServerReturnsObservedFill(t *testing.T) {
+	bridge, executor := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{order: ccxt.OrderResponse{
+		Order: ccxt.Order{
+			ID:            "exchange-order-1",
+			ClientOrderID: "NTclient",
+			Symbol:        "BTC/USDT",
+			Type:          "market",
+			Side:          "buy",
+			Status:        "closed",
+			Amount:        decimal.RequireFromString("0.1"),
+			Filled:        decimal.RequireFromString("0.1"),
+			Price:         decimal.RequireFromString("100"),
+			Cost:          decimal.RequireFromString("10.01"),
+			Fee:           decimal.RequireFromString("0.0123"),
+		}},
+	})
+	defer bridge.close()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/v1/execution/futures/order", bridge.placeFuturesOrder)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	request, err := http.NewRequest(
+		http.MethodPost,
+		server.URL+"/api/v1/execution/futures/order",
+		bytes.NewBufferString(`{"intent_id":"wire-fill-1","chat_id":"123","exchange":"bitget-futures","symbol":"BTC/USDT","side":"buy","size":"0.1","price":"100","portfolio_value":"100","confidence":"0.9"}`),
+	)
+	require.NoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	var payload liveFuturesOrderResponse
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&payload))
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.Equal(t, int32(1), executor.placed.Load())
+	require.Equal(t, "exchange-order-1", payload.OrderID)
+	require.Equal(t, "0.0123", payload.Fee)
 }
 
 func TestLiveExecutionHTTPSurfacesUnconfirmedOrderAsAccepted(t *testing.T) {

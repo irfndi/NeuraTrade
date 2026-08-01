@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -55,6 +56,9 @@ func TestNativeCCXTService_InitializePreservesConfiguredCredentials(t *testing.T
 }
 
 func TestNativeCCXTService_FetchOrder_BitgetReturnsClosedOrderDetails(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/bitget/order-detail-filled.json")
+	require.NoError(t, err)
+
 	service := NewNativeCCXTService(5*time.Second, 1)
 	service.exchanges["bitget"] = &ExchangeConnection{
 		Name:       "bitget",
@@ -78,7 +82,7 @@ func TestNativeCCXTService_FetchOrder_BitgetReturnsClosedOrderDetails(t *testing
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"code":"00000","msg":"success","data":{"orderId":"order-123","clientOid":"client-123","symbol":"BTCUSDT","side":"buy","orderType":"market","state":"filled","price":"100.123456789012345678","size":"0.2","baseVolume":"0.2","quoteVolume":"20.0246913578024691356","cTime":"1710000000000","uTime":"1710000001000"}}`)),
+				Body:       io.NopCloser(strings.NewReader(string(fixture))),
 				Header:     make(http.Header),
 			}, nil
 		}),
@@ -91,6 +95,7 @@ func TestNativeCCXTService_FetchOrder_BitgetReturnsClosedOrderDetails(t *testing
 	assert.Equal(t, "closed", response.Order.Status)
 	assert.Equal(t, "0.2", response.Order.Filled.String())
 	assert.Equal(t, "20.0246913578024691356", response.Order.Cost.String())
+	assert.Equal(t, "0.012345678901234567", response.Order.Fee.String())
 }
 
 func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
