@@ -17,6 +17,7 @@ import {
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
+  type FuturesPosition,
 } from "../exchange/futures-adapter.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
@@ -194,18 +195,22 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
   };
 }
 
-function makeTrackingFuturesAdapter(closeWithFill = true): {
+function makeTrackingFuturesAdapter(
+  closeWithFill = true,
+  initialPosition: FuturesPosition | null = null,
+): {
   adapter: FuturesExchangeAdapterService;
   orders: { side: string; size: number }[];
   closes: { side: string; size: number }[];
 } {
   const orders: { side: string; size: number }[] = [];
   const closes: { side: string; size: number }[] = [];
+  let position = initialPosition;
   const adapter: FuturesExchangeAdapterService = {
     placeOrder: (req) =>
       Effect.sync(() => {
         orders.push({ side: req.side, size: req.size.toNumber() });
-        return {
+        const fill = {
           orderId: "live",
           symbol: req.symbol,
           side: req.side,
@@ -216,12 +221,24 @@ function makeTrackingFuturesAdapter(closeWithFill = true): {
           fee: money(0),
           timestamp: new Date(),
         };
+        position = {
+          symbol: req.symbol,
+          side: req.side === "buy" ? "long" : "short",
+          productType: req.productType,
+          marginMode: req.marginMode,
+          leverage: req.leverage,
+          quantity: req.size,
+          available: req.size,
+          entryPrice: fill.filledPrice,
+          marginCoin: "USDT",
+        };
+        return fill;
       }),
     closePosition: (req) =>
       Effect.sync(() => {
         closes.push({ side: req.side, size: req.size.toNumber() });
         if (!closeWithFill) return null;
-        return {
+        const fill = {
           orderId: "close",
           symbol: req.symbol,
           side: req.side,
@@ -232,8 +249,10 @@ function makeTrackingFuturesAdapter(closeWithFill = true): {
           fee: money(0),
           timestamp: new Date(),
         };
+        position = null;
+        return fill;
       }),
-    getPosition: () => Effect.succeed(null),
+    getPosition: () => Effect.succeed(position),
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
@@ -304,6 +323,7 @@ function runWithRepo(
   adapter?: FuturesExchangeAdapterService,
   riskGuard: RiskGuardService = makeRiskGuard(),
   circuitBreaker: CircuitBreakerService = makeCircuitBreaker(),
+  killSwitch: KillSwitchService = makeKillSwitch(),
 ) {
   return runGridPaperTradingIteration(options).pipe(
     Effect.provide(
@@ -312,7 +332,7 @@ function runWithRepo(
         Layer.succeed(PaperTradingRepository, repo),
         Layer.succeed(FuturesExchangeAdapter, adapter ?? makeFuturesAdapter()),
         Layer.succeed(RiskGuard, riskGuard),
-        Layer.succeed(KillSwitch, makeKillSwitch()),
+        Layer.succeed(KillSwitch, killSwitch),
         Layer.succeed(CircuitBreaker, circuitBreaker),
       ),
     ),
@@ -463,6 +483,111 @@ describe("grid paper engine", () => {
     expect(records.length).toBeGreaterThan(0);
   });
 
+  it("fails closed when the exchange has an untracked live position", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const exchangePosition: FuturesPosition = {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 1,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    };
+    const mismatchAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      getPosition: () => Effect.succeed(exchangePosition),
+    };
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      mismatchAdapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(result.note).toContain("LIVE POSITION MISMATCH");
+    expect(orders).toHaveLength(0);
+    expect(killReason).toContain(
+      "exchange position exists without local state",
+    );
+  });
+
+  it("fails closed when persisted live state has no exchange position", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.02"),
+        entryFee: money(0),
+        entryFillSource: "live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(result.note).toContain("LIVE POSITION MISMATCH");
+    expect(orders).toHaveLength(0);
+    expect(killReason).toContain(
+      "local state exists without exchange position",
+    );
+  });
+
   it("does not clear a live position when the close has no exchange fill", async () => {
     const repo = new InMemoryPaperRepository();
     const { adapter, closes } = makeTrackingFuturesAdapter(false);
@@ -494,7 +619,17 @@ describe("grid paper engine", () => {
 
   it("closes a live position at liquidation before killing local state", async () => {
     const repo = new InMemoryPaperRepository();
-    const { adapter, closes } = makeTrackingFuturesAdapter();
+    const { adapter, closes } = makeTrackingFuturesAdapter(true, {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 10,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    });
     const baseCandles = makeCandles(20, 1000, "oscillate");
     const lastCandle = baseCandles.at(-1);
     if (lastCandle === undefined) throw new Error("fixture is empty");

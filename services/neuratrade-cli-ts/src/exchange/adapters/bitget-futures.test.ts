@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import {
   BitgetClient,
   type BitgetClientImpl,
+  type BitgetFuturesPosition,
 } from "../../services/bitget-client.js";
 import {
   FuturesExchangeAdapter,
@@ -220,6 +221,53 @@ describe("BitgetFuturesExchangeAdapter", () => {
     expect(position?.side).toBe("long");
     expect(position?.quantity.toNumber()).toBe(0.5);
     expect(position?.leverage).toBe(10);
+  });
+
+  it("fails closed when multiple active position legs are returned", async () => {
+    const activePositions: ReadonlyArray<BitgetFuturesPosition> = [
+      {
+        positionId: "long-1",
+        symbol: "BTCUSDT",
+        productType: "USDT-FUTURES",
+        marginMode: "crossed",
+        holdSide: "long",
+        openPrice: "66000",
+        total: "0.5",
+        available: "0.5",
+        leverage: "10",
+        unrealizedPL: "200",
+        liquidatedPrice: "60000",
+      },
+      {
+        positionId: "short-1",
+        symbol: "BTCUSDT",
+        productType: "USDT-FUTURES",
+        marginMode: "crossed",
+        holdSide: "short",
+        openPrice: "66000",
+        total: "0.5",
+        available: "0.5",
+        leverage: "10",
+        unrealizedPL: "200",
+        liquidatedPrice: "60000",
+      },
+    ];
+    const client: BitgetClientImpl = {
+      ...makeStubClient(),
+      getFuturesPositions: () => Effect.succeed(activePositions),
+    };
+    const adapterLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(client),
+    );
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(exit._tag).toBe("Failure");
   });
 
   it("reads a balance", async () => {

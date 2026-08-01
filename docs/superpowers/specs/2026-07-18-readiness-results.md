@@ -214,6 +214,19 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   breaker before the next entry decision. Unit coverage verifies both controls
   on live-grid iterations and SQLite-backed repository accounting.
 
+## Iteration 10 — live position reconciliation (2026-08-02)
+
+- Every live grid iteration now compares persisted local state with the active
+  exchange position before evaluating an entry or exit. Flat-vs-open, open-vs-flat,
+  side, quantity, and missing live-fill evidence mismatches engage the persistent
+  kill switch and fail closed without placing an order.
+- The Bitget futures adapter now rejects ambiguous responses with multiple active
+  position legs instead of silently selecting the first row. Unit coverage,
+  fast-check quantity fuzzing, and a SQLite-backed integration test verify the
+  reconciliation and persisted kill-switch behavior.
+- This closes a crash/restart and manual-account-change safety gap; it does not
+  establish profitability or replace the required exchange demo soak.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
@@ -276,4 +289,4 @@ bun run index.ts scalp paper-trade \
 
 Conservative fraction 0.5 (`--max-position-size-pct 50`), risk guards on, ~15-min iteration cadence over a ≥ 7-day / ≥ 50-trade window. Record realized fill-rate, expectancy, and DD, then compare against the backtest within its Monte-Carlo band for sign-off. **This live demo is the decisive fill-realism proof** that backtesting cannot provide; it gates any real-money decision.
 
-**Status:** dt8/u1u/91b QA-closed (tests green; 706/706 package suite); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed. Maker-fill realism modeled + stressed: edge survives slippage/taker-fees/queue fill-rate but is fragile to adverse selection (verdict refined above). Position sizing landed (backtest `positionFraction`; live `--max-position-size-pct`, provably equivalent). Foundation = PR #472, sizing = PR #473, verdict + fill realism = PR #474. **er7:** deterministic 30-day sample captured; the decisive live-demo soak remains **pending the user's Bitget demo keys**.
+**Status:** dt8/u1u/91b QA-closed (tests green; 747/747 package suite); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed. Maker-fill realism modeled + stressed: edge survives slippage/taker-fees/queue fill-rate but is fragile to adverse selection (verdict refined above). Position sizing landed (backtest `positionFraction`; live `--max-position-size-pct`, provably equivalent). Foundation = PR #472, sizing = PR #473, verdict + fill realism = PR #474. **er7:** deterministic 30-day sample captured; the decisive live-demo soak remains **pending the user's Bitget demo keys**.

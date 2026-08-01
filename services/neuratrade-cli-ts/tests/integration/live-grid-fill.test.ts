@@ -9,6 +9,7 @@ import type { Candle } from "../../src/market-data/types.js";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
+  type FuturesPosition,
 } from "../../src/exchange/futures-adapter.js";
 import { money } from "../../src/utils/money.js";
 import { PaperTradingRepositorySQLite } from "../../src/paper-trading/repository.js";
@@ -27,6 +28,7 @@ import {
   CircuitBreaker,
   type CircuitBreakerService,
 } from "../../src/risk/circuit-breaker.js";
+import { KillSwitchSQLiteLive } from "../../src/risk/kill-switch.js";
 
 function makeCandles(count: number): Candle[] {
   const candles: Candle[] = [];
@@ -87,20 +89,37 @@ function makeFill(
 function makeAdapter(): FuturesExchangeAdapterService {
   let orderNumber = 0;
   let closeNumber = 0;
+  let position: FuturesPosition | null = null;
   return {
     placeOrder: (request) =>
-      Effect.sync(() => makeFill(request, `entry-${++orderNumber}`)),
+      Effect.sync(() => {
+        const fill = makeFill(request, `entry-${++orderNumber}`);
+        position = {
+          symbol: request.symbol,
+          side: request.side === "buy" ? "long" : "short",
+          productType: request.productType,
+          marginMode: request.marginMode,
+          leverage: request.leverage,
+          quantity: fill.filledQty,
+          available: fill.filledQty,
+          entryPrice: fill.filledPrice,
+          marginCoin: "USDT",
+        };
+        return fill;
+      }),
     closePosition: (request) =>
-      Effect.sync(() =>
-        makeFill(
+      Effect.sync(() => {
+        const fill = makeFill(
           {
             ...request,
             type: request.price === undefined ? "market" : "limit",
           },
           `close-${++closeNumber}`,
-        ),
-      ),
-    getPosition: () => Effect.succeed(null),
+        );
+        position = null;
+        return fill;
+      }),
+    getPosition: () => Effect.succeed(position),
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
@@ -207,6 +226,49 @@ describe("live grid fill integration", () => {
       });
       expect(report.passed).toBe(true);
       expect(report.expectancyPct.greaterThan(0)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists a kill switch when local and exchange positions diverge", async () => {
+    const db = new Database(":memory:");
+    try {
+      const repository = new PaperTradingRepositorySQLite(db);
+      const orphanPosition: FuturesPosition = {
+        symbol: "BTC/USDT:USDT",
+        side: "long",
+        productType: "USDT-FUTURES",
+        marginMode: "isolated",
+        leverage: 1,
+        quantity: money("0.01"),
+        available: money("0.01"),
+        entryPrice: money(70_000),
+        marginCoin: "USDT",
+      };
+      const adapter: FuturesExchangeAdapterService = {
+        ...makeAdapter(),
+        getPosition: () => Effect.succeed(orphanPosition),
+      };
+      const layers = Layer.mergeAll(
+        Layer.succeed(MarketDataGateway, makeGateway(makeCandles(40))),
+        Layer.succeed(FuturesExchangeAdapter, adapter),
+        Layer.succeed(RiskGuard, riskGuard),
+        KillSwitchSQLiteLive(db),
+        Layer.succeed(CircuitBreaker, circuitBreaker),
+      );
+
+      const result = await Effect.runPromise(
+        runGridPaperTradingIteration(options).pipe(
+          Effect.provideService(PaperTradingRepository, repository),
+          Effect.provide(layers),
+        ),
+      );
+
+      expect(result.note).toContain("LIVE POSITION MISMATCH");
+      expect(
+        db.query("SELECT engaged FROM risk_kill_switch WHERE id = 1").get(),
+      ).toEqual({ engaged: 1 });
     } finally {
       db.close();
     }

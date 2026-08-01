@@ -44,6 +44,7 @@ import type {
   GridPaperState,
   GridPaperTrade,
 } from "./types.js";
+import { reconcileLivePosition } from "./live-position-reconciliation.js";
 
 export interface GridPaperTradingOptions {
   readonly exchange: string;
@@ -265,6 +266,29 @@ export function runGridPaperTradingIteration(
     const marginMode = options.marginMode ?? "isolated";
 
     if (isLive) {
+      const reconciliation = reconcileLivePosition(
+        state,
+        yield* adapter.getPosition(options.symbol, productType),
+      );
+      if (reconciliation.kind === "mismatch") {
+        const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
+        yield* killSwitch.engage(reason);
+        state = {
+          ...state,
+          killed: true,
+          lastTimestamp: current.timestamp,
+          updatedAt: new Date(),
+        };
+        yield* repo.saveGridState(state);
+        return {
+          action: "hold" as const,
+          side: state.side,
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          note: reason,
+        };
+      }
+
       if (yield* killSwitch.isEngaged()) {
         const reason = yield* killSwitch.getReason();
         return {

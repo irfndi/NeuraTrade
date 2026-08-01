@@ -219,7 +219,17 @@ export function makeBitgetFuturesAdapter(
         const positions = yield* withError(
           client.getFuturesPositions(symbol, productType),
         );
-        const p = positions[0];
+        const activePositions = positions.filter((position) =>
+          money(position.total).greaterThan(0),
+        );
+        if (activePositions.length > 1) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              `multiple active ${productType} positions returned for ${symbol}`,
+            ),
+          );
+        }
+        const p = activePositions.at(0);
         if (!p) {
           return null;
         }
