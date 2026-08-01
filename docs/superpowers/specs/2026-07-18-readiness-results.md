@@ -188,6 +188,24 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   the repository still contains no real Bitget demo fills and no real-money
   order has been placed.
 
+## Iteration 8 — live liquidation safety and integrated proof (2026-08-02)
+
+- Live grid liquidation now sends a reduce-only exchange close before clearing
+  local state and activating the kill switch. A missing or partial liquidation
+  fill fails closed and preserves the local position for reconciliation.
+- Coverage now includes the liquidation branch at the grid-engine unit level, a
+  SQLite-backed live-grid integration run that persists entry and exit fills,
+  a real CLI E2E fixture for partial closes, and fast-check corruption cases
+  for missing IDs, partial quantities, invalid fees, non-finite PnL, and bad
+  timestamps. The integrated synthetic live-fill run produced positive
+  realized expectancy and passed the evaluator; it is execution-integrity
+  evidence, not exchange evidence.
+- The read-only stress replay was rerun against the local Bitget futures
+  dataset: 35,039 BTC 15m candles, OOS +1.53% at 1 bp, fixed-winner
+  walk-forward 5/5 profitable with mean +5.12% at 1 bp and 5/5 with mean
+  +2.78% at 10 bp. The adverse-selection stress remains negative at -3.26%
+  OOS / PF 0.82, so the real-fill question remains unresolved.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.

@@ -59,6 +59,40 @@ async function seedPassingTrades(home: string): Promise<void> {
   db.close();
 }
 
+async function seedPartialTrade(home: string): Promise<void> {
+  const dataDir = join(home, "data");
+  await mkdir(dataDir, { recursive: true });
+  const db = new Database(join(dataDir, "neuratrade.db"));
+  const repository = new PaperTradingRepositorySQLite(db);
+  await Effect.runPromise(repository.ensureTables());
+  await Effect.runPromise(
+    repository.recordGridTrade({
+      id: "e2e-partial",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      side: "long",
+      entryPrice: money("70000"),
+      exitPrice: money("70010"),
+      capitalBefore: money("1000"),
+      capitalAfter: money("1002"),
+      pnlPct: money("0.2"),
+      exitReason: "target",
+      openedAt: new Date("2026-01-01T00:00:00.000Z"),
+      closedAt: new Date("2026-01-01T01:00:00.000Z"),
+      fillSource: "live",
+      entryOrderId: "entry-partial",
+      exitOrderId: "exit-partial",
+      entryFilledQty: money("0.01"),
+      exitFilledQty: money("0.005"),
+      entryFee: money("0.01"),
+      exitFee: money("0.01"),
+      realizedPnlPct: money("0.2"),
+    }),
+  );
+  db.close();
+}
+
 describe("demo-readiness CLI", () => {
   it("exposes threshold controls through the real command surface", async () => {
     const result = await runCli(["scalp", "demo-readiness", "--help"]);
@@ -90,6 +124,32 @@ describe("demo-readiness CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('"status":"PASS"');
       expect(result.stdout).toContain('"expectancyPct":"0.2"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("fails closed on a persisted partial close fixture", async () => {
+    const home = await mkdtemp(join(tmpdir(), "neuratrade-demo-partial-"));
+    try {
+      await seedPartialTrade(home);
+      const result = await runCli(
+        [
+          "scalp",
+          "demo-readiness",
+          "--min-trades",
+          "1",
+          "--min-duration-days",
+          "0",
+        ],
+        home,
+      );
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toContain('"status":"FAIL"');
+      expect(result.stdout).toContain(
+        "one or more trades lack complete live fill evidence",
+      );
     } finally {
       await rm(home, { recursive: true, force: true });
     }

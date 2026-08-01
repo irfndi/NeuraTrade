@@ -408,7 +408,7 @@ export function runGridPaperTradingIteration(
       return Effect.gen(function* () {
         let exitPrice = theoreticalExitPrice;
         let exitFill: FuturesOrderFill | null = null;
-        if (isLive && exitReason !== "liquidation") {
+        if (isLive) {
           const size = orderSizeContracts(
             s.capital,
             s.maxPositionPct,

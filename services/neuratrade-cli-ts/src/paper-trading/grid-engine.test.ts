@@ -426,6 +426,67 @@ describe("grid paper engine", () => {
     ).toHaveLength(0);
   });
 
+  it("closes a live position at liquidation before killing local state", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter();
+    const baseCandles = makeCandles(20, 1000, "oscillate");
+    const lastCandle = baseCandles.at(-1);
+    if (lastCandle === undefined) throw new Error("fixture is empty");
+    const candles = [
+      ...baseCandles.slice(0, -1),
+      { ...lastCandle, high: 1001, low: 800, close: 1000 },
+    ];
+    const openedAt = new Date("2026-08-01T00:00:00.000Z");
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(1000),
+        peakCapital: money(1000),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.01"),
+        entryFee: money("0.01"),
+        entryFillSource: "live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 10,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: openedAt,
+      }),
+    );
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true, leverage: 10 }),
+      repo,
+      candles,
+      adapter,
+    );
+
+    expect(result.action).toBe("closed");
+    expect(closes).toHaveLength(1);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBeNull();
+    expect(state?.killed).toBe(true);
+    const trades = await Effect.runPromise(
+      repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 10),
+    );
+    expect(trades[0]?.exitReason).toBe("liquidation");
+    expect(trades[0]?.fillSource).toBe("live");
+  });
+
   it("chop gate blocks entries in a trending market and allows them in chop", async () => {
     const trendRepo = new InMemoryPaperRepository();
     const trendCandles = makeCandles(80, 1000, "trendUp");

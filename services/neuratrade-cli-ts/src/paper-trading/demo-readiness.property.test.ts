@@ -32,6 +32,41 @@ function makeTrade(index: number, basisPoints: number): GridPaperTrade {
   };
 }
 
+type FillCorruption =
+  | "simulated"
+  | "missing-entry-id"
+  | "missing-exit-id"
+  | "partial-quantity"
+  | "negative-fee"
+  | "non-finite-pnl"
+  | "invalid-timestamp";
+
+function corruptTrade(
+  trade: GridPaperTrade,
+  corruption: FillCorruption,
+): GridPaperTrade {
+  switch (corruption) {
+    case "simulated":
+      return { ...trade, fillSource: "simulated" };
+    case "missing-entry-id": {
+      const { entryOrderId: _entryOrderId, ...withoutEntryOrderId } = trade;
+      return withoutEntryOrderId;
+    }
+    case "missing-exit-id": {
+      const { exitOrderId: _exitOrderId, ...withoutExitOrderId } = trade;
+      return withoutExitOrderId;
+    }
+    case "partial-quantity":
+      return { ...trade, exitFilledQty: money("0.005") };
+    case "negative-fee":
+      return { ...trade, entryFee: money("-0.01") };
+    case "non-finite-pnl":
+      return { ...trade, realizedPnlPct: money("NaN") };
+    case "invalid-timestamp":
+      return { ...trade, closedAt: new Date("invalid") };
+  }
+}
+
 describe("evaluateDemoSoak property coverage", () => {
   it("never produces non-finite metrics for bounded live-fill PnL sequences", () => {
     fc.assert(
@@ -55,6 +90,44 @@ describe("evaluateDemoSoak property coverage", () => {
           expect(report.expectancyPct.isFinite()).toBe(true);
           expect(report.maximumDrawdownPct.isFinite()).toBe(true);
           expect(report.maximumDrawdownPct.greaterThanOrEqualTo(0)).toBe(true);
+        },
+      ),
+    );
+  });
+
+  it("fails closed for every generated incomplete live-fill corruption", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 49 }),
+        fc.constantFrom<FillCorruption>(
+          "simulated",
+          "missing-entry-id",
+          "missing-exit-id",
+          "partial-quantity",
+          "negative-fee",
+          "non-finite-pnl",
+          "invalid-timestamp",
+        ),
+        (corruptIndex, corruption) => {
+          const trades = Array.from({ length: 50 }, (_, index) =>
+            makeTrade(index, 20),
+          );
+          const original = trades[corruptIndex];
+          if (original === undefined)
+            throw new Error("fixture index is invalid");
+          trades[corruptIndex] = corruptTrade(original, corruption);
+
+          const report = evaluateDemoSoak(trades, {
+            minimumTrades: 50,
+            minimumDurationDays: 7,
+            minimumExpectancyPct: money(0),
+            maximumDrawdownPct: money(15),
+          });
+
+          expect(report.passed).toBe(false);
+          expect(report.failures).toContain(
+            "one or more trades lack complete live fill evidence",
+          );
         },
       ),
     );
