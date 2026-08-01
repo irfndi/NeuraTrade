@@ -1,6 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { money } from "../utils/money.js";
-import { evaluateDemoSoak, type DemoSoakThresholds } from "./demo-readiness.js";
+import {
+  evaluateDemoSoak,
+  serializeDemoSoakReport,
+  type DemoSoakThresholds,
+} from "./demo-readiness.js";
 import type { GridPaperTrade } from "./types.js";
 
 const thresholds: DemoSoakThresholds = {
@@ -79,5 +83,36 @@ describe("evaluateDemoSoak", () => {
       "duration is below the minimum",
       "one or more trades lack complete live fill evidence",
     ]);
+  });
+
+  it("serializes decimal metrics into a machine-readable signoff record", () => {
+    const report = evaluateDemoSoak(
+      Array.from({ length: 50 }, (_, index) => makeTrade(index, "0.20")),
+      thresholds,
+    );
+
+    const output = serializeDemoSoakReport(report);
+
+    expect(output).toContain('"status":"PASS"');
+    expect(output).toContain('"expectancyPct":"0.2"');
+    expect(output).toContain('"profitFactor":null');
+  });
+
+  it("rejects live-fill rows with invalid exchange timestamps", () => {
+    const trades = Array.from({ length: 50 }, (_, index) =>
+      makeTrade(index, "0.20"),
+    );
+    const corruptTrade = trades[0];
+    if (corruptTrade === undefined) throw new Error("fixture is empty");
+
+    const report = evaluateDemoSoak(
+      [{ ...corruptTrade, closedAt: new Date("invalid") }, ...trades.slice(1)],
+      thresholds,
+    );
+
+    expect(report.passed).toBe(false);
+    expect(report.failures).toContain(
+      "one or more trades lack complete live fill evidence",
+    );
   });
 });

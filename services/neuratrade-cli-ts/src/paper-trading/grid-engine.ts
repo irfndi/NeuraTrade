@@ -357,14 +357,14 @@ export function runGridPaperTradingIteration(
         exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
       const realizedPnlPct =
         entryEvidence !== null && exitFill !== null
-          ? leveragedReturn
+          ? (side === "long"
+              ? exitPrice.minus(entryPrice)
+              : entryPrice.minus(exitPrice)
+            )
+              .times(Decimal.min(entryEvidence.filledQty, exitFill.filledQty))
+              .minus(entryEvidence.fee.plus(exitFill.fee))
+              .div(stateCapital)
               .times(100)
-              .minus(
-                entryEvidence.fee
-                  .plus(exitFill.fee)
-                  .div(stateCapital)
-                  .times(100),
-              )
           : undefined;
       const trade: GridPaperTrade = {
         id: makeId(),
@@ -414,6 +414,11 @@ export function runGridPaperTradingIteration(
             s.maxPositionPct,
             s.entryPrice,
           );
+          const closeSize =
+            s.entryFillSource === "live" &&
+            s.entryFilledQty?.greaterThan(0) === true
+              ? s.entryFilledQty
+              : size;
           if (size.greaterThan(0)) {
             const fill = yield* adapter.closePosition({
               symbol: options.symbol,
@@ -421,13 +426,23 @@ export function runGridPaperTradingIteration(
               productType,
               marginMode,
               leverage: s.leverage,
-              size,
+              size: closeSize,
               price: theoreticalExitPrice,
             });
-            if (fill) {
-              exitPrice = money(fill.filledPrice);
-              exitFill = fill;
+            if (!fill) {
+              return yield* Effect.fail(
+                new ExchangeError(`live ${exitReason} close returned no fill`),
+              );
             }
+            if (fill.filledQty.lessThan(closeSize)) {
+              return yield* Effect.fail(
+                new ExchangeError(
+                  `live ${exitReason} close was partially filled (${fill.filledQty.toString()}/${closeSize.toString()})`,
+                ),
+              );
+            }
+            exitPrice = money(fill.filledPrice);
+            exitFill = fill;
           }
         }
         const close = closeTrade(

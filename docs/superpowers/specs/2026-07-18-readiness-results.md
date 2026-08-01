@@ -223,6 +223,20 @@ export BITGET_PASSPHRASE=<demo passphrase>
 export BITGET_USE_SANDBOX=true   # client auto-sends the PAPTRADING=1 header (no real funds at risk)
 ```
 
+After the soak, evaluate the persisted exchange fills before changing any
+credentials or live flags:
+
+```bash
+bun run index.ts scalp demo-readiness \
+  --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m \
+  --min-trades 50 --min-duration-days 7 --min-expectancy-pct 0 \
+  --max-drawdown-pct 15
+```
+
+The command emits machine-readable JSON and exits non-zero until the gate
+passes. Backtest trades, simulated replay trades, incomplete fills, and
+partial closes cannot satisfy the live-fill evidence requirement.
+
 ```bash
 bun run index.ts scalp paper-trade \
   --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m --futures --live \

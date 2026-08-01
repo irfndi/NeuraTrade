@@ -25,6 +25,7 @@ import {
   type CircuitBreakerService,
 } from "../risk/circuit-breaker.js";
 import { money } from "../utils/money.js";
+import { ExchangeError } from "../exchange/adapter.js";
 
 function makeCandles(
   count: number,
@@ -193,7 +194,7 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
   };
 }
 
-function makeTrackingFuturesAdapter(): {
+function makeTrackingFuturesAdapter(closeWithFill = true): {
   adapter: FuturesExchangeAdapterService;
   orders: { side: string; size: number }[];
   closes: { side: string; size: number }[];
@@ -219,6 +220,7 @@ function makeTrackingFuturesAdapter(): {
     closePosition: (req) =>
       Effect.sync(() => {
         closes.push({ side: req.side, size: req.size.toNumber() });
+        if (!closeWithFill) return null;
         return {
           orderId: "close",
           symbol: req.symbol,
@@ -393,6 +395,35 @@ describe("grid paper engine", () => {
     expect(trades[0]?.entryOrderId).toBe("live");
     expect(trades[0]?.exitOrderId).toBe("close");
     expect(trades[0]?.realizedPnlPct).toBeDefined();
+  });
+
+  it("does not clear a live position when the close has no exchange fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter(false);
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    await runWithRepo(opts, repo, candles, adapter);
+    let caught: unknown = null;
+    for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
+      try {
+        await runWithRepo(opts, repo, candles, adapter);
+      } catch (error) {
+        caught = error;
+      }
+    }
+
+    expect(caught instanceof ExchangeError).toBe(true);
+    expect(closes.length).toBeGreaterThan(0);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBe("long");
+    expect(
+      await Effect.runPromise(
+        repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+      ),
+    ).toHaveLength(0);
   });
 
   it("chop gate blocks entries in a trending market and allows them in chop", async () => {

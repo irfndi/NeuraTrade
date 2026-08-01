@@ -19,21 +19,50 @@ export interface DemoSoakReport {
   readonly failures: readonly string[];
 }
 
+export function serializeDemoSoakReport(report: DemoSoakReport): string {
+  return JSON.stringify({
+    status: report.passed ? "PASS" : "FAIL",
+    passed: report.passed,
+    tradeCount: report.tradeCount,
+    durationDays: report.durationDays,
+    expectancyPct: report.expectancyPct.toString(),
+    profitFactor: report.profitFactor?.toString() ?? null,
+    maximumDrawdownPct: report.maximumDrawdownPct.toString(),
+    failures: report.failures,
+  });
+}
+
 function hasCompleteLiveFillEvidence(trade: GridPaperTrade): boolean {
   return (
     trade.fillSource === "live" &&
+    Number.isFinite(trade.openedAt.getTime()) &&
+    Number.isFinite(trade.closedAt.getTime()) &&
     Boolean(trade.entryOrderId) &&
     Boolean(trade.exitOrderId) &&
     (trade.entryFilledQty?.greaterThan(0) ?? false) &&
+    (trade.entryFilledQty?.isFinite() ?? false) &&
     (trade.exitFilledQty?.greaterThan(0) ?? false) &&
+    (trade.exitFilledQty?.isFinite() ?? false) &&
+    (trade.exitFilledQty?.equals(trade.entryFilledQty ?? money(0)) ?? false) &&
     (trade.entryFee?.greaterThanOrEqualTo(0) ?? false) &&
+    (trade.entryFee?.isFinite() ?? false) &&
     (trade.exitFee?.greaterThanOrEqualTo(0) ?? false) &&
-    trade.realizedPnlPct !== undefined
+    (trade.exitFee?.isFinite() ?? false) &&
+    (trade.realizedPnlPct?.isFinite() ?? false)
   );
 }
 
 function durationDays(trades: readonly GridPaperTrade[]): number {
   if (trades.length === 0) return 0;
+  if (
+    trades.some(
+      (trade) =>
+        !Number.isFinite(trade.openedAt.getTime()) ||
+        !Number.isFinite(trade.closedAt.getTime()),
+    )
+  ) {
+    return 0;
+  }
   const openedAt = Math.min(...trades.map((trade) => trade.openedAt.getTime()));
   const closedAt = Math.max(...trades.map((trade) => trade.closedAt.getTime()));
   return (closedAt - openedAt) / (24 * 60 * 60 * 1000);
