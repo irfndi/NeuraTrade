@@ -31,6 +31,7 @@ type riskGatedLiveExecution struct {
 type liveOrderLookup interface {
 	FetchOrder(context.Context, string, string, string) (*ccxt.OrderResponse, error)
 	FetchBalance(context.Context, string) (*ccxt.BalanceResponse, error)
+	FetchPositions(context.Context, string) (*ccxt.PositionsResponse, error)
 }
 
 func newRiskGatedLiveExecution(

@@ -7,6 +7,7 @@ import {
   type ClosePositionRequest,
   type FuturesExchangeAdapterService,
   type FuturesOrderFill,
+  type FuturesPosition,
   type FuturesOrderRequest,
 } from "../futures-adapter.js";
 import { money } from "../../utils/money.js";
@@ -18,16 +19,16 @@ interface BackendRiskGatedConfig {
   readonly timeoutMs?: number;
 }
 
-const decimalText = z.string().min(1).refine(
-  (value) => {
+const decimalText = z
+  .string()
+  .min(1)
+  .refine((value) => {
     try {
       return money(value).isFinite();
     } catch {
       return false;
     }
-  },
-  "must be a finite decimal",
-);
+  }, "must be a finite decimal");
 
 const orderResponseSchema = z.object({
   intent_id: z.string().min(1),
@@ -40,13 +41,51 @@ const orderResponseSchema = z.object({
   filled_price: decimalText,
   fee: decimalText,
   status: z.string().min(1),
-  timestamp: z.string().refine(
-    (value) => !Number.isNaN(Date.parse(value)),
-    "must be an ISO timestamp",
-  ),
+  timestamp: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      "must be an ISO timestamp",
+    ),
 });
 
 type OrderResponse = z.infer<typeof orderResponseSchema>;
+
+const positionResponseSchema = z.object({
+  id: z.string().min(1),
+  symbol: z.string().min(1),
+  side: z.enum(["long", "short"]),
+  product_type: z.enum(["USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES"]),
+  margin_mode: z.enum(["isolated", "crossed"]),
+  leverage: z.number().int().nonnegative(),
+  quantity: decimalText,
+  available: decimalText,
+  entry_price: decimalText,
+  liquidation_price: decimalText,
+  unrealized_pnl: decimalText,
+  margin_coin: z.string().min(1),
+});
+
+const positionsResponseSchema = z.object({
+  exchange: z.string().min(1),
+  positions: z.array(positionResponseSchema),
+  count: z.number().int().nonnegative(),
+  timestamp: z
+    .string()
+    .refine(
+      (value) => !Number.isNaN(Date.parse(value)),
+      "must be an ISO timestamp",
+    ),
+});
+
+type PositionsResponse = z.infer<typeof positionsResponseSchema>;
+
+function comparableSymbol(symbol: string): string {
+  return symbol
+    .split(":", 1)[0]
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
+}
 
 function makeAdapter(
   config: BackendRiskGatedConfig,
@@ -136,6 +175,96 @@ function makeAdapter(
       return toFill(payload);
     });
 
+  const getPosition = (
+    symbol: string,
+    productType: FuturesOrderRequest["productType"],
+  ) =>
+    Effect.gen(function* () {
+      if (config.apiKey === "" || config.chatId === "") {
+        return yield* Effect.fail(
+          new ExchangeError(
+            "backend live position lookup requires ADMIN_API_KEY and TELEGRAM_CHAT_ID",
+          ),
+        );
+      }
+      const query = new URLSearchParams({
+        exchange: "bitget-futures",
+        product_type: productType,
+      });
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          ky.get(
+            `${baseUrl}/api/v1/execution/futures/positions?${query.toString()}`,
+            {
+              headers: { "X-API-Key": config.apiKey },
+              retry: { limit: 0 },
+              timeout: timeoutMs,
+              throwHttpErrors: false,
+            },
+          ),
+        catch: (error) =>
+          new ExchangeError(
+            `backend live position request failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      });
+      if (!response.ok) {
+        const body = yield* Effect.tryPromise({
+          try: () => response.text(),
+          catch: (error) =>
+            new ExchangeError(
+              `backend live position error response unavailable: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+        });
+        return yield* Effect.fail(
+          new ExchangeError(
+            `backend live position lookup rejected (${response.status}): ${body.slice(0, 240)}`,
+          ),
+        );
+      }
+      const payload: PositionsResponse = yield* Effect.tryPromise({
+        try: async () => {
+          const body: unknown = await response.json();
+          return positionsResponseSchema.parse(body);
+        },
+        catch: (error) =>
+          new ExchangeError(
+            `backend live position response invalid: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      });
+      const activePositions = payload.positions.filter(
+        (position) =>
+          position.product_type === productType &&
+          comparableSymbol(position.symbol) === comparableSymbol(symbol) &&
+          money(position.quantity).greaterThan(0),
+      );
+      if (activePositions.length > 1) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `multiple active ${productType} positions returned for ${symbol}`,
+          ),
+        );
+      }
+      const position = activePositions.at(0);
+      if (!position) {
+        return null;
+      }
+      return {
+        symbol,
+        side: position.side,
+        productType: position.product_type,
+        marginMode: position.margin_mode,
+        leverage: position.leverage,
+        quantity: money(position.quantity),
+        available: money(position.available),
+        entryPrice: money(position.entry_price),
+        liquidationPrice: money(position.liquidation_price).isZero()
+          ? undefined
+          : money(position.liquidation_price),
+        unrealizedPnl: money(position.unrealized_pnl),
+        marginCoin: position.margin_coin,
+      } satisfies FuturesPosition;
+    });
+
   const service: FuturesExchangeAdapterService = {
     placeOrder,
     closePosition: (request: ClosePositionRequest) =>
@@ -150,10 +279,7 @@ function makeAdapter(
         leverage: request.leverage,
         reduceOnly: true,
       }),
-    getPosition: (_symbol, _productType) =>
-      Effect.fail(
-        new ExchangeError("backend live position lookup is unavailable"),
-      ),
+    getPosition,
     getBalance: (_marginCoin, _productType) =>
       Effect.fail(
         new ExchangeError("backend live balance lookup is unavailable"),

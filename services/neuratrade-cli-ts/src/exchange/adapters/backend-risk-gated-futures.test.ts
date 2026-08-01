@@ -50,10 +50,10 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
           throw new Error("expected a JSON object request body");
         }
         requestBody = body as Record<string, string | boolean>;
-        return new Response(
-          JSON.stringify(liveOrderFilledFixture),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify(liveOrderFilledFixture), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       },
     });
 
@@ -84,6 +84,90 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
     expect(requestBody?.intent_id).toBe("intent-1");
     expect(fill.filledQty.toString()).toBe("0.0001234567890123456789");
     expect(fill.fee.toString()).toBe("1e-20");
+  });
+
+  it("reads the exchange position through the backend gate", async () => {
+    let requestedUrl = "";
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        requestedUrl = request.url;
+        return new Response(
+          JSON.stringify({
+            exchange: "bitget",
+            positions: [
+              {
+                id: "position-1",
+                symbol: "BTC/USDT",
+                side: "long",
+                product_type: "USDT-FUTURES",
+                margin_mode: "crossed",
+                leverage: 5,
+                quantity: "0.1",
+                available: "0.1",
+                entry_price: "70000",
+                liquidation_price: "0",
+                unrealized_pnl: "10",
+                margin_coin: "USDT",
+              },
+            ],
+            count: 1,
+            timestamp: "2026-08-02T00:00:00.000Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const position = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(requestedUrl).toContain("/api/v1/execution/futures/positions");
+    expect(requestedUrl).toContain("exchange=bitget-futures");
+    expect(position?.symbol).toBe("BTC/USDT:USDT");
+    expect(position?.quantity.toString()).toBe("0.1");
+    expect(position?.entryPrice.toString()).toBe("70000");
+    expect(position?.liquidationPrice).toBeUndefined();
+  });
+
+  it("returns flat when the backend reports no matching active position", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: async () =>
+        new Response(
+          JSON.stringify({
+            exchange: "bitget",
+            positions: [],
+            count: 0,
+            timestamp: "2026-08-02T00:00:00.000Z",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    });
+
+    const adapterLayer = BackendRiskGatedFuturesExchangeAdapterLive({
+      baseUrl: "http://localhost:8080",
+      apiKey: "admin-key",
+      chatId: "chat-1",
+    });
+    const position = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(position).toBeNull();
   });
 
   it("fails closed when the exchange has not confirmed a fill", async () => {

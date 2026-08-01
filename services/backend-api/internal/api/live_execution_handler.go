@@ -48,6 +48,65 @@ type liveFuturesOrderResponse struct {
 	Timestamp   string `json:"timestamp"`
 }
 
+type liveFuturesPositionResponse struct {
+	ID               string `json:"id"`
+	Symbol           string `json:"symbol"`
+	Side             string `json:"side"`
+	ProductType      string `json:"product_type"`
+	MarginMode       string `json:"margin_mode"`
+	Leverage         int    `json:"leverage"`
+	Quantity         string `json:"quantity"`
+	Available        string `json:"available"`
+	EntryPrice       string `json:"entry_price"`
+	LiquidationPrice string `json:"liquidation_price"`
+	UnrealizedPnl    string `json:"unrealized_pnl"`
+	MarginCoin       string `json:"margin_coin"`
+}
+
+type liveFuturesPositionsResponse struct {
+	Exchange  string                        `json:"exchange"`
+	Positions []liveFuturesPositionResponse `json:"positions"`
+	Count     int                           `json:"count"`
+	Timestamp string                        `json:"timestamp"`
+}
+
+func (e *riskGatedLiveExecution) getFuturesPositions(c *gin.Context) {
+	exchange := liveLookupExchange(c.Query("exchange"))
+	if exchange == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exchange is required"})
+		return
+	}
+	positions, err := e.orderLookup.FetchPositions(c.Request.Context(), exchange)
+	if err != nil || positions == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "live positions unavailable"})
+		return
+	}
+
+	response := liveFuturesPositionsResponse{
+		Exchange:  positions.Exchange,
+		Positions: make([]liveFuturesPositionResponse, 0, len(positions.Positions)),
+		Count:     len(positions.Positions),
+		Timestamp: positions.Timestamp,
+	}
+	for _, position := range positions.Positions {
+		response.Positions = append(response.Positions, liveFuturesPositionResponse{
+			ID:               position.ID,
+			Symbol:           position.Symbol,
+			Side:             position.Side,
+			ProductType:      "USDT-FUTURES",
+			MarginMode:       position.MarginMode,
+			Leverage:         position.Leverage,
+			Quantity:         position.Size.String(),
+			Available:        position.Size.String(),
+			EntryPrice:       position.EntryPrice.String(),
+			LiquidationPrice: position.LiquidationPrice.String(),
+			UnrealizedPnl:    position.UnrealizedPnl.String(),
+			MarginCoin:       "USDT",
+		})
+	}
+	c.JSON(http.StatusOK, response)
+}
+
 func (e *riskGatedLiveExecution) placeFuturesOrder(c *gin.Context) {
 	var request liveFuturesOrderRequest
 	if err := c.ShouldBindJSON(&request); err != nil {

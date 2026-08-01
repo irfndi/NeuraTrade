@@ -1505,6 +1505,7 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 			liveExecutionRoutes.Use(adminMiddleware.RequireAdminAuth())
 			{
 				liveExecutionRoutes.POST("/futures/order", liveExecution.placeFuturesOrder)
+				liveExecutionRoutes.GET("/futures/positions", liveExecution.getFuturesPositions)
 			}
 		}
 

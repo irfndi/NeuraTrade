@@ -47,8 +47,9 @@ func (e *liveExecutionTestExecutor) CancelOrder(context.Context, string, string)
 func (e *liveExecutionTestExecutor) IsPaperTrading() bool { return false }
 
 type liveExecutionTestLookup struct {
-	order ccxt.OrderResponse
-	err   error
+	order     ccxt.OrderResponse
+	positions ccxt.PositionsResponse
+	err       error
 }
 
 func (l liveExecutionTestLookup) FetchOrder(context.Context, string, string, string) (*ccxt.OrderResponse, error) {
@@ -63,6 +64,47 @@ func (liveExecutionTestLookup) FetchBalance(context.Context, string) (*ccxt.Bala
 		Free:  map[string]decimal.Decimal{"USDT": decimal.RequireFromString("1000")},
 		Total: map[string]decimal.Decimal{"USDT": decimal.RequireFromString("1000")},
 	}, nil
+}
+
+func (l liveExecutionTestLookup) FetchPositions(context.Context, string) (*ccxt.PositionsResponse, error) {
+	if l.err != nil {
+		return nil, l.err
+	}
+	return &l.positions, nil
+}
+
+func TestLiveExecutionHTTPReturnsFuturesPositions(t *testing.T) {
+	bridge, _ := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{positions: ccxt.PositionsResponse{
+		Exchange: "bitget",
+		Positions: []ccxt.Position{{
+			ID:            "position-1",
+			Symbol:        "BTC/USDT",
+			Side:          "long",
+			Size:          decimal.RequireFromString("0.1"),
+			EntryPrice:    decimal.RequireFromString("70000"),
+			MarkPrice:     decimal.RequireFromString("70100"),
+			UnrealizedPnl: decimal.RequireFromString("10"),
+			Leverage:      5,
+			MarginMode:    "crossed",
+		}},
+		Count:     1,
+		Timestamp: "2026-08-02T00:00:00Z",
+	}})
+	defer bridge.close()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("GET", "/api/v1/execution/futures/positions?exchange=bitget-futures", nil)
+	bridge.getFuturesPositions(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response liveFuturesPositionsResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "bitget", response.Exchange)
+	require.Len(t, response.Positions, 1)
+	require.Equal(t, "0.1", response.Positions[0].Quantity)
+	require.Equal(t, "USDT-FUTURES", response.Positions[0].ProductType)
 }
 
 func TestLiveExecutionHTTPRejectsOverLimitWithoutCallingExecutor(t *testing.T) {

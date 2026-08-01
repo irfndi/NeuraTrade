@@ -227,6 +227,20 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - This closes a crash/restart and manual-account-change safety gap; it does not
   establish profitability or replace the required exchange demo soak.
 
+## Iteration 11 — backend-gated live position lookup (2026-08-02)
+
+- The TS live grid now reads exchange positions through the backend's existing
+  CCXT `FetchPositions` path via an admin-authenticated read-only endpoint. It
+  no longer fails every live iteration because position lookup was unavailable.
+- The adapter validates the response schema, normalizes `BTC/USDT` and
+  `BTC/USDT:USDT` symbol forms, returns flat state when no matching active
+  position exists, and fails closed on multiple active legs. Go HTTP and TS
+  adapter tests cover the contract.
+- This makes the documented Bitget PAPTRADING command operationally testable,
+  but no demo or real-money order has been placed in this environment because
+  Bitget credentials are not configured. Profitability remains unproven in
+  exchange fills.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
