@@ -442,7 +442,7 @@ export function evaluateRealMoneyReadiness(
       ? ["historical window count is below the minimum"]
       : []),
     ...(h.profitableWindowPct <= thresholds.minimumProfitableWindowPct
-      ? ["profitable historical windows do not exceed 50%"]
+      ? ["profitable historical windows do not exceed the minimum"]
       : []),
     ...(decimalValue(h.compoundedReturnPct) === null
       ? ["historical compounded return is malformed"]

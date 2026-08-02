@@ -117,4 +117,15 @@ describe("deterministic grid validation", () => {
     expect(first.resamples).toBe(5000);
     expect(first.lowerBoundPct).toBeLessThanOrEqual(first.upperBoundPct);
   });
+
+  it("rejects exponent-form values at the bootstrap boundary", () => {
+    expect(() =>
+      bootstrapBlockConfidence(
+        ["1e-3", "2", "3", "4", "5", "6"],
+        20260802,
+        5,
+        10,
+      ),
+    ).toThrow("invalid block-bootstrap input");
+  });
 });

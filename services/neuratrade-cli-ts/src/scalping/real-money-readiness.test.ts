@@ -152,6 +152,48 @@ describe("real-money readiness contract", () => {
     );
   });
 
+  it("applies a strengthened profitable-window threshold", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      thresholdOverrides: { minimumProfitableWindowPct: 75 },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("historical-robustness");
+    expect(
+      result.gates.find((gate) => gate.id === "historical-robustness")?.reasons,
+    ).toContain("profitable historical windows do not exceed the minimum");
+  });
+
+  it("fails execution parity when any required check is missing", () => {
+    const checks = [
+      "trigger-bar",
+      "order-type",
+      "fill-price",
+      "fees",
+      "slippage",
+      "quantity",
+      "exit-reason",
+      "pnl",
+    ];
+
+    for (const missing of checks) {
+      const result = evaluateRealMoneyReadiness({
+        ...passingInput(),
+        executionParity: {
+          ...passingInput().executionParity,
+          checks: checks.filter((check) => check !== missing),
+        },
+      });
+
+      expect(result.status).toBe("FAIL");
+      expect(result.failedGateIds).toContain("execution-parity");
+      expect(
+        result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
+      ).toContain(`execution parity check is missing: ${missing}`);
+    }
+  });
+
   it("changes the fingerprint when an audited manifest field changes", () => {
     const manifest: StrategyManifest = passingInput().manifest;
     const original = fingerprintStrategyManifest(manifest);

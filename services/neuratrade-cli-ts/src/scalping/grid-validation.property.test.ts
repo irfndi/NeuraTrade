@@ -38,4 +38,41 @@ describe("grid validation data-quality properties", () => {
       { numRuns: 10 },
     );
   });
+
+  it("rejects every generated cadence gap", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 96 }), (extraBars) => {
+        const rows: CandleLike[] = [
+          {
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 100,
+            volume: 1,
+            timestamp: new Date("2026-01-01T00:00:00.000Z"),
+          },
+          {
+            open: 100,
+            high: 101,
+            low: 99,
+            close: 100,
+            volume: 1,
+            timestamp: new Date(Date.UTC(2026, 0, 1, 0, 15 * (extraBars + 1))),
+          },
+        ];
+        const result = validateCandleDataQuality(
+          rows,
+          new Date("2026-01-01T12:00:00.000Z"),
+          1,
+          1,
+          0,
+        );
+        expect(result.valid).toBe(false);
+        expect(result.failures).toContain(
+          "candle 1 is not exactly 15m after the previous candle",
+        );
+      }),
+      { numRuns: 25 },
+    );
+  });
 });

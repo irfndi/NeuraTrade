@@ -365,6 +365,24 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   intentionally returns `ERROR` until the additive provenance migration has
   been applied by the writer path; the read-only command does not mutate it.
 
+## Iteration 19 — exhaustive current-candidate sweep (2026-08-02)
+
+- The live database currently contains 70,079 BTC/USDT:USDT 15m candles from
+  2024-08-01 through 2026-08-01. The normal `scalp readiness` command fails six
+  gates on this history: OOS return **−5.75%**, OOS drawdown **34.55%**, PF
+  **1.055**, win rate **36.64%**, Monte Carlo p95 drawdown **165.21%**, and
+  average hold **14.79h**.
+- The exhaustive grid sweep tested 864 configurations at 0.06% fee and 2bp
+  slippage. **Zero** configurations passed all frequency, PF, win-rate, OOS,
+  and drawdown floors. The best in-sample rows had only 2–4 OOS trades and
+  therefore do not qualify as evidence.
+- The fixed-candidate walk-forward remains negative: 6/13 profitable windows,
+  mean window return **−0.41%**. Re-optimizing each window produces aggregate
+  return **−46.92%**.
+- No Bitget credentials are configured and no demo or live order has been
+  attempted. The conclusion remains: **not profitable-proven and not ready for
+  demo/live execution**.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.

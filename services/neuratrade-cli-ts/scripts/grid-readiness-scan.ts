@@ -239,7 +239,7 @@ console.log(
 );
 for (const r of ranked.slice(0, args.top)) {
   console.log(
-    `${r.step.toFixed(2).padStart(5)} ${r.maxGrids.toFixed(1).padStart(6)} ${r.targetRatio.toFixed(2).padStart(5)} ${String(r.onlyWithTrend).padStart(6)} ${String(r.pause).padStart(6)} ${String(r.chopGate).padStart(5)} ${r.tradesPerMonth.toFixed(1).padStart(7)} ${(r.winRate * 100).toFixed(1).padStart(6)} ${r.profitFactor.toFixed(2).padStart(6)} ${r.returnPct.toFixed(2).padStart(8)} ${r.maxDdPct.toFixed(1).padStart(6)} ${r.expPerTrade.toFixed(3).padStart(7)} ${String(r.oosTrades).padStart(6)} ${r.oosReturnPct.toFixed(2).padStart(8)} ${r.oosProfitFactor.toFixed(2).padStart(6)}`,
+    `${r.step.toFixed(2).padStart(5)} ${r.maxGrids.toFixed(1).padStart(6)} ${r.targetRatio.toFixed(2).padStart(5)} ${String(r.onlyWithTrend).padStart(6)} ${String(r.pause).padStart(6)} ${String(r.chopGate).padStart(5)} ${r.tradesPerMonth.toFixed(1).padStart(7)} ${r.winRate.toFixed(1).padStart(6)} ${r.profitFactor.toFixed(2).padStart(6)} ${r.returnPct.toFixed(2).padStart(8)} ${r.maxDdPct.toFixed(1).padStart(6)} ${r.expPerTrade.toFixed(3).padStart(7)} ${String(r.oosTrades).padStart(6)} ${r.oosReturnPct.toFixed(2).padStart(8)} ${r.oosProfitFactor.toFixed(2).padStart(6)}`,
   );
 }
 
@@ -248,7 +248,7 @@ const byIs = [...rows].sort((a, b) => b.returnPct - a.returnPct).slice(0, 5);
 console.log("\nBest by IS return (any floor):");
 for (const r of byIs) {
   console.log(
-    `  step ${r.step} grids ${r.maxGrids} tgtR ${r.targetRatio} trend ${r.onlyWithTrend} pause ${r.pause} gate ${r.chopGate} | tr/mo ${r.tradesPerMonth.toFixed(1)} win ${(r.winRate * 100).toFixed(1)}% PF ${r.profitFactor.toFixed(2)} ret ${r.returnPct.toFixed(2)}% dd ${r.maxDdPct.toFixed(1)}% | oos ${r.oosTrades} ${r.oosReturnPct.toFixed(2)}% PF ${r.oosProfitFactor.toFixed(2)}`,
+    `  step ${r.step} grids ${r.maxGrids} tgtR ${r.targetRatio} trend ${r.onlyWithTrend} pause ${r.pause} gate ${r.chopGate} | tr/mo ${r.tradesPerMonth.toFixed(1)} win ${r.winRate.toFixed(1)}% PF ${r.profitFactor.toFixed(2)} ret ${r.returnPct.toFixed(2)}% dd ${r.maxDdPct.toFixed(1)}% | oos ${r.oosTrades} ${r.oosReturnPct.toFixed(2)}% PF ${r.oosProfitFactor.toFixed(2)}`,
   );
 }
 

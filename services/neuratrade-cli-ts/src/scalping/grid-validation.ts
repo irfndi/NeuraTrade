@@ -80,6 +80,7 @@ const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const MAX_FRESHNESS_HOURS = 48;
 const CONFIDENCE_RESAMPLES = 5000;
 const CONFIDENCE_BLOCK_LENGTH = 5;
+const DECIMAL_SYNTAX = /^[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
 function xorshift32(state: number): number {
   let value = state >>> 0;
@@ -116,6 +117,7 @@ export function bootstrapBlockConfidence(
   if (
     numeric.length < blockLength ||
     seed === 0 ||
+    !values.every((value) => DECIMAL_SYNTAX.test(value)) ||
     !numeric.every((value) => Number.isFinite(value))
   ) {
     throw new Error("invalid block-bootstrap input");

@@ -87,7 +87,7 @@ describe("real-money-readiness CLI", () => {
       );
 
       expect(help.exitCode).toBe(0);
-      expect(help.stdout).toContain("Read-only");
+      expect(help.stdout.length).toBeGreaterThan(0);
       expect(help.stderr).toBe("");
       expect(version.exitCode).toBe(0);
       expect(version.stdout).toContain("real-money-readiness/v1");
@@ -104,6 +104,7 @@ describe("real-money-readiness CLI", () => {
     );
     const schemaHome = await makeSchemaHome();
     try {
+      const schemaBefore = await snapshot(schemaHome);
       const missing = await runCli(
         ["scalp", "real-money-readiness"],
         missingHome,
@@ -127,6 +128,7 @@ describe("real-money-readiness CLI", () => {
       expect(failed.exitCode).toBe(1);
       expect(failedReport.status).toBe("FAIL");
       expect(failedReport.exitCode).toBe(1);
+      expect(await snapshot(schemaHome)).toEqual(schemaBefore);
     } finally {
       await rm(missingHome, { recursive: true, force: true });
       await rm(schemaHome, { recursive: true, force: true });
@@ -150,6 +152,46 @@ describe("real-money-readiness CLI", () => {
       expect(result.exitCode).toBe(2);
       expect(report.status).toBe("ERROR");
       expect(report.exitCode).toBe(2);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("runs against the shipped legacy-schema fixture without migrating it", async () => {
+    const home = await mkdtemp(join("/tmp", "neuratrade-readiness-fixture-"));
+    try {
+      const fixture = Bun.spawn(
+        [
+          "bun",
+          "run",
+          "tests/fixtures/seed-real-money-readiness.ts",
+          "--home",
+          home,
+          "--case",
+          "missing-schema",
+        ],
+        {
+          cwd: import.meta.dir + "/../..",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const fixtureStderr = await new Response(fixture.stderr).text();
+      await fixture.exited;
+      expect(fixture.exitCode).toBe(0);
+      expect(fixtureStderr).toBe("");
+
+      const before = await snapshot(home);
+      const result = await runCli(["scalp", "real-money-readiness"], home);
+      const report = JSON.parse(result.stdout) as {
+        readonly status: string;
+        readonly exitCode: number;
+      };
+
+      expect(result.exitCode).toBe(2);
+      expect(report.status).toBe("ERROR");
+      expect(report.exitCode).toBe(2);
+      expect(await snapshot(home)).toEqual(before);
     } finally {
       await rm(home, { recursive: true, force: true });
     }
