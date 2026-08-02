@@ -383,6 +383,18 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   attempted. The conclusion remains: **not profitable-proven and not ready for
   demo/live execution**.
 
+## Iteration 20 — cross-symbol walk-forward check (2026-08-02)
+
+- ETH 15m, using the research validator's more favorable 0.02% fee and 1bp
+  slippage assumptions, produced only 4/13 profitable fixed windows, mean
+  window return **−3.89%**, worst drawdown **23.89%**, and re-optimized
+  aggregate return **−29.12%**.
+- SOL 15m had 2/5 profitable fixed windows, mean window return **−5.66%**,
+  worst drawdown **18.52%**, and re-optimized aggregate return **−47.95%**.
+- The negative result is therefore not isolated to BTC. These optimistic-cost
+  walk-forwards strengthen the conclusion that no persisted symbol currently
+  has evidence sufficient for a demo or live order.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
