@@ -394,6 +394,10 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
 - The negative result is therefore not isolated to BTC. These optimistic-cost
   walk-forwards strengthen the conclusion that no persisted symbol currently
   has evidence sufficient for a demo or live order.
+- The grid sweep's win-rate floor was also corrected from an accidental `0.5`
+  percentage-point comparison to the intended **50%** comparison. The earlier
+  run already produced zero passes under the weaker floor, so the corrected
+  result remains zero; future sweeps now enforce the intended threshold.
 
 **What is proven (backtest, honest protocol):**
 

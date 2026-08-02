@@ -17,6 +17,11 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runGridBacktest } from "../src/scalping/grid.js";
+import {
+  DEFAULT_GRID_SWEEP_FLOORS,
+  passesGridSweepFloors,
+  type GridSweepRow,
+} from "../src/scalping/grid-sweep.js";
 import type { Candle } from "../src/market-data/types.js";
 
 interface Args {
@@ -128,7 +133,7 @@ const TREND_ONLY = [false, true];
 const PAUSES = [0, 12];
 const CHOP_GATES = [0, 20, 25, 30];
 
-interface Row {
+interface Row extends GridSweepRow {
   step: number;
   maxGrids: number;
   targetRatio: number;
@@ -136,16 +141,11 @@ interface Row {
   pause: number;
   chopGate: number;
   trades: number;
-  tradesPerMonth: number;
-  winRate: number;
-  profitFactor: number;
   returnPct: number;
   maxDdPct: number;
   expPerTrade: number;
-  oosTrades: number;
   oosWinRate: number;
   oosProfitFactor: number;
-  oosReturnPct: number;
 }
 
 const rows: Row[] = [];
@@ -217,14 +217,11 @@ for (const step of STEPS) {
 
 // Readiness-aligned floors for grid (G1 freq, G2 economics, G3 robustness).
 const minPerMonth = args.timeframe === "5m" ? 15 : 10;
-const passing = rows.filter(
-  (r) =>
-    r.tradesPerMonth >= minPerMonth &&
-    r.profitFactor >= 1.3 &&
-    r.winRate >= 0.5 &&
-    r.oosTrades >= 10 &&
-    r.oosReturnPct >= 0 &&
-    r.maxDdPct <= 15,
+const passing = rows.filter((r) =>
+  passesGridSweepFloors(r, {
+    ...DEFAULT_GRID_SWEEP_FLOORS,
+    minimumTradesPerMonth: minPerMonth,
+  }),
 );
 
 const ranked = [...passing].sort(
@@ -271,7 +268,7 @@ await Bun.write(
         floors: {
           tradesPerMonth: minPerMonth,
           profitFactor: 1.3,
-          winRate: 0.5,
+          winRatePct: 50,
           oosTrades: 10,
           oosReturnPct: 0,
           maxDdPct: 15,
