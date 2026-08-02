@@ -9,6 +9,7 @@ export interface DemoSoakThresholds {
   readonly minimumExpectancyPct: Money;
   readonly minimumExpectancyLowerBoundPct?: Money;
   readonly maximumDrawdownPct: Money;
+  readonly confidenceResamples?: number;
 }
 
 export interface DemoSoakReport {
@@ -91,6 +92,7 @@ export function evaluateDemoSoak(
     completeLiveTrades.length > 0
       ? bootstrapMeanConfidenceInterval(
           completeLiveTrades.map((trade) => trade.realizedPnlPct ?? money(0)),
+          { resamples: thresholds.confidenceResamples },
         )
       : undefined;
   const expectancyLowerBoundPct = expectancyConfidence?.lowerBound ?? money(0);

@@ -152,6 +152,19 @@ describe("real-money readiness contract", () => {
     );
   });
 
+  it("rejects a non-finite threshold override", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      thresholdOverrides: { maximumFreshnessHours: Number.NaN },
+    });
+
+    expect(result.status).toBe("ERROR");
+    expect(result.exitCode).toBe(2);
+    expect(result.errors).toContain(
+      "threshold override is malformed: maximumFreshnessHours",
+    );
+  });
+
   it("applies a strengthened profitable-window threshold", () => {
     const result = evaluateRealMoneyReadiness({
       ...passingInput(),
@@ -191,6 +204,64 @@ describe("real-money readiness contract", () => {
       expect(
         result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
       ).toContain(`execution parity check is missing: ${missing}`);
+    }
+  });
+
+  it("fails an inverted confidence interval", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      confidence: {
+        ...passingInput().confidence,
+        lowerBoundPct: "0.2",
+        upperBoundPct: "0.1",
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("confidence");
+    expect(
+      result.gates.find((gate) => gate.id === "confidence")?.reasons,
+    ).toContain("confidence interval is inverted");
+  });
+
+  it("fails non-finite scalar evidence instead of treating it as passing", () => {
+    const cases = [
+      {
+        input: {
+          ...passingInput(),
+          prospectiveEvidence: {
+            ...passingInput().prospectiveEvidence,
+            completeTradeCount: Number.NaN,
+          },
+        },
+        gate: "prospective-evidence" as const,
+      },
+      {
+        input: {
+          ...passingInput(),
+          historicalRobustness: {
+            ...passingInput().historicalRobustness,
+            completeWindows: Number.POSITIVE_INFINITY,
+          },
+        },
+        gate: "historical-robustness" as const,
+      },
+      {
+        input: {
+          ...passingInput(),
+          dataQuality: {
+            ...passingInput().dataQuality,
+            candleCount: Number.NaN,
+          },
+        },
+        gate: "data-quality" as const,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = evaluateRealMoneyReadiness(testCase.input);
+      expect(result.status).toBe("FAIL");
+      expect(result.failedGateIds).toContain(testCase.gate);
     }
   });
 

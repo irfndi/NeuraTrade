@@ -83,6 +83,7 @@ describe("evaluateDemoSoak property coverage", () => {
               minimumDurationDays: 0,
               minimumExpectancyPct: money(-100),
               maximumDrawdownPct: money(100),
+              confidenceResamples: 100,
             },
           );
 
@@ -122,6 +123,7 @@ describe("evaluateDemoSoak property coverage", () => {
             minimumDurationDays: 7,
             minimumExpectancyPct: money(0),
             maximumDrawdownPct: money(15),
+            confidenceResamples: 100,
           });
 
           expect(report.passed).toBe(false);

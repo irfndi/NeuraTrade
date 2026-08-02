@@ -308,7 +308,9 @@ function resolveThresholds(
   >) {
     const requested = thresholds[key];
     const baseline = DEFAULT_READINESS_THRESHOLDS[key];
-    if (
+    if (typeof requested === "number" && !Number.isFinite(requested)) {
+      errors.push(`threshold override is malformed: ${key}`);
+    } else if (
       typeof requested === "number" &&
       typeof baseline === "number" &&
       requested < baseline
@@ -406,6 +408,10 @@ export function evaluateRealMoneyReadiness(
       : Number.POSITIVE_INFINITY;
 
   const prospectiveReasons = [
+    ...(!Number.isFinite(p.completeTradeCount)
+      ? ["demo trade count is malformed"]
+      : []),
+    ...(!Number.isFinite(p.durationDays) ? ["demo duration is malformed"] : []),
     ...(p.completeTradeCount < thresholds.minimumDemoTrades
       ? ["demo trade count is below the minimum"]
       : []),
@@ -438,6 +444,15 @@ export function evaluateRealMoneyReadiness(
       : []),
   ];
   const historicalReasons = [
+    ...(!Number.isFinite(h.completeWindows)
+      ? ["historical window count is malformed"]
+      : []),
+    ...(!Number.isFinite(h.profitableWindowPct)
+      ? ["profitable historical window percentage is malformed"]
+      : []),
+    ...(!Number.isFinite(h.totalTrades)
+      ? ["historical trade count is malformed"]
+      : []),
     ...(h.completeWindows < thresholds.minimumHistoricalWindows
       ? ["historical window count is below the minimum"]
       : []),
@@ -482,6 +497,9 @@ export function evaluateRealMoneyReadiness(
       : []),
     ...(decimalValue(c.upperBoundPct) === null
       ? ["confidence upper bound is malformed"]
+      : []),
+    ...(above(c.lowerBoundPct, c.upperBoundPct)
+      ? ["confidence interval is inverted"]
       : []),
   ];
   const stressReasons = [
@@ -538,6 +556,12 @@ export function evaluateRealMoneyReadiness(
       : []),
   ];
   const dataQualityReasons = [
+    ...(!Number.isFinite(quality.candleCount)
+      ? ["candle count is malformed"]
+      : []),
+    ...(!Number.isFinite(quality.completeWindows)
+      ? ["complete window count is malformed"]
+      : []),
     ...(!quality.valid ? ["candle data-quality validation failed"] : []),
     ...(quality.candleCount === 0 ? ["candle evidence is empty"] : []),
     ...(quality.completeWindows < thresholds.minimumHistoricalWindows
