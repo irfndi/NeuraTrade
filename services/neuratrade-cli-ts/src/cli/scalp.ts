@@ -86,6 +86,7 @@ import {
   evaluateReadiness,
   formatReadinessReport,
 } from "../scalping/readiness.js";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
   buildComposerConfigFromTemplate,
@@ -3266,41 +3267,43 @@ export function validateLiveGridConfiguration(
   config: LiveGridConfiguration,
 ): string | undefined {
   const validatedCandidate =
-    config.exchange === "bitget-futures" &&
-    config.symbol === "BTC/USDT:USDT" &&
-    config.timeframe === "15m" &&
-    config.productType === "USDT-FUTURES" &&
-    config.gridStepPct === 1 &&
-    config.gridMaxGrids === 1.5 &&
-    config.gridPauseAfterLossBars === 12 &&
-    config.feePct === 0.02 &&
-    config.slippageBps === 1 &&
-    config.trendFilterPeriod === 0 &&
-    !config.onlyWithTrend &&
-    config.targetRatio === 1 &&
-    config.chopGateAdx === 30 &&
-    config.leverage === 1;
+    config.exchange === VALIDATED_BTC_GRID_CANDIDATE.exchange &&
+    config.symbol === VALIDATED_BTC_GRID_CANDIDATE.symbol &&
+    config.timeframe === VALIDATED_BTC_GRID_CANDIDATE.timeframe &&
+    config.productType === VALIDATED_BTC_GRID_CANDIDATE.productType &&
+    config.gridStepPct === VALIDATED_BTC_GRID_CANDIDATE.gridStepPct &&
+    config.gridMaxGrids === VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids &&
+    config.gridPauseAfterLossBars ===
+      VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars &&
+    config.feePct === VALIDATED_BTC_GRID_CANDIDATE.feePct &&
+    config.slippageBps === VALIDATED_BTC_GRID_CANDIDATE.slippageBps &&
+    config.trendFilterPeriod ===
+      VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod &&
+    config.onlyWithTrend === VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend &&
+    config.targetRatio === VALIDATED_BTC_GRID_CANDIDATE.targetRatio &&
+    config.chopGateAdx === VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx &&
+    config.leverage === VALIDATED_BTC_GRID_CANDIDATE.leverage;
   if (!validatedCandidate) {
     return "live grid must use the validated BTC 15m grid candidate";
   }
   if (
     !Number.isFinite(config.maxPositionSizePct) ||
     config.maxPositionSizePct <= 0 ||
-    config.maxPositionSizePct > 50
+    config.maxPositionSizePct > VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct
   ) {
     return "live grid max position size must be between 0% and 50%";
   }
   if (
     !Number.isFinite(config.maxDrawdownPct) ||
     config.maxDrawdownPct <= 0 ||
-    config.maxDrawdownPct > 5
+    config.maxDrawdownPct > VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct
   ) {
     return "live grid max drawdown must be between 0% and 5%";
   }
   if (
     !Number.isFinite(config.maxDailyLossPct) ||
     config.maxDailyLossPct <= 0 ||
-    config.maxDailyLossPct > 2
+    config.maxDailyLossPct > VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct
   ) {
     return "live grid max daily loss must be between 0% and 2%";
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "bun:test";
+import { describe, expect, it, afterEach, beforeAll, afterAll } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as nodePath from "path";
@@ -14,6 +14,53 @@ import {
   defaultLocalConfig,
   defaultRuntimeConfig,
 } from "./config.ts";
+
+// ---------------------------------------------------------------------------
+// Environment isolation
+//
+// resolvedConfigEffect applies env overrides on top of file config. Tests must
+// run in a controlled environment — ambient vars from the developer shell or
+// CI (SERVER_PORT, AI_PROVIDER, SQLITE_PATH, …) would otherwise leak into the
+// merge and corrupt expectations. Snapshot the full env once, clear the
+// config-relevant keys for the whole suite, and restore after.
+// ---------------------------------------------------------------------------
+
+const CONFIG_ENV_KEYS = [
+  "SERVER_PORT",
+  "PORT",
+  "BACKEND_HOST_PORT",
+  "DATABASE_DRIVER",
+  "SQLITE_PATH",
+  "REDIS_HOST",
+  "REDIS_PORT",
+  "AI_PROVIDER",
+  "AI_MODEL",
+  "AI_BASE_URL",
+  "ADMIN_API_KEY",
+  "JWT_SECRET",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_CHAT_ID",
+  "AI_API_KEY",
+] as const;
+
+const originalEnv: Record<string, string | undefined> = {};
+let envKeysPresent: string[] = [];
+
+beforeAll(() => {
+  for (const key of CONFIG_ENV_KEYS) {
+    originalEnv[key] = process.env[key];
+    if (process.env[key] !== undefined) envKeysPresent.push(key);
+    delete process.env[key];
+  }
+});
+
+afterAll(() => {
+  // Restore only what was present before this suite ran.
+  for (const key of envKeysPresent) process.env[key] = originalEnv[key];
+  for (const key of CONFIG_ENV_KEYS) {
+    if (!envKeysPresent.includes(key)) delete process.env[key];
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,10 +91,10 @@ function writeJson(filePath: string, data: unknown): void {
 // ---------------------------------------------------------------------------
 
 describe("Config service", () => {
-  const originalEnv = { ...process.env };
-
   afterEach(() => {
-    process.env = { ...originalEnv };
+    // Reset to the suite-cleaned baseline (env vars the tests themselves set
+    // are removed; ambient developer/CI vars stay excluded).
+    for (const key of CONFIG_ENV_KEYS) delete process.env[key];
   });
 
   // -----------------------------------------------------------------------

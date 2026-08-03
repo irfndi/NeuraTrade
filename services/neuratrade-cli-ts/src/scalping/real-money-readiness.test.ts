@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
   DEFAULT_READINESS_THRESHOLDS,
+  DEFAULT_STRATEGY_MANIFEST,
   READINESS_GATE_IDS,
   READINESS_SCHEMA_VERSION,
   evaluateRealMoneyReadiness,
   fingerprintStrategyManifest,
+  serializeRealMoneyReadiness,
   type RealMoneyReadinessInput,
   type StrategyManifest,
 } from "./real-money-readiness.js";
@@ -83,7 +85,7 @@ function passingInput(): RealMoneyReadinessInput {
       positionFraction: "0.5",
       feePct: "0.06",
       slippageBps: "2",
-      trendFilterPeriod: "96",
+      trendFilterPeriod: "0",
       adxGate: "30",
       orderType: "market-after-trigger",
       triggerTiming: "next-bar",
@@ -103,6 +105,14 @@ describe("real-money readiness contract", () => {
     expect(first.schemaVersion).toBe(READINESS_SCHEMA_VERSION);
     expect(first.gates.map((gate) => gate.id)).toEqual([...READINESS_GATE_IDS]);
     expect(first.thresholds).toEqual(DEFAULT_READINESS_THRESHOLDS);
+  });
+
+  it("uses market execution assumptions for the validated BTC candidate", () => {
+    expect(DEFAULT_STRATEGY_MANIFEST).toMatchObject({
+      feePct: "0.06",
+      slippageBps: "2",
+      trendFilterPeriod: "0",
+    });
   });
 
   it("fails closed on missing, unsafe, and mismatched evidence", () => {
@@ -286,7 +296,7 @@ describe("real-money readiness contract", () => {
       orderType: manifest.orderType,
       triggerTiming: manifest.triggerTiming,
       adxGate: "30.0",
-      trendFilterPeriod: "96.00",
+      trendFilterPeriod: "0.00",
       slippageBps: "+2",
       feePct: "0.0600",
       positionFraction: "0.500",
@@ -302,5 +312,191 @@ describe("real-money readiness contract", () => {
     expect(fingerprintStrategyManifest(reordered)).toBe(
       fingerprintStrategyManifest(manifest),
     );
+  });
+
+  it("rejects a string threshold override that weakens a default", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      thresholdOverrides: { maximumHistoricalDrawdownPct: "20" },
+    });
+
+    expect(result.status).toBe("ERROR");
+    expect(result.exitCode).toBe(2);
+    expect(result.errors).toContain(
+      "threshold override weakens maximumHistoricalDrawdownPct",
+    );
+  });
+
+  it("rejects a malformed string threshold override", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      thresholdOverrides: { minimumDemoExpectancyPct: "not-a-number" },
+    });
+
+    expect(result.status).toBe("ERROR");
+    expect(result.exitCode).toBe(2);
+    expect(result.errors).toContain(
+      "threshold override is malformed: minimumDemoExpectancyPct",
+    );
+  });
+
+  it("accepts a strengthened threshold override", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      thresholdOverrides: { minimumHistoricalWindows: 11 },
+    });
+
+    expect(result.status).toBe("PASS");
+    expect(result.thresholds.minimumHistoricalWindows).toBe(11);
+  });
+
+  it("reports ERROR when the manifest contains a non-finite value", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      manifest: {
+        ...passingInput().manifest,
+        feePct: "NaN",
+      },
+    });
+
+    expect(result.status).toBe("ERROR");
+    expect(result.exitCode).toBe(2);
+    expect(result.errors[0]).toContain("manifest is invalid");
+  });
+
+  it("reports ERROR when the manifest contains a non-decimal value", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      manifest: {
+        ...passingInput().manifest,
+        feePct: "0.06e3",
+      },
+    });
+
+    expect(result.status).toBe("ERROR");
+    expect(result.exitCode).toBe(2);
+    expect(result.errors[0]).toContain("manifest is invalid");
+  });
+
+  it("serializes a report to JSON and round-trips it", () => {
+    const report = evaluateRealMoneyReadiness(passingInput());
+
+    const serialized = serializeRealMoneyReadiness(report);
+    const parsed = JSON.parse(serialized) as {
+      readonly status: string;
+      readonly exitCode: number;
+    };
+
+    expect(serialized).toBe(JSON.stringify(report));
+    expect(parsed.status).toBe("PASS");
+    expect(parsed.exitCode).toBe(0);
+  });
+
+  it("fails the freshness gate when the latest candle is stale", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      dataQuality: {
+        ...passingInput().dataQuality,
+        latestCandle: "2026-07-01T00:00:00.000Z",
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("freshness");
+  });
+
+  it("fails the freshness gate when the latest candle is in the future", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      dataQuality: {
+        ...passingInput().dataQuality,
+        latestCandle: "2026-08-03T00:00:00.000Z",
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("freshness");
+  });
+
+  it("fails when the demo trade count exceeds the trades with live fills", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      prospectiveEvidence: {
+        ...passingInput().prospectiveEvidence,
+        allTradesHaveLiveFillEvidence: false,
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("prospective-evidence");
+    expect(
+      result.gates.find((gate) => gate.id === "prospective-evidence")?.reasons,
+    ).toContain("one or more demo trades lack complete live fill evidence");
+  });
+
+  it("fails the provenance gate on a cohort query truncation", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      provenance: {
+        ...passingInput().provenance,
+        queriedRows: 40,
+        expectedRows: 60,
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("provenance");
+    expect(
+      result.gates.find((gate) => gate.id === "provenance")?.reasons,
+    ).toContain("cohort query was truncated");
+  });
+
+  it("fails the provenance gate when the candidate lock is after the cutoff", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      provenance: {
+        ...passingInput().provenance,
+        candidateLock: "2026-08-01T00:00:00.000Z",
+        datasetCutoff: "2026-07-31T23:45:00.000Z",
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("provenance");
+    expect(
+      result.gates.find((gate) => gate.id === "provenance")?.reasons,
+    ).toContain("candidate lock is after dataset cutoff");
+  });
+
+  it("fails the provenance gate when a close is after the evaluation time", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      provenance: {
+        ...passingInput().provenance,
+        latestClose: "2026-08-03T00:00:00.000Z",
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("provenance");
+    expect(
+      result.gates.find((gate) => gate.id === "provenance")?.reasons,
+    ).toContain("close is after evaluation time");
+  });
+
+  it("fails the stress gate when an adverse seed set is incomplete", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      stress: {
+        ...passingInput().stress,
+        seeds: [20260802],
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("stress");
+    expect(
+      result.gates.find((gate) => gate.id === "stress")?.reasons,
+    ).toContain("adverse stress seed set is incomplete");
   });
 });

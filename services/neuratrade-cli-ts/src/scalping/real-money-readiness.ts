@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "./grid-candidate.js";
 
 export const READINESS_SCHEMA_VERSION = "real-money-readiness/v1" as const;
 
@@ -77,16 +78,20 @@ export interface StrategyManifest {
 export const DEFAULT_STRATEGY_MANIFEST = {
   schema: READINESS_SCHEMA_VERSION,
   exchange: "bitget-demo",
-  symbol: "BTC/USDT:USDT",
-  timeframe: "15m",
-  gridStepPct: "1",
-  gridMaxGrids: "1.5",
-  gridPauseAfterLossBars: "12",
-  positionFraction: "0.5",
-  feePct: "0.06",
-  slippageBps: "2",
-  trendFilterPeriod: "96",
-  adxGate: "30",
+  symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+  timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+  gridStepPct: String(VALIDATED_BTC_GRID_CANDIDATE.gridStepPct),
+  gridMaxGrids: String(VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids),
+  gridPauseAfterLossBars: String(
+    VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+  ),
+  positionFraction: String(
+    VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct / 100,
+  ),
+  feePct: String(VALIDATED_BTC_GRID_CANDIDATE.feePct),
+  slippageBps: String(VALIDATED_BTC_GRID_CANDIDATE.slippageBps),
+  trendFilterPeriod: String(VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod),
+  adxGate: String(VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx),
   orderType: "market-after-trigger",
   triggerTiming: "next-bar",
   engineVersion: "grid-engine/v1",

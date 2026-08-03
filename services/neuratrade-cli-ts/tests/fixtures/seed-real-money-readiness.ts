@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
+import { Effect } from "effect";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { PaperTradingRepositorySQLite } from "../../src/paper-trading/repository.js";
 
-type FixtureCase = "pass" | "fail" | "missing-schema";
+type FixtureCase = "pass" | "fail" | "missing-schema" | "migrated-schema";
 
 function optionValue(argv: readonly string[], name: string): string | null {
   const index = argv.indexOf(name);
@@ -33,6 +35,29 @@ function schemaSql(): string {
   `;
 }
 
+function legacySchemaSql(): string {
+  return `
+    CREATE TABLE exchanges (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE trading_pairs (id INTEGER PRIMARY KEY, symbol TEXT NOT NULL);
+    CREATE TABLE ohlcv_data (
+      exchange_id INTEGER NOT NULL, trading_pair_id INTEGER NOT NULL,
+      timeframe TEXT NOT NULL, open_price REAL NOT NULL, high_price REAL NOT NULL,
+      low_price REAL NOT NULL, close_price REAL NOT NULL, volume REAL NOT NULL,
+      timestamp DATETIME NOT NULL
+    );
+    CREATE TABLE grid_paper_trades (
+      id TEXT PRIMARY KEY, exchange TEXT NOT NULL, symbol TEXT NOT NULL,
+      timeframe TEXT NOT NULL, side TEXT NOT NULL,
+      entry_price REAL NOT NULL, exit_price REAL NOT NULL,
+      capital_before REAL NOT NULL, capital_after REAL NOT NULL,
+      pnl_pct REAL NOT NULL, exit_reason TEXT NOT NULL,
+      opened_at DATETIME NOT NULL, closed_at DATETIME NOT NULL
+    );
+    INSERT INTO exchanges VALUES (1, 'bitget-futures');
+    INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
+  `;
+}
+
 async function main(): Promise<void> {
   const home = optionValue(process.argv.slice(2), "--home");
   const fixtureCase = optionValue(
@@ -42,7 +67,9 @@ async function main(): Promise<void> {
   if (home === null || fixtureCase === null) {
     throw new Error("--home and --case are required");
   }
-  if (!["pass", "fail", "missing-schema"].includes(fixtureCase)) {
+  if (
+    !["pass", "fail", "missing-schema", "migrated-schema"].includes(fixtureCase)
+  ) {
     throw new Error(`unsupported fixture case: ${fixtureCase}`);
   }
   const dataDir = join(home, "data");
@@ -50,6 +77,10 @@ async function main(): Promise<void> {
   const db = new Database(join(dataDir, "neuratrade.db"));
   if (fixtureCase === "missing-schema") {
     db.exec("CREATE TABLE legacy_fixture (id INTEGER PRIMARY KEY)");
+  } else if (fixtureCase === "migrated-schema") {
+    db.exec(legacySchemaSql());
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
   } else {
     db.exec(schemaSql());
   }

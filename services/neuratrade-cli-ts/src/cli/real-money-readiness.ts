@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CandleLike } from "../scalping/types.js";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   bootstrapBlockConfidence,
   READINESS_STRESS_SEEDS,
@@ -301,16 +302,17 @@ function buildInput(
   const grid = validateGridEvidence(candles, {
     now,
     grid: {
-      gridStepPct: 1,
-      gridMaxGrids: 1.5,
-      gridPauseAfterLossBars: 12,
-      feePct: 0.06,
-      slippageBps: 2,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
       initialCapital: 100,
-      trendFilterPeriod: 96,
-      leverage: 1,
-      positionFraction: 0.5,
-      chopGateAdxThreshold: 30,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      positionFraction: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct / 100,
+      chopGateAdxThreshold: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
     },
     executionParityPassed: parityPassed,
   });
