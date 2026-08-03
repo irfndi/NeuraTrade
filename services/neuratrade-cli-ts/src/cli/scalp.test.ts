@@ -96,6 +96,89 @@ describe("live execution market guard", () => {
     expect(
       validateLiveGridConfiguration({ ...config, maxPositionSizePct: 51 }),
     ).toContain("50%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxPositionSizePct: 0 }),
+    ).toContain("between 0% and 50%");
+  });
+
+  it("rejects any drift from the audited candidate fields", () => {
+    const config = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      productType: "USDT-FUTURES",
+      gridStepPct: 1,
+      gridMaxGrids: 1.5,
+      gridPauseAfterLossBars: 12,
+      feePct: 0.06,
+      slippageBps: 2,
+      trendFilterPeriod: 0,
+      onlyWithTrend: false,
+      targetRatio: 1,
+      chopGateAdx: 30,
+      leverage: 1,
+      maxPositionSizePct: 50,
+      maxDrawdownPct: 5,
+      maxDailyLossPct: 2,
+    };
+
+    const drifts: Array<Partial<typeof config>> = [
+      { exchange: "binance" },
+      { symbol: "ETH/USDT:USDT" },
+      { timeframe: "5m" },
+      { productType: "SPOT" },
+      { gridStepPct: 0.5 },
+      { gridMaxGrids: 3 },
+      { gridPauseAfterLossBars: 0 },
+      { feePct: 0.02 },
+      { slippageBps: 1 },
+      { trendFilterPeriod: 96 },
+      { onlyWithTrend: true },
+      { targetRatio: 1.5 },
+      { chopGateAdx: 20 },
+      { leverage: 2 },
+    ];
+
+    for (const drift of drifts) {
+      expect(validateLiveGridConfiguration({ ...config, ...drift })).toContain(
+        "validated BTC 15m grid",
+      );
+    }
+  });
+
+  it("enforces the live drawdown and daily-loss risk caps", () => {
+    const config = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      productType: "USDT-FUTURES",
+      gridStepPct: 1,
+      gridMaxGrids: 1.5,
+      gridPauseAfterLossBars: 12,
+      feePct: 0.06,
+      slippageBps: 2,
+      trendFilterPeriod: 0,
+      onlyWithTrend: false,
+      targetRatio: 1,
+      chopGateAdx: 30,
+      leverage: 1,
+      maxPositionSizePct: 50,
+      maxDrawdownPct: 5,
+      maxDailyLossPct: 2,
+    };
+
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDrawdownPct: 5.1 }),
+    ).toContain("max drawdown must be between 0% and 5%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDrawdownPct: -1 }),
+    ).toContain("max drawdown must be between 0% and 5%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDailyLossPct: 2.1 }),
+    ).toContain("max daily loss must be between 0% and 2%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDailyLossPct: Number.NaN }),
+    ).toContain("max daily loss must be between 0% and 2%");
   });
 
   it("disables the directional multi-symbol live soak surface", () => {
