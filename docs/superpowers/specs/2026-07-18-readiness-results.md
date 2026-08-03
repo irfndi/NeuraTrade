@@ -399,6 +399,28 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   run already produced zero passes under the weaker floor, so the corrected
   result remains zero; future sweeps now enforce the intended threshold.
 
+## Iteration 21 — re-run audit on current data (2026-08-03)
+
+- Re-ran the exhaustive grid sweep (`scripts/grid-readiness-scan.ts`, 864
+  configs) on the full 70,079-candle BTC 15m history at the audited taker
+  costs (0.06% fee, 2bp slippage): **0/864 pass** the frequency, PF, win-rate,
+  OOS, and drawdown floors. The best IS rows have only 2–4 OOS trades — not
+  evidence. (Output: `/tmp/sweep-btc-15m-taker.json`.)
+- Re-ran the statistical validator (`scripts/grid-statistical-validation.ts`)
+  on BTC and ETH:
+  - BTC fixed-candidate OOS (54 trades): optimistic **+14.67%**, PF **1.61**,
+    expectancy **+0.260%/trade**, but 95% bootstrap interval **−0.060% to
+    +0.536%** (lower bound still negative); taker-stop **+13.97%**, PF 1.57,
+    interval **−0.076% to +0.529%**; adverse-maker **−1.41%**, PF 0.96. Latest
+    30-day tail **−0.28%**, 5 trades, PF **0.92**.
+  - ETH fixed-candidate OOS (117 trades): optimistic **+18.21%**, PF **1.25**,
+    interval **−0.131% to +0.414%**; taker-stop PF 1.23, interval **−0.145% to
+    +0.441%**; latest 30-day tail **−2.28%**, PF **0.87**.
+- No demo or live order was placed; no credentials are configured. The verdict
+  is unchanged: **not profitable-proven**. Both candidates' confidence lower
+  bounds cross zero and their recent tails are negative. The live demo soak
+  remains the decisive, still-blocked experiment.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
