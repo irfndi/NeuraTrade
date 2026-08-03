@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { BacktestResult } from "../scalping/backtest.js";
 import { applyPreset } from "../scalping/presets.js";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   buildStrategyProfileFromArgs,
   type ResolvedBacktestArgs,
@@ -31,6 +32,7 @@ import {
   validateLiveSoakExecution,
   walkForwardCommand,
   buildValidateBacktestArgs,
+  type LiveGridConfiguration,
   type OptimizeArgs,
   type OptimizeCandidateParams,
   type OptimizeResult,
@@ -70,23 +72,24 @@ describe("live execution market guard", () => {
 
   it("accepts only the validated BTC grid profile for live execution", () => {
     const config = {
-      exchange: "bitget-futures",
-      symbol: "BTC/USDT:USDT",
-      timeframe: "15m",
-      productType: "USDT-FUTURES",
-      gridStepPct: 1,
-      gridMaxGrids: 1.5,
-      gridPauseAfterLossBars: 12,
-      feePct: 0.06,
-      slippageBps: 2,
-      trendFilterPeriod: 0,
-      onlyWithTrend: false,
-      targetRatio: 1,
-      chopGateAdx: 30,
-      leverage: 1,
-      maxPositionSizePct: 50,
-      maxDrawdownPct: 5,
-      maxDailyLossPct: 2,
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
     };
 
     expect(validateLiveGridConfiguration(config)).toBeUndefined();
@@ -103,38 +106,39 @@ describe("live execution market guard", () => {
 
   it("rejects any drift from the audited candidate fields", () => {
     const config = {
-      exchange: "bitget-futures",
-      symbol: "BTC/USDT:USDT",
-      timeframe: "15m",
-      productType: "USDT-FUTURES",
-      gridStepPct: 1,
-      gridMaxGrids: 1.5,
-      gridPauseAfterLossBars: 12,
-      feePct: 0.06,
-      slippageBps: 2,
-      trendFilterPeriod: 0,
-      onlyWithTrend: false,
-      targetRatio: 1,
-      chopGateAdx: 30,
-      leverage: 1,
-      maxPositionSizePct: 50,
-      maxDrawdownPct: 5,
-      maxDailyLossPct: 2,
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
     };
 
-    const drifts: Array<Partial<typeof config>> = [
+    const drifts: Array<Partial<LiveGridConfiguration>> = [
       { exchange: "binance" },
       { symbol: "ETH/USDT:USDT" },
       { timeframe: "5m" },
       { productType: "SPOT" },
       { gridStepPct: 0.5 },
-      { gridMaxGrids: 3 },
+      { gridMaxGrids: 1.5 },
       { gridPauseAfterLossBars: 0 },
       { feePct: 0.02 },
       { slippageBps: 1 },
       { trendFilterPeriod: 96 },
       { onlyWithTrend: true },
-      { targetRatio: 1.5 },
+      { targetRatio: 1 },
       { chopGateAdx: 20 },
       { leverage: 2 },
     ];
@@ -148,23 +152,24 @@ describe("live execution market guard", () => {
 
   it("enforces the live drawdown and daily-loss risk caps", () => {
     const config = {
-      exchange: "bitget-futures",
-      symbol: "BTC/USDT:USDT",
-      timeframe: "15m",
-      productType: "USDT-FUTURES",
-      gridStepPct: 1,
-      gridMaxGrids: 1.5,
-      gridPauseAfterLossBars: 12,
-      feePct: 0.06,
-      slippageBps: 2,
-      trendFilterPeriod: 0,
-      onlyWithTrend: false,
-      targetRatio: 1,
-      chopGateAdx: 30,
-      leverage: 1,
-      maxPositionSizePct: 50,
-      maxDrawdownPct: 5,
-      maxDailyLossPct: 2,
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
     };
 
     expect(

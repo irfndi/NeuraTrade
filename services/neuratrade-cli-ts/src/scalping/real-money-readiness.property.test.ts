@@ -79,7 +79,7 @@ function baseInput(): RealMoneyReadinessInput {
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       gridStepPct: "1",
-      gridMaxGrids: "1.5",
+      gridMaxGrids: "1",
       gridPauseAfterLossBars: "12",
       positionFraction: "0.5",
       feePct: "0.06",

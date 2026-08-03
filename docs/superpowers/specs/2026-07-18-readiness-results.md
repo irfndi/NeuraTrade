@@ -468,10 +468,34 @@ selection stress, backtesting has exhausted its ability to find a profitable
 configuration. The remaining — and only — way to establish profitability is
 the Bitget demo soak with real fills, which is blocked on demo credentials.
 
+## Iteration 24 — candidate re-selection and pure-TS demo soak (2026-08-03)
+
+- **Candidate change.** The demo soak was re-pointed at a structurally better
+  grid config found by a focused parameter search: `step 1%, grids 1, 3:1
+  target, pause 12, ADX 30 gate` (was `grids 1.5, 1:1 target`). The 3:1
+  reward structure (wins ~3x losses, ~28% win rate) is the only config in the
+  searched space profitable on **both** the IS slice (+16.1%, PF 1.11) and the
+  OOS slice (+8.5%, PF 1.26). The old 1:1 candidate was negative in IS
+  (−26.76%) — its per-trade edge was identical to OOS but the win rate was
+  regime-dependent (57% vs 72%).
+- **Honest caveat.** The new candidate still fails the adverse-selection stress
+  (fp=0.7 adverse → −8.55% OOS, PF 0.78) and is 6/13 profitable on rolling
+  45-day windows (mean +1.04%/window, better than the old −0.41%). It is the
+  best config the two-year dataset supports, not a proven edge.
+- **Pure-TS execution.** `scalp paper-trade --live` now uses the TypeScript
+  `BitgetFuturesExchangeAdapterLive` (order-safety + position-reconciliation
+  guards) instead of the Go backend-gated adapter. The demo soak therefore
+  runs entirely in TypeScript with no backend dependency. Fixed two bugs:
+  `--iterations 0` never looped (condition `remaining !== 0` excluded the
+  infinite sentinel) and skipped its inter-iteration sleep in infinite mode.
+- **Demo soak running under pm2** (`neuratrade-demo-soak`, 15-min cadence,
+  `pm2 save` for boot persistence) on the Bitget PAPTRADING demo account (50
+  USDT, conservative 50% position fraction, taker-cost config). First fills
+  will be evaluated with `scalp demo-readiness` after ≥ 7 days / ≥ 50 trades.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
-- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the strongest candidate but is **not robust**: on the full two-year history its OOS slice is positive (+14.67%, PF 1.61) while its IS slice is strongly negative (−26.76%, PF 0.82), its 95% OOS confidence interval crosses zero, and only 6/13 rolling windows are profitable. The OOS positivity is a recent-regime artifact.
 - The ETH gated grid also has a positive historical point estimate, but its
   confidence interval crosses zero and its current tail misses the PF gate;
   it is not approved for live execution. The live CLI deliberately permits
@@ -534,10 +558,10 @@ partial closes cannot satisfy the live-fill evidence requirement.
 ```bash
 bun run index.ts scalp paper-trade \
   --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m --futures --live \
-  --strategy-type grid --grid-step-pct 1 --grid-max-grids 1.5 \
-  --grid-pause-after-loss-bars 12 --chop-gate-adx 30 --target-ratio 1 \
+  --strategy-type grid --grid-step-pct 1 --grid-max-grids 1 \
+  --grid-pause-after-loss-bars 12 --chop-gate-adx 30 --target-ratio 3 \
   --trend-filter-period 0 --fee 0.06 --slippage-bps 2 --leverage 1 \
-  --capital 10000 --max-position-size-pct 50 \
+  --capital 50 --max-position-size-pct 50 \
   --max-drawdown-pct 5 --max-daily-loss-pct 2 \
   --iterations 0 --interval 900
 ```
