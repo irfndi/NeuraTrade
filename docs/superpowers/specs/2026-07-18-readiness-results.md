@@ -454,7 +454,7 @@ full 70,079-candle BTC 15m history. Full output saved to
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
-- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the strongest candidate. It has a positive point estimate, but the extended 54-trade OOS confidence interval still crosses zero and rolling-window performance is inconsistent.
+- The **chop-gated BTC 15m grid** (`step 1%, grids 1.5, targetRatio 1.0, pause-after-loss 12, ADX chop-gate 30, maker 0.02%/side, 1bp slip, leverage 1`) is the strongest candidate but is **not robust**: on the full two-year history its OOS slice is positive (+14.67%, PF 1.61) while its IS slice is strongly negative (−26.76%, PF 0.82), its 95% OOS confidence interval crosses zero, and only 6/13 rolling windows are profitable. The OOS positivity is a recent-regime artifact.
 - The ETH gated grid also has a positive historical point estimate, but its
   confidence interval crosses zero and its current tail misses the PF gate;
   it is not approved for live execution. The live CLI deliberately permits
@@ -463,8 +463,9 @@ full 70,079-candle BTC 15m history. Full output saved to
 
 **What is NOT proven:**
 
-- **Adverse-selection magnitude in real fills.** The extended BTC result remains positive under symmetric slippage and taker-stop fees, but the 70% adverse-maker model is negative (PF 0.96), and only 6/13 rolling windows are profitable at 1bp. Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
+- **Adverse-selection magnitude in real fills.** The extended BTC OOS result stays positive under symmetric slippage and taker-stop fees, but the 70% adverse-maker model is negative (PF 0.96) and only 4/13 windows are profitable, while the 50% adverse model is +7.06% OOS but only 3/13 windows. Whether real Bitget maker fills behave like the benign rows or the adverse rows is the **single decisive unknown**, and only live order fills reveal it.
 - **Statistical confirmation of the optimistic OOS estimate.** The 95% bootstrap lower bound remains negative even after extending to 54 BTC trades and 117 ETH trades. A qualifying demo sample is needed before calling the edge proven.
+- **In-sample robustness on the extended history.** The winner's IS slice is −26.76% on the full two-year window, so the positive OOS slice alone is not a stable edge.
 - **Current-tail profitability.** BTC's latest 30-day sample remains negative in the statistical validator (five trades); ETH's extended-data tail is also negative (20 trades). These are warnings, not a basis for a real-money order.
 
 **Recommendation:**
