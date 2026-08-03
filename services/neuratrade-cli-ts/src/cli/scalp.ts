@@ -39,10 +39,8 @@ import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-reposito
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
-import {
-  BackendRiskGatedFuturesExchangeAdapterLive,
-  backendRiskGatedFuturesConfigFromEnv,
-} from "../exchange/adapters/backend-risk-gated-futures.js";
+import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
+import { BitgetClientLiveConfig } from "../services/bitget-client.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -3571,11 +3569,15 @@ function paperTradeProgram(args: PaperTradeArgs) {
           apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
         })
       : SimulatedExchangeAdapterLive();
-    const futuresAdapterLayer = args.live
-      ? BackendRiskGatedFuturesExchangeAdapterLive(
-          backendRiskGatedFuturesConfigFromEnv(),
+    const futuresAdapterLayer = (args.live
+      ? BitgetFuturesExchangeAdapterLive.pipe(
+          Layer.provide(BitgetClientLiveConfig),
         )
-      : SimulatedFuturesExchangeAdapterLive();
+      : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+      import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+      never,
+      import("../market-data/gateway.js").MarketDataGatewayService
+    >;
 
     const runSpotIteration = (
       opts: PaperTradingOptions,
@@ -3615,10 +3617,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
       ) as Effect.Effect<GridPaperTradingIterationResult, never, never>;
 
     let remaining = args.iterations;
-    while (remaining !== 0) {
+    // iterations=0 means run forever.
+    while (args.iterations === 0 || remaining !== 0) {
       if (entries) {
         for (const entry of entries) {
-          if (remaining === 0) break;
+          if (remaining === 0 && args.iterations !== 0) break;
           const entryExchange = entry.exchange ?? args.exchange;
           const result =
             args.strategyType === "grid"
@@ -3650,7 +3653,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
             remaining -= 1;
           }
 
-          if (remaining !== 0) {
+          // Sleep between iterations: always in infinite mode (0), otherwise
+          // after every iteration except the final one.
+          if (args.iterations === 0 || remaining !== 0) {
             yield* Effect.sleep(`${args.interval} seconds`);
           }
         }
@@ -3675,7 +3680,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
           remaining -= 1;
         }
 
-        if (remaining !== 0) {
+        // Sleep between iterations: always in infinite mode (0), otherwise
+        // after every iteration except the final one.
+        if (args.iterations === 0 || remaining !== 0) {
           yield* Effect.sleep(`${args.interval} seconds`);
         }
       }
@@ -3926,11 +3933,15 @@ export const soakCommand = Command.make(
               mergedArgs.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
-      const futuresAdapterLayer = mergedArgs.live
-        ? BackendRiskGatedFuturesExchangeAdapterLive(
-            backendRiskGatedFuturesConfigFromEnv(),
+      const futuresAdapterLayer = (mergedArgs.live
+        ? BitgetFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BitgetClientLiveConfig),
           )
-        : SimulatedFuturesExchangeAdapterLive();
+        : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+        import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+        never,
+        import("../market-data/gateway.js").MarketDataGatewayService
+      >;
 
       const composerConfig = buildBacktestComposerConfig(
         mergedArgs.priceOnly,
