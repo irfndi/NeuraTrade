@@ -69,6 +69,8 @@ export interface StrategyManifest {
   readonly slippageBps: string;
   readonly trendFilterPeriod: string;
   readonly adxGate: string;
+  readonly targetRatio: string;
+  readonly onlyWithTrend: string;
   readonly orderType: string;
   readonly triggerTiming: string;
   readonly engineVersion: string;
@@ -92,6 +94,8 @@ export const DEFAULT_STRATEGY_MANIFEST = {
   slippageBps: String(VALIDATED_BTC_GRID_CANDIDATE.slippageBps),
   trendFilterPeriod: String(VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod),
   adxGate: String(VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx),
+  targetRatio: String(VALIDATED_BTC_GRID_CANDIDATE.targetRatio),
+  onlyWithTrend: String(VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend),
   orderType: "market-after-trigger",
   triggerTiming: "next-bar",
   engineVersion: "grid-engine/v1",
@@ -265,7 +269,8 @@ export function canonicalizeStrategyManifest(
       key === "symbol" ||
       key === "timeframe" ||
       key === "orderType" ||
-      key === "triggerTiming"
+      key === "triggerTiming" ||
+      key === "onlyWithTrend"
         ? value
         : normalizeDecimal(value);
   }

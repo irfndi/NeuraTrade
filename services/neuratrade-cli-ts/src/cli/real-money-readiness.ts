@@ -313,6 +313,8 @@ function buildInput(
       leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
       positionFraction: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct / 100,
       chopGateAdxThreshold: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
     },
     executionParityPassed: parityPassed,
   });
