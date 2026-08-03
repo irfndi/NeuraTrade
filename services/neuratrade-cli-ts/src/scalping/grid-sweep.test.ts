@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import {
   DEFAULT_GRID_SWEEP_FLOORS,
   passesGridSweepFloors,
+  type GridSweepFloors,
   type GridSweepRow,
 } from "./grid-sweep.js";
 
@@ -13,6 +15,24 @@ const passingRow: GridSweepRow = {
   oosReturnPct: 0,
   maxDdPct: 15,
 };
+
+const rowArbitrary = fc.record<GridSweepRow>({
+  tradesPerMonth: fc.double({ min: 0, max: 500, noNaN: true }),
+  profitFactor: fc.double({ min: 0, max: 5, noNaN: true }),
+  winRate: fc.double({ min: 0, max: 100, noNaN: true }),
+  oosTrades: fc.integer({ min: 0, max: 2000 }),
+  oosReturnPct: fc.double({ min: -100, max: 100, noNaN: true }),
+  maxDdPct: fc.double({ min: 0, max: 100, noNaN: true }),
+});
+
+const floorsArbitrary = fc.record<GridSweepFloors>({
+  minimumTradesPerMonth: fc.double({ min: 0, max: 500, noNaN: true }),
+  minimumProfitFactor: fc.double({ min: 0, max: 5, noNaN: true }),
+  minimumWinRatePct: fc.double({ min: 0, max: 100, noNaN: true }),
+  minimumOosTrades: fc.integer({ min: 0, max: 2000 }),
+  minimumOosReturnPct: fc.double({ min: -100, max: 100, noNaN: true }),
+  maximumDrawdownPct: fc.double({ min: 0, max: 100, noNaN: true }),
+});
 
 describe("grid sweep readiness floors", () => {
   it("uses percentage-point win-rate semantics at the boundary", () => {
@@ -49,5 +69,72 @@ describe("grid sweep readiness floors", () => {
       minimumOosReturnPct: 0,
       maximumDrawdownPct: 15,
     });
+  });
+
+  it("is monotone: improving any metric never flips a PASS to FAIL", () => {
+    fc.assert(
+      fc.property(rowArbitrary, (row) => {
+        const base = passesGridSweepFloors(row);
+        if (!base) return; // only meaningful for rows that already pass
+
+        // Improve every metric in every combination of fields: a PASS under
+        // the base row must remain a PASS under any strictly-better row.
+        const deltas: readonly (readonly (keyof GridSweepRow)[])[] = [
+          [],
+          ["tradesPerMonth"],
+          ["profitFactor"],
+          ["winRate"],
+          ["oosTrades"],
+          ["oosReturnPct"],
+          ["maxDdPct"],
+          ["tradesPerMonth", "profitFactor"],
+          ["winRate", "oosReturnPct"],
+          ["tradesPerMonth", "oosTrades", "maxDdPct"],
+          [
+            "tradesPerMonth",
+            "profitFactor",
+            "winRate",
+            "oosTrades",
+            "oosReturnPct",
+            "maxDdPct",
+          ],
+        ];
+        for (const fields of deltas) {
+          let improved: GridSweepRow = { ...row };
+          for (const field of fields) {
+            if (field === "maxDdPct") {
+              improved = { ...improved, [field]: row[field] / 2 }; // lower drawdown is better
+            } else {
+              improved = { ...improved, [field]: row[field] * 1.5 }; // higher is better
+            }
+          }
+          expect(passesGridSweepFloors(improved)).toBe(true);
+        }
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it("is monotone: relaxing any floor never flips a PASS to FAIL", () => {
+    fc.assert(
+      fc.property(rowArbitrary, floorsArbitrary, (row, floors) => {
+        const base = passesGridSweepFloors(row, floors);
+        if (!base) return;
+
+        // Relax each floor (raise the maximum, lower the minimums): a PASS
+        // under the strict floors must remain a PASS.
+        const relaxed = {
+          ...floors,
+          minimumTradesPerMonth: floors.minimumTradesPerMonth / 2,
+          minimumProfitFactor: floors.minimumProfitFactor / 2,
+          minimumWinRatePct: floors.minimumWinRatePct / 2,
+          minimumOosTrades: Math.floor(floors.minimumOosTrades / 2),
+          minimumOosReturnPct: floors.minimumOosReturnPct - 10,
+          maximumDrawdownPct: floors.maximumDrawdownPct * 1.5,
+        };
+        expect(passesGridSweepFloors(row, relaxed)).toBe(true);
+      }),
+      { numRuns: 200 },
+    );
   });
 });
