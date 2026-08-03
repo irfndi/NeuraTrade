@@ -458,6 +458,95 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
   });
 
+  it("re-seeds a flat state whose persisted config differs from the options", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(10_000),
+        peakCapital: money(10_000),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 1.5,
+        gridPauseAfterLossBars: 12,
+        feePct: 0.02,
+        slippageBps: 1,
+        trendFilterPeriod: 200,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const opts = makeOptions({
+      initialCapital: 20,
+      maxPositionPct: 50,
+      maxDrawdownPct: 5,
+      gridMaxGrids: 1,
+      gridPauseAfterLossBars: 12,
+      trendFilterPeriod: 0,
+      feePct: 0.06,
+      slippageBps: 2,
+    });
+    await runWithRepo(opts, repo, makeCandles(20, 1000, "oscillate"));
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state).not.toBeNull();
+    expect(state?.capital.toNumber()).toBe(20);
+    expect(state?.peakCapital.toNumber()).toBe(20);
+    expect(state?.maxPositionPct).toBe(50);
+    expect(state?.maxDrawdownPct).toBe(5);
+    expect(state?.gridMaxGrids).toBe(1);
+    expect(state?.trendFilterPeriod).toBe(0);
+  });
+
+  it("keeps a flat state whose persisted config matches the options", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(333),
+        peakCapital: money(400),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    await runWithRepo(
+      makeOptions(),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.capital.toNumber()).toBe(333);
+    expect(state?.maxPositionPct).toBe(100);
+  });
+
   it("records both live order fills when a live grid trade closes", async () => {
     const repo = new InMemoryPaperRepository();
     const { adapter, closes } = makeTrackingFuturesAdapter();

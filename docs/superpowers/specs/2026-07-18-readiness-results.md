@@ -492,6 +492,17 @@ the Bitget demo soak with real fills, which is blocked on demo credentials.
   `pm2 save` for boot persistence) on the Bitget PAPTRADING demo account (50
   USDT, conservative 50% position fraction, taker-cost config). First fills
   will be evaluated with `scalp demo-readiness` after ≥ 7 days / ≥ 50 trades.
+- **Stale-state bug fixed (2026-08-03).** The grid engine loaded a persisted
+  `grid_paper_state` row as-is, and the provenance fingerprint guard only
+  fired when a position was open. After the candidate promotion, the pm2 soak
+  silently resumed the OLD flat state — `capital=10269.99` (the live account
+  balance), `maxPositionPct=100`, `maxDrawdownPct=100`, `gridMaxGrids=1.5`,
+  `trendFilterPeriod=200` — instead of the promoted 50 USDT / 50% / 5% DD /
+  1-grid / 0-trend config. Added a flat-state config check: when the persisted
+  config differs from the current options, the state is re-seeded from the
+  options (fresh capital, correct sizing/risk). Regression tests cover both
+  the re-seed and the keep-same-config paths. The stale row was deleted and
+  the soak restarted; the state now shows the intended config.
 
 **What is proven (backtest, honest protocol):**
 

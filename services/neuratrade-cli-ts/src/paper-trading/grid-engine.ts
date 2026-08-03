@@ -159,6 +159,48 @@ function strategyManifestFor(
   };
 }
 
+function freshGridState(options: GridPaperTradingOptions): GridPaperState {
+  return {
+    exchange: options.exchange,
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    capital: money(options.initialCapital),
+    peakCapital: money(options.initialCapital),
+    paused: 0,
+    side: null,
+    entryPrice: money(0),
+    gridStepPct: options.gridStepPct,
+    gridMaxGrids: options.gridMaxGrids,
+    gridPauseAfterLossBars: options.gridPauseAfterLossBars,
+    feePct: options.feePct,
+    slippageBps: options.slippageBps,
+    trendFilterPeriod: options.trendFilterPeriod,
+    maxPositionPct: options.maxPositionPct,
+    maxDrawdownPct: options.maxDrawdownPct,
+    leverage: options.leverage ?? 1,
+    killed: false,
+    lastTimestamp: null,
+    updatedAt: new Date(),
+  };
+}
+
+function stateConfigMatchesOptions(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+): boolean {
+  return (
+    state.gridStepPct === options.gridStepPct &&
+    state.gridMaxGrids === options.gridMaxGrids &&
+    state.gridPauseAfterLossBars === options.gridPauseAfterLossBars &&
+    state.feePct === options.feePct &&
+    state.slippageBps === options.slippageBps &&
+    state.trendFilterPeriod === options.trendFilterPeriod &&
+    state.maxPositionPct === options.maxPositionPct &&
+    state.maxDrawdownPct === options.maxDrawdownPct &&
+    state.leverage === (options.leverage ?? 1)
+  );
+}
+
 type GridFillEvidence = Pick<
   FuturesOrderFill,
   "orderId" | "clientOid" | "filledQty" | "fee"
@@ -200,28 +242,21 @@ export function runGridPaperTradingIteration(
       options.exchange,
       options.symbol,
       options.timeframe,
-    )) ?? {
-      exchange: options.exchange,
-      symbol: options.symbol,
-      timeframe: options.timeframe,
-      capital: money(options.initialCapital),
-      peakCapital: money(options.initialCapital),
-      paused: 0,
-      side: null,
-      entryPrice: money(0),
-      gridStepPct: options.gridStepPct,
-      gridMaxGrids: options.gridMaxGrids,
-      gridPauseAfterLossBars: options.gridPauseAfterLossBars,
-      feePct: options.feePct,
-      slippageBps: options.slippageBps,
-      trendFilterPeriod: options.trendFilterPeriod,
-      maxPositionPct: options.maxPositionPct,
-      maxDrawdownPct: options.maxDrawdownPct,
-      leverage: options.leverage ?? 1,
-      killed: false,
-      lastTimestamp: null,
-      updatedAt: new Date(),
-    };
+    )) ?? freshGridState(options);
+
+    // A persisted state may belong to a previous run with different
+    // parameters (e.g. the demo soak was reconfigured after a candidate
+    // promotion). When the position is flat, the persisted config fields are
+    // still used for sizing/risk — silently reusing a stale config trades the
+    // wrong capital/position/drawdown limits. Re-seed the state from the
+    // current options instead of resuming with the stale parameters.
+    if (
+      state.side === null &&
+      !stateConfigMatchesOptions(state, options)
+    ) {
+      state = freshGridState(options);
+      yield* repo.saveGridState(state);
+    }
 
     if (
       state.side !== null &&
