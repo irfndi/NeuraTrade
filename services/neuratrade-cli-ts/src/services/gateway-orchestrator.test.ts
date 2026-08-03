@@ -316,6 +316,43 @@ describe("GatewayOrchestrator service", () => {
       expect(mockState.startCalls[0]["env"]["HOST"]).toBe("0.0.0.0");
     });
 
+    it("skips the Go backend spawn in TS-only mode", async () => {
+      const pm = createMockPM(mockProc, mockState);
+      const hc = createMockHC(true);
+      const saved = process.env.NEURATRADE_TS_ONLY;
+      process.env.NEURATRADE_TS_ONLY = "true";
+      try {
+        const result = await runOrch(
+          Effect.gen(function* () {
+            const orch = yield* GatewayOrchestrator;
+            return yield* orch.start({
+              supervised: false,
+              config: makeConfig(),
+            });
+          }),
+          home,
+          pm,
+          hc,
+        );
+
+        expect(result.mode).toBe("healthy");
+        expect(result.backendPid).toBe(0);
+        // No backend spawn happened.
+        expect(mockState.startCalls.length).toBe(0);
+
+        const state = readState(home);
+        const services = state["services"] as Record<
+          string,
+          { status: string; detail?: string }
+        >;
+        expect(services["backend"]["status"]).toBe("skipped");
+        expect(services["backend"]["detail"]).toContain("TS-only mode");
+      } finally {
+        if (saved === undefined) delete process.env.NEURATRADE_TS_ONLY;
+        else process.env.NEURATRADE_TS_ONLY = saved;
+      }
+    });
+
     it("writes backend env map matching Go", async () => {
       const pm = createMockPM(mockProc, mockState);
       const hc = createMockHC(true);
