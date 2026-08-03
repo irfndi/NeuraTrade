@@ -451,6 +451,23 @@ full 70,079-candle BTC 15m history. Full output saved to
   proven; not ready for demo/live. The live demo soak remains decisive and
   blocked on Bitget demo credentials.**
 
+## Iteration 23 — maker-cost sweep closure (2026-08-03)
+
+Re-ran the exhaustive 864-config grid sweep on the full 70,079-candle BTC 15m
+history at the **favorable maker costs** (0.02% fee, 1bp slippage) — the
+research thesis's own assumptions. Result: **0/864 configs pass** the
+frequency, PF, win-rate, OOS, and drawdown floors. The best IS rows have only
+2–4 OOS trades (not evidence). Artifact:
+`docs/superpowers/evidence/2026-08-03-sweep-btc-15m-maker.json`.
+
+This closes the backtest search space: **no configuration is findable that
+passes the readiness floors on two years of public BTC 15m data, even under
+the most optimistic cost assumptions.** Combined with the negative IS window
+(Iteration 22), the negative confidence lower bounds, and the adverse-
+selection stress, backtesting has exhausted its ability to find a profitable
+configuration. The remaining — and only — way to establish profitability is
+the Bitget demo soak with real fills, which is blocked on demo credentials.
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.
