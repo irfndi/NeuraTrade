@@ -466,12 +466,12 @@ bun run index.ts scalp paper-trade \
   --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m --futures --live \
   --strategy-type grid --grid-step-pct 1 --grid-max-grids 1.5 \
   --grid-pause-after-loss-bars 12 --chop-gate-adx 30 --target-ratio 1 \
-  --trend-filter-period 0 --fee 0.02 --slippage-bps 1 --leverage 1 \
+  --trend-filter-period 0 --fee 0.06 --slippage-bps 2 --leverage 1 \
   --capital 10000 --max-position-size-pct 50 \
   --max-drawdown-pct 5 --max-daily-loss-pct 2 \
   --iterations 0 --interval 900
 ```
 
-Conservative fraction 0.5 (`--max-position-size-pct 50`), risk guards on, ~15-min iteration cadence over a ≥ 7-day / ≥ 50-trade window. Record realized fill-rate, expectancy, and DD, then compare against the backtest within its Monte-Carlo band for sign-off. **This live demo is the decisive fill-realism proof** that backtesting cannot provide; it gates any real-money decision.
+Conservative fraction 0.5 (`--max-position-size-pct 50`), risk guards on, ~15-min iteration cadence over a ≥ 7-day / ≥ 50-trade window. Costs are the **taker** assumptions (0.06%/side fee, 2bp slippage) — the same audited values the `real-money-readiness` manifest and the live-grid guard require, so a demo run is provably conservative versus the maker thesis. Record realized fill-rate, expectancy, and DD, then compare against the backtest within its Monte-Carlo band for sign-off. **This live demo is the decisive fill-realism proof** that backtesting cannot provide; it gates any real-money decision.
 
 **Status:** dt8/u1u/91b QA-closed (tests green; 747/747 package suite); 3gr/24h/7xu tuning QA-closed; 4h5 (replay stall) QA-closed. Maker-fill realism modeled + stressed: edge survives slippage/taker-fees/queue fill-rate but is fragile to adverse selection (verdict refined above). Position sizing landed (backtest `positionFraction`; live `--max-position-size-pct`, provably equivalent). Foundation = PR #472, sizing = PR #473, verdict + fill realism = PR #474. **er7:** deterministic 30-day sample captured; the decisive live-demo soak remains **pending the user's Bitget demo keys**.
