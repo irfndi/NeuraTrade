@@ -30,7 +30,7 @@ async function seedPassingTrades(home: string): Promise<void> {
   const repository = new PaperTradingRepositorySQLite(db);
   await Effect.runPromise(repository.ensureTables());
   for (let index = 0; index < 50; index++) {
-    const openedAt = new Date(Date.UTC(2026, 0, 1 + index / 4));
+    const openedAt = new Date(Date.UTC(2026, 0, 1 + index / 1.5));
     const trade: GridPaperTrade = {
       id: `e2e-${index}`,
       exchange: "bitget-futures",

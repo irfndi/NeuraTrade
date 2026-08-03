@@ -5,8 +5,10 @@
 # and evaluates the demo-readiness gate. Intended to run on a schedule
 # (launchd/cron) logging to $NEURATRADE_HOME/logs/demo-soak-monitor.log.
 #
-# The gate needs >= 50 live fills over >= 7 days before it can pass; until
-# then this script is a progress reporter, not a verdict.
+# The gate needs >= 10 live fills over >= 30 days before it can pass; until
+# then this script is a progress reporter, not a verdict. The thresholds are
+# calibrated to the chop-gated grid's real cadence (~1-2 fills/week on a 1%
+# BTC 15m step), not to a generic scalping frequency.
 
 set -euo pipefail
 
@@ -20,8 +22,8 @@ LOG_DIR="${NEURATRADE_HOME}/logs"
 LOG_FILE="${LOG_DIR}/demo-soak-monitor.log"
 PM2_NAME="${PM2_NAME:-neuratrade-demo-soak}"
 DB_PATH="${DB_PATH:-$NEURATRADE_HOME/data/neuratrade.db}"
-MIN_TRADES="${MIN_TRADES:-50}"
-MIN_DURATION_DAYS="${MIN_DURATION_DAYS:-7}"
+MIN_TRADES="${MIN_TRADES:-10}"
+MIN_DURATION_DAYS="${MIN_DURATION_DAYS:-30}"
 
 log() {
   mkdir -p "$LOG_DIR"

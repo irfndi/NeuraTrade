@@ -26,11 +26,11 @@ const commandOptions = {
     Options.withDescription("Maximum completed trades to evaluate"),
   ),
   minimumTrades: Options.integer("min-trades").pipe(
-    Options.withDefault(50),
+    Options.withDefault(10),
     Options.withDescription("Minimum completed live trades"),
   ),
   minimumDurationDays: Options.float("min-duration-days").pipe(
-    Options.withDefault(7),
+    Options.withDefault(30),
     Options.withDescription("Minimum elapsed demo duration in days"),
   ),
   minimumExpectancyPct: Options.text("min-expectancy-pct").pipe(
