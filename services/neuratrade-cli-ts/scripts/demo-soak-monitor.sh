@@ -11,7 +11,7 @@
 set -euo pipefail
 
 # launchd runs with a minimal PATH; resolve the toolchain explicitly.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_TS_DIR="$(dirname "$SCRIPT_DIR")"

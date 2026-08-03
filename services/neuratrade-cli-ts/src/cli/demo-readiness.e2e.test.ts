@@ -131,6 +131,36 @@ async function seedPositiveButUncertainTrades(home: string): Promise<void> {
   db.close();
 }
 
+async function seedStaleSimulatedTrades(home: string): Promise<void> {
+  const dataDir = join(home, "data");
+  await mkdir(dataDir, { recursive: true });
+  const db = new Database(join(dataDir, "neuratrade.db"));
+  const repository = new PaperTradingRepositorySQLite(db);
+  await Effect.runPromise(repository.ensureTables());
+  for (let index = 0; index < 17; index++) {
+    const openedAt = new Date(Date.UTC(2026, 6, 18 + index / 4));
+    await Effect.runPromise(
+      repository.recordGridTrade({
+        id: `e2e-stale-${index}`,
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "15m",
+        side: "long",
+        entryPrice: money("60000"),
+        exitPrice: money("60010"),
+        capitalBefore: money("1000"),
+        capitalAfter: money("1002"),
+        pnlPct: money("0.2"),
+        exitReason: "target",
+        openedAt,
+        closedAt: new Date(openedAt.getTime() + 60 * 60 * 1000),
+        fillSource: "simulated",
+      }),
+    );
+  }
+  db.close();
+}
+
 describe("demo-readiness CLI", () => {
   it("exposes threshold controls through the real command surface", async () => {
     const result = await runCli(["scalp", "demo-readiness", "--help"]);
@@ -216,6 +246,21 @@ describe("demo-readiness CLI", () => {
       expect(result.stdout).toContain(
         "one or more trades lack complete live fill evidence",
       );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("passes with stale simulated trades present when the live-fill cohort qualifies", async () => {
+    const home = await mkdtemp(join(tmpdir(), "neuratrade-demo-stale-"));
+    try {
+      await seedPassingTrades(home);
+      await seedStaleSimulatedTrades(home);
+      const result = await runCli(["scalp", "demo-readiness"], home);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('"status":"PASS"');
+      expect(result.stdout).toContain('"tradeCount":50');
     } finally {
       await rm(home, { recursive: true, force: true });
     }

@@ -134,10 +134,10 @@ export function evaluateDemoSoak(
   }
 
   const failures: string[] = [];
-  if (trades.length < thresholds.minimumTrades) {
+  if (completeLiveTrades.length < thresholds.minimumTrades) {
     failures.push("trade count is below the minimum");
   }
-  const soakDurationDays = durationDays(trades);
+  const soakDurationDays = durationDays(completeLiveTrades);
   if (soakDurationDays < thresholds.minimumDurationDays) {
     failures.push("duration is below the minimum");
   }
@@ -159,7 +159,7 @@ export function evaluateDemoSoak(
 
   return {
     passed: failures.length === 0,
-    tradeCount: trades.length,
+    tradeCount: completeLiveTrades.length,
     durationDays: soakDurationDays,
     expectancyPct,
     expectancyLowerBoundPct,

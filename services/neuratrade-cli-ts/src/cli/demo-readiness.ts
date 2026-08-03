@@ -92,11 +92,16 @@ export function makeDemoReadinessCommand(
       const sqlite = yield* SqliteClient;
       const repository = new PaperTradingRepositorySQLite(sqlite.database);
       yield* repository.ensureTables();
-      const trades = yield* repository.listRecentGridTrades(
+      const allTrades = yield* repository.listRecentGridTrades(
         args.exchange,
         args.symbol,
         args.timeframe,
         args.limit,
+      );
+      // Stale simulated trades from earlier runs share the same key and
+      // must never count toward the minimums or block the verdict.
+      const trades = allTrades.filter(
+        (trade) => trade.fillSource === "live",
       );
       const report = evaluateDemoSoak(trades, {
         minimumTrades: args.minimumTrades,
