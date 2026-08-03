@@ -421,6 +421,36 @@ Both engines produce a profitable, PF>1 realized sample over the same 30-day win
   bounds cross zero and their recent tails are negative. The live demo soak
   remains the decisive, still-blocked experiment.
 
+## Iteration 22 — fresh fill-stress and walk-forward re-run (2026-08-03)
+
+Re-ran `scripts/grid-fill-stress.ts` and `scripts/grid-walkforward.ts` on the
+full 70,079-candle BTC 15m history. Full output saved to
+`docs/superpowers/evidence/2026-08-03-*`.
+
+- **IS/OOS divergence has widened to a collapse.** On the full two-year
+  history, the winner config's IN-SAMPLE return is now **−26.76%** (PF 0.82,
+  win 56.9%) while OOS remains **+14.67%** (PF 1.61, win 72.2%). The earlier
+  "+20.3% IS" figure was measured on the shorter pre-extension dataset
+  (Iteration 5); the extra year of history turned the IS window negative. The
+  single 80/20 OOS slice's positivity is therefore a **recent-regime artifact**
+  of the last ~20% of data, not evidence of a stable edge.
+- Slippage sweep on OOS: still positive through 10bp (+8.78%, PF 1.38), but
+  the fixed-config walk-forward is **6/13 profitable at 1bp and 3/13 at 10bp**,
+  with negative mean window return at every slippage level.
+- Position sizing halves OOS drawdown (BTC 3.7% → 1.1% at fraction 0.3) but
+  does not rescue the edge: per-trade expectancy is sizing-invariant, so the
+  negative-IS and mixed-walk-forward verdicts stand.
+- Adverse-selection stress: fp=0.7 adverse+taker is **−1.41% OOS (PF 0.96)**
+  and only 4/13 walk-forward windows positive; fp=0.5 adverse is +7.06% OOS
+  but **3/13 windows**. The edge does not survive adverse fill selection.
+- Recent 30-day realized samples remain negative: BTC −0.28% (5 trades, PF
+  0.92), ETH −2.28% (20 trades, PF 0.87).
+- The verdict is now stronger than before: not only is the confidence lower
+  bound negative, but the extended-history IS window contradicts the OOS
+  slice, so the OOS positivity itself is regime-specific. **Not profitable-
+  proven; not ready for demo/live. The live demo soak remains decisive and
+  blocked on Bitget demo credentials.**
+
 **What is proven (backtest, honest protocol):**
 
 - Directional signal-composer scalping on BTC/ETH majors is **dead** (0/384 configs; no edge after 0.16% round-trip cost). Do not deploy it.

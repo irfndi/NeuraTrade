@@ -1,0 +1,34 @@
+Walk-forward bitget-futures:BTC/USDT:USDT:15m — 70079 candles, train 11520 bars / test 4320 bars
+
+=== Pass A: re-optimized per window (neighborhood) ===
+ win  step  grids  pause  testRet%  testDD%  trades
+   1  0.75    2.0      6    -15.75    17.50      46
+   2  1.25    2.0      6    -13.56    14.59      13
+   3  1.25    2.0     12    -16.24    18.22      23
+   4  1.00    1.5      6     -5.88     8.53      12
+   5  1.00    1.5      6     -3.61     4.51       4
+   6  1.25    2.0      6     -3.86     5.00       3
+   7  1.25    2.0      6      0.00     0.00       0
+   8  1.00    1.5      6     -4.78     8.04      29
+   9  1.25    1.5      6     -0.22     3.72       5
+  10  1.25    1.5      6     10.26     3.73      16
+  11  1.25    1.5      6    -10.01    10.01      20
+  12  1.00    1.5     12      4.61     1.54      10
+  13  1.00    1.5     12      1.18     4.52      25
+AGGREGATE: return -46.92% | profitable windows 23% | maxDD 18.22% | trades 206
+
+=== Pass B: fixed winner config (step 1, grids 1.5, pause 12, gate 30) ===
+window 1: 2024-11-29 → ret -9.14% dd 11.69% trades 24 win 45.8% PF 0.53
+window 2: 2025-01-13 → ret -0.11% dd 8.57% trades 21 win 61.9% PF 1.00
+window 3: 2025-02-27 → ret -8.53% dd 13.06% trades 30 win 50.0% PF 0.62
+window 4: 2025-04-13 → ret -3.50% dd 6.22% trades 12 win 50.0% PF 0.62
+window 5: 2025-05-28 → ret -3.61% dd 4.51% trades 4 win 25.0% PF 0.21
+window 6: 2025-07-12 → ret -0.84% dd 4.54% trades 7 win 57.1% PF 0.83
+window 7: 2025-08-26 → ret 0.94% dd 0.00% trades 1 win 100.0% PF Infinity
+window 8: 2025-10-10 → ret -3.31% dd 6.63% trades 28 win 57.1% PF 0.83
+window 9: 2025-11-24 → ret 0.82% dd 3.04% trades 14 win 64.3% PF 1.12
+window 10: 2026-01-08 → ret 13.96% dd 2.73% trades 27 win 81.5% PF 2.72
+window 11: 2026-02-22 → ret 2.24% dd 5.98% trades 26 win 65.4% PF 1.17
+window 12: 2026-04-08 → ret 4.61% dd 1.54% trades 10 win 80.0% PF 2.50
+window 13: 2026-05-23 → ret 1.18% dd 4.52% trades 25 win 64.0% PF 1.10
+FIXED: 6/13 profitable windows | mean window ret -0.41% | worst DD 13.06% | trades 229

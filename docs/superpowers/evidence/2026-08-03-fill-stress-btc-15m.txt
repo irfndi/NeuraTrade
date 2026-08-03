@@ -1,0 +1,45 @@
+Grid fill stress bitget-futures:BTC/USDT:USDT:15m — 70079 candles (IS 56063 bars / OOS 14016 bars, last 20%)
+
+=== Slippage sweep (winner config, round-trip fee fixed at 0.04%) ===
+slip   --- IN-SAMPLE ---                                          --- OUT-OF-SAMPLE ---
+1      IS     ret  -26.76% tr  246 win  56.9% PF  0.82 exp  -0.119%/tr DD  38.2%   OOS    ret   14.67% tr   54 win  72.2% PF  1.61 exp   0.260%/tr DD   3.7%
+2      IS     ret  -27.00% tr  246 win  56.9% PF  0.82 exp  -0.120%/tr DD  38.2%   OOS    ret   13.35% tr   53 win  71.7% PF  1.56 exp   0.243%/tr DD   3.6%
+3      IS     ret  -28.31% tr  247 win  56.7% PF  0.81 exp  -0.127%/tr DD  37.6%   OOS    ret   13.10% tr   53 win  71.7% PF  1.56 exp   0.239%/tr DD   3.6%
+4      IS     ret  -28.53% tr  247 win  56.7% PF  0.80 exp  -0.129%/tr DD  37.6%   OOS    ret   10.13% tr   53 win  69.8% PF  1.42 exp   0.188%/tr DD   3.6%
+5      IS     ret  -28.75% tr  247 win  56.7% PF  0.80 exp  -0.130%/tr DD  37.5%   OOS    ret    9.90% tr   53 win  69.8% PF  1.41 exp   0.184%/tr DD   3.6%
+7      IS     ret  -30.85% tr  247 win  56.3% PF  0.78 exp  -0.142%/tr DD  39.9%   OOS    ret    9.45% tr   53 win  69.8% PF  1.40 exp   0.176%/tr DD   3.5%
+10     IS     ret  -33.55% tr  246 win  55.7% PF  0.75 exp  -0.159%/tr DD  41.2%   OOS    ret    8.78% tr   53 win  69.8% PF  1.38 exp   0.165%/tr DD   3.5%
+
+=== Walk-forward Pass B (FIXED winner config) across all 45d windows ===
+slip     profit  meanRet%  worstDD%  trades
+1          6/13     -0.41     13.06     229
+2          6/13     -0.52     13.01     228
+3          6/13     -0.70     12.95     229
+5          5/13     -0.96     12.86     229
+8          4/13     -1.24     11.92     229
+10         3/13     -1.48     11.83     229
+
+=== Position sizing sweep (fraction of equity per grid) ===
+ETH 15m (gated: step 0.75, grids 3, tgtR 1.5, pause 12, gate 25):
+1      IS     ret  -10.87% tr  649 win  67.8% PF  0.99 exp  -0.005%/tr DD  46.1%   OOS    ret   18.21% tr  117 win  72.6% PF  1.25 exp   0.154%/tr DD  11.7%
+0.75   IS     ret   -6.87% tr  649 win  67.8% PF  0.99 exp  -0.005%/tr DD  36.6%   OOS    ret   13.65% tr  117 win  72.6% PF  1.25 exp   0.154%/tr DD   8.8%
+0.5    IS     ret   -3.67% tr  649 win  67.8% PF  0.99 exp  -0.005%/tr DD  25.8%   OOS    ret    9.09% tr  117 win  72.6% PF  1.25 exp   0.154%/tr DD   6.0%
+0.3    IS     ret   -1.74% tr  649 win  67.8% PF  0.99 exp  -0.005%/tr DD  16.3%   OOS    ret    5.44% tr  117 win  72.6% PF  1.25 exp   0.154%/tr DD   3.6%
+
+BTC 15m (winner: step 1, grids 1.5, tgtR 1, pause 12, gate 30):
+1      IS     ret  -26.76% tr  246 win  56.9% PF  0.82 exp  -0.119%/tr DD  38.2%   OOS    ret   14.67% tr   54 win  72.2% PF  1.61 exp   0.260%/tr DD   3.7%
+0.75   IS     ret  -20.55% tr  246 win  56.9% PF  0.82 exp  -0.119%/tr DD  30.1%   OOS    ret   10.89% tr   54 win  72.2% PF  1.61 exp   0.260%/tr DD   2.7%
+0.5    IS     ret  -14.01% tr  246 win  56.9% PF  0.82 exp  -0.119%/tr DD  21.1%   OOS    ret    7.18% tr   54 win  72.2% PF  1.61 exp   0.260%/tr DD   1.8%
+0.3    IS     ret   -8.56% tr  246 win  56.9% PF  0.82 exp  -0.119%/tr DD  13.2%   OOS    ret    4.27% tr   54 win  72.2% PF  1.61 exp   0.260%/tr DD   1.1%
+
+=== Recent 30-day realized sample (last 2880 bars, deterministic) ===
+BTC 15m winner   (30d) ret   -0.28% tr    5 (5.0/mo) win  60.0% PF  0.92 exp  -0.049%/tr DD   2.1%
+ETH 15m gated    (30d) ret   -2.28% tr   20 (20.0/mo) win  65.0% PF  0.87 exp  -0.102%/tr DD   7.0%
+
+=== Realistic maker-fill stress (BTC 15m winner) ===
+case                      OOS ret  OOS PF   OOS exp  OOS win | WF win   WF ret   WF DD
+optimistic fp=1 sym        14.67%    1.61    0.260%    72.2% |   6/13   -0.41%  13.06%
+taker stops fp=1           13.97%    1.57    0.249%    72.2% |   6/13   -0.68%  13.56%
+fp=0.7 uniform+taker        9.41%    1.54    0.237%    71.8% |   6/13    0.56%   8.50%
+fp=0.7 adverse+taker       -1.41%    0.96   -0.025%    61.4% |   4/13   -2.18%  14.34%
+fp=0.5 adverse+taker        7.06%    1.35    0.169%    69.0% |   3/13   -2.20%  14.13%
