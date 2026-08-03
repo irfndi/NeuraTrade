@@ -8,6 +8,7 @@ import {
 
 // Effect v4 snapshots process.env in the default ConfigProvider at first use,
 // so tests that mutate process.env must supply a fresh provider per run.
+// (The test preload clears the live BITGET_* vars before every file.)
 const loadConfig = () =>
   Effect.gen(function* () {
     return yield* BitgetConfig;
@@ -15,7 +16,13 @@ const loadConfig = () =>
     Effect.provide(BitgetConfigLive),
     Effect.provideService(
       ConfigProvider.ConfigProvider,
-      ConfigProvider.fromEnv(),
+      ConfigProvider.fromEnv(
+        Object.fromEntries(
+          Object.entries(process.env).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined,
+          ),
+        ),
+      ),
     ),
   );
 

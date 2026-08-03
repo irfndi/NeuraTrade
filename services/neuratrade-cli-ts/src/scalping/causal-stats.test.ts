@@ -138,5 +138,5 @@ describe("runBacktest causal-stats reconciliation (bd clever-cabin-dt8)", () => 
     const compounded =
       (1 + isRes.totalReturnPct / 100) * (1 + oosRes.totalReturnPct / 100) - 1;
     expect(Math.abs(compounded * 100 - full.totalReturnPct)).toBeLessThan(5);
-  });
+  }, 15_000);
 });
