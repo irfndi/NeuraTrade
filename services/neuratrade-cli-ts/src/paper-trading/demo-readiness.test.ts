@@ -134,4 +134,46 @@ describe("evaluateDemoSoak", () => {
       "one or more trades lack complete live fill evidence",
     );
   });
+
+  it("reports an infinite profit factor for an all-winning sample", () => {
+    const report = evaluateDemoSoak(
+      Array.from({ length: 50 }, (_, index) => makeTrade(index, "0.20")),
+      thresholds,
+    );
+
+    expect(report.profitFactor).toBeNull();
+  });
+
+  it("reports a zero profit factor for an all-losing sample", () => {
+    const report = evaluateDemoSoak(
+      Array.from({ length: 50 }, (_, index) => makeTrade(index, "-0.30")),
+      thresholds,
+    );
+
+    expect(report.profitFactor?.toString()).toBe("0");
+    expect(report.failures).toContain("expectancy is below the minimum");
+  });
+
+  it("rejects a sample whose drawdown exceeds the ceiling", () => {
+    // One large loss early on, then small wins: the peak-to-trough drawdown
+    // exceeds the 15% ceiling while expectancy stays positive.
+    const trades = Array.from({ length: 50 }, (_, index) =>
+      index === 0 ? makeTrade(index, "-20") : makeTrade(index, "0.10"),
+    );
+    const report = evaluateDemoSoak(trades, thresholds);
+
+    expect(report.maximumDrawdownPct.greaterThan(money(15))).toBe(true);
+    expect(report.failures).toContain("drawdown is above the maximum");
+  });
+
+  it("counts the whole cohort duration from the earliest open to the latest close", () => {
+    const trades = Array.from({ length: 50 }, (_, index) =>
+      makeTrade(index, "0.20"),
+    );
+    const report = evaluateDemoSoak(trades, thresholds);
+
+    // 50 trades opened a quarter-day apart span 12.25 days.
+    expect(report.durationDays).toBeGreaterThan(12);
+    expect(report.durationDays).toBeLessThan(13);
+  });
 });
