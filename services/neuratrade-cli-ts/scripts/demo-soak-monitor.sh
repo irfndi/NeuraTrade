@@ -33,7 +33,10 @@ if ! command -v pm2 >/dev/null 2>&1; then
   log "[WARN] pm2 not found; cannot verify soak process"
 else
   if pm2 jlist 2>/dev/null | grep -q "\"name\":\"${PM2_NAME}\""; then
-    STATUS=$(pm2 jlist 2>/dev/null | grep -o "\"name\":\"${PM2_NAME}\"" | tail -1 >/dev/null; pm2 jlist 2>/dev/null | python3 -c "import json,sys; [print(p['pm2_env']['status']) for p in json.load(sys.stdin) if p.get('name')=='${PM2_NAME}']" 2>/dev/null | head -1)
+    STATUS=$(
+      pm2 jlist 2>/dev/null | grep -o "\"name\":\"${PM2_NAME}\"" | tail -1 >/dev/null
+      pm2 jlist 2>/dev/null | python3 -c "import json,sys; [print(p['pm2_env']['status']) for p in json.load(sys.stdin) if p.get('name')=='${PM2_NAME}']" 2>/dev/null | head -1
+    )
     log "[INFO] pm2 ${PM2_NAME}: ${STATUS:-unknown}"
   else
     log "[WARN] pm2 process ${PM2_NAME} not found"
