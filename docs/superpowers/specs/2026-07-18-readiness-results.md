@@ -503,6 +503,11 @@ the Bitget demo soak with real fills, which is blocked on demo credentials.
   options (fresh capital, correct sizing/risk). Regression tests cover both
   the re-seed and the keep-same-config paths. The stale row was deleted and
   the soak restarted; the state now shows the intended config.
+- **Recurring soak monitor (2026-08-03).** `scripts/demo-soak-monitor.sh`
+  checks the pm2 process is alive, counts live fills, and evaluates
+  `scalp demo-readiness`, appending to `$NEURATRADE_HOME/logs/demo-soak-monitor.log`.
+  Installed as launchd `com.neuratrade.demo-soak-monitor` (daily 09:00, boot
+  resilient) so the ≥ 7-day / ≥ 50-fill gate is checked without manual polling.
 
 **What is proven (backtest, honest protocol):**
 
