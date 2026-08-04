@@ -158,6 +158,58 @@ describe("runGridBacktest", () => {
     const wins = result.trades.filter((t) => t.win).length;
     expect(wins / result.trades.length).toBeCloseTo(result.winRate / 100, 2);
   });
+
+  const sizingOpts = {
+    gridStepPct: 0.5,
+    gridMaxGrids: 2,
+    gridPauseAfterLossBars: 0,
+    feePct: 0.04,
+    slippageBps: 1,
+    initialCapital: 20,
+    trendFilterPeriod: 96,
+    leverage: 1,
+  };
+
+  it("positionFraction defaults to 1 and is backward compatible", () => {
+    const candles = makeOscillatingCandles(300);
+    const baseline = runGridBacktest(candles, sizingOpts);
+    const explicit = runGridBacktest(candles, {
+      ...sizingOpts,
+      positionFraction: 1,
+    });
+    expect(explicit.totalTrades).toBe(baseline.totalTrades);
+    expect(explicit.totalReturnPct).toBeCloseTo(baseline.totalReturnPct, 8);
+    expect(explicit.maxDrawdownPct).toBeCloseTo(baseline.maxDrawdownPct, 8);
+  });
+
+  it("positionFraction scales return and drawdown down, not trade count", () => {
+    const candles = makeOscillatingCandles(400);
+    const full = runGridBacktest(candles, sizingOpts);
+    const half = runGridBacktest(candles, {
+      ...sizingOpts,
+      positionFraction: 0.5,
+    });
+    expect(full.totalReturnPct).toBeGreaterThan(0);
+    expect(half.totalTrades).toBe(full.totalTrades);
+    expect(half.totalReturnPct).toBeLessThan(full.totalReturnPct);
+    expect(half.totalReturnPct).toBeGreaterThan(0);
+    expect(half.maxDrawdownPct).toBeLessThanOrEqual(full.maxDrawdownPct);
+  });
+
+  it("positionFraction leaves win rate, profit factor, and expectancy invariant", () => {
+    const candles = makeOscillatingCandles(400);
+    const full = runGridBacktest(candles, sizingOpts);
+    const half = runGridBacktest(candles, {
+      ...sizingOpts,
+      positionFraction: 0.5,
+    });
+    expect(half.winRate).toBeCloseTo(full.winRate, 6);
+    expect(half.profitFactor).toBeCloseTo(full.profitFactor, 6);
+    expect(half.totalTrades).toBeGreaterThan(0);
+    const mean = (r: typeof full): number =>
+      r.trades.reduce((s, t) => s + t.pnlPct, 0) / r.trades.length;
+    expect(mean(half)).toBeCloseTo(mean(full), 8);
+  });
 });
 
 describe("findBestGridParams", () => {
