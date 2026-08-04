@@ -227,6 +227,10 @@ export function runPaperTradingIteration(
         yield* repo.setPortfolio(capital, peakCapital);
         position = scaleOut.updatedPosition;
         yield* repo.saveOpenPosition(position);
+        yield* circuitBreaker.recordTradeResult(
+          toNumber(scaleOut.trade.pnl),
+          toNumber(startOfDayCapital),
+        );
 
         return {
           action: "scaled_out" as const,

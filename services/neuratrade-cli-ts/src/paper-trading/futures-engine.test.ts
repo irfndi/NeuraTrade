@@ -272,8 +272,10 @@ class InMemoryKillSwitch implements KillSwitchService {
 
 class InMemoryCircuitBreaker implements CircuitBreakerService {
   constructor(private openState = false) {}
+  readonly recordedPnl: number[] = [];
 
-  recordTradeResult(_realizedPnl: number) {
+  recordTradeResult(realizedPnl: number) {
+    this.recordedPnl.push(realizedPnl);
     return Effect.void;
   }
 
@@ -637,6 +639,48 @@ describe("runFuturesPaperTradingIteration", () => {
       Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
     ).toEqual(position);
     expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("records the realized PnL into the circuit breaker on a paper scale-out", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition({
+      entryPrice: money(100),
+      stopLoss: money(90),
+      takeProfit: money(110),
+      scaleOutPrice: money(105),
+    });
+    Effect.runSync(repo.saveOpenPosition(position));
+    const circuitBreaker = new InMemoryCircuitBreaker();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        scaleOutAtR: 1,
+        scaleOutPct: 50,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, makeGateway(105)),
+        Effect.provideService(FuturesExchangeAdapter, makeFuturesAdapter()),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, circuitBreaker),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("scaled_out");
+    expect(circuitBreaker.recordedPnl.length).toBeGreaterThan(0);
   });
 
   it("checks minimum ATR before placing a live entry order", async () => {

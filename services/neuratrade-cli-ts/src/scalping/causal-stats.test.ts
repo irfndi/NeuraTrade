@@ -78,6 +78,21 @@ describe("makeCausalSymbolStats", () => {
     expect(causal.volumeRatio).toBeCloseTo(batch.volumeRatio, 6);
   });
 
+  it("matches the batch ADX14 exactly at every bar from the first valid index (seed-window parity)", () => {
+    // Regression lock for the reported "causal ADX seed window off-by-one":
+    // the causal Wilder ADX must equal calculateADX over each prefix at every
+    // bar, including the very first valid value (i = 2*period). A seed-window
+    // shift would surface here as a divergence from the first valid bar on.
+    const series = makeSeries(400, 10_000);
+    const provider = makeCausalSymbolStats(series, "5m");
+    const period = 14;
+    for (let i = period * 2; i < series.length; i++) {
+      const causal = provider(i).adx14;
+      const batch = computeSymbolStats(series.slice(0, i + 1), "5m").adx14;
+      expect(causal).toBeCloseTo(batch, 6);
+    }
+  });
+
   it("returns zero-ish stats for very short series", () => {
     const provider = makeCausalSymbolStats(makeSeries(5, 10_000), "5m");
     const stats = provider(4);
