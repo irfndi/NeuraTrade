@@ -45,7 +45,7 @@ import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
 import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
-import { Decimal, money } from "../utils/money.js";
+import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,
@@ -3617,6 +3617,18 @@ function paperTradeProgram(args: PaperTradeArgs) {
         Effect.provide(futuresAdapterLayer),
         Effect.catch((err) =>
           Effect.gen(function* () {
+            const tag =
+              "tag" in err && typeof err.tag === "string" ? err.tag : "";
+            // Safety-critical errors must propagate so the loop stops and the
+            // process exits for the operator; only transient network/IO errors
+            // are safe to skip and retry on the next cadence.
+            if (
+              tag === "RiskError" ||
+              tag === "KillSwitchError" ||
+              tag === "CircuitBreakerError"
+            ) {
+              return yield* Effect.fail(err);
+            }
             const state = yield* paperRepo
               .getGridState(opts.exchange, opts.symbol, opts.timeframe)
               .pipe(Effect.orElseSucceed(() => null));
@@ -3632,8 +3644,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
             return {
               action: "hold" as const,
               side: state?.side ?? null,
-              capital: state ? Number(state.capital) : 0,
-              peakCapital: state ? Number(state.peakCapital) : 0,
+              capital: state ? toNumber(state.capital) : 0,
+              peakCapital: state ? toNumber(state.peakCapital) : 0,
               note: `skip: ${reason}`,
             };
           }),
