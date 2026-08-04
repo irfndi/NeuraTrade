@@ -35,6 +35,9 @@ import {
   StrategyLibraryLive,
 } from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
+import {
+  MarketDataGateway,
+} from "../market-data/gateway.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
@@ -63,6 +66,7 @@ import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLiteLive,
+  type WatchlistEntry as DbWatchlistEntry,
 } from "../paper-trading/repository.js";
 import {
   runSoak,
@@ -87,6 +91,7 @@ import {
 import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   runGridUniverseScan,
+  type GridUniverseEntry,
   type GridUniverseOptions,
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
@@ -3137,18 +3142,38 @@ export const paperTradeCommand = Command.make(
       const sqlite = yield* SqliteClient;
       const db = sqlite.database;
 
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
+
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
         ? mergePaperTradeArgs(args as unknown as PaperTradeArgs, profile.value)
         : (args as unknown as PaperTradeArgs);
 
       const watchlist = yield* Option.match(mergedArgs.watchlist, {
-        onNone: () => Effect.succeed<readonly WatchlistEntry[]>([]),
+        onNone: () =>
+          Effect.gen(function* () {
+            const paperRepo = yield* PaperTradingRepository;
+            yield* paperRepo.ensureTables();
+            const dbEntries = yield* paperRepo.listWatchlist(
+              resolveFuturesMarketExchange(mergedArgs.exchange, mergedArgs.futures),
+              mergedArgs.timeframe,
+            );
+            return dbEntries.map((e): WatchlistEntry => ({
+              symbol: e.symbol,
+              exchange: e.exchange,
+              returnPct: e.aggregateReturnPct,
+              sharpe: e.aggregateReturnPct > 0 ? 1 : 0,
+              gridParams: {
+                gridStepPct: e.gridStepPct,
+                gridMaxGrids: e.gridMaxGrids,
+                gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+              },
+            }));
+          }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
-      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
       const riskGuardLayer = RiskGuardLive(
         mergedArgs.live,
         buildRiskOverrides(mergedArgs),
@@ -5423,6 +5448,20 @@ const gridUniverseOutputOption = Options.text("output").pipe(
   ),
 );
 
+const gridUniverseWatchOption = Options.boolean("watch").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Continuously re-scan the universe and upsert survivors into the DB watchlist",
+  ),
+);
+
+const gridUniverseIntervalOption = Options.integer("interval").pipe(
+  Options.withDefault(3600),
+  Options.withDescription(
+    "Seconds between scans in --watch continuous mode (default 3600)",
+  ),
+);
+
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5445,12 +5484,15 @@ export const gridUniverseScanCommand = Command.make(
     slippageBps: gridUniverseSlippageOption,
     trendFilterPeriod: gridUniverseTrendFilterOption,
     output: gridUniverseOutputOption,
+    watch: gridUniverseWatchOption,
+    interval: gridUniverseIntervalOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlite = yield* SqliteClient;
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(sqlite.database);
 
       const outputPath = Option.isSome(args.output)
         ? resolve(path.homeDir, "data", args.output.value)
@@ -5472,69 +5514,204 @@ export const gridUniverseScanCommand = Command.make(
         outputPath,
       };
 
-      const result = yield* runGridUniverseScan(options).pipe(
-        Effect.provide(repoLayer),
-        Effect.catch((err) =>
-          Effect.gen(function* () {
-            yield* Console.error(
-              `grid-universe-scan failed: ${
-                "reason" in err ? err.reason : String(err)
-              }`,
-            );
-            return { entries: [], survivors: [] };
-          }),
-        ),
-      );
-
-      if (outputPath) {
-        const watchlist = result.survivors.map((e) => ({
-          symbol: e.symbol,
-          exchange: args.exchange,
-          returnPct: e.walkForward.aggregateReturnPct,
-          sharpe: e.walkForward.aggregateReturnPct > 0 ? 1 : 0,
-          gridParams: {
+      const persistSurvivors = (result: {
+        readonly survivors: readonly GridUniverseEntry[];
+      }) =>
+        Effect.gen(function* () {
+          const paperRepo = yield* PaperTradingRepository;
+          yield* paperRepo.ensureTables();
+          const entries: DbWatchlistEntry[] = result.survivors.map((e) => ({
+            exchange: args.exchange,
+            symbol: e.symbol,
+            timeframe: args.timeframe,
+            returnPct: e.walkForward.aggregateReturnPct,
+            profitableWindowsPct: e.walkForward.profitableWindowsPct,
+            aggregateReturnPct: e.walkForward.aggregateReturnPct,
             gridStepPct: e.bestParams.gridStepPct,
             gridMaxGrids: e.bestParams.gridMaxGrids,
             gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
-          },
-        }));
-        yield* Effect.tryPromise({
-          try: () => Bun.write(outputPath, JSON.stringify(watchlist, null, 2)),
-          catch: (err) =>
-            new MarketDataRepositoryError(
-              `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
-            ),
+            updatedAt: new Date(),
+          }));
+          yield* paperRepo.clearWatchlist(args.exchange, args.timeframe);
+          yield* paperRepo.upsertWatchlist(entries);
+          yield* Console.log(
+            `💾 Watchlist upserted: ${entries.length} survivors into DB (${args.exchange}:${args.timeframe})`,
+          );
+
+          if (outputPath) {
+            const watchlistJson = result.survivors.map((e) => ({
+              symbol: e.symbol,
+              exchange: args.exchange,
+              returnPct: e.walkForward.aggregateReturnPct,
+              sharpe: e.walkForward.aggregateReturnPct > 0 ? 1 : 0,
+              gridParams: {
+                gridStepPct: e.bestParams.gridStepPct,
+                gridMaxGrids: e.bestParams.gridMaxGrids,
+                gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+              },
+            }));
+            yield* Effect.tryPromise({
+              try: () => Bun.write(outputPath, JSON.stringify(watchlistJson, null, 2)),
+              catch: (err) =>
+                new MarketDataRepositoryError(
+                  `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+            });
+            yield* Console.log(`Whitelist written to ${outputPath}`);
+          }
         });
-        yield* Console.log(`Whitelist written to ${outputPath}`);
-      }
 
-      yield* Console.log(
-        `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
-      );
-      yield* Console.log(
-        "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
-      );
-      yield* Console.log(
-        "------------------------------------------------------------------",
-      );
-      for (const e of result.entries) {
-        const mark = e.passed ? " ✔" : "";
+      const runScan = () =>
+        Effect.gen(function* () {
+          const gateway = yield* MarketDataGateway;
+          const futuresSymbols = yield* gateway
+            .fetchSymbols(args.exchange)
+            .pipe(
+              Effect.catch(() => Effect.succeed<readonly string[]>([])),
+            );
+          const futuresSet = new Set(futuresSymbols);
+          const isFuturesSymbol = (symbol: string) =>
+            futuresSet.has(symbol) || futuresSet.has(symbol.replace(/^(.+):(.+)$/, "$1/$2"));
+
+          const rawResult = yield* runGridUniverseScan(options).pipe(
+            Effect.provide(repoLayer),
+            Effect.catch((err) =>
+              Effect.gen(function* () {
+                yield* Console.error(
+                  `grid-universe-scan failed: ${
+                    "reason" in err ? err.reason : String(err)
+                  }`,
+                );
+                return { entries: [], survivors: [] };
+              }),
+            ),
+          );
+
+          const survivors =
+            rawResult.survivors.length > 0 && futuresSet.size > 0
+              ? rawResult.survivors.filter((e) => isFuturesSymbol(e.symbol))
+              : rawResult.survivors;
+          const result = { entries: rawResult.entries, survivors };
+
+          if (survivors.length < rawResult.survivors.length) {
+            yield* Console.log(
+              `🎯 Filtered ${rawResult.survivors.length - survivors.length} survivors without a live ${args.exchange} contract`,
+            );
+          }
+
+          yield* Console.log(
+            `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
+          );
+          yield* Console.log(
+            "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
+          );
+          yield* Console.log(
+            "------------------------------------------------------------------",
+          );
+          for (const e of result.entries) {
+            const mark = e.passed ? " ✔" : "";
+            yield* Console.log(
+              `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
+                `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
+                `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
+                `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
+                `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
+                `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+            );
+          }
+
+          yield* persistSurvivors(result).pipe(Effect.provide(paperRepoLayer));
+          return result.survivors;
+        });
+
+      const runScanWithLayers = () =>
+        runScan()
+          .pipe(
+            Effect.provide(MarketDataGatewayLive),
+            Effect.catch((err) =>
+              Effect.gen(function* () {
+                yield* Console.error(
+                  `grid-universe scan cycle failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                );
+                return [] as readonly GridUniverseEntry[];
+              }),
+            ),
+          );
+
+      if (args.watch) {
         yield* Console.log(
-          `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
-            `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
-            `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
-            `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
-            `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
-            `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+          `👁 Watching universe ${args.exchange}:${args.timeframe}, re-scan every ${args.interval}s...`,
         );
+        while (true) {
+          yield* runScanWithLayers();
+          yield* Effect.sleep(`${args.interval} seconds`);
+        }
       }
 
-      return result.survivors;
+      return yield* runScanWithLayers();
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription(
     "Per-symbol grid walk-forward scan; finds profitable grid candidates across the stored universe",
   ),
+);
+
+const watchlistListExchangeOption = Options.text("exchange").pipe(
+  Options.withDefault("bitget-futures"),
+  Options.withDescription("Exchange to list watchlist for"),
+);
+
+const watchlistListTimeframeOption = Options.text("timeframe").pipe(
+  Options.withDefault("15m"),
+  Options.withDescription("Timeframe to list watchlist for"),
+);
+
+export const watchlistListCommand = Command.make(
+  "list",
+  {
+    exchange: watchlistListExchangeOption,
+    timeframe: watchlistListTimeframeOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const sqlite = yield* SqliteClient;
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(sqlite.database);
+      const entries = yield* PaperTradingRepository.pipe(
+        Effect.flatMap((repo) => repo.listWatchlist(args.exchange, args.timeframe)),
+        Effect.provide(paperRepoLayer),
+      );
+      yield* Console.log(
+        `\n📋 Watchlist ${args.exchange}:${args.timeframe} (${entries.length} symbols)`,
+      );
+      yield* Console.log(
+        "Symbol        Return%   ProfitWin%  Step%  Grids  Pause  Updated",
+      );
+      yield* Console.log(
+        "------------------------------------------------------------------",
+      );
+      for (const e of entries) {
+        yield* Console.log(
+          `${e.symbol.padEnd(13)} ${e.aggregateReturnPct.toFixed(2).padStart(8)}%  ` +
+            `${e.profitableWindowsPct.toFixed(0).padStart(8)}%  ` +
+            `${e.gridStepPct.toFixed(2).padStart(5)}  ` +
+            `${String(e.gridMaxGrids).padStart(5)}  ` +
+            `${String(e.gridPauseAfterLossBars).padStart(5)}  ` +
+            `  ${e.updatedAt.toISOString().slice(0, 16)}`,
+        );
+      }
+      return entries;
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(Command.withDescription("List the DB-backed watchlist for an exchange/timeframe"));
+
+export const watchlistCommand = Command.make("watchlist", {}, () =>
+  Console.log(
+    "Watchlist commands. Use 'watchlist list --exchange <ex> --timeframe <tf>'.",
+  ),
+).pipe(
+  Command.withDescription("DB-backed watchlist management"),
+  Command.withSubcommands([watchlistListCommand]),
 );
 
 export const demoReadinessCommand = makeDemoReadinessCommand(
@@ -5564,5 +5741,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     demoReadinessCommand,
     parityReplayCommand,
     gridUniverseScanCommand,
+    watchlistCommand,
   ]),
 );

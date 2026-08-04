@@ -250,6 +250,18 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
       this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
     );
   }
+
+  listWatchlist() {
+    return Effect.succeed([]);
+  }
+
+  upsertWatchlist() {
+    return Effect.void;
+  }
+
+  clearWatchlist() {
+    return Effect.void;
+  }
 }
 
 class InMemoryKillSwitch implements KillSwitchService {

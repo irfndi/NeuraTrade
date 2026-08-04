@@ -165,6 +165,18 @@ class InMemRepo implements PaperTradingRepositoryService {
   ) {
     return Effect.succeed(this.trades.slice(-limit).reverse());
   }
+
+  listWatchlist() {
+    return Effect.succeed([]);
+  }
+
+  upsertWatchlist() {
+    return Effect.void;
+  }
+
+  clearWatchlist() {
+    return Effect.void;
+  }
 }
 
 function withinTol(a: number, b: number, tol = 0.005): boolean {

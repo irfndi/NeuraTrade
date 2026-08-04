@@ -19,6 +19,19 @@ export class PaperTradingRepositoryError {
   ) {}
 }
 
+export interface WatchlistEntry {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly returnPct: number;
+  readonly profitableWindowsPct: number;
+  readonly aggregateReturnPct: number;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly updatedAt: Date;
+}
+
 export interface PaperTradingRepositoryService {
   readonly ensureTables: () => Effect.Effect<
     void,
@@ -111,6 +124,20 @@ export interface PaperTradingRepositoryService {
     PaperTradingRepositoryError,
     never
   >;
+
+  readonly listWatchlist: (
+    exchange: string,
+    timeframe: string,
+  ) => Effect.Effect<readonly WatchlistEntry[], PaperTradingRepositoryError, never>;
+
+  readonly upsertWatchlist: (
+    entries: readonly WatchlistEntry[],
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  readonly clearWatchlist: (
+    exchange: string,
+    timeframe: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 }
 
 export const PaperTradingRepository =
@@ -264,6 +291,23 @@ CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_symbol
   ON grid_paper_trades(exchange, symbol, timeframe);
 CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_closed_at
   ON grid_paper_trades(closed_at DESC);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  return_pct REAL NOT NULL,
+  profitable_windows_pct REAL NOT NULL,
+  aggregate_return_pct REAL NOT NULL,
+  grid_step_pct REAL NOT NULL,
+  grid_max_grids INTEGER NOT NULL,
+  grid_pause_after_loss_bars INTEGER NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (exchange, symbol, timeframe)
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlist_scope
+  ON watchlist(exchange, timeframe);
 `;
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
@@ -1329,6 +1373,123 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to list grid paper trades: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  listWatchlist(
+    exchange: string,
+    timeframe: string,
+  ): Effect.Effect<
+    readonly WatchlistEntry[],
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const rows = this.db
+          .query(
+            `SELECT exchange, symbol, timeframe, return_pct,
+                    profitable_windows_pct, aggregate_return_pct,
+                    grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+                    updated_at
+             FROM watchlist
+             WHERE exchange = ? AND timeframe = ?
+             ORDER BY aggregate_return_pct DESC`,
+          )
+          .all(exchange, timeframe) as Array<{
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          return_pct: number;
+          profitable_windows_pct: number;
+          aggregate_return_pct: number;
+          grid_step_pct: number;
+          grid_max_grids: number;
+          grid_pause_after_loss_bars: number;
+          updated_at: string;
+        }>;
+
+        return rows.map((r) => ({
+          exchange: r.exchange,
+          symbol: r.symbol,
+          timeframe: r.timeframe,
+          returnPct: r.return_pct,
+          profitableWindowsPct: r.profitable_windows_pct,
+          aggregateReturnPct: r.aggregate_return_pct,
+          gridStepPct: r.grid_step_pct,
+          gridMaxGrids: r.grid_max_grids,
+          gridPauseAfterLossBars: r.grid_pause_after_loss_bars,
+          updatedAt: new Date(r.updated_at),
+        }));
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to list watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  upsertWatchlist(
+    entries: readonly WatchlistEntry[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const upsert = this.db
+          .query(
+            `INSERT INTO watchlist
+             (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
+              aggregate_return_pct, grid_step_pct, grid_max_grids,
+              grid_pause_after_loss_bars, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+               return_pct = excluded.return_pct,
+               profitable_windows_pct = excluded.profitable_windows_pct,
+               aggregate_return_pct = excluded.aggregate_return_pct,
+               grid_step_pct = excluded.grid_step_pct,
+               grid_max_grids = excluded.grid_max_grids,
+               grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+               updated_at = excluded.updated_at`,
+          );
+        const now = new Date().toISOString();
+        for (const e of entries) {
+          upsert.run(
+            e.exchange,
+            e.symbol,
+            e.timeframe,
+            e.returnPct,
+            e.profitableWindowsPct,
+            e.aggregateReturnPct,
+            e.gridStepPct,
+            e.gridMaxGrids,
+            e.gridPauseAfterLossBars,
+            now,
+          );
+        }
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to upsert watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  clearWatchlist(
+    exchange: string,
+    timeframe: string,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query("DELETE FROM watchlist WHERE exchange = ? AND timeframe = ?")
+          .run(exchange, timeframe);
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to clear watchlist: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });
