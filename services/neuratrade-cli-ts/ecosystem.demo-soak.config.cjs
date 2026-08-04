@@ -1,8 +1,9 @@
 // pm2 process definition for the Bitget PAPTRADING demo soak.
 // Run: pm2 start ecosystem.demo-soak.config.cjs
-// The soak runs the validated BTC 15m grid candidate against the Bitget demo
-// matching engine (PAPTRADING=1) at a 15-minute cadence, forever, persisting
-// fills to ~/.neuratrade/data/neuratrade.db via NEURATRADE_HOME.
+// The soak runs the grid universe survivors (grid-whitelist.json) against the
+// Bitget demo matching engine (PAPTRADING=1) at a 15-minute cadence, forever,
+// persisting fills to ~/.neuratrade/data/neuratrade.db via NEURATRADE_HOME.
+// The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -42,24 +43,12 @@ module.exports = {
         "paper-trade",
         "--exchange",
         "bitget-futures",
-        "--symbol",
-        "BTC/USDT:USDT",
         "--timeframe",
         "15m",
         "--futures",
         "--live",
         "--strategy-type",
         "grid",
-        "--grid-step-pct",
-        "1",
-        "--grid-max-grids",
-        "1",
-        "--grid-pause-after-loss-bars",
-        "24",
-        "--chop-gate-adx",
-        "24",
-        "--target-ratio",
-        "3",
         "--trend-filter-period",
         "0",
         "--fee",
@@ -76,6 +65,8 @@ module.exports = {
         "5",
         "--max-daily-loss-pct",
         "2",
+        "--watchlist",
+        "grid-whitelist.json",
         "--iterations",
         "0",
         "--interval",

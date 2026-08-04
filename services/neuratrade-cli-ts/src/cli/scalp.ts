@@ -85,6 +85,10 @@ import {
   formatReadinessReport,
 } from "../scalping/readiness.js";
 import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
+import {
+  runGridUniverseScan,
+  type GridUniverseOptions,
+} from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
   buildComposerConfigFromTemplate,
@@ -2871,6 +2875,11 @@ export interface WatchlistEntry {
     readonly atrTakeProfitMultiplier: number;
     readonly minConfidence: number;
   };
+  readonly gridParams?: {
+    readonly gridStepPct: number;
+    readonly gridMaxGrids: number;
+    readonly gridPauseAfterLossBars: number;
+  };
 }
 
 export interface PaperTradeArgs extends ResolvedBacktestArgs {
@@ -3268,6 +3277,7 @@ export interface LiveGridConfiguration {
 
 export function validateLiveGridConfiguration(
   config: LiveGridConfiguration,
+  sandbox = false,
 ): string | undefined {
   const validatedCandidate =
     config.exchange === VALIDATED_BTC_GRID_CANDIDATE.exchange &&
@@ -3286,7 +3296,7 @@ export function validateLiveGridConfiguration(
     config.targetRatio === VALIDATED_BTC_GRID_CANDIDATE.targetRatio &&
     config.chopGateAdx === VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx &&
     config.leverage === VALIDATED_BTC_GRID_CANDIDATE.leverage;
-  if (!validatedCandidate) {
+  if (!validatedCandidate && !sandbox) {
     return "live grid must use the validated BTC 15m grid candidate";
   }
   if (
@@ -3317,6 +3327,7 @@ export function validateLiveGridWatchlist(
   live: boolean,
   strategyType: "signal" | "grid",
   entries: readonly Pick<WatchlistEntry, "symbol">[] | undefined,
+  sandbox = false,
 ): string | undefined {
   if (
     live &&
@@ -3324,6 +3335,9 @@ export function validateLiveGridWatchlist(
     entries !== undefined &&
     entries.length > 0
   ) {
+    if (sandbox) {
+      return undefined;
+    }
     return "live grid watchlists are disabled; run the validated BTC candidate directly";
   }
   return undefined;
@@ -3377,6 +3391,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.live,
       strategyType,
       args.entries,
+      process.env.BITGET_USE_SANDBOX === "true" ||
+        process.env.BITGET_USE_SANDBOX === "1",
     );
     if (liveGridWatchlistError !== undefined) {
       return yield* Effect.fail(new Error(liveGridWatchlistError));
@@ -3405,7 +3421,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         ),
         maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
         maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
-      });
+      }, args.live &&
+        strategyType === "grid" &&
+        (args.entries?.length ?? 0) > 0 &&
+        (process.env.BITGET_USE_SANDBOX === "true" ||
+          process.env.BITGET_USE_SANDBOX === "1"));
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
       }
@@ -3539,13 +3559,15 @@ function paperTradeProgram(args: PaperTradeArgs) {
     const makeGridOptions = (
       symbol: string,
       exchange: string,
+      gridParams?: WatchlistEntry["gridParams"],
     ): GridPaperTradingOptions => ({
       exchange: resolveFuturesMarketExchange(exchange, true),
       symbol,
       timeframe: args.timeframe,
-      gridStepPct: args.gridStepPct,
-      gridMaxGrids: args.gridMaxGrids,
-      gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+      gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
+      gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
+      gridPauseAfterLossBars:
+        gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
       feePct: args.fee,
       slippageBps: args.slippageBps,
       trendFilterPeriod: args.trendFilterPeriod,
@@ -3666,7 +3688,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
           const result =
             args.strategyType === "grid"
               ? yield* runGridIteration(
-                  makeGridOptions(entry.symbol, entryExchange),
+                  makeGridOptions(entry.symbol, entryExchange, entry.gridParams),
                 )
               : args.futures
                 ? yield* runFuturesIteration(
@@ -5328,6 +5350,193 @@ export const readinessCommand = Command.make(
   ),
 );
 
+const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
+  gridStepPct: [0.2, 0.4, 0.6, 1.0],
+  gridMaxGrids: [1, 2, 3],
+  gridPauseAfterLossBars: [0, 6, 24],
+} as const;
+
+const gridUniverseExchangeOption = Options.text("exchange").pipe(
+  Options.withDefault("bitget-futures"),
+  Options.withDescription("Exchange to scan for grid candidates"),
+);
+
+const gridUniverseTimeframeOption = Options.text("timeframe").pipe(
+  Options.withDefault("15m"),
+  Options.withDescription("Candle timeframe for the grid universe scan"),
+);
+
+const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
+  Options.withDefault(500),
+  Options.withDescription(
+    "Minimum candles a symbol must have to be included in the scan",
+  ),
+);
+
+const gridUniverseTrainWindowOption = Options.integer("train-window").pipe(
+  Options.withDefault(180),
+  Options.withDescription("Walk-forward training window in days"),
+);
+
+const gridUniverseTestWindowOption = Options.integer("test-window").pipe(
+  Options.withDefault(60),
+  Options.withDescription("Walk-forward test window in days"),
+);
+
+const gridUniverseMinProfitableWindowsOption = Options.float(
+  "min-profitable-windows-pct",
+).pipe(
+  Options.withDefault(60),
+  Options.withDescription(
+    "Minimum % of walk-forward windows a symbol must be profitable in",
+  ),
+);
+
+const gridUniverseMinAggregateReturnOption = Options.float(
+  "min-aggregate-return-pct",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum aggregate walk-forward return % a symbol must exceed",
+  ),
+);
+
+const gridUniverseFeeOption = Options.float("fee").pipe(
+  Options.withDefault(0.06),
+  Options.withDescription("Per-side fee % applied in the grid backtests"),
+);
+
+const gridUniverseSlippageOption = Options.float("slippage-bps").pipe(
+  Options.withDefault(2),
+  Options.withDescription("Slippage in basis points applied to grid fills"),
+);
+
+const gridUniverseTrendFilterOption = Options.integer("trend-filter-period").pipe(
+  Options.withDefault(0),
+  Options.withDescription("SMA trend filter period for the grid backtests"),
+);
+
+const gridUniverseOutputOption = Options.text("output").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Write surviving candidates to a JSON whitelist in NEURATRADE_HOME/data",
+  ),
+);
+
+/**
+ * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
+ *
+ * Walks every stored symbol with enough candles, finds the best grid
+ * parameters in-sample, and reports which symbols survive a profitability and
+ * robustness gate. With --output it writes a whitelist JSON consumable by
+ * `scalp paper-trade --strategy-type grid --watchlist`.
+ */
+export const gridUniverseScanCommand = Command.make(
+  "grid-universe-scan",
+  {
+    exchange: gridUniverseExchangeOption,
+    timeframe: gridUniverseTimeframeOption,
+    minCandles: gridUniverseMinCandlesOption,
+    trainWindow: gridUniverseTrainWindowOption,
+    testWindow: gridUniverseTestWindowOption,
+    minProfitableWindowsPct: gridUniverseMinProfitableWindowsOption,
+    minAggregateReturnPct: gridUniverseMinAggregateReturnOption,
+    fee: gridUniverseFeeOption,
+    slippageBps: gridUniverseSlippageOption,
+    trendFilterPeriod: gridUniverseTrendFilterOption,
+    output: gridUniverseOutputOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlite = yield* SqliteClient;
+      const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
+
+      const outputPath = Option.isSome(args.output)
+        ? resolve(path.homeDir, "data", args.output.value)
+        : undefined;
+
+      const options: GridUniverseOptions = {
+        exchange: args.exchange,
+        timeframe: args.timeframe,
+        initialCapital: 10000,
+        minCandles: args.minCandles,
+        trainWindow: args.trainWindow,
+        testWindow: args.testWindow,
+        minProfitableWindowsPct: args.minProfitableWindowsPct,
+        minAggregateReturnPct: args.minAggregateReturnPct,
+        feePct: args.fee,
+        slippageBps: args.slippageBps,
+        trendFilterPeriod: args.trendFilterPeriod,
+        searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+        outputPath,
+      };
+
+      const result = yield* runGridUniverseScan(options).pipe(
+        Effect.provide(repoLayer),
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(
+              `grid-universe-scan failed: ${
+                "reason" in err ? err.reason : String(err)
+              }`,
+            );
+            return { entries: [], survivors: [] };
+          }),
+        ),
+      );
+
+      if (outputPath) {
+        const watchlist = result.survivors.map((e) => ({
+          symbol: e.symbol,
+          exchange: args.exchange,
+          returnPct: e.walkForward.aggregateReturnPct,
+          sharpe: e.walkForward.aggregateReturnPct > 0 ? 1 : 0,
+          gridParams: {
+            gridStepPct: e.bestParams.gridStepPct,
+            gridMaxGrids: e.bestParams.gridMaxGrids,
+            gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+          },
+        }));
+        yield* Effect.tryPromise({
+          try: () => Bun.write(outputPath, JSON.stringify(watchlist, null, 2)),
+          catch: (err) =>
+            new MarketDataRepositoryError(
+              `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+        });
+        yield* Console.log(`Whitelist written to ${outputPath}`);
+      }
+
+      yield* Console.log(
+        `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
+      );
+      yield* Console.log(
+        "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
+      );
+      yield* Console.log(
+        "------------------------------------------------------------------",
+      );
+      for (const e of result.entries) {
+        const mark = e.passed ? " ✔" : "";
+        yield* Console.log(
+          `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
+            `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
+            `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
+            `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
+            `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
+            `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+        );
+      }
+
+      return result.survivors;
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Per-symbol grid walk-forward scan; finds profitable grid candidates across the stored universe",
+  ),
+);
+
 export const demoReadinessCommand = makeDemoReadinessCommand(
   makeDbLayer(process.env.NEURATRADE_HOME),
 );
@@ -5354,5 +5563,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     readinessCommand,
     demoReadinessCommand,
     parityReplayCommand,
+    gridUniverseScanCommand,
   ]),
 );

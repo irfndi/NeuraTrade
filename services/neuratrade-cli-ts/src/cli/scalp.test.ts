@@ -148,6 +148,10 @@ describe("live execution market guard", () => {
         "validated BTC 15m grid",
       );
     }
+
+    expect(
+      validateLiveGridConfiguration({ ...config, symbol: "ETH/USDT:USDT" }, true),
+    ).toBeUndefined();
   });
 
   it("enforces the live drawdown and daily-loss risk caps", () => {
@@ -198,6 +202,9 @@ describe("live execution market guard", () => {
     expect(validateLiveGridWatchlist(true, "grid", [])).toBeUndefined();
     expect(
       validateLiveGridWatchlist(false, "grid", [{ symbol: "ETH/USDT:USDT" }]),
+    ).toBeUndefined();
+    expect(
+      validateLiveGridWatchlist(true, "grid", [{ symbol: "ETH/USDT:USDT" }], true),
     ).toBeUndefined();
   });
 });
