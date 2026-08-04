@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { Effect, Fiber, TestClock, TestContext } from "effect";
+import { Effect, Fiber } from "effect";
+import * as TestClock from "effect/testing/TestClock";
 import { RateLimiter, RateLimiterLive } from "./rate-limiter.ts";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +13,7 @@ function runWithTestClock<A>(
   return Effect.runPromise(
     program.pipe(
       Effect.provide(RateLimiterLive({ perSecond: 10, perMinute: 600 })),
-      Effect.provide(TestContext.TestContext),
+      Effect.provide(TestClock.layer()),
     ) as Effect.Effect<A, never>,
   );
 }
@@ -37,7 +38,7 @@ describe("RateLimiter", () => {
       yield* rl.acquire(10);
 
       // The next acquire should sleep until tokens refill.
-      const fiber = yield* Effect.fork(rl.acquire(1));
+      const fiber = yield* Effect.forkChild(rl.acquire(1));
       yield* TestClock.adjust("150 millis");
       yield* Fiber.join(fiber);
     });
@@ -49,7 +50,7 @@ describe("RateLimiter", () => {
       const rl = yield* RateLimiter;
       yield* rl.acquire(5);
       yield* rl.acquire(5);
-      const fiber = yield* Effect.fork(rl.acquire(1));
+      const fiber = yield* Effect.forkChild(rl.acquire(1));
       yield* TestClock.adjust("150 millis");
       yield* Fiber.join(fiber);
     });
@@ -63,13 +64,15 @@ describe("RateLimiter", () => {
       yield* rl.acquire(10);
 
       const fibers = yield* Effect.forEach(Array.from({ length: 5 }), () =>
-        Effect.fork(rl.acquire(1)),
+        Effect.forkChild(rl.acquire(1)),
       );
 
       yield* TestClock.adjust("100 millis");
 
-      const statuses = yield* Effect.forEach(fibers, (f) => Fiber.poll(f));
-      const completed = statuses.filter((s) => s._tag === "Some").length;
+      const statuses = yield* Effect.forEach(fibers, (f) =>
+        Effect.sync(() => f.pollUnsafe()),
+      );
+      const completed = statuses.filter((s) => s !== undefined).length;
 
       expect(completed).toBeLessThanOrEqual(1);
 

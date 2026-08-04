@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect";
-import { FileSystem } from "@effect/platform";
+import { FileSystem } from "effect";
 import { Path } from "./path.ts";
 
 /**
@@ -9,7 +9,7 @@ import { Path } from "./path.ts";
  * `processMatchesAnyPattern`, `removePIDFileIfProcessExited`,
  * `cleanupStalePIDs`).
  */
-export class PidFile extends Context.Tag("PidFile")<
+export class PidFile extends Context.Service<
   PidFile,
   {
     /** Read the PID stored for `service`, or `null` if missing/invalid. */
@@ -45,7 +45,7 @@ export class PidFile extends Context.Tag("PidFile")<
       services: ReadonlyArray<string>,
     ) => Effect.Effect<void, never>;
   }
->() {}
+>()("PidFile") {}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -77,7 +77,7 @@ function psCommand(pid: number): Effect.Effect<string, never> {
       new Response(proc.stdout).text(),
     );
     return output.trim().toLowerCase();
-  }).pipe(Effect.catchAll(() => Effect.succeed("")));
+  }).pipe(Effect.catch(() => Effect.succeed("")));
 }
 
 /** Live PidFile layer backed by the real filesystem and process signals. */
@@ -111,13 +111,13 @@ export const PidFileLive: Layer.Layer<
           return null;
         }
         return parsed;
-      }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      }).pipe(Effect.catch(() => Effect.succeed(null)));
 
     const write = (service: string, pid: number): Effect.Effect<void, never> =>
       Effect.gen(function* () {
         const filePath = pidPath(service);
         yield* fs.writeFileString(filePath, String(pid));
-      }).pipe(Effect.catchAll(() => Effect.void));
+      }).pipe(Effect.catch(() => Effect.void));
 
     const remove = (service: string): Effect.Effect<void, never> =>
       Effect.gen(function* () {
@@ -126,7 +126,7 @@ export const PidFileLive: Layer.Layer<
         if (exists) {
           yield* fs.remove(filePath);
         }
-      }).pipe(Effect.catchAll(() => Effect.void));
+      }).pipe(Effect.catch(() => Effect.void));
 
     const isRunning = (pid: number): Effect.Effect<boolean, never> =>
       Effect.sync(() => isProcessAlive(pid));

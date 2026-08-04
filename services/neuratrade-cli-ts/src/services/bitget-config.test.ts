@@ -1,21 +1,30 @@
 import { describe, expect, it } from "bun:test";
-import { Effect } from "effect";
+import { ConfigProvider, Effect } from "effect";
 import {
   BitgetConfig,
   BitgetConfigLive,
   requireBitgetCredentials,
 } from "./bitget-config.ts";
 
+// Effect v4 snapshots process.env in the default ConfigProvider at first use,
+// so tests that mutate process.env must supply a fresh provider per run.
+const loadConfig = () =>
+  Effect.gen(function* () {
+    return yield* BitgetConfig;
+  }).pipe(
+    Effect.provide(BitgetConfigLive),
+    Effect.provideService(
+      ConfigProvider.ConfigProvider,
+      ConfigProvider.fromEnv(),
+    ),
+  );
+
 describe("BitgetConfig", () => {
   it("loads credentials and sandbox flag from environment", async () => {
     const original = process.env.BITGET_USE_SANDBOX;
     delete process.env.BITGET_USE_SANDBOX;
     try {
-      const config = await Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* BitgetConfig;
-        }).pipe(Effect.provide(BitgetConfigLive)),
-      );
+      const config = await Effect.runPromise(loadConfig());
       expect(config.useSandbox).toBe(false);
     } finally {
       if (original === undefined) {
@@ -30,11 +39,7 @@ describe("BitgetConfig", () => {
     const original = process.env.BITGET_USE_SANDBOX;
     process.env.BITGET_USE_SANDBOX = "true";
     try {
-      const config = await Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* BitgetConfig;
-        }).pipe(Effect.provide(BitgetConfigLive)),
-      );
+      const config = await Effect.runPromise(loadConfig());
       expect(config.useSandbox).toBe(true);
     } finally {
       if (original === undefined) {
@@ -53,11 +58,7 @@ describe("BitgetConfig", () => {
     delete process.env.BITGET_API_SECRET;
     delete process.env.BITGET_PASSPHRASE;
     try {
-      const config = await Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* BitgetConfig;
-        }).pipe(Effect.provide(BitgetConfigLive)),
-      );
+      const config = await Effect.runPromise(loadConfig());
       const exit = await Effect.runPromiseExit(
         requireBitgetCredentials(config),
       );

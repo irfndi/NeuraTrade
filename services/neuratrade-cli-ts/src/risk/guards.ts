@@ -54,7 +54,7 @@ export interface RiskGuardService {
   ) => Effect.Effect<void, RiskError, never>;
 }
 
-export const RiskGuard = Context.GenericTag<RiskGuardService>("RiskGuard");
+export const RiskGuard = Context.Service<RiskGuardService>("RiskGuard");
 
 /**
  * Conservative defaults for live trading; permissive defaults for paper trading.

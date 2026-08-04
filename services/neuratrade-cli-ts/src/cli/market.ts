@@ -1,6 +1,6 @@
-import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
-import { Console, Effect, Layer } from "effect";
+import { Command, Options } from "./kit/kit.ts";
+import { BunServices } from "@effect/platform-bun";
+import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
@@ -54,6 +54,33 @@ const minVolumeOption = Options.float("min-volume").pipe(
   Options.withDescription("Minimum 24h quote-volume threshold (0 = disabled)"),
 );
 
+const startOption = Options.text("start").pipe(
+  Options.optional,
+  Options.withDescription("Start date as an ISO-8601 string (e.g. 2025-06-01)"),
+);
+
+const endOption = Options.text("end").pipe(
+  Options.optional,
+  Options.withDescription(
+    "End date as an ISO-8601 string (defaults to now if omitted)",
+  ),
+);
+
+const noResumeOption = Options.boolean("no-resume").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Delete existing candles before fetching"),
+);
+
+const concurrencyOption = Options.integer("concurrency").pipe(
+  Options.withDefault(1),
+  Options.withDescription("Maximum symbols to fetch in parallel"),
+);
+
+const coverageOption = Options.boolean("coverage").pipe(
+  Options.withDefault(false),
+  Options.withDescription("Print a coverage report before fetching"),
+);
+
 const STABLECOIN_BASES = new Set([
   "USDT",
   "USDC",
@@ -68,7 +95,7 @@ const STABLECOIN_BASES = new Set([
 
 function makeLayer(home?: string) {
   return Layer.mergeAll(
-    BunContext.layer,
+    BunServices.layer,
     PathLive(home),
     MarketDataGatewayLive,
   );
@@ -82,15 +109,24 @@ export const fetchCandlesCommand = Command.make(
     timeframe: timeframeOption,
     days: daysOption,
     batch: batchOption,
+    start: startOption,
+    end: endOption,
+    noResume: noResumeOption,
   },
-  ({ exchange, symbol, timeframe, days, batch }) =>
+  ({ exchange, symbol, timeframe, days, batch, start, end, noResume }) =>
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const startDate = yield* parseDateOption(start);
+      const endDate = yield* parseDateOption(end);
 
       const result = yield* fetchCandlesProgram({
         exchange,
@@ -98,12 +134,15 @@ export const fetchCandlesCommand = Command.make(
         timeframe,
         days,
         batch,
+        start: startDate,
+        end: endDate,
+        noResume,
       }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((total) =>
           Console.log(`Fetched and stored ${total} candles`),
         ),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-candles failed: ${err.reason}`);
             return 0;
@@ -124,6 +163,28 @@ interface FetchCandlesArgs {
   readonly timeframe: string;
   readonly days: number;
   readonly batch: number;
+  readonly start?: Date;
+  readonly end?: Date;
+  readonly noResume?: boolean;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function parseDateOption(
+  opt: Option.Option<string>,
+): Effect.Effect<Date | undefined, MarketDataRepositoryError, never> {
+  return Option.match(opt, {
+    onNone: () => Effect.succeed(undefined),
+    onSome: (value) => {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return Effect.fail(
+          new MarketDataRepositoryError(`Invalid ISO date: ${value}`),
+        );
+      }
+      return Effect.succeed(date);
+    },
+  });
 }
 
 function fetchCandlesProgram(args: FetchCandlesArgs) {
@@ -133,15 +194,30 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
 
     yield* repo.ensureTables();
 
-    const now = Date.now();
-    const startTime = now - args.days * 24 * 60 * 60 * 1000;
+    if (args.noResume) {
+      const deleted = yield* repo.deleteCandles(
+        args.exchange,
+        args.symbol,
+        args.timeframe,
+      );
+      if (deleted > 0) {
+        yield* Console.log(
+          `Cleared ${deleted} existing candles for ${args.symbol} ${args.timeframe}`,
+        );
+      }
+    }
+
+    const endTime = args.end ? args.end.getTime() : Date.now();
+    const startTime = args.start
+      ? args.start.getTime()
+      : endTime - args.days * DAY_MS;
     const timeframeMs = timeframeToMs(args.timeframe);
     const candlesPerBatch = Math.min(args.batch, 1000);
 
     let totalSaved = 0;
     let currentStart = startTime;
 
-    while (currentStart < now) {
+    while (currentStart < endTime) {
       const candles = yield* gateway.fetchOHLCV(
         args.exchange,
         args.symbol,
@@ -153,7 +229,9 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
       if (candles.length === 0) break;
 
       const filtered = candles.filter(
-        (c) => c.timestamp.getTime() >= startTime,
+        (c) =>
+          c.timestamp.getTime() >= startTime &&
+          c.timestamp.getTime() <= endTime,
       );
       if (filtered.length === 0) break;
 
@@ -170,6 +248,20 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
 
       // Respectful rate limiting: 100ms between requests (10 req/s).
       yield* Effect.sleep("100 millis");
+    }
+
+    const stored = yield* repo.getCandles({
+      exchange: args.exchange,
+      symbol: args.symbol,
+      timeframe: args.timeframe,
+    });
+    if (stored.length > 0) {
+      const first = stored[0].timestamp.toISOString();
+      const last = stored[stored.length - 1].timestamp.toISOString();
+      const expected = Math.floor((endTime - startTime) / timeframeMs) + 1;
+      yield* Console.log(
+        `Integrity: ${stored.length} candles stored (${first} → ${last}), ~${expected} expected`,
+      );
     }
 
     return totalSaved;
@@ -196,6 +288,11 @@ interface FetchUniverseArgs {
   readonly top: number;
   readonly quote: string;
   readonly minVolume: number;
+  readonly start?: Date;
+  readonly end?: Date;
+  readonly noResume?: boolean;
+  readonly concurrency?: number;
+  readonly coverage?: boolean;
 }
 
 export const fetchUniverseCommand = Command.make(
@@ -208,15 +305,39 @@ export const fetchUniverseCommand = Command.make(
     top: topOption,
     quote: quoteOption,
     minVolume: minVolumeOption,
+    start: startOption,
+    end: endOption,
+    noResume: noResumeOption,
+    concurrency: concurrencyOption,
+    coverage: coverageOption,
   },
-  ({ exchange, timeframe, days, batch, top, quote, minVolume }) =>
+  ({
+    exchange,
+    timeframe,
+    days,
+    batch,
+    top,
+    quote,
+    minVolume,
+    start,
+    end,
+    noResume,
+    concurrency,
+    coverage,
+  }) =>
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
-      const db = new Database(sqlitePath);
-      db.exec("PRAGMA foreign_keys = ON;");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const startDate = yield* parseDateOption(start);
+      const endDate = yield* parseDateOption(end);
 
       const result = yield* fetchUniverseProgram({
         exchange,
@@ -226,6 +347,11 @@ export const fetchUniverseCommand = Command.make(
         top,
         quote,
         minVolume,
+        start: startDate,
+        end: endDate,
+        noResume,
+        concurrency,
+        coverage,
       }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((summary) =>
@@ -233,7 +359,7 @@ export const fetchUniverseCommand = Command.make(
             `Universe fetch complete: ${summary.symbols.length} symbols, ${summary.totalCandles} candles`,
           ),
         ),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(`fetch-universe failed: ${err.reason}`);
             return { symbols: [], totalCandles: 0 };
@@ -249,6 +375,37 @@ export const fetchUniverseCommand = Command.make(
     "Fetch historical candles for the top-volume symbol universe",
   ),
 );
+
+interface CoverageRow {
+  readonly symbol: string;
+  readonly count: number;
+  readonly expected: number;
+  readonly coveragePct: number;
+  readonly status: string;
+}
+
+function printCoverageTable(rows: readonly CoverageRow[]) {
+  const lines = [
+    "Symbol".padEnd(12) +
+      "Count".padStart(8) +
+      "Expected".padStart(12) +
+      "Coverage".padStart(12) +
+      "Status".padStart(10),
+    ...rows.map(
+      (r) =>
+        r.symbol.padEnd(12) +
+        String(r.count).padStart(8) +
+        String(r.expected).padStart(12) +
+        `${(r.coveragePct * 100).toFixed(1)}%`.padStart(12) +
+        r.status.padStart(10),
+    ),
+  ];
+  return Effect.gen(function* () {
+    for (const line of lines) {
+      yield* Console.log(line);
+    }
+  });
+}
 
 export function fetchUniverseProgram(args: FetchUniverseArgs) {
   return Effect.gen(function* () {
@@ -291,32 +448,170 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
       .slice(0, args.top)
       .map((s) => s.symbol);
 
+    const coverage = args.coverage ?? false;
+    const concurrency = args.concurrency ?? 1;
+
+    if (coverage) {
+      const reportEnd = args.end ?? new Date();
+      const reportStart =
+        args.start ?? new Date(reportEnd.getTime() - args.days * DAY_MS);
+      yield* Console.log(
+        `Coverage report for ${args.exchange} ${args.timeframe} (${reportStart.toISOString()} → ${reportEnd.toISOString()})`,
+      );
+      const rows = yield* repo.getCoverageReport(
+        args.exchange,
+        ranked,
+        args.timeframe,
+        reportStart,
+        reportEnd,
+      );
+      yield* printCoverageTable(rows);
+    }
+
     yield* Console.log(
       `Fetching ${ranked.length} symbols: ${ranked.join(", ")}`,
     );
 
+    const results = yield* Effect.all(
+      ranked.map((symbol) =>
+        fetchCandlesProgram({
+          exchange: args.exchange,
+          symbol,
+          timeframe: args.timeframe,
+          days: args.days,
+          batch: args.batch,
+          start: args.start,
+          end: args.end,
+          noResume: args.noResume,
+        }),
+      ),
+      { concurrency },
+    );
+
     let totalCandles = 0;
-    for (const symbol of ranked) {
-      const saved = yield* fetchCandlesProgram({
-        exchange: args.exchange,
-        symbol,
-        timeframe: args.timeframe,
-        days: args.days,
-        batch: args.batch,
-      });
-      totalCandles += saved;
-      yield* Console.log(`  ${symbol}: ${saved} candles`);
+    for (let i = 0; i < ranked.length; i++) {
+      totalCandles += results[i];
+      yield* Console.log(`  ${ranked[i]}: ${results[i]} candles`);
     }
 
     return { symbols: ranked, totalCandles };
   });
 }
 
+interface FetchFundingRatesArgs {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly days: number;
+  readonly start?: Date;
+  readonly end?: Date;
+  readonly noResume?: boolean;
+}
+
+function fetchFundingRatesProgram(args: FetchFundingRatesArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* MarketDataRepository;
+    const gateway = yield* MarketDataGateway;
+
+    yield* repo.ensureFundingRatesTable();
+
+    if (args.noResume) {
+      const db = (repo as unknown as { db?: Database }).db;
+      if (db) {
+        db.run("DELETE FROM funding_rates WHERE exchange = ? AND symbol = ?", [
+          args.exchange,
+          args.symbol,
+        ]);
+      }
+    }
+
+    const endTime = args.end ? args.end.getTime() : Date.now();
+    const startTime = args.start
+      ? args.start.getTime()
+      : endTime - args.days * DAY_MS;
+
+    const rates = yield* gateway.fetchFundingRates(
+      args.exchange,
+      args.symbol,
+      new Date(startTime),
+      new Date(endTime),
+      1000,
+    );
+
+    const saved = yield* repo.saveFundingRates(
+      args.exchange,
+      args.symbol,
+      rates,
+    );
+
+    return { fetched: rates.length, saved };
+  });
+}
+
+export const fetchFundingRatesCommand = Command.make(
+  "fetch-funding-rates",
+  {
+    exchange: exchangeOption,
+    symbol: symbolOption,
+    days: daysOption,
+    start: startOption,
+    end: endOption,
+    noResume: noResumeOption,
+  },
+  ({ exchange, symbol, days, start, end, noResume }) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlitePath = resolve(path.homeDir, "data", "neuratrade.db");
+      const db = yield* Effect.sync(() => {
+        const d = new Database(sqlitePath);
+        d.exec("PRAGMA foreign_keys = ON;");
+        return d;
+      });
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+
+      const startDate = yield* parseDateOption(start);
+      const endDate = yield* parseDateOption(end);
+
+      const result = yield* fetchFundingRatesProgram({
+        exchange,
+        symbol,
+        days,
+        start: startDate,
+        end: endDate,
+        noResume,
+      }).pipe(
+        Effect.provide(repoLayer),
+        Effect.tap((r) =>
+          Console.log(
+            `Fetched ${r.fetched} funding rates, stored ${r.saved} new rows`,
+          ),
+        ),
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            yield* Console.error(`fetch-funding-rates failed: ${err.reason}`);
+            return { fetched: 0, saved: 0 };
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => db.close())),
+      );
+
+      return result;
+    }).pipe(Effect.provide(makeLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Fetch perpetual futures funding rates from an exchange",
+  ),
+);
+
 export const marketCommand = Command.make("market", {}, () =>
   Console.log(
-    "Market data commands. Use 'market fetch-candles|fetch-universe --help' for details.",
+    "Market data commands. Use 'market fetch-candles|fetch-funding-rates|fetch-universe --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Market data operations"),
-  Command.withSubcommands([fetchCandlesCommand, fetchUniverseCommand]),
+  Command.withSubcommands([
+    fetchCandlesCommand,
+    fetchFundingRatesCommand,
+    fetchUniverseCommand,
+  ]),
 );

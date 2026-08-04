@@ -1,4 +1,4 @@
-import { Command, Options } from "@effect/cli";
+import { Command } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
 import { gatewayCommand } from "./gateway.ts";
 import { statusCommand } from "./status.ts";

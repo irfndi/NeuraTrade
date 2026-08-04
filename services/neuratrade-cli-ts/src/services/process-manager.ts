@@ -69,7 +69,7 @@ function resolveAllowedBinaries(): ReadonlySet<string> {
  * `startService`, `stopServiceByPIDFile`, `signalAndWait`,
  * `cleanupStalePIDs`, `resolveServiceBinary`.
  */
-export class ProcessManager extends Context.Tag("ProcessManager")<
+export class ProcessManager extends Context.Service<
   ProcessManager,
   {
     /**
@@ -131,7 +131,7 @@ export class ProcessManager extends Context.Tag("ProcessManager")<
       services: ReadonlyArray<string>,
     ) => Effect.Effect<void, never>;
   }
->() {}
+>()("ProcessManager") {}
 
 // ---------------------------------------------------------------------------
 // LookPath — find binary in PATH (or execDir)

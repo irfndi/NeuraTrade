@@ -1,6 +1,6 @@
 import { describe, it } from "bun:test";
 import * as fc from "fast-check";
-import { runBacktest } from "./backtest.js";
+import { runBacktest, type BacktestOptions } from "./backtest.js";
 import { defaultComposerConfig } from "./composer.js";
 import type { CandleLike } from "./types.js";
 
@@ -15,6 +15,26 @@ const baseOpts = {
   takeProfitPct: 10,
   minConfidence: 0.1,
 } as const;
+
+function withExitEngineOverrides(
+  opts: BacktestOptions,
+  useAtrStops: boolean,
+  atrStopMultiplier: number,
+  atrTakeProfitMultiplier: number,
+  atrRiskReward: number,
+  scaleOutAtR: number,
+  scaleOutPct: number,
+): BacktestOptions {
+  return {
+    ...opts,
+    useAtrStops,
+    atrStopMultiplier,
+    atrTakeProfitMultiplier,
+    atrRiskReward,
+    scaleOutAtR,
+    scaleOutPct,
+  };
+}
 
 function makeCandleArb(): fc.Arbitrary<CandleLike[]> {
   return fc
@@ -84,6 +104,48 @@ describe("Backtest property invariants", () => {
         });
         return result.totalFundingCost === 0;
       }),
+      { numRuns: 50 },
+    );
+  });
+
+  it("random exit-engine configs produce finite results", () => {
+    fc.assert(
+      fc.property(
+        makeCandleArb(),
+        fc.boolean(),
+        fc.float({ min: 0.5, max: 5, noNaN: true }),
+        fc.float({ min: 1, max: 6, noNaN: true }),
+        fc.float({ min: 0, max: 4, noNaN: true }),
+        fc.float({ min: 0, max: 3, noNaN: true }),
+        fc.float({ min: 10, max: 90, noNaN: true }),
+        (
+          candles,
+          useAtrStops,
+          atrStopMultiplier,
+          atrTakeProfitMultiplier,
+          atrRiskReward,
+          scaleOutAtR,
+          scaleOutPct,
+        ) => {
+          const result = runBacktest(
+            withExitEngineOverrides(
+              { ...baseOpts, candles, feePct: 0 },
+              useAtrStops,
+              atrStopMultiplier,
+              atrTakeProfitMultiplier,
+              atrRiskReward,
+              scaleOutAtR,
+              scaleOutPct,
+            ),
+          );
+          return (
+            Number.isFinite(result.totalReturnPct) &&
+            Number.isFinite(result.maxDrawdownPct) &&
+            Number.isFinite(result.sharpeRatio) &&
+            result.trades.every((t) => Number.isFinite(t.pnl))
+          );
+        },
+      ),
       { numRuns: 50 },
     );
   });

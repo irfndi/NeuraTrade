@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import { Database } from "bun:sqlite";
-import type { Candle, Tick } from "./types.js";
+import type { Candle, FundingRate, Tick } from "./types.js";
 
 /**
  * Error raised when market-data persistence fails.
@@ -52,15 +52,86 @@ export interface MarketDataRepositoryService {
     minCandles?: number,
   ) => Effect.Effect<readonly string[], MarketDataRepositoryError, never>;
 
+  readonly listSymbolsByCandleCount: (
+    exchange: string,
+    timeframe: string,
+    limit: number,
+  ) => Effect.Effect<
+    readonly { symbol: string; count: number }[],
+    MarketDataRepositoryError,
+    never
+  >;
+
+  readonly deleteCandles: (
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ) => Effect.Effect<number, MarketDataRepositoryError, never>;
+
+  readonly getCandleRange: (
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ) => Effect.Effect<
+    { earliest: Date | null; latest: Date | null; count: number },
+    MarketDataRepositoryError,
+    never
+  >;
+
+  readonly getCoverageReport: (
+    exchange: string,
+    symbols: readonly string[],
+    timeframe: string,
+    start: Date,
+    end: Date,
+  ) => Effect.Effect<
+    readonly {
+      symbol: string;
+      count: number;
+      earliest: Date | null;
+      latest: Date | null;
+      expected: number;
+      coveragePct: number;
+      status: "complete" | "partial" | "missing";
+    }[],
+    MarketDataRepositoryError,
+    never
+  >;
+
   readonly ensureTables: () => Effect.Effect<
     void,
     MarketDataRepositoryError,
     never
   >;
+
+  readonly ensureFundingRatesTable: () => Effect.Effect<
+    void,
+    MarketDataRepositoryError,
+    never
+  >;
+
+  readonly saveFundingRates: (
+    exchange: string,
+    symbol: string,
+    rates: readonly FundingRate[],
+  ) => Effect.Effect<number, MarketDataRepositoryError, never>;
+
+  readonly getFundingRates: (
+    exchange: string,
+    symbol: string,
+    startTime?: Date,
+    endTime?: Date,
+  ) => Effect.Effect<readonly FundingRate[], MarketDataRepositoryError, never>;
+
+  readonly getLatestFundingRateBefore: (
+    exchange: string,
+    symbol: string,
+    timestamp: Date,
+  ) => Effect.Effect<FundingRate | null, MarketDataRepositoryError, never>;
 }
 
 export const MarketDataRepository =
-  Context.GenericTag<MarketDataRepositoryService>("MarketDataRepository");
+  Context.Service<MarketDataRepositoryService>("MarketDataRepository");
 
 // ---------------------------------------------------------------------------
 // SQLite implementation
@@ -123,6 +194,16 @@ CREATE TABLE IF NOT EXISTS ohlcv_data (
 
 CREATE INDEX IF NOT EXISTS idx_ohlcv_pair_timeframe ON ohlcv_data(trading_pair_id, timeframe);
 CREATE INDEX IF NOT EXISTS idx_ohlcv_timestamp ON ohlcv_data(timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS funding_rates (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  funding_rate REAL NOT NULL,
+  timestamp DATETIME NOT NULL,
+  PRIMARY KEY (exchange, symbol, timestamp)
+);
+
+CREATE INDEX IF NOT EXISTS idx_funding_rates_timestamp ON funding_rates(exchange, symbol, timestamp DESC);
 `;
 
 export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
@@ -131,6 +212,11 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   ensureTables(): Effect.Effect<void, MarketDataRepositoryError, never> {
     return Effect.try({
       try: () => {
+        // Allow concurrent reads while one writer updates the DB, and wait
+        // briefly instead of failing immediately when the DB is locked.
+        this.db.exec("PRAGMA journal_mode = WAL;");
+        this.db.exec("PRAGMA busy_timeout = 5000;");
+
         this.db.exec(ensureTablesSQL);
       },
       catch: (err) =>
@@ -143,11 +229,160 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     });
   }
 
+  ensureFundingRatesTable(): Effect.Effect<
+    void,
+    MarketDataRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS funding_rates (
+            exchange TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            funding_rate REAL NOT NULL,
+            timestamp DATETIME NOT NULL,
+            PRIMARY KEY (exchange, symbol, timestamp)
+          );
+          CREATE INDEX IF NOT EXISTS idx_funding_rates_timestamp ON funding_rates(exchange, symbol, timestamp DESC);
+        `);
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Failed to create funding_rates table: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+  }
+
+  saveFundingRates(
+    exchange: string,
+    symbol: string,
+    rates: readonly FundingRate[],
+  ): Effect.Effect<number, MarketDataRepositoryError, never> {
+    if (rates.length === 0) {
+      return Effect.succeed(0);
+    }
+    const db = this.db;
+    return Effect.try({
+      try: () => {
+        const insert = db.query(
+          `INSERT OR IGNORE INTO funding_rates (exchange, symbol, funding_rate, timestamp)
+           VALUES (?, ?, ?, ?)`,
+        );
+        let saved = 0;
+        for (const r of rates) {
+          const result = insert.run(
+            exchange,
+            symbol,
+            r.fundingRate,
+            r.timestamp.toISOString(),
+          );
+          saved += Number(result.changes);
+        }
+        return saved;
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Failed to save funding rates: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+  }
+
+  getFundingRates(
+    exchange: string,
+    symbol: string,
+    startTime?: Date,
+    endTime?: Date,
+  ): Effect.Effect<readonly FundingRate[], MarketDataRepositoryError, never> {
+    const db = this.db;
+    return Effect.try({
+      try: () => {
+        const conditions: string[] = ["exchange = ?", "symbol = ?"];
+        const params: (string | number)[] = [exchange, symbol];
+        if (startTime) {
+          conditions.push("timestamp >= ?");
+          params.push(startTime.toISOString());
+        }
+        if (endTime) {
+          conditions.push("timestamp <= ?");
+          params.push(endTime.toISOString());
+        }
+        const sql = `SELECT funding_rate, timestamp
+                     FROM funding_rates
+                     WHERE ${conditions.join(" AND ")}
+                     ORDER BY timestamp ASC`;
+        const rows = db.query(sql).all(...params) as Array<{
+          funding_rate: number;
+          timestamp: string;
+        }>;
+        return rows.map(
+          (r): FundingRate => ({
+            exchange,
+            symbol,
+            fundingRate: r.funding_rate,
+            timestamp: new Date(r.timestamp),
+          }),
+        );
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Failed to load funding rates: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+  }
+
+  getLatestFundingRateBefore(
+    exchange: string,
+    symbol: string,
+    timestamp: Date,
+  ): Effect.Effect<FundingRate | null, MarketDataRepositoryError, never> {
+    const db = this.db;
+    return Effect.try({
+      try: () => {
+        const row = db
+          .query(
+            `SELECT funding_rate, timestamp
+             FROM funding_rates
+             WHERE exchange = ? AND symbol = ? AND timestamp <= ?
+             ORDER BY timestamp DESC
+             LIMIT 1`,
+          )
+          .get(exchange, symbol, timestamp.toISOString()) as {
+          funding_rate: number;
+          timestamp: string;
+        } | null;
+        if (!row) return null;
+        return {
+          exchange,
+          symbol,
+          fundingRate: row.funding_rate,
+          timestamp: new Date(row.timestamp),
+        };
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Failed to load latest funding rate: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+  }
+
   saveTick(tick: Tick): Effect.Effect<void, MarketDataRepositoryError, never> {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(tick.exchange, db);
-      const pairId = yield* getOrCreateTradingPair(tick.symbol, db);
+      const pairId = yield* getOrCreateTradingPair(tick.symbol, exchangeId, db);
 
       const insert = db.query(
         `INSERT INTO market_data (exchange_id, trading_pair_id, price, volume, bid, ask, high_24h, low_24h, volume_24h, timestamp)
@@ -188,7 +423,11 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(candles[0].exchange, db);
-      const pairId = yield* getOrCreateTradingPair(candles[0].symbol, db);
+      const pairId = yield* getOrCreateTradingPair(
+        candles[0].symbol,
+        exchangeId,
+        db,
+      );
 
       const insert = db.query(
         `INSERT OR IGNORE INTO ohlcv_data
@@ -230,7 +469,11 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(query.exchange, db);
-      const pairId = yield* getOrCreateTradingPair(query.symbol, db);
+      const pairId = yield* getOrCreateTradingPair(
+        query.symbol,
+        exchangeId,
+        db,
+      );
 
       const conditions: string[] = [
         "exchange_id = ?",
@@ -299,7 +542,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
 
       return yield* Effect.try({
         try: () => {
@@ -382,6 +625,241 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
       });
     });
   }
+
+  listSymbolsByCandleCount(
+    exchange: string,
+    timeframe: string,
+    limit: number,
+  ): Effect.Effect<
+    readonly { symbol: string; count: number }[],
+    MarketDataRepositoryError,
+    never
+  > {
+    const db = this.db;
+    return Effect.gen(function* () {
+      const exchangeId = yield* getOrCreateExchange(exchange, db);
+
+      return yield* Effect.try({
+        try: () => {
+          const rows = db
+            .query(
+              `SELECT tp.symbol, COUNT(o.id) AS candle_count
+               FROM ohlcv_data o
+               JOIN trading_pairs tp ON o.trading_pair_id = tp.id
+               WHERE o.exchange_id = ? AND o.timeframe = ?
+               GROUP BY tp.symbol
+               ORDER BY candle_count DESC
+               LIMIT ?`,
+            )
+            .all(exchangeId, timeframe, limit) as Array<{
+            symbol: string;
+            candle_count: number;
+          }>;
+
+          return rows.map((r) => ({ symbol: r.symbol, count: r.candle_count }));
+        },
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to list symbols by candle count: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+    });
+  }
+
+  deleteCandles(
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ): Effect.Effect<number, MarketDataRepositoryError, never> {
+    const db = this.db;
+    return Effect.gen(function* () {
+      const exchangeId = yield* getOrCreateExchange(exchange, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
+
+      return yield* Effect.try({
+        try: () => {
+          const result = db
+            .query(
+              `DELETE FROM ohlcv_data
+               WHERE exchange_id = ? AND trading_pair_id = ? AND timeframe = ?`,
+            )
+            .run(exchangeId, pairId, timeframe);
+          return Number(result.changes);
+        },
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to delete candles: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+    });
+  }
+
+  getCandleRange(
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ): Effect.Effect<
+    { earliest: Date | null; latest: Date | null; count: number },
+    MarketDataRepositoryError,
+    never
+  > {
+    const db = this.db;
+    return Effect.gen(function* () {
+      const exchangeId = yield* getOrCreateExchange(exchange, db);
+      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
+
+      return yield* Effect.try({
+        try: () => {
+          const row = db
+            .query(
+              `SELECT MIN(timestamp) AS earliest, MAX(timestamp) AS latest, COUNT(*) AS count
+               FROM ohlcv_data
+               WHERE exchange_id = ? AND trading_pair_id = ? AND timeframe = ?`,
+            )
+            .get(exchangeId, pairId, timeframe) as {
+            earliest: string | null;
+            latest: string | null;
+            count: number;
+          };
+
+          return {
+            earliest: row.earliest ? new Date(row.earliest) : null,
+            latest: row.latest ? new Date(row.latest) : null,
+            count: row.count,
+          };
+        },
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to load candle range: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+    });
+  }
+
+  getCoverageReport(
+    exchange: string,
+    symbols: readonly string[],
+    timeframe: string,
+    start: Date,
+    end: Date,
+  ): Effect.Effect<
+    readonly {
+      symbol: string;
+      count: number;
+      earliest: Date | null;
+      latest: Date | null;
+      expected: number;
+      coveragePct: number;
+      status: "complete" | "partial" | "missing";
+    }[],
+    MarketDataRepositoryError,
+    never
+  > {
+    const db = this.db;
+    return Effect.gen(function* () {
+      const exchangeId = yield* getOrCreateExchange(exchange, db);
+
+      if (symbols.length === 0) {
+        return [];
+      }
+
+      const placeholders = symbols.map(() => "?").join(",");
+      const sql = `SELECT tp.symbol, MIN(o.timestamp) AS earliest, MAX(o.timestamp) AS latest, COUNT(o.id) AS count
+         FROM ohlcv_data o
+         JOIN trading_pairs tp ON o.trading_pair_id = tp.id
+         WHERE o.exchange_id = ? AND o.timeframe = ? AND tp.symbol IN (${placeholders})
+           AND o.timestamp >= ? AND o.timestamp <= ?
+         GROUP BY tp.symbol`;
+      const params: (string | number)[] = [
+        exchangeId,
+        timeframe,
+        ...symbols,
+        start.toISOString(),
+        end.toISOString(),
+      ];
+
+      const rows = yield* Effect.try({
+        try: () =>
+          db.query(sql).all(...params) as Array<{
+            symbol: string;
+            earliest: string | null;
+            latest: string | null;
+            count: number;
+          }>,
+        catch: (err) =>
+          new MarketDataRepositoryError(
+            `Failed to load coverage report: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      });
+
+      const found = new Map<
+        string,
+        { earliest: Date | null; latest: Date | null; count: number }
+      >();
+      for (const r of rows) {
+        found.set(r.symbol, {
+          earliest: r.earliest ? new Date(r.earliest) : null,
+          latest: r.latest ? new Date(r.latest) : null,
+          count: r.count,
+        });
+      }
+
+      const timeframeMs = timeframeToMs(timeframe);
+      const expected = Math.max(
+        0,
+        Math.floor((end.getTime() - start.getTime()) / timeframeMs) + 1,
+      );
+
+      return symbols.map((symbol) => {
+        const data = found.get(symbol);
+        const count = data?.count ?? 0;
+        const coveragePct = expected > 0 ? count / expected : 0;
+        const status: "complete" | "partial" | "missing" =
+          coveragePct >= 1 ? "complete" : count === 0 ? "missing" : "partial";
+
+        return {
+          symbol,
+          count,
+          earliest: data?.earliest ?? null,
+          latest: data?.latest ?? null,
+          expected,
+          coveragePct,
+          status,
+        };
+      });
+    });
+  }
+}
+
+function timeframeToMs(timeframe: string): number {
+  const value = Number.parseInt(timeframe, 10);
+  const unit = timeframe.slice(-1);
+  const multiplier: Record<string, number> = {
+    m: 60_000,
+    h: 3_600_000,
+    d: 86_400_000,
+    w: 604_800_000,
+  };
+  return value * (multiplier[unit] ?? 60_000);
+}
+
+function tableColumns(db: Database, table: string): ReadonlySet<string> {
+  const rows = db.query(`PRAGMA table_info(${table})`).all() as ReadonlyArray<{
+    name: string;
+  }>;
+  return new Set(rows.map((r) => r.name));
+}
+
+function displayName(name: string): string {
+  return name
+    .split(/[-_]/)
+    .filter((p) => p.length > 0)
+    .map((p) => p[0]!.toUpperCase() + p.slice(1))
+    .join(" ");
 }
 
 function getOrCreateExchange(
@@ -395,9 +873,30 @@ function getOrCreateExchange(
         .get(name) as { id: number } | undefined;
       if (existing) return existing.id;
 
+      // The shared Go backend schema requires display_name and ccxt_id
+      // (NOT NULL, ccxt_id UNIQUE); the slim CLI schema has neither. Adapt
+      // the insert to whichever schema is present.
+      const cols = tableColumns(db, "exchanges");
+      const names = ["name"];
+      const values: Array<string> = [name];
+      if (cols.has("display_name")) {
+        names.push("display_name");
+        values.push(displayName(name));
+      }
+      if (cols.has("ccxt_id")) {
+        names.push("ccxt_id");
+        values.push(name);
+      }
+      if (cols.has("api_url")) {
+        names.push("api_url");
+        values.push("");
+      }
+      const placeholders = names.map(() => "?").join(", ");
       const result = db
-        .query("INSERT INTO exchanges (name, api_url) VALUES (?, ?)")
-        .run(name, "");
+        .query(
+          `INSERT INTO exchanges (${names.join(", ")}) VALUES (${placeholders})`,
+        )
+        .run(...values);
       return Number(result.lastInsertRowid);
     },
     catch: (err) =>
@@ -410,14 +909,36 @@ function getOrCreateExchange(
 
 function getOrCreateTradingPair(
   symbol: string,
+  exchangeId: number,
   db: Database,
 ): Effect.Effect<number, MarketDataRepositoryError, never> {
   return Effect.gen(function* () {
+    // The shared Go backend schema scopes pairs per exchange (exchange_id
+    // NOT NULL, UNIQUE(exchange_id, symbol)); the slim CLI schema keys on
+    // symbol alone. Adapt both lookup and insert to the schema present.
+    const cols = yield* Effect.try({
+      try: () => tableColumns(db, "trading_pairs"),
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Trading pair schema lookup failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+    const hasExchangeScope = cols.has("exchange_id");
+
     const existing = yield* Effect.try({
       try: () =>
-        db
-          .query("SELECT id FROM trading_pairs WHERE symbol = ?")
-          .get(symbol) as { id: number } | undefined,
+        hasExchangeScope
+          ? (db
+              .query(
+                "SELECT id FROM trading_pairs WHERE symbol = ? AND exchange_id = ?",
+              )
+              .get(symbol, exchangeId) as { id: number } | undefined)
+          : (db
+              .query("SELECT id FROM trading_pairs WHERE symbol = ?")
+              .get(symbol) as { id: number } | undefined),
       catch: (err) =>
         new MarketDataRepositoryError(
           `Trading pair lookup failed for ${symbol}: ${
@@ -430,15 +951,22 @@ function getOrCreateTradingPair(
 
     const parts = symbol.split("/");
     const base = parts[0] ?? symbol;
-    const quote = parts[1] ?? "";
+    // Strip the futures settle suffix: "BTC/USDT:USDT" -> quote "USDT".
+    const quote = (parts[1] ?? "").split(":")[0] ?? "";
 
     return yield* Effect.try({
       try: () => {
-        const result = db
-          .query(
-            "INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)",
-          )
-          .run(symbol, base, quote);
+        const result = hasExchangeScope
+          ? db
+              .query(
+                "INSERT INTO trading_pairs (symbol, base_currency, quote_currency, exchange_id) VALUES (?, ?, ?, ?)",
+              )
+              .run(symbol, base, quote, exchangeId)
+          : db
+              .query(
+                "INSERT INTO trading_pairs (symbol, base_currency, quote_currency) VALUES (?, ?, ?)",
+              )
+              .run(symbol, base, quote);
         return Number(result.lastInsertRowid);
       },
       catch: (err) =>

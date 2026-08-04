@@ -45,6 +45,7 @@ function makeGateway(): MarketDataGatewayService {
         SOLUSDT: 100_000,
         DOGEBTC: 50_000,
       }),
+    fetchFundingRates: () => Effect.succeed([]),
   };
 }
 
@@ -63,6 +64,33 @@ describe("fetchUniverseProgram", () => {
         top: 2,
         quote: "USDT",
         minVolume: 0,
+      }).pipe(
+        Effect.provide(repoLayer),
+        Effect.provideService(MarketDataGateway, gateway),
+      ),
+    );
+
+    expect(result.symbols).toEqual(["BTC/USDT", "ETH/USDT"]);
+    expect(result.totalCandles).toBe(2);
+
+    db.close();
+  });
+
+  it("prints a coverage report before fetching when coverage is enabled", async () => {
+    const db = new Database(":memory:");
+    const repoLayer = MarketDataRepositorySQLiteLive(db);
+    const gateway = makeGateway();
+
+    const result = await Effect.runPromise(
+      fetchUniverseProgram({
+        exchange: "binance",
+        timeframe: "1h",
+        days: 365,
+        batch: 1000,
+        top: 2,
+        quote: "USDT",
+        minVolume: 0,
+        coverage: true,
       }).pipe(
         Effect.provide(repoLayer),
         Effect.provideService(MarketDataGateway, gateway),

@@ -17,6 +17,7 @@ import {
   toBitgetFuturesSymbol,
 } from "../../services/bitget-client.js";
 import { validateFuturesOrder } from "../../services/bitget-futures-guards.js";
+import { validateLiveOrderSafety } from "../../services/bitget-futures-safety.js";
 
 function toExchangeError(error: BitgetClientError): ExchangeError {
   switch (error._tag) {
@@ -110,6 +111,29 @@ export function makeBitgetFuturesAdapter(
       // order path and the live paper-trading path reject unsafe orders before
       // any signed request leaves the process.
       yield* runPreTradeGuard(order);
+
+      // Account-state safety checks catch reduce-only mismatches, margin-mode
+      // conflicts, and leverage mismatches before a signed order is sent.
+      const [positions, leverageInfo] = yield* Effect.all([
+        withError(client.getFuturesPositions(order.symbol, order.productType)),
+        withError(
+          client.getLeverage({
+            symbol: order.symbol,
+            productType: order.productType,
+          }),
+        ),
+      ]);
+      yield* validateLiveOrderSafety({
+        order,
+        positions,
+        leverageInfo,
+        intendedLeverage: order.leverage ? String(order.leverage) : undefined,
+      }).pipe(
+        Effect.mapError(
+          (err) =>
+            new ExchangeError(`futures safety rejected: ${err.reason}`, err),
+        ),
+      );
 
       const ack = yield* withError(client.placeFuturesOrder(order));
 

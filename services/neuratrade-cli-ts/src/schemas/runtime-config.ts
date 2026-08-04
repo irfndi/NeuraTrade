@@ -5,96 +5,93 @@
  * Fields use `Schema.optional` + `Schema.withDecodingDefault` where the
  * Go code provides explicit defaults in `defaultRuntimeConfig()`.
  */
+import { Effect } from "effect";
 import * as S from "effect/Schema";
 
 // -- Nested sub-schemas --
 
 const RuntimeServerConfig = S.Struct({
-  host: S.optional(S.String).pipe(S.withDecodingDefault(() => "0.0.0.0")),
-  port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 8080)),
+  host: S.String.pipe(S.withDecodingDefault(Effect.succeed("0.0.0.0"))),
+  port: S.Number.pipe(S.withDecodingDefault(Effect.succeed(8080))),
 });
 
 const RuntimeDatabaseConfig = S.Struct({
-  driver: S.optional(S.String).pipe(S.withDecodingDefault(() => "sqlite")),
+  driver: S.String.pipe(S.withDecodingDefault(Effect.succeed("sqlite"))),
   sqlite_path: S.optional(S.String),
 });
 
 const RuntimeRedisConfig = S.Struct({
-  host: S.optional(S.String).pipe(S.withDecodingDefault(() => "127.0.0.1")),
-  port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 6379)),
+  host: S.String.pipe(S.withDecodingDefault(Effect.succeed("127.0.0.1"))),
+  port: S.Number.pipe(S.withDecodingDefault(Effect.succeed(6379))),
 });
 
 const RuntimeCCXTConfig = S.Struct({
-  service_url: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "http://localhost:3001"),
+  service_url: S.String.pipe(
+    S.withDecodingDefault(Effect.succeed("http://localhost:3001")),
   ),
-  grpc_address: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "127.0.0.1:50051"),
+  grpc_address: S.String.pipe(
+    S.withDecodingDefault(Effect.succeed("127.0.0.1:50051")),
   ),
 });
 
 const RuntimeTelegramConfig = S.Struct({
-  service_url: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "http://localhost:3002"),
+  service_url: S.String.pipe(
+    S.withDecodingDefault(Effect.succeed("http://localhost:3002")),
   ),
-  grpc_address: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "127.0.0.1:50052"),
+  grpc_address: S.String.pipe(
+    S.withDecodingDefault(Effect.succeed("127.0.0.1:50052")),
   ),
-  use_polling: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  api_base_url: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "http://localhost:8080"),
+  use_polling: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(true))),
+  api_base_url: S.String.pipe(
+    S.withDecodingDefault(Effect.succeed("http://localhost:8080")),
   ),
 });
 
 const RuntimeAIConfig = S.Struct({
-  provider: S.optional(S.String).pipe(S.withDecodingDefault(() => "openai")),
-  model: S.optional(S.String).pipe(S.withDecodingDefault(() => "gpt-4o-mini")),
+  provider: S.String.pipe(S.withDecodingDefault(Effect.succeed("openai"))),
+  model: S.String.pipe(S.withDecodingDefault(Effect.succeed("gpt-4o-mini"))),
   base_url: S.optional(S.String),
-  temperature: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.7)),
-  max_tokens: S.optional(S.Number).pipe(S.withDecodingDefault(() => 4096)),
-  min_confidence: S.optional(S.Number).pipe(S.withDecodingDefault(() => 0.7)),
+  temperature: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0.7))),
+  max_tokens: S.Number.pipe(S.withDecodingDefault(Effect.succeed(4096))),
+  min_confidence: S.Number.pipe(S.withDecodingDefault(Effect.succeed(0.7))),
   // Go uses decimal.Decimal which JSON-encodes as a string
-  daily_budget: S.optional(S.String).pipe(S.withDecodingDefault(() => "10")),
-  routing_mode: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "primary"),
-  ),
+  daily_budget: S.String.pipe(S.withDecodingDefault(Effect.succeed("10"))),
+  routing_mode: S.String.pipe(S.withDecodingDefault(Effect.succeed("primary"))),
 });
 
 const RuntimeFeaturesConfig = S.Struct({
-  enable_ai: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  enable_ai_scalping: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => true),
+  enable_ai: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(true))),
+  enable_ai_scalping: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(true)),
   ),
-  enable_ai_signals: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  enable_ai_signals: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  enable_ai_arbitrage: S.optional(S.Boolean).pipe(
-    S.withDecodingDefault(() => false),
+  enable_ai_arbitrage: S.Boolean.pipe(
+    S.withDecodingDefault(Effect.succeed(false)),
   ),
-  paper_trading: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => true)),
-  real_trading: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
+  paper_trading: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(true))),
+  real_trading: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
 });
 
 const RuntimeGatewayConfig = S.Struct({
-  bind_host: S.optional(S.String).pipe(
-    S.withDecodingDefault(() => "127.0.0.1"),
+  bind_host: S.String.pipe(S.withDecodingDefault(Effect.succeed("127.0.0.1"))),
+  ccxt_port: S.Number.pipe(S.withDecodingDefault(Effect.succeed(3001))),
+  telegram_port: S.Number.pipe(S.withDecodingDefault(Effect.succeed(3002))),
+  telegram_grpc_port: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(50052)),
   ),
-  ccxt_port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 3001)),
-  telegram_port: S.optional(S.Number).pipe(S.withDecodingDefault(() => 3002)),
-  telegram_grpc_port: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 50052),
+  supervised: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
+  health_timeout_seconds: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(150)),
   ),
-  supervised: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
-  health_timeout_seconds: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 150),
+  signal_timeout_seconds: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(5)),
   ),
-  signal_timeout_seconds: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 5),
+  graceful_timeout_seconds: S.Number.pipe(
+    S.withDecodingDefault(Effect.succeed(10)),
   ),
-  graceful_timeout_seconds: S.optional(S.Number).pipe(
-    S.withDecodingDefault(() => 10),
-  ),
-  skip_telegram: S.optional(S.Boolean).pipe(S.withDecodingDefault(() => false)),
+  skip_telegram: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(false))),
 });
 
 // -- Main runtimeConfig schema --
@@ -103,80 +100,96 @@ const RuntimeGatewayConfig = S.Struct({
 // value is applied and inner fields fill in their own defaults.
 
 export const RuntimeConfigSchema = S.Struct({
-  server: S.optional(RuntimeServerConfig).pipe(
-    S.withDecodingDefault(() => ({
-      host: "0.0.0.0",
-      port: 8080,
-    })),
+  server: RuntimeServerConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        host: "0.0.0.0",
+        port: 8080,
+      }),
+    ),
   ),
-  database: S.optional(RuntimeDatabaseConfig).pipe(
-    S.withDecodingDefault(() => ({
-      driver: "sqlite",
-      sqlite_path: "",
-    })),
+  database: RuntimeDatabaseConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        driver: "sqlite",
+        sqlite_path: "",
+      }),
+    ),
   ),
-  redis: S.optional(RuntimeRedisConfig).pipe(
-    S.withDecodingDefault(() => ({
-      host: "127.0.0.1",
-      port: 6379,
-    })),
+  redis: RuntimeRedisConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        host: "127.0.0.1",
+        port: 6379,
+      }),
+    ),
   ),
-  ccxt: S.optional(RuntimeCCXTConfig).pipe(
-    S.withDecodingDefault(() => ({
-      service_url: "http://localhost:3001",
-      grpc_address: "127.0.0.1:50051",
-    })),
+  ccxt: RuntimeCCXTConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        service_url: "http://localhost:3001",
+        grpc_address: "127.0.0.1:50051",
+      }),
+    ),
   ),
-  telegram: S.optional(RuntimeTelegramConfig).pipe(
-    S.withDecodingDefault(() => ({
-      service_url: "http://localhost:3002",
-      grpc_address: "127.0.0.1:50052",
-      use_polling: true,
-      api_base_url: "http://localhost:8080",
-    })),
+  telegram: RuntimeTelegramConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        service_url: "http://localhost:3002",
+        grpc_address: "127.0.0.1:50052",
+        use_polling: true,
+        api_base_url: "http://localhost:8080",
+      }),
+    ),
   ),
-  ai: S.optional(RuntimeAIConfig).pipe(
-    S.withDecodingDefault(() => ({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      base_url: undefined,
-      temperature: 0.7,
-      max_tokens: 4096,
-      min_confidence: 0.7,
-      daily_budget: "10",
-      routing_mode: "primary",
-    })),
+  ai: RuntimeAIConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        provider: "openai",
+        model: "gpt-4o-mini",
+        base_url: undefined,
+        temperature: 0.7,
+        max_tokens: 4096,
+        min_confidence: 0.7,
+        daily_budget: "10",
+        routing_mode: "primary",
+      }),
+    ),
   ),
-  features: S.optional(RuntimeFeaturesConfig).pipe(
-    S.withDecodingDefault(() => ({
-      enable_ai: true,
-      enable_ai_scalping: true,
-      enable_ai_signals: false,
-      enable_ai_arbitrage: false,
-      paper_trading: true,
-      real_trading: false,
-    })),
+  features: RuntimeFeaturesConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        enable_ai: true,
+        enable_ai_scalping: true,
+        enable_ai_signals: false,
+        enable_ai_arbitrage: false,
+        paper_trading: true,
+        real_trading: false,
+      }),
+    ),
   ),
-  gateway: S.optional(RuntimeGatewayConfig).pipe(
-    S.withDecodingDefault(() => ({
-      bind_host: "127.0.0.1",
-      ccxt_port: 3001,
-      telegram_port: 3002,
-      telegram_grpc_port: 50052,
-      supervised: false,
-      health_timeout_seconds: 150,
-      signal_timeout_seconds: 5,
-      graceful_timeout_seconds: 10,
-      skip_telegram: false,
-    })),
+  gateway: RuntimeGatewayConfig.pipe(
+    S.withDecodingDefault(
+      Effect.succeed({
+        bind_host: "127.0.0.1",
+        ccxt_port: 3001,
+        telegram_port: 3002,
+        telegram_grpc_port: 50052,
+        supervised: false,
+        health_timeout_seconds: 150,
+        signal_timeout_seconds: 5,
+        graceful_timeout_seconds: 10,
+        skip_telegram: false,
+      }),
+    ),
   ),
 });
 
 export type RuntimeConfig = typeof RuntimeConfigSchema.Type;
 
 /** Decode an unknown JSON value into RuntimeConfig (returns Effect). */
-export const decodeRuntimeConfig = S.decodeUnknown(RuntimeConfigSchema);
+export const decodeRuntimeConfig = S.decodeUnknownEffect(RuntimeConfigSchema);
 
 /** Decode an unknown JSON value, returning Either. */
 export const decodeRuntimeConfigEither =
-  S.decodeUnknownEither(RuntimeConfigSchema);
+  S.decodeUnknownResult(RuntimeConfigSchema);

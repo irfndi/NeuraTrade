@@ -1,4 +1,4 @@
-import { Command } from "@effect/cli";
+import { Command } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
 import { ApiClient } from "../services/api-client.ts";
 
@@ -6,7 +6,7 @@ export const statusCommand = Command.make("status", {}, () =>
   Effect.gen(function* () {
     const client = yield* ApiClient;
     const result = yield* client.health().pipe(
-      Effect.catchAll((err) =>
+      Effect.catch((err) =>
         Effect.succeed({
           status: "unknown",
           error: err._tag,

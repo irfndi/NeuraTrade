@@ -1,5 +1,5 @@
-import { Command, Options } from "@effect/cli";
-import { BunContext } from "@effect/platform-bun";
+import { Command, Options } from "./kit/kit.ts";
+import { BunServices } from "@effect/platform-bun";
 import { Console, Effect, Layer } from "effect";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { ExchangeAdapter, ExchangeError } from "../exchange/adapter.js";
@@ -26,7 +26,7 @@ const quantityOption = Options.float("quantity").pipe(
 );
 
 function makeLayer() {
-  return Layer.mergeAll(BunContext.layer, MarketDataGatewayLive);
+  return Layer.mergeAll(BunServices.layer, MarketDataGatewayLive);
 }
 
 export const exchangeTestCommand = Command.make(
@@ -57,7 +57,7 @@ export const exchangeTestCommand = Command.make(
       ).pipe(
         Effect.provide(layers),
         Effect.tap((report) => Console.log(report)),
-        Effect.catchAll((err) =>
+        Effect.catch((err) =>
           Effect.gen(function* () {
             yield* Console.error(
               `exchange test failed: ${"reason" in err ? err.reason : String(err)}`,

@@ -24,13 +24,21 @@ import {
   PaperTradingRepository,
   type PaperTradingRepositoryService,
 } from "./repository.js";
-import type { PaperPosition, PaperTrade } from "./types.js";
+import type {
+  GridPaperState,
+  GridPaperTrade,
+  PaperPosition,
+  PaperTrade,
+} from "./types.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,
 } from "./engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
+import { ExitEngineLive, SignalComposerLive } from "../scalping/services.js";
 import type { ComposerConfig } from "../scalping/types.js";
+
+const scalpingServiceLayers = Layer.merge(SignalComposerLive, ExitEngineLive);
 
 function makeCandles(
   count: number,
@@ -80,6 +88,10 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
+  resetGridState() {
+    return Effect.void;
+  }
+
   getOpenPosition(_exchange: string, _symbol: string) {
     return Effect.succeed(this.position);
   }
@@ -124,6 +136,49 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
+  scaleOutPosition(
+    position: PaperPosition,
+    exitPrice: number,
+    scaleOutPct: number,
+    closedAt: Date,
+  ) {
+    return Effect.sync(() => {
+      const pct = Math.max(0, Math.min(100, scaleOutPct));
+      const partialSize = position.size * (pct / 100);
+      const remainingSize = position.size - partialSize;
+      const priceDiff =
+        position.side === "long"
+          ? exitPrice - position.entryPrice
+          : position.entryPrice - exitPrice;
+      const pnl = priceDiff * partialSize;
+      const pnlPct = (pnl / (position.entryPrice * partialSize)) * 100;
+      const trade: PaperTrade = {
+        id: `paper-trade-${Date.now()}`,
+        exchange: position.exchange,
+        symbol: position.symbol,
+        timeframe: position.timeframe,
+        side: position.side,
+        entryPrice: position.entryPrice,
+        exitPrice,
+        size: partialSize,
+        pnl,
+        pnlPct,
+        exitReason: "scale_out",
+        openedAt: position.openedAt,
+        closedAt,
+      };
+      this.trades.push(trade);
+      const updatedPosition: PaperPosition = {
+        ...position,
+        size: remainingSize,
+        stopLoss: position.entryPrice,
+        scaledOut: true,
+      };
+      this.position = updatedPosition;
+      return { trade, updatedPosition };
+    });
+  }
+
   getPortfolio() {
     return Effect.succeed({
       capital: this.capital,
@@ -152,6 +207,43 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   getStartOfDayCapital(_date: Date, currentCapital: number) {
     return Effect.succeed(currentCapital);
+  }
+
+  private gridState: GridPaperState | null = null;
+  private gridTrades: GridPaperTrade[] = [];
+
+  getGridState(exchange: string, symbol: string, timeframe: string) {
+    return Effect.succeed(
+      this.gridState &&
+        this.gridState.exchange === exchange &&
+        this.gridState.symbol === symbol &&
+        this.gridState.timeframe === timeframe
+        ? this.gridState
+        : null,
+    );
+  }
+
+  saveGridState(state: GridPaperState) {
+    return Effect.sync(() => {
+      this.gridState = state;
+    });
+  }
+
+  recordGridTrade(trade: GridPaperTrade) {
+    return Effect.sync(() => {
+      this.gridTrades.push(trade);
+    });
+  }
+
+  listRecentGridTrades(
+    _exchange: string,
+    _symbol: string,
+    _timeframe: string,
+    limit: number,
+  ) {
+    return Effect.succeed(
+      this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
+    );
   }
 }
 
@@ -212,6 +304,7 @@ function makeGateway(price: number): MarketDataGatewayService {
     fetchOrderBook: () => Effect.succeed(orderBook),
     fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
     fetch24hrVolumes: () => Effect.succeed({}),
+    fetchFundingRates: () => Effect.succeed([]),
   };
 }
 
@@ -224,12 +317,26 @@ function makeOptions(
     timeframe: "1h",
     composerConfig,
     positionSizePct: 100,
+    riskPerTradePct: 0,
+    maxPositionSizePct: 100,
     feePct: 0.1,
     minConfidence: 0.5,
     useAtrStops: false,
     atrStopMultiplier: 1.5,
     atrTakeProfitMultiplier: 2.5,
+    atrRiskReward: 0,
+    scaleOutAtR: 0,
+    scaleOutPct: 50,
+    volatilityLookback: 0,
+    volatilityLowPct: 20,
+    volatilityHighPct: 80,
+    volatilityLowFactor: 0.8,
+    volatilityHighFactor: 1.2,
+    volatilityTargetAnnualPct: 0,
+    stopLossPct: 1.5,
+    takeProfitPct: 3.0,
     holdUntilStop: false,
+    minAtrPct: 0,
     initialCapital: 10_000,
     isLive: false,
   };
@@ -257,6 +364,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -287,6 +395,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -318,6 +427,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 
@@ -347,6 +457,7 @@ describe("runPaperTradingIteration", () => {
         Effect.provideService(RiskGuard, riskGuard),
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
+        Effect.provide(scalpingServiceLayers),
       ),
     );
 

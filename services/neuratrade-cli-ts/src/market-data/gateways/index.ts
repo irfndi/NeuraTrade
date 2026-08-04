@@ -75,6 +75,14 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       }
       return Binance.fetch24hrVolumes();
     }),
+
+  fetchFundingRates: (exchange, symbol, startTime, endTime, limit) =>
+    dispatch(exchange, "fetchFundingRates", () => {
+      if (exchange.toLowerCase() === "bitget-futures") {
+        return Bitget.fetchFundingRates(symbol, startTime, endTime, limit);
+      }
+      return Binance.fetchFundingRates(symbol, startTime, endTime, limit);
+    }),
 } satisfies MarketDataGatewayService);
 
 function dispatch<A>(

@@ -26,7 +26,7 @@ export interface CircuitBreakerService {
 }
 
 export const CircuitBreaker =
-  Context.GenericTag<CircuitBreakerService>("CircuitBreaker");
+  Context.Service<CircuitBreakerService>("CircuitBreaker");
 
 const ensureTableSQL = `
 CREATE TABLE IF NOT EXISTS risk_circuit_breaker (

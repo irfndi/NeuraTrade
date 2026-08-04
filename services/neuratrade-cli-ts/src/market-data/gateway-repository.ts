@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Ref } from "effect";
 import { MarketDataError, MarketDataGateway } from "./gateway.js";
 import { MarketDataRepository } from "./repository.js";
-import type { Candle, OrderBook, Tick } from "./types.js";
+import type { Candle, FundingRate, OrderBook, Tick } from "./types.js";
 
 function toMarketDataError(err: { readonly reason: string }): MarketDataError {
   return new MarketDataError(err.reason);
@@ -133,12 +133,22 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       never
     > => Effect.succeed({});
 
+    const fetchFundingRates = (
+      _exchange: string,
+      _symbol: string,
+      _startTime?: Date,
+      _endTime?: Date,
+      _limit?: number,
+    ): Effect.Effect<readonly FundingRate[], MarketDataError, never> =>
+      Effect.succeed([]);
+
     return {
       fetchTick,
       fetchOHLCV,
       fetchOrderBook,
       fetchSymbols,
       fetch24hrVolumes,
+      fetchFundingRates,
     };
   }),
 );

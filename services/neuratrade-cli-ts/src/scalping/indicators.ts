@@ -1,5 +1,27 @@
 import type { CandleLike } from "./types.js";
 
+export function calculateSMA(
+  values: readonly number[],
+  period: number,
+): number[] {
+  if (values.length === 0 || period <= 0) return [];
+
+  const result: number[] = [];
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i];
+    if (i >= period) {
+      sum -= values[i - period];
+    }
+    if (i >= period - 1) {
+      result.push(sum / period);
+    } else {
+      result.push(NaN);
+    }
+  }
+  return result;
+}
+
 export function calculateEMA(
   values: readonly number[],
   period: number,
@@ -35,10 +57,20 @@ export function calculateRSI(
   candles: readonly CandleLike[],
   period = 14,
 ): number | null {
-  if (candles.length < period + 1) return null;
+  const series = calculateRSISeries(candles, period);
+  if (series.length === 0) return null;
+  return series[series.length - 1];
+}
+
+export function calculateRSISeries(
+  candles: readonly CandleLike[],
+  period = 14,
+): number[] {
+  if (candles.length < period + 1) return [];
 
   let avgGain = 0;
   let avgLoss = 0;
+  const result: number[] = [];
 
   for (let i = 1; i <= period; i++) {
     const change = candles[i].close - candles[i - 1].close;
@@ -49,17 +81,29 @@ export function calculateRSI(
   avgGain /= period;
   avgLoss /= period;
 
+  if (avgLoss === 0) {
+    result.push(100);
+  } else {
+    const rs = avgGain / avgLoss;
+    result.push(100 - 100 / (1 + rs));
+  }
+
   for (let i = period + 1; i < candles.length; i++) {
     const change = candles[i].close - candles[i - 1].close;
     const gain = Math.max(0, change);
     const loss = Math.max(0, -change);
     avgGain = (avgGain * (period - 1) + gain) / period;
     avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+    if (avgLoss === 0) {
+      result.push(100);
+    } else {
+      const rs = avgGain / avgLoss;
+      result.push(100 - 100 / (1 + rs));
+    }
   }
 
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - 100 / (1 + rs);
+  return result;
 }
 
 export function calculateVolatility(
@@ -221,4 +265,70 @@ export function calculateBollingerBands(
   const percentB = range === 0 ? 0.5 : (lastClose - lower) / range;
 
   return { upper, middle, lower, percentB };
+}
+
+function timeframeToMinutes(timeframe: string): number {
+  const match = /^([0-9]+)([mhdwM])$/.exec(timeframe.trim());
+  if (!match) return 60;
+  const value = Number(match[1]);
+  switch (match[2]) {
+    case "m":
+      return value;
+    case "h":
+      return value * 60;
+    case "d":
+      return value * 60 * 24;
+    case "w":
+      return value * 60 * 24 * 7;
+    case "M":
+      return value * 60 * 24 * 30;
+    default:
+      return 60;
+  }
+}
+
+const MINUTES_PER_YEAR = 365 * 24 * 60;
+
+/**
+ * Annualized log-return volatility for the last `lookback` candles.
+ * Returns 0 when there is insufficient data.
+ */
+export function calculateVolumeRatio(
+  candles: readonly CandleLike[],
+  lookback: number,
+): number | null {
+  if (lookback <= 0 || candles.length < lookback + 1) return null;
+  const currentVolume = candles[candles.length - 1].volume;
+  if (currentVolume === 0) return null;
+
+  const window = candles.slice(-lookback - 1, -1);
+  const avgVolume =
+    window.reduce((sum, c) => sum + c.volume, 0) / window.length;
+  if (avgVolume === 0) return null;
+
+  return currentVolume / avgVolume;
+}
+
+export function calculateAnnualizedVolatility(
+  candles: readonly CandleLike[],
+  lookback: number,
+  timeframe: string,
+): number {
+  if (lookback <= 0 || candles.length < lookback + 1) return 0;
+  const window = candles.slice(-lookback - 1);
+  const returns: number[] = [];
+  for (let i = 1; i < window.length; i++) {
+    const prev = window[i - 1].close;
+    const curr = window[i].close;
+    if (prev > 0 && curr > 0) {
+      returns.push(Math.log(curr / prev));
+    }
+  }
+  if (returns.length < 2) return 0;
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const variance =
+    returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
+  const std = Math.sqrt(variance);
+  const periodsPerYear = MINUTES_PER_YEAR / timeframeToMinutes(timeframe);
+  return std * Math.sqrt(periodsPerYear) * 100;
 }

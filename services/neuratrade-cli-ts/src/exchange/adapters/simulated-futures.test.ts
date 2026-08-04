@@ -20,6 +20,7 @@ const mockGateway: MarketDataGatewayService = {
     }),
   fetchSymbols: () => Effect.die("not used"),
   fetch24hrVolumes: () => Effect.die("not used"),
+  fetchFundingRates: () => Effect.succeed([]),
 };
 
 let sharedAdapter: ReturnType<
@@ -98,11 +99,11 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             marginMode: "crossed",
             leverage: 1,
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("closes a long position with reduce-only", async () => {
@@ -174,11 +175,11 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             leverage: 10,
             reduceOnly: true,
           })
-          .pipe(Effect.either);
+          .pipe(Effect.result);
       }),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("opens a short position", async () => {

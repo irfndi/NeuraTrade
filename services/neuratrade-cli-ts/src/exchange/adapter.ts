@@ -37,4 +37,4 @@ export interface ExchangeAdapterService {
 }
 
 export const ExchangeAdapter =
-  Context.GenericTag<ExchangeAdapterService>("ExchangeAdapter");
+  Context.Service<ExchangeAdapterService>("ExchangeAdapter");

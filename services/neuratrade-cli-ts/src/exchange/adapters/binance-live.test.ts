@@ -16,6 +16,7 @@ const dummyGateway = MarketDataGateway.of({
     }),
   fetchSymbols: () => Effect.fail({ reason: "not implemented" } as never),
   fetch24hrVolumes: () => Effect.succeed({}),
+  fetchFundingRates: () => Effect.succeed([]),
 });
 
 describe("BinanceLiveExchangeAdapter", () => {
@@ -23,7 +24,7 @@ describe("BinanceLiveExchangeAdapter", () => {
     const adapter = makeBinanceLiveAdapter({ apiKey: "", apiSecret: "" });
 
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         adapter.placeOrder({
           symbol: "BTC/USDT",
           side: "buy",
@@ -33,18 +34,18 @@ describe("BinanceLiveExchangeAdapter", () => {
       ).pipe(Effect.provideService(MarketDataGateway, dummyGateway)),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("fails getBalance without credentials", async () => {
     const adapter = makeBinanceLiveAdapter({ apiKey: "", apiSecret: "" });
 
     const result = await Effect.runPromise(
-      Effect.either(adapter.getBalance("USDT")).pipe(
+      Effect.result(adapter.getBalance("USDT")).pipe(
         Effect.provideService(MarketDataGateway, dummyGateway),
       ),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 });

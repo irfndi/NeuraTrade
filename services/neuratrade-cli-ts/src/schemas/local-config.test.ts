@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Either, pipe } from "effect";
+import { Result, pipe } from "effect";
 import {
   LocalConfigSchema,
   decodeLocalConfigEither,
@@ -39,10 +39,10 @@ describe("LocalConfigSchema", () => {
     };
 
     const result = decodeLocalConfigEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const cfg = result.right;
+    if (Result.isSuccess(result)) {
+      const cfg = result.success;
       expect(cfg.admin_api_key).toBe("ak-test-123");
       expect(cfg.telegram_test_chat_id).toBe("-100123");
       expect(cfg.auth?.jwt_secret).toBe("s3cret");
@@ -66,10 +66,10 @@ describe("LocalConfigSchema", () => {
 
   test("decodes an empty config object", () => {
     const result = decodeLocalConfigEither({});
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      const cfg = result.right;
+    if (Result.isSuccess(result)) {
+      const cfg = result.success;
       expect(cfg.admin_api_key).toBeUndefined();
       expect(cfg.auth).toBeUndefined();
       expect(cfg.server).toBeUndefined();
@@ -80,10 +80,10 @@ describe("LocalConfigSchema", () => {
   test("decodes a partial config with only top-level fields", () => {
     const input = { admin_api_key: "key1" };
     const result = decodeLocalConfigEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      expect(result.right.admin_api_key).toBe("key1");
+    if (Result.isSuccess(result)) {
+      expect(result.success.admin_api_key).toBe("key1");
     }
   });
 
@@ -93,13 +93,13 @@ describe("LocalConfigSchema", () => {
       ai: { provider: "anthropic" },
     };
     const result = decodeLocalConfigEither(input);
-    expect(Either.isRight(result)).toBe(true);
+    expect(Result.isSuccess(result)).toBe(true);
 
-    if (Either.isRight(result)) {
-      expect(result.right.server?.port).toBe(9090);
-      expect(result.right.server?.host).toBeUndefined();
-      expect(result.right.ai?.provider).toBe("anthropic");
-      expect(result.right.ai?.model).toBeUndefined();
+    if (Result.isSuccess(result)) {
+      expect(result.success.server?.port).toBe(9090);
+      expect(result.success.server?.host).toBeUndefined();
+      expect(result.success.ai?.provider).toBe("anthropic");
+      expect(result.success.ai?.model).toBeUndefined();
     }
   });
 
@@ -107,22 +107,22 @@ describe("LocalConfigSchema", () => {
 
   test("rejects a string instead of an object", () => {
     const result = decodeLocalConfigEither("not-an-object");
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects an array", () => {
     const result = decodeLocalConfigEither([1, 2, 3]);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects null", () => {
     const result = decodeLocalConfigEither(null);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   test("rejects a number", () => {
     const result = decodeLocalConfigEither(42);
-    expect(Either.isLeft(result)).toBe(true);
+    expect(Result.isFailure(result)).toBe(true);
   });
 
   // --- Type compatibility ---

@@ -7,7 +7,7 @@
 import * as nodePath from "path";
 import * as os from "os";
 import { Context, Effect, Layer } from "effect";
-import { FileSystem } from "@effect/platform";
+import { FileSystem } from "effect";
 import type { LocalConfig as LocalConfigData } from "../schemas/local-config";
 import type { RuntimeConfig as RuntimeConfigData } from "../schemas/runtime-config";
 import { decodeLocalConfig } from "../schemas/local-config";
@@ -17,15 +17,15 @@ import { decodeRuntimeConfig } from "../schemas/runtime-config";
 // Context.Tags
 // ---------------------------------------------------------------------------
 
-export class LocalConfig extends Context.Tag("LocalConfig")<
+export class LocalConfig extends Context.Service<
   LocalConfig,
   LocalConfigData
->() {}
+>()("LocalConfig") {}
 
-export class RuntimeConfig extends Context.Tag("RuntimeConfig")<
+export class RuntimeConfig extends Context.Service<
   RuntimeConfig,
   RuntimeConfigData
->() {}
+>()("RuntimeConfig") {}
 
 // ---------------------------------------------------------------------------
 // Resolved Config — the fully-merged configuration
@@ -138,7 +138,7 @@ function readJsonFileSafe(
     if (!exists) return null;
     const content = yield* fs.readFileString(filePath);
     return JSON.parse(content) as unknown;
-  }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  }).pipe(Effect.catch(() => Effect.succeed(null)));
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +575,7 @@ export const loadLocalConfigEffect = (
     const json = yield* readJsonFileSafe(fs, configPath);
     if (json === null) return defaultLocalConfig();
     return yield* decodeLocalConfig(json).pipe(
-      Effect.catchAll(() => Effect.succeed(defaultLocalConfig())),
+      Effect.catch(() => Effect.succeed(defaultLocalConfig())),
     );
   });
 };
@@ -592,7 +592,7 @@ export const loadRuntimeConfigEffect = (
     const json = yield* readJsonFileSafe(fs, runtimePath);
     if (json === null) return defaultRuntimeConfig(home);
     return yield* decodeRuntimeConfig(json).pipe(
-      Effect.catchAll(() => Effect.succeed(defaultRuntimeConfig(home))),
+      Effect.catch(() => Effect.succeed(defaultRuntimeConfig(home))),
     );
   });
 };
@@ -629,7 +629,7 @@ export const resolvedConfigEffect = (
     const local =
       localJson !== null
         ? yield* decodeLocalConfig(localJson).pipe(
-            Effect.catchAll(() => Effect.succeed(defaultLocalConfig())),
+            Effect.catch(() => Effect.succeed(defaultLocalConfig())),
           )
         : defaultLocalConfig();
 
@@ -649,7 +649,7 @@ export const resolvedConfigEffect = (
     // 3. Apply runtime config overrides (only fields present in raw JSON)
     if (runtimeJson !== null) {
       const runtime = yield* decodeRuntimeConfig(runtimeJson).pipe(
-        Effect.catchAll(() => Effect.succeed(defaultRuntimeConfig(home))),
+        Effect.catch(() => Effect.succeed(defaultRuntimeConfig(home))),
       );
       result = applyRuntimeOverrides(result, runtime, runtimeJson);
     }

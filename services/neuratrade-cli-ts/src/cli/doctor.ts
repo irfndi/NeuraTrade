@@ -1,6 +1,6 @@
-import { Command } from "@effect/cli";
+import { Command } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
-import { FileSystem } from "@effect/platform";
+import { FileSystem } from "effect";
 import { Path } from "../services/path.ts";
 
 export const doctorCommand = Command.make("doctor", {}, () =>

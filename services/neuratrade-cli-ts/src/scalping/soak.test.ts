@@ -60,6 +60,14 @@ function makeOptions(
     useAtrStops: false,
     atrStopMultiplier: 1.5,
     atrTakeProfitMultiplier: 2.5,
+    atrRiskReward: 0,
+    scaleOutAtR: 0,
+    scaleOutPct: 50,
+    volatilityLookback: 0,
+    volatilityLowPct: 20,
+    volatilityHighPct: 80,
+    volatilityLowFactor: 0.8,
+    volatilityHighFactor: 1.2,
     holdUntilStop: false,
     regimeMode: "trend",
     composerConfig: defaultComposerConfig,
@@ -149,9 +157,9 @@ describe("runSoak", () => {
       { symbol: "BTC/USDT", exchange: "binance" },
     ];
     const result = await Effect.runPromise(
-      runSoak(makeOptions(watchlist, 1), failingRunner).pipe(Effect.either),
+      runSoak(makeOptions(watchlist, 1), failingRunner).pipe(Effect.result),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 });

@@ -35,7 +35,7 @@ export interface Logger {
 /**
  * Context.Tag for the Logger service.
  */
-export const Logger = Context.GenericTag<Logger>("Logger");
+export const Logger = Context.Service<Logger>("Logger");
 
 /**
  * Attaches annotations to an Effect if provided, otherwise returns the

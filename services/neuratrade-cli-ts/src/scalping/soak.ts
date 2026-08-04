@@ -30,8 +30,16 @@ export interface SoakOptions {
   readonly useAtrStops: boolean;
   readonly atrStopMultiplier: number;
   readonly atrTakeProfitMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly scaleOutPct: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
   readonly holdUntilStop: boolean;
-  readonly regimeMode: "trend" | "reversion";
+  readonly regimeMode: "trend" | "reversion" | "breakout";
   readonly composerConfig: ComposerConfig;
   readonly leverage: number;
   readonly marginMode: FuturesMarginMode;
@@ -39,7 +47,7 @@ export interface SoakOptions {
 }
 
 export interface IterationResult {
-  readonly action: "opened" | "closed" | "hold";
+  readonly action: "opened" | "closed" | "hold" | "scaled_out";
   readonly capital: number;
   readonly note: string;
 }
@@ -86,7 +94,7 @@ export function runSoak<E>(
     for (const entry of options.watchlist) {
       const exchange = entry.exchange;
       const capitalSnapshots: number[] = [];
-      const actions: Array<"opened" | "closed" | "hold"> = [];
+      const actions: Array<"opened" | "closed" | "hold" | "scaled_out"> = [];
       const notes: string[] = [];
 
       // iterationsPerSymbol = 0 means an unbounded soak, matching the CLI help.
@@ -135,7 +143,7 @@ function computePerSymbolMetrics(
   exchange: string,
   initialCapital: number,
   capitalSnapshots: readonly number[],
-  actions: readonly ("opened" | "closed" | "hold")[],
+  actions: readonly ("opened" | "closed" | "hold" | "scaled_out")[],
   notes: readonly string[],
 ): PerSymbolResult {
   const startCapital =

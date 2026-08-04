@@ -52,9 +52,7 @@ function run(
       leverage,
     }).pipe(
       Effect.map((r) => ({ ok: true as const, result: r })),
-      Effect.catchAll((err) =>
-        Effect.succeed({ ok: false as const, error: err }),
-      ),
+      Effect.catch((err) => Effect.succeed({ ok: false as const, error: err })),
     ),
   );
 }
@@ -127,7 +125,7 @@ describe("BitgetFuturesGuards", () => {
         leverage: "10",
       }).pipe(
         Effect.map(() => ({ ok: true as const })),
-        Effect.catchAll((err: BitgetFuturesGuardError) =>
+        Effect.catch((err: BitgetFuturesGuardError) =>
           Effect.succeed({ ok: false as const, error: err }),
         ),
       ),

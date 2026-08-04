@@ -5,7 +5,7 @@
  * to be set in the environment. Use BITGET_USE_SANDBOX=true to target demo
  * trading endpoints when available.
  */
-import { Command, Options } from "@effect/cli";
+import { Command, Options } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
 import {
   BitgetClient,
@@ -71,7 +71,7 @@ function catchBitget<A>(
 ): Effect.Effect<void, never, BitgetClient> {
   return program.pipe(
     Effect.tap((value) => Console.log(JSON.stringify(value, null, 2))),
-    Effect.catchAll((err) =>
+    Effect.catch((err) =>
       Console.log(`❌ Bitget API error: ${err._tag}: ${JSON.stringify(err)}`),
     ),
     Effect.map(() => undefined),
@@ -114,7 +114,7 @@ const verifyCommand = Command.make("verify", {}, () =>
       yield* Console.log(`     ... and ${balances.length - 5} more`);
     }
   }).pipe(
-    Effect.catchAll((err: unknown) => {
+    Effect.catch((err: unknown) => {
       const details =
         err instanceof Error
           ? err.message
@@ -147,7 +147,7 @@ const balanceCommand = Command.make("balance", {}, () =>
       );
     }
   }).pipe(
-    Effect.catchAll((err: unknown) => {
+    Effect.catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       return Console.log(`❌ balance failed: ${message}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(message))),
@@ -173,7 +173,7 @@ const tickerCommand = Command.make(
       yield* Console.log(`  ask:   ${ticker.askPrice} x ${ticker.askQty}`);
       yield* Console.log(`  vol24: ${ticker.volume24h}`);
     }).pipe(
-      Effect.catchAll((err: unknown) => {
+      Effect.catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         return Console.log(`❌ ticker failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
@@ -200,7 +200,7 @@ const instrumentsCommand = Command.make("instruments", {}, () =>
       yield* Console.log(`  ... and ${instruments.length - 20} more`);
     }
   }).pipe(
-    Effect.catchAll((err: unknown) => {
+    Effect.catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       return Console.log(`❌ instruments failed: ${message}`).pipe(
         Effect.flatMap(() => Effect.fail(new Error(message))),
@@ -292,7 +292,7 @@ const orderPlaceCommand = Command.make(
       yield* Console.log(`  side:      ${order.side}`);
       yield* Console.log(`  status:    ${order.status}`);
     }).pipe(
-      Effect.catchAll((err: unknown) => {
+      Effect.catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         return Console.log(`❌ place order failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
@@ -330,7 +330,7 @@ const orderStatusCommand = Command.make(
         `  filled: ${order.filledSize} / ${order.filledAmount}`,
       );
     }).pipe(
-      Effect.catchAll((err: unknown) => {
+      Effect.catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         return Console.log(`❌ order status failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),
@@ -361,7 +361,7 @@ const orderCancelCommand = Command.make(
       });
       yield* Console.log("✅ Order cancel request sent");
     }).pipe(
-      Effect.catchAll((err: unknown) => {
+      Effect.catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         return Console.log(`❌ cancel order failed: ${message}`).pipe(
           Effect.flatMap(() => Effect.fail(new Error(message))),

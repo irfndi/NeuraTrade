@@ -5,15 +5,7 @@
  * never live in config.json. The optional sandbox flag lets users point at
  * Bitget's demo trading environment when available.
  */
-import {
-  Config,
-  ConfigError,
-  Context,
-  Data,
-  Effect,
-  Layer,
-  Redacted,
-} from "effect";
+import { Config, Context, Data, Effect, Layer, Redacted } from "effect";
 import type { BitgetCredentials } from "./bitget-client.ts";
 
 export class BitgetConfigError extends Data.TaggedError("BitgetConfigError")<{
@@ -25,39 +17,37 @@ export interface BitgetConfigData {
   readonly useSandbox: boolean;
 }
 
-export class BitgetConfig extends Context.Tag("BitgetConfig")<
+export class BitgetConfig extends Context.Service<
   BitgetConfig,
   BitgetConfigData
->() {}
+>()("BitgetConfig") {}
 
-export const BitgetConfigLive: Layer.Layer<
-  BitgetConfig,
-  ConfigError.ConfigError
-> = Layer.effect(
-  BitgetConfig,
-  Effect.gen(function* () {
-    const apiKey = yield* Config.redacted("BITGET_API_KEY").pipe(
-      Config.withDefault(Redacted.make("")),
-    );
-    const apiSecret = yield* Config.redacted("BITGET_API_SECRET").pipe(
-      Config.withDefault(Redacted.make("")),
-    );
-    const passphrase = yield* Config.redacted("BITGET_PASSPHRASE").pipe(
-      Config.withDefault(Redacted.make("")),
-    );
-    const useSandbox = yield* Config.boolean("BITGET_USE_SANDBOX").pipe(
-      Config.withDefault(false),
-    );
-    return {
-      credentials: {
-        apiKey: Redacted.value(apiKey),
-        apiSecret: Redacted.value(apiSecret),
-        passphrase: Redacted.value(passphrase),
-      },
-      useSandbox,
-    };
-  }),
-);
+export const BitgetConfigLive: Layer.Layer<BitgetConfig, Config.ConfigError> =
+  Layer.effect(
+    BitgetConfig,
+    Effect.gen(function* () {
+      const apiKey = yield* Config.redacted("BITGET_API_KEY").pipe(
+        Config.withDefault(Redacted.make("")),
+      );
+      const apiSecret = yield* Config.redacted("BITGET_API_SECRET").pipe(
+        Config.withDefault(Redacted.make("")),
+      );
+      const passphrase = yield* Config.redacted("BITGET_PASSPHRASE").pipe(
+        Config.withDefault(Redacted.make("")),
+      );
+      const useSandbox = yield* Config.boolean("BITGET_USE_SANDBOX").pipe(
+        Config.withDefault(false),
+      );
+      return {
+        credentials: {
+          apiKey: Redacted.value(apiKey),
+          apiSecret: Redacted.value(apiSecret),
+          passphrase: Redacted.value(passphrase),
+        },
+        useSandbox,
+      };
+    }),
+  );
 
 export function requireBitgetCredentials(
   config: BitgetConfigData,

@@ -5,6 +5,7 @@ import candlesFixture from "../../../tests/fixtures/bitget/candles.json";
 import orderbookFixture from "../../../tests/fixtures/bitget/orderbook.json";
 import tickersFixture from "../../../tests/fixtures/bitget/tickers.json";
 import symbolsFixture from "../../../tests/fixtures/bitget/symbols.json";
+import fundingRatesFixture from "../../../tests/fixtures/bitget/funding-rates.json";
 
 describe("Bitget gateway", () => {
   let originalFetch: typeof fetch;
@@ -79,6 +80,32 @@ describe("Bitget gateway", () => {
     expect(candles[0].exchange).toBe("bitget-futures");
   });
 
+  it("fetchOHLCV uses history-candles for futures (deep backfills)", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify(candlesFixture), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(
+      Bitget.fetchOHLCV(
+        "BTC/USDT:USDT",
+        "5m",
+        1000,
+        new Date("2025-01-01T00:00:00Z"),
+        "futures",
+      ),
+    );
+
+    expect(requestedUrl).toContain("/api/v2/mix/market/history-candles");
+    expect(requestedUrl).toContain("productType=USDT-FUTURES");
+    // Bitget caps history-candles at 200 rows/request (error 40053 above).
+    expect(requestedUrl).toContain("limit=200");
+  });
+
   it("fetchOrderBook parses depth", async () => {
     mockFetch(orderbookFixture);
 
@@ -116,29 +143,123 @@ describe("Bitget gateway", () => {
     mockFetch({ msg: "bad request" }, 400);
 
     const result = await Effect.runPromise(
-      Effect.either(Bitget.fetchTick("BTC/USDT", "spot")),
+      Effect.result(Bitget.fetchTick("BTC/USDT", "spot")),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("returns MarketDataError on API error code", async () => {
     mockFetch({ code: "40001", msg: "invalid symbol", data: [] }, 200);
 
     const result = await Effect.runPromise(
-      Effect.either(Bitget.fetchTick("BTC/USDT", "spot")),
+      Effect.result(Bitget.fetchTick("BTC/USDT", "spot")),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
   });
 
   it("returns MarketDataError when ticker data is empty", async () => {
     mockFetch({ code: "00000", data: [] });
 
     const result = await Effect.runPromise(
-      Effect.either(Bitget.fetchTick("BTC/USDT", "spot")),
+      Effect.result(Bitget.fetchTick("BTC/USDT", "spot")),
     );
 
-    expect(result._tag).toBe("Left");
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("fetchFundingRates maps funding history rows", async () => {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const pageNo = new URL(String(url)).searchParams.get("pageNo") ?? "1";
+      const body =
+        pageNo === "1"
+          ? fundingRatesFixture
+          : { code: "00000", msg: "success", data: [] };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Bitget.fetchFundingRates("BTC/USDT:USDT"),
+    );
+
+    expect(rates).toHaveLength(2);
+    expect(rates[0].exchange).toBe("bitget-futures");
+    expect(rates[0].symbol).toBe("BTC/USDT:USDT");
+    expect(rates[0].fundingRate).toBe(0.0001);
+    expect(rates[0].timestamp.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(rates[1].fundingRate).toBe(-0.00005);
+    expect(rates[1].timestamp.toISOString()).toBe("2023-12-31T16:00:00.000Z");
+  });
+
+  it("fetchFundingRates returns MarketDataError on API error code", async () => {
+    mockFetch({ code: "40001", msg: "invalid symbol", data: null }, 200);
+
+    const result = await Effect.runPromise(
+      Effect.result(Bitget.fetchFundingRates("BTC/USDT:USDT")),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("fetchFundingRates paginates until an empty page", async () => {
+    const requests: string[] = [];
+    const pages: Record<string, unknown> = {
+      "1": {
+        code: "00000",
+        msg: "success",
+        data: [
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.0001",
+            fundingTime: "1704067200000",
+          },
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.00009",
+            fundingTime: "1704038400000",
+          },
+        ],
+      },
+      "2": {
+        code: "00000",
+        msg: "success",
+        data: [
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.00008",
+            fundingTime: "1704009600000",
+          },
+        ],
+      },
+      "3": { code: "00000", msg: "success", data: [] },
+    };
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      requests.push(u);
+      const pageNo = new URL(u).searchParams.get("pageNo") ?? "1";
+      const body = pages[pageNo] ?? { code: "00000", msg: "success", data: [] };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Bitget.fetchFundingRates("BTC/USDT:USDT"),
+    );
+
+    expect(rates).toHaveLength(3);
+    expect(requests).toHaveLength(3);
+    expect(rates[0].fundingRate).toBe(0.0001);
+    expect(rates[2].fundingRate).toBe(0.00008);
+    for (const u of requests) {
+      expect(u).toContain("/api/v2/mix/market/history-fund-rate");
+      expect(u).toContain("symbol=BTCUSDT");
+      expect(u).toContain("productType=USDT-FUTURES");
+    }
   });
 });

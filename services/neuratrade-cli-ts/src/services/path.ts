@@ -35,7 +35,7 @@ function resolveHome(explicitHome?: string): string {
  * The Path service interface. Resolves all NeuraTrade file paths
  * from the home directory (NEURATRADE_HOME).
  */
-export class Path extends Context.Tag("Path")<
+export class Path extends Context.Service<
   Path,
   {
     /** The resolved NeuraTrade home directory. */
@@ -55,7 +55,7 @@ export class Path extends Context.Tag("Path")<
     /** Returns the PID file path for the given service name. */
     readonly pidFilePath: (service: string) => string;
   }
->() {}
+>()("Path") {}
 
 /**
  * Create a Path service Layer.

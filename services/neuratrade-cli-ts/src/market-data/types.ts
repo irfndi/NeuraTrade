@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /**
  * A single price level in an order book.
@@ -65,11 +65,22 @@ export interface OrderBookMetrics {
   readonly timestamp: Date;
 }
 
+/**
+ * Normalized perpetual futures funding rate.
+ */
+export interface FundingRate {
+  readonly exchange: string;
+  readonly symbol: string;
+  /** Funding rate as a decimal, e.g. 0.0001 = 0.01% per 8h. */
+  readonly fundingRate: number;
+  readonly timestamp: Date;
+}
+
 // ---------------------------------------------------------------------------
 // Schema-validated primitives for config and persistence
 // ---------------------------------------------------------------------------
 
-export const Timeframe = Schema.Literal(
+export const Timeframe = Schema.Literals([
   "1m",
   "5m",
   "15m",
@@ -77,13 +88,15 @@ export const Timeframe = Schema.Literal(
   "1h",
   "4h",
   "1d",
-);
+]);
 export type Timeframe = typeof Timeframe.Type;
 
-export const ExchangeId = Schema.String.pipe(Schema.minLength(1));
+export const ExchangeId = Schema.String.pipe(
+  Schema.check(Schema.isMinLength(1)),
+);
 export type ExchangeId = typeof ExchangeId.Type;
 
-export const Symbol = Schema.String.pipe(Schema.minLength(1));
+export const Symbol = Schema.String.pipe(Schema.check(Schema.isMinLength(1)));
 export type Symbol = typeof Symbol.Type;
 
 /**
@@ -92,7 +105,13 @@ export type Symbol = typeof Symbol.Type;
 export const CollectionConfig = Schema.Struct({
   exchange: ExchangeId,
   symbol: Symbol,
-  timeframe: Schema.optionalWith(Timeframe, { default: () => "1m" }),
-  enabled: Schema.optionalWith(Schema.Boolean, { default: () => true }),
+  timeframe: Timeframe.pipe(
+    Schema.withDecodingDefault(Effect.succeed("1m" as const)),
+    Schema.withConstructorDefault(Effect.succeed("1m" as const)),
+  ),
+  enabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+    Schema.withConstructorDefault(Effect.succeed(true)),
+  ),
 });
 export type CollectionConfig = typeof CollectionConfig.Type;
