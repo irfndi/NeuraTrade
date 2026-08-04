@@ -3614,6 +3614,29 @@ function paperTradeProgram(args: PaperTradeArgs) {
     ): Effect.Effect<GridPaperTradingIterationResult, never, never> =>
       runGridPaperTradingIteration(opts).pipe(
         Effect.provide(futuresAdapterLayer),
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            const state = yield* paperRepo
+              .getGridState(opts.exchange, opts.symbol, opts.timeframe)
+              .pipe(Effect.orElseSucceed(() => null));
+            const reason =
+              "reason" in err && typeof err.reason === "string"
+                ? err.reason
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            yield* Console.error(
+              `grid iteration skipped (network/IO error): ${reason}`,
+            );
+            return {
+              action: "hold" as const,
+              side: state?.side ?? null,
+              capital: state ? Number(state.capital) : 0,
+              peakCapital: state ? Number(state.peakCapital) : 0,
+              note: `skip: ${reason}`,
+            };
+          }),
+        ),
       ) as Effect.Effect<GridPaperTradingIterationResult, never, never>;
 
     let remaining = args.iterations;
