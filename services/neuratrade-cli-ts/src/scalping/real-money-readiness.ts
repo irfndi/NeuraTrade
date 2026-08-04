@@ -128,11 +128,34 @@ export interface ConfidenceEvidence {
   readonly seed: number;
 }
 
+export interface ExecutionParityCheck {
+  readonly name: string;
+  readonly passed: boolean;
+  readonly detail: string;
+}
+
 export interface ExecutionParityEvidence {
   readonly passed: boolean;
   readonly protocolVersion: string;
-  readonly checks: readonly string[];
+  readonly checks: readonly ExecutionParityCheck[];
 }
+
+/**
+ * The eight measured execution-fidelity dimensions a parity artifact must
+ * cover. A real parity run compares the validated backtest engine against the
+ * deployed replay engine on the same candle window and records a per-check
+ * verdict with measured detail (see `scalp parity-replay`).
+ */
+export const EXECUTION_PARITY_CHECK_NAMES = [
+  "trigger-bar",
+  "order-type",
+  "fill-price",
+  "fees",
+  "slippage",
+  "quantity",
+  "exit-reason",
+  "pnl",
+] as const;
 
 export interface StressEvidence {
   readonly returnPct: string;
@@ -587,16 +610,6 @@ export function evaluateRealMoneyReadiness(
       ? ["latest candle is stale"]
       : []),
   ];
-  const requiredParityChecks = [
-    "trigger-bar",
-    "order-type",
-    "fill-price",
-    "fees",
-    "slippage",
-    "quantity",
-    "exit-reason",
-    "pnl",
-  ] as const;
   const parityReasons = [
     ...(!input.executionParity.passed
       ? ["deployed execution semantics do not match the validated replay"]
@@ -604,9 +617,13 @@ export function evaluateRealMoneyReadiness(
     ...(input.executionParity.protocolVersion !== "execution-parity/v1"
       ? ["execution parity protocol version is unsupported"]
       : []),
-    ...requiredParityChecks
-      .filter((check) => !input.executionParity.checks.includes(check))
-      .map((check) => `execution parity check is missing: ${check}`),
+    ...EXECUTION_PARITY_CHECK_NAMES.filter(
+      (name) =>
+        !input.executionParity.checks.some((check) => check.name === name),
+    ).map((name) => `execution parity check is missing: ${name}`),
+    ...input.executionParity.checks
+      .filter((check) => !check.passed)
+      .map((check) => `execution parity check failed: ${check.name}`),
   ];
 
   const gates = [

@@ -92,6 +92,7 @@ import {
 } from "../scalping/strategy-library.js";
 import { runWalkForward } from "../scalping/walk-forward.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
+import { makeParityReplayCommand } from "./parity-replay.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -5315,9 +5316,13 @@ export const demoReadinessCommand = makeDemoReadinessCommand(
   makeDbLayer(process.env.NEURATRADE_HOME),
 );
 
+export const parityReplayCommand = makeParityReplayCommand(
+  process.env.NEURATRADE_HOME,
+);
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -5332,5 +5337,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     walkForwardCommand,
     readinessCommand,
     demoReadinessCommand,
+    parityReplayCommand,
   ]),
 );

@@ -40,14 +40,38 @@ function passingInput(): RealMoneyReadinessInput {
       passed: true,
       protocolVersion: "execution-parity/v1",
       checks: [
-        "trigger-bar",
-        "order-type",
-        "fill-price",
-        "fees",
-        "slippage",
-        "quantity",
-        "exit-reason",
-        "pnl",
+        {
+          name: "trigger-bar",
+          passed: true,
+          detail: "backtest=2 deployed=2",
+        },
+        {
+          name: "order-type",
+          passed: true,
+          detail: "both use limit entry at grid level",
+        },
+        {
+          name: "fill-price",
+          passed: true,
+          detail: "2/2 entries within 0.5%",
+        },
+        { name: "fees", passed: true, detail: "both charge 0.12% round-trip" },
+        {
+          name: "slippage",
+          passed: true,
+          detail: "both apply slippageBps=2",
+        },
+        {
+          name: "quantity",
+          passed: true,
+          detail: "both size at 50% of capital",
+        },
+        {
+          name: "exit-reason",
+          passed: true,
+          detail: "2/2 exit reasons equal",
+        },
+        { name: "pnl", passed: true, detail: "2/2 within 0.5pp" },
       ],
     },
     stress: {
@@ -207,7 +231,13 @@ describe("real-money readiness contract", () => {
         ...passingInput(),
         executionParity: {
           ...passingInput().executionParity,
-          checks: checks.filter((check) => check !== missing),
+          checks: checks
+            .filter((check) => check !== missing)
+            .map((name) => ({
+              name,
+              passed: true,
+              detail: `${name}: OK`,
+            })),
         },
       });
 
@@ -217,6 +247,26 @@ describe("real-money readiness contract", () => {
         result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
       ).toContain(`execution parity check is missing: ${missing}`);
     }
+  });
+
+  it("fails execution parity when any required check is not passed", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      executionParity: {
+        ...passingInput().executionParity,
+        checks: passingInput().executionParity.checks.map((check) =>
+          check.name === "fill-price"
+            ? { ...check, passed: false, detail: "0/2 entries within 0.5%" }
+            : check,
+        ),
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("execution-parity");
+    expect(
+      result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
+    ).toContain("execution parity check failed: fill-price");
   });
 
   it("fails an inverted confidence interval", () => {

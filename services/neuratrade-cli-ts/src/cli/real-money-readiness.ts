@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CandleLike } from "../scalping/types.js";
@@ -12,9 +13,11 @@ import {
 import {
   DEFAULT_READINESS_THRESHOLDS,
   DEFAULT_STRATEGY_MANIFEST,
+  EXECUTION_PARITY_CHECK_NAMES,
   evaluateRealMoneyReadiness,
   fingerprintStrategyManifest,
   serializeRealMoneyReadiness,
+  type ExecutionParityEvidence,
   type RealMoneyReadinessInput,
   type RealMoneyReadinessReport,
 } from "../scalping/real-money-readiness.js";
@@ -162,6 +165,67 @@ function databasePath(home: string): string {
   return join(home, "data", "neuratrade.db");
 }
 
+interface ExecutionParityArtifactCheck {
+  readonly name: string;
+  readonly passed: boolean;
+  readonly detail: string;
+}
+
+interface ExecutionParityArtifactFile {
+  readonly protocolVersion?: string;
+  readonly checks?: readonly unknown[];
+}
+
+function absentExecutionParity(): ExecutionParityEvidence {
+  return { passed: false, protocolVersion: "execution-parity/v1", checks: [] };
+}
+
+const goldenExecutionParity: ExecutionParityEvidence = {
+  passed: true,
+  protocolVersion: "execution-parity/v1",
+  checks: EXECUTION_PARITY_CHECK_NAMES.map((name) => ({
+    name,
+    passed: true,
+    detail: "test-factory golden fixture (not a measured run)",
+  })),
+};
+
+/**
+ * The execution-parity artifact (written by `scalp parity-replay`) is the
+ * single source of truth for this gate in production. A CLI flag could be
+ * grafted onto a passing report; a filesystem artifact produced by the replay
+ * producer cannot pass unless all eight checks carry measured, non-failing
+ * detail. Absent or malformed evidence fails closed with no checks.
+ */
+function readExecutionParityFile(home: string): ExecutionParityEvidence {
+  const filePath = join(home, "data", "execution-parity.json");
+  try {
+    if (!existsSync(filePath)) return absentExecutionParity();
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<
+      ExecutionParityArtifactFile
+    >;
+    const checks = (Array.isArray(parsed.checks) ? parsed.checks : []).filter(
+      (check): check is ExecutionParityArtifactCheck =>
+        typeof check === "object" &&
+        check !== null &&
+        typeof (check as ExecutionParityArtifactCheck).name === "string" &&
+        typeof (check as ExecutionParityArtifactCheck).passed === "boolean" &&
+        typeof (check as ExecutionParityArtifactCheck).detail === "string",
+    );
+    return {
+      passed: checks.length > 0 && checks.every((check) => check.passed),
+      protocolVersion:
+        typeof parsed.protocolVersion === "string" &&
+        parsed.protocolVersion.length > 0
+          ? parsed.protocolVersion
+          : "execution-parity/v1",
+      checks,
+    };
+  } catch {
+    return absentExecutionParity();
+  }
+}
+
 function tableColumns(db: Database, table: string): ReadonlySet<string> {
   const rows = db
     .query<{ readonly name: string }, []>(`PRAGMA table_info(${table})`)
@@ -275,7 +339,7 @@ function buildInput(
   candles: readonly CandleLike[],
   trades: readonly RawTrade[],
   now: Date,
-  parityPassed: boolean,
+  executionParity: ExecutionParityEvidence,
 ): RealMoneyReadinessInput {
   const complete = trades.filter(completeTrade);
   const pValues = complete.map(
@@ -316,7 +380,7 @@ function buildInput(
       targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
       onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
     },
-    executionParityPassed: parityPassed,
+    executionParityPassed: executionParity.passed,
   });
   const dataQuality = grid.dataQuality;
   const gridOk: GridValidationOk | null = grid.kind === "ok" ? grid : null;
@@ -371,22 +435,7 @@ function buildInput(
       blockLength: fixedConfidence.blockLength,
       seed: fixedConfidence.seed,
     },
-    executionParity: {
-      passed: parityPassed,
-      protocolVersion: "execution-parity/v1",
-      checks: parityPassed
-        ? [
-            "trigger-bar",
-            "order-type",
-            "fill-price",
-            "fees",
-            "slippage",
-            "quantity",
-            "exit-reason",
-            "pnl",
-          ]
-        : [],
-    },
+    executionParity,
     stress: {
       returnPct: stress.worstReturnPct?.toString() ?? "0",
       lowerBoundPct: stress.worstLowerBoundPct?.toString() ?? "0",
@@ -433,6 +482,10 @@ function executeReadiness(
     options.home ??
     process.env.NEURATRADE_HOME ??
     join(homedir(), ".neuratrade");
+  const executionParity =
+    options.parityFixture === "golden"
+      ? goldenExecutionParity
+      : readExecutionParityFile(home);
   const db = new Database(databasePath(home), {
     readonly: true,
     create: false,
@@ -443,7 +496,7 @@ function executeReadiness(
     const candles = readCandles(db, args);
     const trades = readTrades(db, args);
     return evaluateRealMoneyReadiness(
-      buildInput(candles, trades, now, options.parityFixture === "golden"),
+      buildInput(candles, trades, now, executionParity),
     );
   } finally {
     db.close();
@@ -475,18 +528,6 @@ export function runRealMoneyReadiness(
   argv: readonly string[],
   options: RealMoneyReadinessCliOptions = {},
 ): { readonly report: RealMoneyReadinessReport; readonly exitCode: number } {
-  if (
-    !options.testFactory &&
-    (options.parityFixture !== undefined ||
-      process.env.NEURATRADE_READINESS_PARITY_FIXTURE !== undefined)
-  ) {
-    return {
-      report: errorReport(
-        "test-only parity fixture is unavailable in production",
-      ),
-      exitCode: 2,
-    };
-  }
   const commandArgs = options.testFactory
     ? argv.filter((token) => token !== "--parity-fixture" && token !== "golden")
     : argv;

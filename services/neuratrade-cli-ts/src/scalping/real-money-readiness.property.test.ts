@@ -39,14 +39,38 @@ function baseInput(): RealMoneyReadinessInput {
       passed: true,
       protocolVersion: "execution-parity/v1",
       checks: [
-        "trigger-bar",
-        "order-type",
-        "fill-price",
-        "fees",
-        "slippage",
-        "quantity",
-        "exit-reason",
-        "pnl",
+        {
+          name: "trigger-bar",
+          passed: true,
+          detail: "backtest=2 deployed=2",
+        },
+        {
+          name: "order-type",
+          passed: true,
+          detail: "both use limit entry at grid level",
+        },
+        {
+          name: "fill-price",
+          passed: true,
+          detail: "2/2 entries within 0.5%",
+        },
+        { name: "fees", passed: true, detail: "both charge 0.12% round-trip" },
+        {
+          name: "slippage",
+          passed: true,
+          detail: "both apply slippageBps=2",
+        },
+        {
+          name: "quantity",
+          passed: true,
+          detail: "both size at 50% of capital",
+        },
+        {
+          name: "exit-reason",
+          passed: true,
+          detail: "2/2 exit reasons equal",
+        },
+        { name: "pnl", passed: true, detail: "2/2 within 0.5pp" },
       ],
     },
     stress: {

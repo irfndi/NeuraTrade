@@ -245,4 +245,110 @@ describe("real-money-readiness CLI contract", () => {
         ?.passed,
     ).toBe(true);
   });
+
+  it("passes the execution-parity gate from the measured data artifact", () => {
+    const home = makeSeededHome(60);
+    tempHomes.push(home);
+    fs.writeFileSync(
+      nodePath.join(home, "data", "execution-parity.json"),
+      JSON.stringify({
+        protocolVersion: "execution-parity/v1",
+        generatedAt: "2026-08-01T00:00:00.000Z",
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "15m",
+        barCount: 500,
+        backtestTrades: 2,
+        deployedTrades: 2,
+        checks: [
+          {
+            name: "trigger-bar",
+            passed: true,
+            detail: "backtest=2 deployed=2",
+          },
+          {
+            name: "order-type",
+            passed: true,
+            detail: "both use limit entry at grid level",
+          },
+          {
+            name: "fill-price",
+            passed: true,
+            detail: "2/2 entries within 0.5%",
+          },
+          {
+            name: "fees",
+            passed: true,
+            detail: "both charge 0.12% round-trip",
+          },
+          {
+            name: "slippage",
+            passed: true,
+            detail: "both apply slippageBps=2",
+          },
+          {
+            name: "quantity",
+            passed: true,
+            detail: "both size at 50% of capital",
+          },
+          {
+            name: "exit-reason",
+            passed: true,
+            detail: "2/2 exit reasons equal",
+          },
+          { name: "pnl", passed: true, detail: "2/2 within 0.5pp" },
+        ],
+      }),
+    );
+
+    const result = runRealMoneyReadiness([], {
+      home,
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    const parityGate = result.report.gates.find(
+      (gate) => gate.id === "execution-parity",
+    );
+    expect(parityGate?.passed).toBe(true);
+    expect(parityGate?.reasons).toEqual([]);
+    // The rest of the cohort still fails closed without candle evidence.
+    expect(result.exitCode).toBe(1);
+    expect(result.report.failedGateIds).toContain("data-quality");
+  });
+
+  it("fails closed when the measured artifact reports a failed check", () => {
+    const home = makeSeededHome(60);
+    tempHomes.push(home);
+    const checks = [
+      "trigger-bar",
+      "order-type",
+      "fill-price",
+      "fees",
+      "slippage",
+      "quantity",
+      "exit-reason",
+      "pnl",
+    ].map((name) => ({
+      name,
+      passed: name !== "pnl",
+      detail: `${name}: ${name === "pnl" ? "0/2 within 0.5pp" : "OK"}`,
+    }));
+    fs.writeFileSync(
+      nodePath.join(home, "data", "execution-parity.json"),
+      JSON.stringify({ protocolVersion: "execution-parity/v1", checks }),
+    );
+
+    const result = runRealMoneyReadiness([], {
+      home,
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    const parityGate = result.report.gates.find(
+      (gate) => gate.id === "execution-parity",
+    );
+    expect(parityGate?.passed).toBe(false);
+    expect(parityGate?.reasons).toContain(
+      "execution parity check failed: pnl",
+    );
+  });
 });
