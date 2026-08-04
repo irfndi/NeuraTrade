@@ -208,6 +208,13 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MarketDataRepositorySQLite } from "../market-data/repository.js";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLiteLive,
+} from "../market-data/repository.js";
+import { BacktestEngine } from "../scalping/services.js";
+import { backtestProgram } from "./scalp.js";
+import type { Candle } from "../market-data/types.js";
 
 function makeOptimizeArgs(overrides: Partial<OptimizeArgs> = {}): OptimizeArgs {
   return {
@@ -1193,4 +1200,86 @@ describe("paper-trade command", () => {
     expect(output).toContain("dualEmaCross");
     expect(output).toContain("--realistic");
   }, 15_000);
+});
+
+describe("backtestProgram fill-model option forwarding", () => {
+  it("forwards makerFeePct/entryOrderType/entryLimitOffsetBps/entryOnClose to runBacktest", async () => {
+    const db = new Database(":memory:");
+    const candles: Candle[] = Array.from({ length: 150 }, (_, i) => {
+      const close = 100 + i * 0.5;
+      return {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: close - 0.2,
+        high: close + 0.5,
+        low: close - 0.5,
+        close,
+        volume: 10,
+        timestamp: new Date(Date.now() + i * 3600_000),
+      };
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(candles);
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    let captured: {
+      makerFeePct: number | undefined;
+      entryOrderType: string | undefined;
+      entryLimitOffsetBps: number | undefined;
+      entryOnClose: boolean | undefined;
+    } | null = null;
+    const fakeEngine = Layer.succeed(BacktestEngine, {
+      runBacktest: (options) => {
+        captured = {
+          makerFeePct: options.makerFeePct,
+          entryOrderType: options.entryOrderType,
+          entryLimitOffsetBps: options.entryLimitOffsetBps,
+          entryOnClose: options.entryOnClose,
+        };
+        return Effect.succeed(makeResult());
+      },
+      runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+    });
+
+    const args = makeOptimizeArgs({
+      makerFeePct: 0.04,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 25,
+      entryOnClose: true,
+    });
+
+    await Effect.runPromise(
+      backtestProgram(args as unknown as Parameters<typeof backtestProgram>[0]).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            fakeEngine,
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    expect(captured!).toEqual({
+      makerFeePct: 0.04,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 25,
+      entryOnClose: true,
+    });
+    db.close();
+  });
 });

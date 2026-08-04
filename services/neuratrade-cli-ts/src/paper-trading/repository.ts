@@ -302,6 +302,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         addColumn(
           "ALTER TABLE grid_paper_state ADD COLUMN leverage REAL NOT NULL DEFAULT 1",
         );
+        addColumn(
+          "ALTER TABLE paper_positions ADD COLUMN scaled_out INTEGER NOT NULL DEFAULT 0",
+        );
+        addColumn(
+          "ALTER TABLE paper_positions ADD COLUMN scale_out_price REAL NOT NULL DEFAULT 0",
+        );
         for (const tableColumn of [
           "grid_paper_state entry_order_id TEXT",
           "grid_paper_state entry_client_oid TEXT",

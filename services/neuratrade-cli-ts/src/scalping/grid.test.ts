@@ -367,6 +367,54 @@ describe("findBestGridParams", () => {
     expect(best.gridMaxGrids).toBeOneOf([2, 3]);
     expect(best.result.totalTrades).toBeGreaterThan(0);
   });
+
+  it("marks open inventory to market at the final candle (no silent boundary erase)", () => {
+    const candles: CandleLike[] = [];
+    for (let i = 0; i < 100; i++) {
+      const ts = new Date(i * 15 * 60 * 1000);
+      if (i < 99) {
+        candles.push({
+          open: 100,
+          high: 100.1,
+          low: 99.9,
+          close: 100,
+          volume: 1,
+          timestamp: ts,
+        });
+      } else {
+        // Last candle dips below the buy level, opening a long that the
+        // series ends before it can hit target/stop/liquidation.
+        candles.push({
+          open: 100,
+          high: 100.1,
+          low: 99.0,
+          close: 99.2,
+          volume: 1,
+          timestamp: ts,
+        });
+      }
+    }
+
+    const result = runGridBacktest(candles, {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 0,
+      leverage: 1,
+    });
+
+    // The open position must be closed at the last close, not silently
+    // dropped (which would report 0 trades and a flat 0% return).
+    expect(result.totalTrades).toBe(1);
+    const last = result.trades[result.trades.length - 1];
+    expect(last.side).toBe("long");
+    expect(last.exitBar).toBe(99);
+    expect(last.exitPrice).toBe(99.2);
+    expect(result.totalReturnPct).toBeLessThan(0);
+  });
 });
 
 describe("runGridWalkForward", () => {

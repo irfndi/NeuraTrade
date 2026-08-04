@@ -319,6 +319,47 @@ export function runGridBacktest(
     }
   }
 
+  // Mark any open grid inventory to market at the final observable close so
+  // the backtest doesn't silently erase an adverse open position at the
+  // boundary (inflating returns at OOS / walk-forward edges).
+  if (positionSize !== 0) {
+    const lastClose = candles[candles.length - 1].close;
+    const exitSide = positionSize > 0 ? "long" : "short";
+    const exitPrice = lastClose;
+    const fee = stopFee;
+    const pricePnl =
+      exitSide === "long"
+        ? (exitPrice - entryPrice) / entryPrice
+        : (entryPrice - exitPrice) / entryPrice;
+    const net = pricePnl - fee;
+    const leveragedReturn = net * leverage;
+    const equityReturn = positionFraction * leveragedReturn;
+    capital = Math.max(0, capital * (1 + equityReturn));
+    peak = Math.max(peak, capital);
+    const dd = peak > 0 ? (peak - capital) / peak : 0;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+    const win = net >= 0;
+    if (net < 0) {
+      totalLosses++;
+      grossLoss += Math.abs(leveragedReturn);
+    } else {
+      totalWins++;
+      grossProfit += leveragedReturn;
+    }
+    trades.push({
+      side: exitSide,
+      entryBar,
+      exitBar: candles.length - 1,
+      entryPrice,
+      exitPrice,
+      pnlPct: leveragedReturn,
+      pnlQuote: capital * equityReturn,
+      win,
+      isLiquidation: false,
+    });
+    positionSize = 0;
+  }
+
   const totalTrades = totalWins + totalLosses;
   return {
     totalReturnPct:

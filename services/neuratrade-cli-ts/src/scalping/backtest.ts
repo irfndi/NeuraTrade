@@ -1058,7 +1058,11 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
         options.htfCandles.length > 0 &&
         !alignsWithHigherTimeframeTrend(
           side,
-          options.htfCandles,
+          // Only consider HTF candles already closed by the decision time;
+          // otherwise the trend reflects future information (look-ahead bias).
+          options.htfCandles.filter(
+            (htf) => htf.timestamp.getTime() <= current.timestamp.getTime(),
+          ),
           options.htfTrendFastPeriod,
           options.htfTrendSlowPeriod,
         )
@@ -1794,15 +1798,20 @@ function runMonteCarlo(
     let capital = initialCapital;
     let peak = capital;
     let maxDd = 0;
+    let ruined = false;
     for (const trade of shuffled) {
       capital += trade.netPnl;
+      if (capital <= 0) {
+        ruined = true;
+        break;
+      }
       if (capital > peak) peak = capital;
       if (peak > 0) {
         const dd = ((peak - capital) / peak) * 100;
         if (dd > maxDd) maxDd = dd;
       }
     }
-    if (capital <= 0) ruinCount++;
+    if (ruined || capital <= 0) ruinCount++;
     maxDrawdowns.push(maxDd);
     if (maxDd > worstMaxDrawdown) worstMaxDrawdown = maxDd;
   }

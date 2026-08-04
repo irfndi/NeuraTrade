@@ -176,4 +176,54 @@ describe("PaperTradingRepositorySQLite", () => {
     ).toBe("2");
     db.close();
   });
+
+  it("migrates scaled_out/scale_out_price columns onto an existing positions table", async () => {
+    // Simulate a DB created before the scale-out columns existed: the
+    // paper_positions table is present but lacks scaled_out / scale_out_price.
+    // ensureTables must ALTER TABLE to add them, or getOpenPosition /
+    // saveOpenPosition fail with "no such column".
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE paper_positions (
+        id TEXT PRIMARY KEY,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        side TEXT NOT NULL,
+        entry_price REAL NOT NULL,
+        size REAL NOT NULL,
+        stop_loss REAL NOT NULL,
+        take_profit REAL NOT NULL,
+        opened_at TEXT NOT NULL,
+        signal_id TEXT
+      );
+    `);
+    const repository = new PaperTradingRepositorySQLite(db);
+
+    await Effect.runPromise(repository.ensureTables());
+
+    const position: PaperPosition = {
+      id: "migrated-1",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "1m",
+      side: "long",
+      entryPrice: money("70000"),
+      size: money("0.001"),
+      stopLoss: money("69000"),
+      takeProfit: money("71000"),
+      openedAt: new Date("2026-08-01T00:00:00.000Z"),
+      signalId: "signal-1",
+      scaledOut: true,
+      scaleOutPrice: money("70500"),
+    };
+
+    await Effect.runPromise(repository.saveOpenPosition(position));
+    const loaded = await Effect.runPromise(
+      repository.getOpenPosition(position.exchange, position.symbol),
+    );
+    expect(loaded?.scaledOut).toBe(true);
+    expect(loaded?.scaleOutPrice.toString()).toBe("70500");
+    db.close();
+  });
 });
