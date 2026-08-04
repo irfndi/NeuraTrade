@@ -50,6 +50,7 @@ func (s *SQLIdempotencyStore) ensureTable() error {
 			post_only BOOLEAN DEFAULT FALSE,
 			filled_amount TEXT DEFAULT '0',
 			fill_price TEXT DEFAULT '0',
+			fee TEXT DEFAULT '0',
 			reject_reason TEXT,
 			attempt_count INTEGER DEFAULT 1,
 			submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -72,6 +73,12 @@ func (s *SQLIdempotencyStore) ensureTable() error {
 			return fmt.Errorf("execute idempotency schema statement %d: %w", i+1, err)
 		}
 	}
+	if _, err := s.db.Exec(`ALTER TABLE order_intents ADD COLUMN fee TEXT DEFAULT '0'`); err != nil {
+		normalizedErr := strings.ToLower(err.Error())
+		if !strings.Contains(normalizedErr, "duplicate column") && !strings.Contains(normalizedErr, "already exists") {
+			return fmt.Errorf("add order intent fee column: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -82,9 +89,9 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		intent_id, client_order_id, exchange_order_id, status,
 		exchange, symbol, side, order_type, amount, price,
 		stop_price, take_profit, reduce_only, post_only,
-		filled_amount, fill_price, reject_reason, attempt_count,
+		filled_amount, fill_price, fee, reject_reason, attempt_count,
 		submitted_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	query = rebindQuestionPlaceholders(s.db, query)
 
@@ -105,6 +112,7 @@ func (s *SQLIdempotencyStore) SaveIntent(ctx context.Context, intent *OrderInten
 		intent.Request.PostOnly,
 		decimalString(intent.FilledAmount),
 		decimalString(intent.FillPrice),
+		decimalString(intent.Fee),
 		intent.RejectReason,
 		intent.AttemptCount,
 		intent.SubmittedAt,
@@ -123,7 +131,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 	SELECT intent_id, client_order_id, exchange_order_id, status,
 		exchange, symbol, side, order_type, amount, price,
 		stop_price, take_profit, reduce_only, post_only,
-		filled_amount, fill_price, reject_reason, attempt_count,
+		filled_amount, fill_price, fee, reject_reason, attempt_count,
 		submitted_at, updated_at
 	FROM order_intents WHERE intent_id = ?
 	`
@@ -131,7 +139,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 
 	var intent OrderIntent
 	var statusStr, sideStr, typeStr string
-	var amountStr, filledStr, fillPriceStr string
+	var amountStr, filledStr, fillPriceStr, feeStr string
 	var priceStr, stopPriceStr, takeProfitStr, rejectReason sql.NullString
 
 	err := s.db.QueryRowContext(ctx, query, intentID).Scan(
@@ -151,6 +159,7 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 		&intent.Request.PostOnly,
 		&filledStr,
 		&fillPriceStr,
+		&feeStr,
 		&rejectReason,
 		&intent.AttemptCount,
 		&intent.SubmittedAt,
@@ -194,6 +203,10 @@ func (s *SQLIdempotencyStore) GetIntent(ctx context.Context, intentID string) (*
 	intent.FillPrice, err = parseDecimal("order_intents.fill_price", fillPriceStr)
 	if err != nil {
 		return nil, fmt.Errorf("decode intent %s fill_price: %w", intentID, err)
+	}
+	intent.Fee, err = parseDecimal("order_intents.fee", feeStr)
+	if err != nil {
+		return nil, fmt.Errorf("decode intent %s fee: %w", intentID, err)
 	}
 
 	return &intent, nil
@@ -254,6 +267,7 @@ func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderInt
 		status = ?,
 		filled_amount = ?,
 		fill_price = ?,
+		fee = ?,
 		reject_reason = ?,
 		attempt_count = ?,
 		updated_at = ?
@@ -266,6 +280,7 @@ func (s *SQLIdempotencyStore) UpdateIntent(ctx context.Context, intent *OrderInt
 		string(intent.Status),
 		intent.FilledAmount.String(),
 		intent.FillPrice.String(),
+		intent.Fee.String(),
 		intent.RejectReason,
 		intent.AttemptCount,
 		intent.UpdatedAt,

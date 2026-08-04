@@ -18,6 +18,7 @@ import {
 } from "../../services/bitget-client.js";
 import { validateFuturesOrder } from "../../services/bitget-futures-guards.js";
 import { validateLiveOrderSafety } from "../../services/bitget-futures-safety.js";
+import { money } from "../../utils/money.js";
 
 function toExchangeError(error: BitgetClientError): ExchangeError {
   switch (error._tag) {
@@ -99,11 +100,11 @@ export function makeBitgetFuturesAdapter(
         productType,
         side: request.side,
         orderType: request.type,
-        size: String(request.size),
+        size: request.size.toString(),
         marginMode: request.marginMode,
         clientOid: request.clientOid,
         reduceOnly: request.reduceOnly,
-        price: request.price !== undefined ? String(request.price) : undefined,
+        price: request.price?.toString(),
         leverage: request.leverage,
       };
 
@@ -149,12 +150,12 @@ export function makeBitgetFuturesAdapter(
         }),
       );
 
-      const filledQty = Number(data.filledSize);
-      const filledPrice = Number(data.priceAvg);
-      if (filledQty <= 0 || filledPrice <= 0) {
+      const filledQty = money(data.filledSize);
+      const filledPrice = money(data.priceAvg);
+      if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
         return yield* Effect.fail(
           new ExchangeError(
-            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty}, filledPrice=${filledPrice})`,
+            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty.toString()}, filledPrice=${filledPrice.toString()})`,
           ),
         );
       }
@@ -168,7 +169,7 @@ export function makeBitgetFuturesAdapter(
         marginMode: data.marginMode,
         filledQty,
         filledPrice,
-        fee: Number(data.fee),
+        fee: money(data.fee),
         timestamp: new Date(),
       };
       return fill;
@@ -189,8 +190,11 @@ export function makeBitgetFuturesAdapter(
       if (!existing) {
         return null;
       }
-      const closeSize = Math.min(request.size, Number(existing.available));
-      if (closeSize <= 0) {
+      const available = money(existing.available);
+      const closeSize = request.size.lessThan(available)
+        ? request.size
+        : available;
+      if (closeSize.lessThanOrEqualTo(0)) {
         return null;
       }
       return yield* placeOrder({
@@ -215,7 +219,17 @@ export function makeBitgetFuturesAdapter(
         const positions = yield* withError(
           client.getFuturesPositions(symbol, productType),
         );
-        const p = positions[0];
+        const activePositions = positions.filter((position) =>
+          money(position.total).greaterThan(0),
+        );
+        if (activePositions.length > 1) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              `multiple active ${productType} positions returned for ${symbol}`,
+            ),
+          );
+        }
+        const p = activePositions.at(0);
         if (!p) {
           return null;
         }
@@ -225,13 +239,14 @@ export function makeBitgetFuturesAdapter(
           productType: p.productType,
           marginMode: p.marginMode,
           leverage: Number(p.leverage),
-          quantity: Number(p.total),
-          available: Number(p.available),
-          entryPrice: Number(p.openPrice),
+          quantity: money(p.total),
+          available: money(p.available),
+          entryPrice: money(p.openPrice),
           liquidationPrice:
             p.liquidatedPrice === "" || p.liquidatedPrice === "0"
               ? undefined
-              : Number(p.liquidatedPrice),
+              : money(p.liquidatedPrice),
+          unrealizedPnl: money(p.unrealizedPL),
           marginCoin: bitgetMarginCoin(p.productType, symbol),
         };
         return position;
@@ -252,10 +267,10 @@ export function makeBitgetFuturesAdapter(
         );
         const balance: FuturesBalance = {
           marginCoin,
-          available: match ? Number(match.available) : 0,
-          locked: match ? Number(match.locked) : 0,
-          equity: match ? Number(match.equity) : 0,
-          usdtEquity: match ? Number(match.usdtEquity) : 0,
+          available: money(match?.available ?? 0),
+          locked: money(match?.locked ?? 0),
+          equity: money(match?.equity ?? 0),
+          usdtEquity: money(match?.usdtEquity ?? 0),
         };
         return balance;
       }),

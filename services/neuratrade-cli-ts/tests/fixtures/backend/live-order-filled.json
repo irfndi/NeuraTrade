@@ -1,0 +1,13 @@
+{
+  "intent_id": "intent-1",
+  "order_id": "exchange-1",
+  "client_id": "client-1",
+  "exchange": "bitget-futures",
+  "symbol": "BTC/USDT:USDT",
+  "side": "buy",
+  "filled_qty": "0.00012345678901234567890",
+  "filled_price": "70000.12345678901234567890",
+  "fee": "0.00000000000000000001",
+  "status": "filled",
+  "timestamp": "2026-08-01T00:00:00.000Z"
+}

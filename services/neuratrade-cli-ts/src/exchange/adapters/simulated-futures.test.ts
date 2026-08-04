@@ -6,6 +6,7 @@ import {
   type FuturesExchangeAdapterService,
 } from "../futures-adapter.js";
 import type { MarketDataGatewayService } from "../../market-data/gateway.js";
+import { money } from "../../utils/money.js";
 
 const mockGateway: MarketDataGatewayService = {
   fetchTick: () => Effect.die("not used"),
@@ -52,7 +53,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
           symbol: "BTC/USDT:USDT",
           side: "buy",
           type: "market",
-          size: 0.1,
+          size: money(0.1),
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
@@ -61,8 +62,8 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     );
 
     expect(fill.side).toBe("buy");
-    expect(fill.filledQty).toBe(0.1);
-    expect(fill.filledPrice).toBeGreaterThan(0);
+    expect(fill.filledQty.toNumber()).toBe(0.1);
+    expect(fill.filledPrice.greaterThan(0)).toBe(true);
 
     const position = await run(
       Effect.gen(function* () {
@@ -73,7 +74,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
 
     expect(position).not.toBeNull();
     expect(position?.side).toBe("long");
-    expect(position?.quantity).toBe(0.1);
+    expect(position?.quantity.toNumber()).toBe(0.1);
 
     const balance = await run(
       Effect.gen(function* () {
@@ -82,7 +83,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
       }),
     );
 
-    expect(balance.available).toBeLessThan(10_000);
+    expect(balance.available.toNumber()).toBeLessThan(10_000);
   });
 
   it("rejects order with insufficient margin", async () => {
@@ -94,7 +95,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             symbol: "BTC/USDT:USDT",
             side: "buy",
             type: "market",
-            size: 100,
+            size: money(100),
             productType: "USDT-FUTURES",
             marginMode: "crossed",
             leverage: 1,
@@ -114,7 +115,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
           symbol: "BTC/USDT:USDT",
           side: "buy",
           type: "market",
-          size: 0.1,
+          size: money(0.1),
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
@@ -132,7 +133,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
-          size: 0.1,
+          size: money(0.1),
         });
       }),
     );
@@ -156,8 +157,10 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     // Margin is released and PnL is realized. The close balance recovers the
     // locked margin plus PnL (minus fees), so it is higher than the post-open
     // balance but still below the initial 10,000 due to fees and slippage.
-    expect(closeBalance.available).toBeGreaterThan(openBalance.available);
-    expect(closeBalance.available).toBeGreaterThan(9_980);
+    expect(closeBalance.available.toNumber()).toBeGreaterThan(
+      openBalance.available.toNumber(),
+    );
+    expect(closeBalance.available.toNumber()).toBeGreaterThan(9_980);
   });
 
   it("rejects reduce-only buy without a short position", async () => {
@@ -169,7 +172,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             symbol: "BTC/USDT:USDT",
             side: "buy",
             type: "market",
-            size: 0.1,
+            size: money(0.1),
             productType: "USDT-FUTURES",
             marginMode: "crossed",
             leverage: 10,
@@ -190,7 +193,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
           symbol: "BTC/USDT:USDT",
           side: "sell",
           type: "market",
-          size: 0.1,
+          size: money(0.1),
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
@@ -239,7 +242,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             symbol: "BTC/USDT:USDT",
             side: "buy",
             type: "market",
-            size,
+            size: money(size),
             productType: "USDT-FUTURES",
             marginMode: "crossed",
             leverage,
@@ -250,7 +253,7 @@ describe("SimulatedFuturesExchangeAdapter", () => {
             productType: "USDT-FUTURES",
             marginMode: "crossed",
             leverage,
-            size,
+            size: money(size),
           });
         }),
       );
@@ -271,11 +274,11 @@ describe("SimulatedFuturesExchangeAdapter", () => {
 
       expect(position).toBeNull();
       // Margin released, only fees (both sides) reduce balance.
-      expect(finalBalance.available).toBeLessThanOrEqual(
-        initialBalance.available,
+      expect(finalBalance.available.toNumber()).toBeLessThanOrEqual(
+        initialBalance.available.toNumber(),
       );
-      expect(finalBalance.available).toBeGreaterThan(
-        initialBalance.available * 0.99,
+      expect(finalBalance.available.toNumber()).toBeGreaterThan(
+        initialBalance.available.toNumber() * 0.99,
       );
     }
   });

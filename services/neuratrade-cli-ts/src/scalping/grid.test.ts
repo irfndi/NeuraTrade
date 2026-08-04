@@ -30,6 +30,54 @@ function makeOscillatingCandles(
   return candles;
 }
 
+/** Random walk with real intrabar wicks — produces genuine close-through vs
+ *  recovered-wick touches so the adverse-selection fill path is exercised. */
+function makeRandomWalkCandles(count: number, seed = 7): CandleLike[] {
+  let state = seed;
+  const rand = (): number => {
+    state = (state * 1103515245 + 12345) % 2147483648;
+    return state / 2147483648 - 0.5;
+  };
+  const candles: CandleLike[] = [];
+  let price = 100;
+  for (let i = 0; i < count; i++) {
+    const open = price;
+    const close = price * (1 + rand() * 0.01);
+    const wick = Math.abs(rand()) * 0.006;
+    candles.push({
+      open,
+      high: Math.max(open, close) * (1 + wick),
+      low: Math.min(open, close) * (1 - wick),
+      close,
+      volume: 1,
+      timestamp: new Date(i * 15 * 60 * 1000),
+    });
+    price = close;
+  }
+  return candles;
+}
+
+/** Steady downtrend: long grid entries repeatedly hit their stops, guaranteeing
+ *  taker stop-exits to exercise the taker-exit fee path. */
+function makeTrendingDownCandles(count: number): CandleLike[] {
+  const candles: CandleLike[] = [];
+  let price = 100;
+  for (let i = 0; i < count; i++) {
+    const open = price;
+    const close = price * 0.995;
+    candles.push({
+      open,
+      high: open * 1.001,
+      low: close * 0.999,
+      close,
+      volume: 1,
+      timestamp: new Date(i * 15 * 60 * 1000),
+    });
+    price = close;
+  }
+  return candles;
+}
+
 describe("runGridBacktest", () => {
   it("captures trades on an oscillating series and produces profit factor > 1", () => {
     const candles = makeOscillatingCandles(300);
@@ -210,6 +258,90 @@ describe("runGridBacktest", () => {
       r.trades.reduce((s, t) => s + t.pnlPct, 0) / r.trades.length;
     expect(mean(half)).toBeCloseTo(mean(full), 8);
   });
+
+  it("makerFillProb=1 reproduces the default (touched = filled) behavior", () => {
+    const candles = makeOscillatingCandles(300);
+    const baseline = runGridBacktest(candles, sizingOpts);
+    const explicit = runGridBacktest(candles, {
+      ...sizingOpts,
+      makerFillProb: 1,
+    });
+    expect(explicit.totalTrades).toBe(baseline.totalTrades);
+    expect(explicit.totalReturnPct).toBeCloseTo(baseline.totalReturnPct, 8);
+    expect(explicit.maxDrawdownPct).toBeCloseTo(baseline.maxDrawdownPct, 8);
+  });
+
+  it("adverse selection is inert at makerFillProb=1 (every touch fills)", () => {
+    const candles = makeRandomWalkCandles(400);
+    const full = runGridBacktest(candles, sizingOpts);
+    const adverseFull = runGridBacktest(candles, {
+      ...sizingOpts,
+      makerFillProb: 1,
+      adverseSelection: true,
+    });
+    expect(adverseFull.totalTrades).toBe(full.totalTrades);
+    expect(adverseFull.totalReturnPct).toBeCloseTo(full.totalReturnPct, 8);
+  });
+
+  it("fill decisions are deterministic for a fixed seed", () => {
+    const candles = makeRandomWalkCandles(400);
+    const cfg = {
+      ...sizingOpts,
+      makerFillProb: 0.6,
+      adverseSelection: true,
+      takerExitFeePct: 0.06,
+    };
+    const first = runGridBacktest(candles, cfg);
+    const second = runGridBacktest(candles, cfg);
+    expect(second.totalTrades).toBe(first.totalTrades);
+    expect(second.totalReturnPct).toBe(first.totalReturnPct);
+  });
+
+  it("adverse selection shifts realized fills toward losers (lower win rate)", () => {
+    const candles = makeRandomWalkCandles(800);
+    const uniform = runGridBacktest(candles, {
+      ...sizingOpts,
+      makerFillProb: 0.6,
+      adverseSelection: false,
+    });
+    const adverse = runGridBacktest(candles, {
+      ...sizingOpts,
+      makerFillProb: 0.6,
+      adverseSelection: true,
+    });
+    expect(adverse.totalTrades).toBeGreaterThan(0);
+    expect(adverse.winRate).toBeLessThanOrEqual(uniform.winRate);
+    expect(adverse.totalReturnPct).toBeLessThanOrEqual(uniform.totalReturnPct);
+  });
+
+  it("sub-unity makerFillProb fills strictly fewer entries", () => {
+    const candles = makeOscillatingCandles(400);
+    const full = runGridBacktest(candles, sizingOpts);
+    const partial = runGridBacktest(candles, {
+      ...sizingOpts,
+      makerFillProb: 0.3,
+    });
+    expect(full.totalTrades).toBeGreaterThan(0);
+    expect(partial.totalTrades).toBeLessThan(full.totalTrades);
+  });
+
+  it("taker stop fees reduce returns relative to symmetric fees", () => {
+    const candles = makeTrendingDownCandles(200);
+    const cfg = {
+      gridStepPct: 0.5,
+      gridMaxGrids: 1.5,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.02,
+      slippageBps: 0,
+      initialCapital: 10000,
+      trendFilterPeriod: 1,
+      leverage: 1,
+    };
+    const symmetric = runGridBacktest(candles, cfg);
+    const taker = runGridBacktest(candles, { ...cfg, takerExitFeePct: 0.3 });
+    expect(symmetric.totalTrades).toBeGreaterThan(0);
+    expect(taker.totalReturnPct).toBeLessThan(symmetric.totalReturnPct);
+  });
 });
 
 describe("findBestGridParams", () => {
@@ -234,6 +366,54 @@ describe("findBestGridParams", () => {
     expect(best.gridStepPct).toBeOneOf([0.3, 0.5]);
     expect(best.gridMaxGrids).toBeOneOf([2, 3]);
     expect(best.result.totalTrades).toBeGreaterThan(0);
+  });
+
+  it("marks open inventory to market at the final candle (no silent boundary erase)", () => {
+    const candles: CandleLike[] = [];
+    for (let i = 0; i < 100; i++) {
+      const ts = new Date(i * 15 * 60 * 1000);
+      if (i < 99) {
+        candles.push({
+          open: 100,
+          high: 100.1,
+          low: 99.9,
+          close: 100,
+          volume: 1,
+          timestamp: ts,
+        });
+      } else {
+        // Last candle dips below the buy level, opening a long that the
+        // series ends before it can hit target/stop/liquidation.
+        candles.push({
+          open: 100,
+          high: 100.1,
+          low: 99.0,
+          close: 99.2,
+          volume: 1,
+          timestamp: ts,
+        });
+      }
+    }
+
+    const result = runGridBacktest(candles, {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 0,
+      leverage: 1,
+    });
+
+    // The open position must be closed at the last close, not silently
+    // dropped (which would report 0 trades and a flat 0% return).
+    expect(result.totalTrades).toBe(1);
+    const last = result.trades[result.trades.length - 1];
+    expect(last.side).toBe("long");
+    expect(last.exitBar).toBe(99);
+    expect(last.exitPrice).toBe(99.2);
+    expect(result.totalReturnPct).toBeLessThan(0);
   });
 });
 

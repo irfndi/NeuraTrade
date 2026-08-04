@@ -370,6 +370,13 @@ func loadRouteRuntimeConfig() (bitgetAPIKey, bitgetSecret, bitgetPassphrase, cha
 	return bitgetAPIKey, bitgetSecret, bitgetPassphrase, chatID
 }
 
+func bitgetSecretEnvOverride() string {
+	if value := strings.TrimSpace(os.Getenv("BITGET_SECRET")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv("BITGET_API_SECRET"))
+}
+
 func hasConnectedExchangeWallet(db *sql.DB, chatID, provider string) bool {
 	if db == nil || strings.TrimSpace(chatID) == "" || strings.TrimSpace(provider) == "" {
 		return false
@@ -886,7 +893,7 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 	if val := strings.TrimSpace(os.Getenv("BITGET_API_KEY")); val != "" {
 		bitgetAPIKey = val
 	}
-	if val := strings.TrimSpace(os.Getenv("BITGET_SECRET")); val != "" {
+	if val := bitgetSecretEnvOverride(); val != "" {
 		bitgetSecret = val
 	}
 	if val := strings.TrimSpace(os.Getenv("BITGET_PASSPHRASE")); val != "" {
@@ -975,6 +982,16 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 	integratedHandlers.SetOperationalModeService(opModeService)
 	integratedHandlers.SetPortfolioSafetyService(portfolioSafety)
 	questEngine.SetOperationalModeService(opModeService)
+
+	var liveExecution *riskGatedLiveExecution
+	if sqlDB != nil && liveOrderExecutor != nil {
+		liveExecution, err = newRiskGatedLiveExecution(ctx, sqlDB, orderExecutor, sharedKillSwitch, sharedSafeMode, liveGuard, ccxtService)
+		if err != nil {
+			zaplogrus.Warnf("TS live execution endpoint disabled: %v", err)
+		} else {
+			zaplogrus.Infof("TS live execution endpoint wired through RiskActor and ExecutionActor")
+		}
+	}
 
 	// Set database for user settings lookup
 	var lifecycleStore *services.TradingLifecycleStore
@@ -1483,6 +1500,15 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 			risk.GET("/metrics", gin.WrapF(healthHandler.GetRiskMetrics))
 		}
 
+		if liveExecution != nil {
+			liveExecutionRoutes := v1.Group("/execution")
+			liveExecutionRoutes.Use(adminMiddleware.RequireAdminAuth())
+			{
+				liveExecutionRoutes.POST("/futures/order", liveExecution.placeFuturesOrder)
+				liveExecutionRoutes.GET("/futures/positions", liveExecution.getFuturesPositions)
+			}
+		}
+
 		// Paper trading readiness endpoints
 		if dbPool, ok := db.(database.DBPool); ok {
 			readinessHandler := handlers.NewReadinessHandler(dbPool)
@@ -1656,6 +1682,9 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 
 	// Return cleanup function for WebSocket handler and other resources
 	return func() {
+		if liveExecution != nil {
+			liveExecution.close()
+		}
 		if webSocketHandler != nil {
 			webSocketHandler.Stop()
 		}

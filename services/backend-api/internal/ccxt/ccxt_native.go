@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ type NativeCCXTService struct {
 	timeout       time.Duration
 	retryAttempts int
 	rateLimiter   *rateLimiter
+	isDemo        bool
 	// Scalping fallback controls are loaded once at construction for deterministic behavior.
 	fallbackMaxSymbolsPerCycle int
 	fallbackCycleBudget        time.Duration
@@ -141,9 +143,19 @@ func NewNativeCCXTService(timeout time.Duration, retryAttempts int) *NativeCCXTS
 		credentials:                make(map[string]config.ExchangeCredentials),
 		timeout:                    timeout,
 		retryAttempts:              retryAttempts,
+		isDemo:                     bitgetDemoEnabled(),
 		fallbackMaxSymbolsPerCycle: fallbackCfg.maxSymbolsPerCycle,
 		fallbackCycleBudget:        fallbackCfg.cycleBudget,
 		fallbackPerSymbolTimeout:   fallbackCfg.perSymbolTimeout,
+	}
+}
+
+func bitgetDemoEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BITGET_USE_SANDBOX"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1966,6 +1978,9 @@ func (s *NativeCCXTService) fetchBitgetBalance(ctx context.Context, conn *Exchan
 	req.Header.Set("ACCESS-TIMESTAMP", fmt.Sprintf("%d", timestamp))
 	req.Header.Set("ACCESS-PASSPHRASE", conn.Passphrase)
 	req.Header.Set("locale", "en-US")
+	if s.isDemo {
+		req.Header.Set("PAPTRADING", "1")
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -2878,6 +2893,13 @@ func (s *NativeCCXTService) CancelOrder(ctx context.Context, exchange, orderID, 
 
 // FetchOrder retrieves a specific order by ID.
 func (s *NativeCCXTService) FetchOrder(ctx context.Context, exchange, orderID, symbol string) (*OrderResponse, error) {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(exchange)), "bitget") {
+		creds, ok := s.credentials["bitget"]
+		if !ok {
+			return nil, fmt.Errorf("no credentials for exchange: bitget")
+		}
+		return s.fetchBitgetOrder(ctx, creds, orderID, symbol)
+	}
 	// For now, fetch all and find - can be optimized later
 	resp, err := s.FetchOpenOrders(ctx, exchange)
 	if err != nil {
@@ -2895,6 +2917,79 @@ func (s *NativeCCXTService) FetchOrder(ctx context.Context, exchange, orderID, s
 	}
 
 	return nil, fmt.Errorf("order not found: %s", orderID)
+}
+
+func (s *NativeCCXTService) fetchBitgetOrder(ctx context.Context, creds config.ExchangeCredentials, orderID, symbol string) (*OrderResponse, error) {
+	query := url.Values{}
+	query.Set("orderId", orderID)
+	query.Set("productType", "USDT-FUTURES")
+	if strings.TrimSpace(symbol) != "" {
+		query.Set("symbol", strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(symbol)), "/", ""))
+	}
+	body, err := s.bitgetPrivateGet(ctx, creds, "/api/v2/mix/order/detail?"+query.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Code string          `json:"code"`
+		Msg  string          `json:"msg"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("failed to parse Bitget order: %w", err)
+	}
+	if raw.Code != "00000" {
+		return nil, fmt.Errorf("bitget API error: %s", bitgetErrorMessage(raw.Msg, ""))
+	}
+	var rec struct {
+		OrderID     string `json:"orderId"`
+		ClientOid   string `json:"clientOid"`
+		Symbol      string `json:"symbol"`
+		Side        string `json:"side"`
+		OrderType   string `json:"orderType"`
+		State       string `json:"state"`
+		Price       string `json:"price"`
+		Size        string `json:"size"`
+		BaseVolume  string `json:"baseVolume"`
+		QuoteVolume string `json:"quoteVolume"`
+		Fee         string `json:"fee"`
+		CTime       string `json:"cTime"`
+		UTime       string `json:"uTime"`
+	}
+	if err := json.Unmarshal(raw.Data, &rec); err != nil {
+		return nil, fmt.Errorf("failed to decode Bitget order data: %w", err)
+	}
+	amount := parseDecimal(rec.Size)
+	filled := parseDecimal(rec.BaseVolume)
+	cost := parseDecimal(rec.QuoteVolume)
+	if cost.IsZero() {
+		cost = parseDecimal(rec.Price).Mul(filled)
+	}
+	createdMS := parseBitgetTimestampMillis(rec.CTime)
+	createdAt := time.Now().UTC()
+	if createdMS > 0 {
+		createdAt = time.UnixMilli(createdMS).UTC()
+	}
+	return &OrderResponse{
+		Exchange: "bitget",
+		Order: Order{
+			ID:            rec.OrderID,
+			ClientOrderID: rec.ClientOid,
+			Symbol:        normalizeBitgetSpotSymbol(rec.Symbol),
+			Type:          strings.ToLower(strings.TrimSpace(rec.OrderType)),
+			Side:          normalizeBitgetOrderSide(rec.Side),
+			Status:        normalizeBitgetOrderStatus(rec.State),
+			Price:         parseDecimal(rec.Price),
+			Amount:        amount,
+			Filled:        filled,
+			Remaining:     amount.Sub(filled),
+			Cost:          cost,
+			Fee:           parseDecimal(rec.Fee).Abs(),
+			CreatedAt:     createdAt,
+			Timestamp:     UnixTimestamp(time.Now().UTC()),
+		},
+		Timestamp: time.Now().Format(time.RFC3339),
+	}, nil
 }
 
 // FetchPositions retrieves all positions for an exchange.
@@ -3185,7 +3280,11 @@ func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.E
 	signPayload := timestamp + "GET" + endpoint
 	signature := s.generateBase64HMACSignature(creds.Secret, signPayload)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.bitget.com"+endpoint, nil)
+	baseURL := "https://api.bitget.com"
+	if connection, ok := s.exchanges["bitget"]; ok && connection != nil && strings.TrimSpace(connection.BaseURL) != "" {
+		baseURL = strings.TrimRight(connection.BaseURL, "/")
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Bitget request: %w", err)
 	}
@@ -3195,6 +3294,9 @@ func (s *NativeCCXTService) bitgetPrivateGet(ctx context.Context, creds config.E
 	req.Header.Set("ACCESS-TIMESTAMP", timestamp)
 	req.Header.Set("ACCESS-PASSPHRASE", creds.Passphrase)
 	req.Header.Set("locale", "en-US")
+	if s.isDemo {
+		req.Header.Set("PAPTRADING", "1")
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

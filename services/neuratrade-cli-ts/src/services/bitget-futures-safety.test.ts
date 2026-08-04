@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import { Effect } from "effect";
 import {
   BitgetFuturesSafetyError,
@@ -137,5 +138,20 @@ describe("BitgetFuturesSafety", () => {
       "10",
     );
     expect(result.ok).toBe(true);
+  });
+
+  it("fails closed for malformed decimal order values", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom("", "NaN", "Infinity", "1e-3", "--1"),
+        async (size) => {
+          const result = await run(baseOrder({ size }));
+          expect(result.ok).toBe(false);
+          if (result.ok) return;
+          expect(result.error).toBeInstanceOf(BitgetFuturesSafetyError);
+        },
+      ),
+      { numRuns: 20 },
+    );
   });
 });

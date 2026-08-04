@@ -125,6 +125,12 @@ function isExternalCCXTMode(): boolean {
   );
 }
 
+/** True when the gateway should not spawn the Go backend (TS-only runtime). */
+function isTSOnlyMode(): boolean {
+  const value = process.env.NEURATRADE_TS_ONLY;
+  return value === "true" || value === "1";
+}
+
 // ---------------------------------------------------------------------------
 // Service name constants (mirror Go stop loop)
 // ---------------------------------------------------------------------------
@@ -263,72 +269,90 @@ export const GatewayOrchestratorLive: Layer.Layer<
         });
 
         // Start Backend API
-        yield* logger.info("Starting Backend API");
-        const backendBinary = yield* pm
-          .resolveServiceBinary("neuratrade-server")
-          .pipe(
-            Effect.mapError(
-              (err) =>
-                new GatewayOrchestratorError({
-                  message: `Failed to resolve backend binary: ${err.message}`,
-                  cause: err,
-                }),
-            ),
-          );
-
-        const backendProc = yield* pm
-          .startService(
-            backendBinary,
-            "Backend API",
-            nodePath.join(path.logDir, "backend.log"),
-            backendEnv,
-            "backend",
-          )
-          .pipe(
-            Effect.mapError(
-              (err) =>
-                new GatewayOrchestratorError({
-                  message: `Failed to start backend: ${err.message}`,
-                  cause: err,
-                }),
-            ),
-          );
-
-        // Probe backend health
-        const backendProbe = yield* hc.waitForHealthy(
-          backendEndpoint,
-          healthTimeoutMs,
-        );
-
-        if (backendProbe.healthy) {
+        //
+        // TS-only mode (NEURATRADE_TS_ONLY=true): the trading path runs on the
+        // TypeScript Bitget adapter, so the Go backend binary is optional. Skip
+        // spawning neuratrade-server and mark the backend service skipped. This
+        // decouples the gateway process manager from the Go binary for TS-only
+        // deployments.
+        const tsOnly = isTSOnlyMode();
+        let backendProc: Bun.Subprocess | undefined;
+        let backendProbe: { healthy: boolean; detail: string } | undefined;
+        if (tsOnly) {
+          yield* logger.info("TS-only mode: skipping Go backend spawn");
           yield* gwState.writeServiceState(
             "backend",
-            "healthy",
-            backendProbe.detail,
+            "skipped",
+            "TS-only mode: Go backend not required",
             backendEndpoint,
           );
-        } else if (supervised) {
-          yield* gwState.writeServiceState(
-            "backend",
-            "warming",
-            backendProbe.detail,
-            backendEndpoint,
-          );
-          yield* gwState.writeMode("warming", "backend warming up");
         } else {
-          yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
-          yield* gwState.writeServiceState(
-            "backend",
-            "down",
-            backendProbe.detail,
+          const backendBinary = yield* pm
+            .resolveServiceBinary("neuratrade-server")
+            .pipe(
+              Effect.mapError(
+                (err) =>
+                  new GatewayOrchestratorError({
+                    message: `Failed to resolve backend binary: ${err.message}`,
+                    cause: err,
+                  }),
+              ),
+            );
+
+          backendProc = yield* pm
+            .startService(
+              backendBinary,
+              "Backend API",
+              nodePath.join(path.logDir, "backend.log"),
+              backendEnv,
+              "backend",
+            )
+            .pipe(
+              Effect.mapError(
+                (err) =>
+                  new GatewayOrchestratorError({
+                    message: `Failed to start backend: ${err.message}`,
+                    cause: err,
+                  }),
+              ),
+            );
+
+          // Probe backend health
+          backendProbe = yield* hc.waitForHealthy(
             backendEndpoint,
+            healthTimeoutMs,
           );
-          yield* gwState.markStopped("backend health check failed");
-          return yield* Effect.fail(
-            new GatewayOrchestratorError({
-              message: backendProbe.detail,
-            }),
-          );
+
+          if (backendProbe.healthy) {
+            yield* gwState.writeServiceState(
+              "backend",
+              "healthy",
+              backendProbe.detail,
+              backendEndpoint,
+            );
+          } else if (supervised) {
+            yield* gwState.writeServiceState(
+              "backend",
+              "warming",
+              backendProbe.detail,
+              backendEndpoint,
+            );
+            yield* gwState.writeMode("warming", "backend warming up");
+          } else {
+            yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
+            yield* gwState.writeServiceState(
+              "backend",
+              "down",
+              backendProbe.detail,
+              backendEndpoint,
+            );
+            yield* gwState.markStopped("backend health check failed");
+            return yield* Effect.fail(
+              new GatewayOrchestratorError({
+                message: backendProbe.detail,
+              }),
+            );
+          }
         }
 
         // Telegram
@@ -401,7 +425,13 @@ export const GatewayOrchestratorLive: Layer.Layer<
             yield* gwState.writeMode("warming", "telegram warming up");
           } else {
             yield* pm.signalAndWait(telegramProc, "SIGTERM", signalTimeoutMs);
-            yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
+            if (backendProc !== undefined) {
+              yield* pm.signalAndWait(
+                backendProc,
+                "SIGTERM",
+                signalTimeoutMs,
+              );
+            }
             yield* gwState.writeServiceState(
               "telegram",
               "down",
@@ -440,7 +470,9 @@ export const GatewayOrchestratorLive: Layer.Layer<
 
         // Final mode
         const anyWarming =
-          (!backendProbe.healthy && (supervised || telegramEnabled)) ||
+          (backendProbe !== undefined &&
+            !backendProbe.healthy &&
+            (supervised || telegramEnabled)) ||
           (telegramEnabled &&
             telegramProbe &&
             !telegramProbe.healthy &&
@@ -450,7 +482,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
 
         return {
           mode: initialMode,
-          backendPid: backendProc.pid,
+          backendPid: backendProc?.pid ?? 0,
           telegramPid,
           ccxtMode,
           telegramEnabled,

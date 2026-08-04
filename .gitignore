@@ -207,6 +207,7 @@ services/backend-api/5yr-backtest
 .claude/
 .cline/
 .claude.json
+.commandcode/
 .kiro/
 .opencode/
 session_*/

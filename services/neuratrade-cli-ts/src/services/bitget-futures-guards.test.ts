@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import { Effect } from "effect";
 import {
   BitgetFuturesGuardError,
@@ -146,5 +147,150 @@ describe("BitgetFuturesGuards", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.reason).toContain("mismatch");
+  });
+
+  it("fails closed for malformed decimal market inputs", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.constantFrom("size", "lastPrice", "leverage"),
+        fc.constantFrom("", "NaN", "Infinity", "1e-3", "--1"),
+        async (field, value) => {
+          const order = {
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES" as const,
+            side: "buy" as const,
+            orderType: "market" as const,
+            size: field === "size" ? value : "0.001",
+          };
+          const result = await run(
+            order,
+            field === "leverage" ? value : "10",
+            field === "lastPrice" ? value : "65000",
+          );
+          expect(result.ok).toBe(false);
+          if (result.ok) return;
+          expect(result.error).toBeInstanceOf(BitgetFuturesGuardError);
+        },
+      ),
+      { numRuns: 20 },
+    );
+  });
+
+  it("uses the limit price when present for notional", async () => {
+    const result = await run({
+      symbol: "BTC/USDT:USDT",
+      productType: "USDT-FUTURES",
+      side: "buy",
+      orderType: "limit",
+      size: "0.001",
+      price: "60000",
+    });
+    if (!result.ok) throw new Error(result.error.reason);
+    expect(result.result.notional).toBe("60");
+  });
+
+  it("rejects a non-tradable contract", async () => {
+    const offContract: BitgetContract = {
+      ...contract,
+      symbolStatus: "offline",
+    };
+    const result = await Effect.runPromise(
+      validateFuturesOrder({
+        order: {
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          side: "buy",
+          orderType: "market",
+          size: "0.001",
+        },
+        contract: offContract,
+        balances,
+        lastPrice: "65000",
+        leverage: "10",
+      }).pipe(
+        Effect.map(() => ({ ok: true as const })),
+        Effect.catch((err: BitgetFuturesGuardError) =>
+          Effect.succeed({ ok: false as const, error: err }),
+        ),
+      ),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("not tradable");
+  });
+
+  it("rejects leverage below the contract minimum", async () => {
+    const result = await run(
+      {
+        symbol: "BTC/USDT:USDT",
+        productType: "USDT-FUTURES",
+        side: "buy",
+        orderType: "market",
+        size: "0.001",
+      },
+      "0.5",
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("below minimum");
+  });
+
+  it("short-circuits reduce-only closes without a balance check", async () => {
+    const emptyBalances: ReadonlyArray<BitgetFuturesBalance> = [];
+    const result = await Effect.runPromise(
+      validateFuturesOrder({
+        order: {
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          side: "sell",
+          orderType: "market",
+          size: "0.001",
+          reduceOnly: true,
+        },
+        contract,
+        balances: emptyBalances,
+        lastPrice: "65000",
+        leverage: "10",
+      }).pipe(
+        Effect.map((r) => ({ ok: true as const, result: r })),
+        Effect.catch((err: BitgetFuturesGuardError) =>
+          Effect.succeed({ ok: false as const, error: err }),
+        ),
+      ),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.result.marginRequired).toBe("0");
+  });
+
+  it("falls back to minTradeAmount when minTradeUSDT is zero", async () => {
+    const zeroUsdtContract: BitgetContract = {
+      ...contract,
+      minTradeUSDT: "0",
+      minTradeAmount: "5",
+    };
+    const result = await Effect.runPromise(
+      validateFuturesOrder({
+        order: {
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          side: "buy",
+          orderType: "market",
+          size: "0.00001",
+        },
+        contract: zeroUsdtContract,
+        balances,
+        lastPrice: "65000",
+        leverage: "10",
+      }).pipe(
+        Effect.map(() => ({ ok: true as const })),
+        Effect.catch((err: BitgetFuturesGuardError) =>
+          Effect.succeed({ ok: false as const, error: err }),
+        ),
+      ),
+    );
+    // 0.00001 * 65000 = 0.65 USDT notional, below the 5 USDT minTradeAmount.
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("min trade amount");
   });
 });

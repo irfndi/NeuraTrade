@@ -10,6 +10,7 @@ import type {
   BitgetFuturesBalance,
   BitgetFuturesOrderRequest,
 } from "./bitget-client.ts";
+import { isDecimalString } from "./decimal-string.ts";
 
 export class BitgetFuturesGuardError extends Data.TaggedError(
   "BitgetFuturesGuardError",
@@ -95,6 +96,35 @@ export function validateFuturesOrder(
   ctx: BitgetFuturesGuardContext,
 ): Effect.Effect<BitgetFuturesGuardResult, BitgetFuturesGuardError> {
   return Effect.gen(function* () {
+    const numericFields: Array<readonly [string, string]> = [
+      ["order size", ctx.order.size],
+      ["last price", ctx.lastPrice],
+      ["leverage", ctx.leverage],
+      ["contract minimum leverage", ctx.contract.minLeverage],
+      ["contract maximum leverage", ctx.contract.maxLeverage],
+      ["contract minimum trade amount", ctx.contract.minTradeAmount],
+      ["contract minimum trade number", ctx.contract.minTradeNum],
+      ["contract minimum USDT trade amount", ctx.contract.minTradeUSDT],
+    ];
+    if (ctx.order.price !== undefined) {
+      numericFields.push(["order price", ctx.order.price]);
+    }
+    for (const balance of ctx.balances) {
+      numericFields.push([
+        `available ${balance.marginCoin} balance`,
+        balance.available,
+      ]);
+    }
+    const invalidField = numericFields.find(
+      ([, value]) => !isDecimalString(value),
+    );
+    if (invalidField !== undefined) {
+      return yield* Effect.fail(
+        new BitgetFuturesGuardError({
+          reason: `${invalidField[0]} must be a decimal string`,
+        }),
+      );
+    }
     const orderSymbol = ctx.order.symbol
       .replace("/", "")
       .split(":")[0]

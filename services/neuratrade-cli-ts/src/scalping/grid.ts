@@ -45,6 +45,27 @@ export interface GridOptions {
    * capital across positions.
    */
   readonly positionFraction?: number;
+  /**
+   * Base probability (0..1) that a touched entry level actually fills.
+   * Default 1 = optimistic "touched = filled". Lower values model queue /
+   * partial-fill risk on maker (limit) entries.
+   */
+  readonly makerFillProb?: number;
+  /**
+   * Model adverse selection when true: a touch whose bar CLOSES through the
+   * entry level (price grinding through — the loss-prone case) fills with
+   * probability 1, while a recovered wick (win-prone) fills with probability
+   * makerFillProb. Default false (uniform fill probability).
+   */
+  readonly adverseSelection?: boolean;
+  /**
+   * Per-side TAKER fee (percent) for stop / liquidation exits; entry and
+   * take-profit use the maker fee (feePct). Default: exit leg uses feePct too
+   * (symmetric round-trip = current behavior).
+   */
+  readonly takerExitFeePct?: number;
+  /** Deterministic seed for the fill-probability RNG (default 12345). */
+  readonly fillSeed?: number;
 }
 
 export interface GridSearchSpace {
@@ -138,6 +159,38 @@ export function runGridBacktest(
     0,
     Math.min(1, options.positionFraction ?? 1),
   );
+  const makerFillProb = Math.max(0, Math.min(1, options.makerFillProb ?? 1));
+  const adverseSelection = options.adverseSelection ?? false;
+  const makerFeePerSide = options.feePct / 100;
+  const takerFeePerSide = (options.takerExitFeePct ?? options.feePct) / 100;
+  const targetFee = makerFeePerSide * 2;
+  const stopFee = makerFeePerSide + takerFeePerSide;
+  let fillSeed = options.fillSeed ?? 12345;
+  // mulberry32: deterministic fill decisions so a given fillSeed reproduces an
+  // identical trade sequence (stress runs are comparable, not random per run).
+  const fillRng = (): number => {
+    fillSeed |= 0;
+    fillSeed = (fillSeed + 0x6d2b79f5) | 0;
+    let t = Math.imul(fillSeed ^ (fillSeed >>> 15), fillSeed | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  // Decide whether a touched limit fills. With defaults (prob 1, no adverse
+  // selection) this is always true — the original behavior, RNG untouched.
+  // Adverse selection: a bar that CLOSES through the level (price grinding
+  // through your queue — the loss-prone case) fills for certain; a wick that
+  // recovers (win-prone) only fills with the base maker probability.
+  const fillsAtLevel = (
+    candle: CandleLike,
+    level: number,
+    side: "long" | "short",
+  ): boolean => {
+    if (makerFillProb >= 1 && !adverseSelection) return true;
+    const adverse =
+      side === "long" ? candle.close < level : candle.close > level;
+    const prob = adverseSelection && adverse ? 1 : makerFillProb;
+    return fillRng() < prob;
+  };
   const statsProvider =
     chopGateAdxThreshold > 0
       ? // The provider's timeframe argument is currently unused (the
@@ -179,11 +232,15 @@ export function runGridBacktest(
       const onlyWithTrend = options.onlyWithTrend ?? false;
       const allowLong = !onlyWithTrend || c.close > trend;
       const allowShort = !onlyWithTrend || c.close < trend;
-      if (allowLong && c.low <= buyLevel) {
+      if (allowLong && c.low <= buyLevel && fillsAtLevel(c, buyLevel, "long")) {
         entryPrice = buyLevel * slippage;
         positionSize = 1;
         entryBar = i;
-      } else if (allowShort && c.high >= sellLevel) {
+      } else if (
+        allowShort &&
+        c.high >= sellLevel &&
+        fillsAtLevel(c, sellLevel, "short")
+      ) {
         entryPrice = sellLevel / slippage;
         positionSize = -1;
         entryBar = i;
@@ -191,12 +248,13 @@ export function runGridBacktest(
       continue;
     }
 
-    const fee = (options.feePct / 100) * 2;
     const closeTrade = (
       exitPrice: number,
       exitSide: "long" | "short",
-      isLiquidation: boolean,
+      exitReason: "target" | "stop" | "liquidation",
     ): void => {
+      const isLiquidation = exitReason === "liquidation";
+      const fee = exitReason === "target" ? targetFee : stopFee;
       const pricePnl =
         exitSide === "long"
           ? (exitPrice - entryPrice) / entryPrice
@@ -241,24 +299,65 @@ export function runGridBacktest(
       const stop = entryPrice - step * options.gridMaxGrids;
       const liq = liquidationPrice("long", entryPrice, leverage);
       if (liq > 0 && c.low <= liq) {
-        closeTrade(liq * slippage, "long", true);
+        closeTrade(liq * slippage, "long", "liquidation");
       } else if (c.high >= target) {
-        closeTrade(target / slippage, "long", false);
+        closeTrade(target / slippage, "long", "target");
       } else if (c.low <= stop) {
-        closeTrade(stop * slippage, "long", false);
+        closeTrade(stop * slippage, "long", "stop");
       }
     } else {
       const target = entryPrice - step * targetRatio;
       const stop = entryPrice + step * options.gridMaxGrids;
       const liq = liquidationPrice("short", entryPrice, leverage);
       if (liq > 0 && c.high >= liq) {
-        closeTrade(liq / slippage, "short", true);
+        closeTrade(liq / slippage, "short", "liquidation");
       } else if (c.low <= target) {
-        closeTrade(target * slippage, "short", false);
+        closeTrade(target * slippage, "short", "target");
       } else if (c.high >= stop) {
-        closeTrade(stop / slippage, "short", false);
+        closeTrade(stop / slippage, "short", "stop");
       }
     }
+  }
+
+  // Mark any open grid inventory to market at the final observable close so
+  // the backtest doesn't silently erase an adverse open position at the
+  // boundary (inflating returns at OOS / walk-forward edges).
+  if (positionSize !== 0) {
+    const lastClose = candles[candles.length - 1].close;
+    const exitSide = positionSize > 0 ? "long" : "short";
+    const exitPrice = lastClose;
+    const fee = stopFee;
+    const pricePnl =
+      exitSide === "long"
+        ? (exitPrice - entryPrice) / entryPrice
+        : (entryPrice - exitPrice) / entryPrice;
+    const net = pricePnl - fee;
+    const leveragedReturn = net * leverage;
+    const equityReturn = positionFraction * leveragedReturn;
+    capital = Math.max(0, capital * (1 + equityReturn));
+    peak = Math.max(peak, capital);
+    const dd = peak > 0 ? (peak - capital) / peak : 0;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+    const win = net >= 0;
+    if (net < 0) {
+      totalLosses++;
+      grossLoss += Math.abs(leveragedReturn);
+    } else {
+      totalWins++;
+      grossProfit += leveragedReturn;
+    }
+    trades.push({
+      side: exitSide,
+      entryBar,
+      exitBar: candles.length - 1,
+      entryPrice,
+      exitPrice,
+      pnlPct: leveragedReturn,
+      pnlQuote: capital * equityReturn,
+      win,
+      isLiquidation: false,
+    });
+    positionSize = 0;
   }
 
   const totalTrades = totalWins + totalLosses;

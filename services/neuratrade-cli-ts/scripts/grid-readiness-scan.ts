@@ -17,6 +17,11 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runGridBacktest } from "../src/scalping/grid.js";
+import {
+  DEFAULT_GRID_SWEEP_FLOORS,
+  passesGridSweepFloors,
+  type GridSweepRow,
+} from "../src/scalping/grid-sweep.js";
 import type { Candle } from "../src/market-data/types.js";
 
 interface Args {
@@ -128,7 +133,7 @@ const TREND_ONLY = [false, true];
 const PAUSES = [0, 12];
 const CHOP_GATES = [0, 20, 25, 30];
 
-interface Row {
+interface Row extends GridSweepRow {
   step: number;
   maxGrids: number;
   targetRatio: number;
@@ -136,16 +141,11 @@ interface Row {
   pause: number;
   chopGate: number;
   trades: number;
-  tradesPerMonth: number;
-  winRate: number;
-  profitFactor: number;
   returnPct: number;
   maxDdPct: number;
   expPerTrade: number;
-  oosTrades: number;
   oosWinRate: number;
   oosProfitFactor: number;
-  oosReturnPct: number;
 }
 
 const rows: Row[] = [];
@@ -217,14 +217,11 @@ for (const step of STEPS) {
 
 // Readiness-aligned floors for grid (G1 freq, G2 economics, G3 robustness).
 const minPerMonth = args.timeframe === "5m" ? 15 : 10;
-const passing = rows.filter(
-  (r) =>
-    r.tradesPerMonth >= minPerMonth &&
-    r.profitFactor >= 1.3 &&
-    r.winRate >= 0.5 &&
-    r.oosTrades >= 10 &&
-    r.oosReturnPct >= 0 &&
-    r.maxDdPct <= 15,
+const passing = rows.filter((r) =>
+  passesGridSweepFloors(r, {
+    ...DEFAULT_GRID_SWEEP_FLOORS,
+    minimumTradesPerMonth: minPerMonth,
+  }),
 );
 
 const ranked = [...passing].sort(
@@ -239,7 +236,7 @@ console.log(
 );
 for (const r of ranked.slice(0, args.top)) {
   console.log(
-    `${r.step.toFixed(2).padStart(5)} ${r.maxGrids.toFixed(1).padStart(6)} ${r.targetRatio.toFixed(2).padStart(5)} ${String(r.onlyWithTrend).padStart(6)} ${String(r.pause).padStart(6)} ${String(r.chopGate).padStart(5)} ${r.tradesPerMonth.toFixed(1).padStart(7)} ${(r.winRate * 100).toFixed(1).padStart(6)} ${r.profitFactor.toFixed(2).padStart(6)} ${r.returnPct.toFixed(2).padStart(8)} ${r.maxDdPct.toFixed(1).padStart(6)} ${r.expPerTrade.toFixed(3).padStart(7)} ${String(r.oosTrades).padStart(6)} ${r.oosReturnPct.toFixed(2).padStart(8)} ${r.oosProfitFactor.toFixed(2).padStart(6)}`,
+    `${r.step.toFixed(2).padStart(5)} ${r.maxGrids.toFixed(1).padStart(6)} ${r.targetRatio.toFixed(2).padStart(5)} ${String(r.onlyWithTrend).padStart(6)} ${String(r.pause).padStart(6)} ${String(r.chopGate).padStart(5)} ${r.tradesPerMonth.toFixed(1).padStart(7)} ${r.winRate.toFixed(1).padStart(6)} ${r.profitFactor.toFixed(2).padStart(6)} ${r.returnPct.toFixed(2).padStart(8)} ${r.maxDdPct.toFixed(1).padStart(6)} ${r.expPerTrade.toFixed(3).padStart(7)} ${String(r.oosTrades).padStart(6)} ${r.oosReturnPct.toFixed(2).padStart(8)} ${r.oosProfitFactor.toFixed(2).padStart(6)}`,
   );
 }
 
@@ -248,7 +245,7 @@ const byIs = [...rows].sort((a, b) => b.returnPct - a.returnPct).slice(0, 5);
 console.log("\nBest by IS return (any floor):");
 for (const r of byIs) {
   console.log(
-    `  step ${r.step} grids ${r.maxGrids} tgtR ${r.targetRatio} trend ${r.onlyWithTrend} pause ${r.pause} gate ${r.chopGate} | tr/mo ${r.tradesPerMonth.toFixed(1)} win ${(r.winRate * 100).toFixed(1)}% PF ${r.profitFactor.toFixed(2)} ret ${r.returnPct.toFixed(2)}% dd ${r.maxDdPct.toFixed(1)}% | oos ${r.oosTrades} ${r.oosReturnPct.toFixed(2)}% PF ${r.oosProfitFactor.toFixed(2)}`,
+    `  step ${r.step} grids ${r.maxGrids} tgtR ${r.targetRatio} trend ${r.onlyWithTrend} pause ${r.pause} gate ${r.chopGate} | tr/mo ${r.tradesPerMonth.toFixed(1)} win ${r.winRate.toFixed(1)}% PF ${r.profitFactor.toFixed(2)} ret ${r.returnPct.toFixed(2)}% dd ${r.maxDdPct.toFixed(1)}% | oos ${r.oosTrades} ${r.oosReturnPct.toFixed(2)}% PF ${r.oosProfitFactor.toFixed(2)}`,
   );
 }
 
@@ -271,7 +268,7 @@ await Bun.write(
         floors: {
           tradesPerMonth: minPerMonth,
           profitFactor: 1.3,
-          winRate: 0.5,
+          winRatePct: 50,
           oosTrades: 10,
           oosReturnPct: 0,
           maxDdPct: 15,

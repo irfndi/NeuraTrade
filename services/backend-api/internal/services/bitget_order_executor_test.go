@@ -108,6 +108,23 @@ func TestBitgetOrderExecutor_Sign(t *testing.T) {
 	assert.Regexp(t, "^[A-Za-z0-9+/]+=*$", signature)
 }
 
+func TestBitgetOrderExecutor_DemoModeSendsPAPTRADINGHeader(t *testing.T) {
+	t.Setenv("BITGET_USE_SANDBOX", "true")
+	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "1", r.Header.Get("PAPTRADING"))
+		w.WriteHeader(http.StatusOK)
+		_, err := io.WriteString(w, `{"code":"00000","msg":"success"}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	executor.baseURL = server.URL
+	executor.httpClient = server.Client()
+	_, err := executor.doRequest(context.Background(), http.MethodGet, "/api/v2/mix/account/account", nil)
+	require.NoError(t, err)
+}
+
 func TestBitgetOrderExecutor_SetNotificationService(t *testing.T) {
 	executor := NewBitgetOrderExecutor("test-key", "test-secret", "test-pass")
 

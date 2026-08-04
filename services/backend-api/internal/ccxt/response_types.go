@@ -373,6 +373,7 @@ type Order struct {
 	Remaining decimal.Decimal `json:"remaining"`
 	// Cost is the total cost.
 	Cost decimal.Decimal `json:"cost"`
+	Fee  decimal.Decimal `json:"fee"`
 	// CreatedAt is the creation time.
 	CreatedAt time.Time `json:"datetime"`
 	// Timestamp is the update time.

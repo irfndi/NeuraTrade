@@ -4,7 +4,7 @@
 
 `services/neuratrade-cli-ts/` is the TypeScript/Effect-TS port of `cmd/neuratrade-cli`. It is a process manager and control interface for the NeuraTrade platform, and the home of the futures scalping engine (signal composer, backtester, optimizer, paper trading) targeting Bitget USDT-M perpetuals.
 
-**The entire package runs on Effect v4** (`effect@4.0.0-beta.98`, pinned exactly) + `@effect/platform-bun@4.0.0-beta.98`. There is no `@effect/cli` and no `@effect/platform` (v3) — the CLI is a hand-rolled kit and platform services come from core `effect`.
+**The entire package runs on Effect v4** (`effect@4.0.0-beta.102`, pinned exactly) + `@effect/platform-bun@4.0.0-beta.102`. There is no `@effect/cli` and no `@effect/platform` (v3) — the CLI is a hand-rolled kit and platform services come from core `effect`.
 
 ## STRUCTURE
 
@@ -31,21 +31,21 @@ services/neuratrade-cli-ts/
 
 ## WHERE TO LOOK
 
-| Task                        | Location                                                           | Notes                                                                                  |
-| --------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| CLI kit (parser/dispatch)   | `src/cli/kit/kit.ts`                                               | `Command.make`/`Options.*` mirror the old @effect/cli API; help auto-generated         |
-| CLI command tree            | `src/cli/index.ts`                                                 | Root command + subcommand wiring                                                       |
-| Gateway start/stop/status   | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts`       | Process lifecycle                                                                      |
-| Config loading              | `src/services/config.ts`, `src/schemas/*.ts`                       | env → runtime.json → config.json → defaults                                            |
-| Market data commands        | `src/cli/market.ts`                                                | fetch-candles, fetch-funding-rates, fetch-universe                                     |
-| Bitget futures client       | `src/services/bitget-client.ts`                                    | HMAC REST, USDT/COIN futures, PAPTRADING demo mode (`BITGET_USE_SANDBOX`)              |
-| Market data persistence     | `src/market-data/repository.ts`                                    | Schema-adaptive (slim CLI schema AND shared Go schema with display_name/ccxt_id)       |
-| Scalping engines            | `src/scalping/{composer,backtest,grid,exit-engine}.ts`             | Pure cores; Effect wrappers in `src/scalping/services.ts`                              |
-| Readiness gates             | `src/scalping/readiness.ts`                                        | `evaluateReadiness` G1–G4 (frequency/economics/robustness/hold time)                   |
-| Strategy profiles           | `src/scalping/strategy-profile.ts`                                 | `findSymbolOverride` matches `BTC/USDT` ↔ `BTC/USDT:USDT` keys both ways               |
-| Exchange adapter port       | `src/exchange/adapter.ts`, `src/exchange/adapters/`                | Simulated + live adapters                                                              |
-| Paper/live trading          | `src/paper-trading/{engine,futures-engine,grid-engine}.ts`         | Iteration loop + persistence                                                           |
-| Pre-trade risk guards       | `src/risk/guards.ts`                                               | Drawdown, daily loss, position size limits                                             |
+| Task                      | Location                                                     | Notes                                                                            |
+| ------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| CLI kit (parser/dispatch) | `src/cli/kit/kit.ts`                                         | `Command.make`/`Options.*` mirror the old @effect/cli API; help auto-generated   |
+| CLI command tree          | `src/cli/index.ts`                                           | Root command + subcommand wiring                                                 |
+| Gateway start/stop/status | `src/cli/gateway.ts`, `src/services/gateway-orchestrator.ts` | Process lifecycle                                                                |
+| Config loading            | `src/services/config.ts`, `src/schemas/*.ts`                 | env → runtime.json → config.json → defaults                                      |
+| Market data commands      | `src/cli/market.ts`                                          | fetch-candles, fetch-funding-rates, fetch-universe                               |
+| Bitget futures client     | `src/services/bitget-client.ts`                              | HMAC REST, USDT/COIN futures, PAPTRADING demo mode (`BITGET_USE_SANDBOX`)        |
+| Market data persistence   | `src/market-data/repository.ts`                              | Schema-adaptive (slim CLI schema AND shared Go schema with display_name/ccxt_id) |
+| Scalping engines          | `src/scalping/{composer,backtest,grid,exit-engine}.ts`       | Pure cores; Effect wrappers in `src/scalping/services.ts`                        |
+| Readiness gates           | `src/scalping/readiness.ts`                                  | `evaluateReadiness` G1–G4 (frequency/economics/robustness/hold time)             |
+| Strategy profiles         | `src/scalping/strategy-profile.ts`                           | `findSymbolOverride` matches `BTC/USDT` ↔ `BTC/USDT:USDT` keys both ways         |
+| Exchange adapter port     | `src/exchange/adapter.ts`, `src/exchange/adapters/`          | Simulated + live adapters                                                        |
+| Paper/live trading        | `src/paper-trading/{engine,futures-engine,grid-engine}.ts`   | Iteration loop + persistence                                                     |
+| Pre-trade risk guards     | `src/risk/guards.ts`                                         | Drawdown, daily loss, position size limits                                       |
 
 ## COMMANDS
 
@@ -76,7 +76,7 @@ bun run scripts/scalp-readiness-scan.ts --exchange bitget-futures --symbol BTC/U
 bun run scripts/sweep-to-profile.ts --sweep /tmp/sweep-btc-5m.json
 ```
 
-**Wired `scalp` subcommands**: backtest, optimize, scan, paper-trade, soak, profile, library, walk-forward, readiness. Anything else you may remember (`select`, `validate`, `preset`, `run`) is NOT wired — `selectBestForSymbol`/`validateWatchlist`/`applyPreset` exist only as exported functions used by walk-forward and tests.
+**Wired `scalp` subcommands**: backtest, optimize, scan, paper-trade, soak, profile, library, walk-forward, readiness, demo-readiness. Anything else you may remember (`select`, `validate`, `preset`, `run`) is NOT wired — `selectBestForSymbol`/`validateWatchlist`/`applyPreset` exist only as exported functions used by walk-forward and tests.
 
 ## READINESS GATES (`scalp readiness`)
 
@@ -94,6 +94,8 @@ Thresholds live in `src/scalping/readiness.ts` (`defaultReadinessThresholds`). T
 - Bitget live-order commands require `--force` to bypass the safety gate (`src/services/bitget-futures-safety.ts`); demo/paper mode uses `BITGET_USE_SANDBOX=true` (PAPTRADING=1 header).
 - Live risk defaults: `maxPositionSizePct=10`, `maxDailyLossPct=2`, `maxDrawdownPct=5`, `maxTradesPerDay=10`, `minCapital=100`; circuit breaker default 2% daily loss. Paper mode defaults are permissive.
 - Position-size and PnL math in `src/paper-trading/` uses `decimal.js` via `src/utils/money.ts`.
+- `scalp --live` is futures-only. Futures orders go through the Go backend risk and execution actors; the CLI rejects spot live mode rather than using the direct Binance adapter.
+- Live futures signal mode fails closed when a close has no exchange fill, checks `minAtrPct` before placing an entry, and rejects scale-out until exchange-fill reconciliation is implemented. The current real-money candidate is the separately fill-aware grid path with `scaleOutPct=0`.
 
 ## CONVENTIONS
 

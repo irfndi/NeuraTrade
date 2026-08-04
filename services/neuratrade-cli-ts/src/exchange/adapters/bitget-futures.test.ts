@@ -3,12 +3,14 @@ import { Effect, Layer } from "effect";
 import {
   BitgetClient,
   type BitgetClientImpl,
+  type BitgetFuturesPosition,
 } from "../../services/bitget-client.js";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../futures-adapter.js";
 import { makeBitgetFuturesAdapter } from "./bitget-futures.js";
+import { money } from "../../utils/money.js";
 
 let calls: string[] = [];
 
@@ -192,7 +194,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
           symbol: "BTC/USDT:USDT",
           side: "buy",
           type: "market",
-          size: 0.1,
+          size: money(0.1),
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
@@ -203,7 +205,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
     expect(fill.orderId).toBe("fut-1");
     expect(fill.symbol).toBe("BTC/USDT:USDT");
     expect(fill.side).toBe("buy");
-    expect(fill.filledQty).toBe(0.1);
+    expect(fill.filledQty.toNumber()).toBe(0.1);
     expect(calls).toContain("placeFuturesOrder:BTCUSDT:buy:no");
   });
 
@@ -217,8 +219,55 @@ describe("BitgetFuturesExchangeAdapter", () => {
 
     expect(position).not.toBeNull();
     expect(position?.side).toBe("long");
-    expect(position?.quantity).toBe(0.5);
+    expect(position?.quantity.toNumber()).toBe(0.5);
     expect(position?.leverage).toBe(10);
+  });
+
+  it("fails closed when multiple active position legs are returned", async () => {
+    const activePositions: ReadonlyArray<BitgetFuturesPosition> = [
+      {
+        positionId: "long-1",
+        symbol: "BTCUSDT",
+        productType: "USDT-FUTURES",
+        marginMode: "crossed",
+        holdSide: "long",
+        openPrice: "66000",
+        total: "0.5",
+        available: "0.5",
+        leverage: "10",
+        unrealizedPL: "200",
+        liquidatedPrice: "60000",
+      },
+      {
+        positionId: "short-1",
+        symbol: "BTCUSDT",
+        productType: "USDT-FUTURES",
+        marginMode: "crossed",
+        holdSide: "short",
+        openPrice: "66000",
+        total: "0.5",
+        available: "0.5",
+        leverage: "10",
+        unrealizedPL: "200",
+        liquidatedPrice: "60000",
+      },
+    ];
+    const client: BitgetClientImpl = {
+      ...makeStubClient(),
+      getFuturesPositions: () => Effect.succeed(activePositions),
+    };
+    const adapterLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(client),
+    );
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(exit._tag).toBe("Failure");
   });
 
   it("reads a balance", async () => {
@@ -229,8 +278,8 @@ describe("BitgetFuturesExchangeAdapter", () => {
       }),
     );
 
-    expect(balance.available).toBe(5000);
-    expect(balance.equity).toBe(6000);
+    expect(balance.available.toNumber()).toBe(5000);
+    expect(balance.equity.toNumber()).toBe(6000);
   });
 
   it("closes a position with a reduce-only order", async () => {
@@ -243,7 +292,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
           productType: "USDT-FUTURES",
           marginMode: "crossed",
           leverage: 10,
-          size: 0.5,
+          size: money(0.5),
         });
       }),
     );

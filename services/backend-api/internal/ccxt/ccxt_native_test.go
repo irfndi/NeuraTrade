@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -54,8 +55,55 @@ func TestNativeCCXTService_InitializePreservesConfiguredCredentials(t *testing.T
 	}
 }
 
+func TestNativeCCXTService_FetchOrder_BitgetReturnsClosedOrderDetails(t *testing.T) {
+	t.Setenv("BITGET_USE_SANDBOX", "true")
+	fixture, err := os.ReadFile("testdata/bitget/order-detail-filled.json")
+	require.NoError(t, err)
+
+	service := NewNativeCCXTService(5*time.Second, 1)
+	service.exchanges["bitget"] = &ExchangeConnection{
+		Name:       "bitget",
+		BaseURL:    "https://bitget.test",
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+	service.credentials["bitget"] = config.ExchangeCredentials{
+		APIKey:     "bitget-key",
+		Secret:     "bitget-secret",
+		Passphrase: "bitget-passphrase",
+	}
+	service.httpClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("PAPTRADING") != "1" {
+				t.Fatalf("missing PAPTRADING demo header")
+			}
+			if req.URL.Path != "/api/v2/mix/order/detail" {
+				t.Fatalf("unexpected path: %s", req.URL.Path)
+			}
+			if req.URL.Query().Get("orderId") != "order-123" || req.URL.Query().Get("symbol") != "BTCUSDT" {
+				t.Fatalf("unexpected query: %s", req.URL.RawQuery)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(string(fixture))),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	response, err := service.FetchOrder(context.Background(), "bitget", "order-123", "BTC/USDT")
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	assert.Equal(t, "order-123", response.Order.ID)
+	assert.Equal(t, "closed", response.Order.Status)
+	assert.Equal(t, "0.2", response.Order.Filled.String())
+	assert.Equal(t, "20.0246913578024691356", response.Order.Cost.String())
+	assert.Equal(t, "0.012345678901234567", response.Order.Fee.String())
+}
+
 func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
-	t.Parallel()
+	t.Setenv("BITGET_USE_SANDBOX", "true")
 
 	service := NewNativeCCXTService(5*time.Second, 1)
 	service.exchanges["bitget"] = &ExchangeConnection{
@@ -69,6 +117,9 @@ func TestNativeCCXTService_FetchBalance_BitgetAllAccountBalance(t *testing.T) {
 	var gotPath string
 	service.httpClient = &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("PAPTRADING") != "1" {
+				t.Fatalf("missing PAPTRADING demo header")
+			}
 			gotPath = req.URL.Path
 
 			if req.Header.Get("ACCESS-KEY") != "bitget-key" {

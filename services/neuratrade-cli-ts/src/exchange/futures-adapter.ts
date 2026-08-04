@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect";
 import { ExchangeError } from "./adapter.js";
+import type { Money } from "../utils/money.js";
 
 export type FuturesOrderSide = "buy" | "sell";
 export type FuturesOrderType = "market" | "limit";
@@ -16,8 +17,8 @@ export interface FuturesOrderRequest {
   readonly symbol: string;
   readonly side: FuturesOrderSide;
   readonly type: FuturesOrderType;
-  readonly size: number;
-  readonly price?: number;
+  readonly size: Money;
+  readonly price?: Money;
   readonly productType: FuturesProductType;
   readonly marginMode: FuturesMarginMode;
   readonly leverage: number;
@@ -32,9 +33,9 @@ export interface FuturesOrderFill {
   readonly side: FuturesOrderSide;
   readonly productType: FuturesProductType;
   readonly marginMode: FuturesMarginMode;
-  readonly filledQty: number;
-  readonly filledPrice: number;
-  readonly fee: number;
+  readonly filledQty: Money;
+  readonly filledPrice: Money;
+  readonly fee: Money;
   readonly timestamp: Date;
 }
 
@@ -44,20 +45,20 @@ export interface FuturesPosition {
   readonly productType: FuturesProductType;
   readonly marginMode: FuturesMarginMode;
   readonly leverage: number;
-  readonly quantity: number;
-  readonly available: number;
-  readonly entryPrice: number;
-  readonly liquidationPrice?: number;
-  readonly unrealizedPnl?: number;
+  readonly quantity: Money;
+  readonly available: Money;
+  readonly entryPrice: Money;
+  readonly liquidationPrice?: Money;
+  readonly unrealizedPnl?: Money;
   readonly marginCoin: string;
 }
 
 export interface FuturesBalance {
   readonly marginCoin: string;
-  readonly available: number;
-  readonly locked: number;
-  readonly equity: number;
-  readonly usdtEquity: number;
+  readonly available: Money;
+  readonly locked: Money;
+  readonly equity: Money;
+  readonly usdtEquity: Money;
 }
 
 export interface ClosePositionRequest {
@@ -66,8 +67,8 @@ export interface ClosePositionRequest {
   readonly productType: FuturesProductType;
   readonly marginMode: FuturesMarginMode;
   readonly leverage: number;
-  readonly size: number;
-  readonly price?: number;
+  readonly size: Money;
+  readonly price?: Money;
 }
 
 /**

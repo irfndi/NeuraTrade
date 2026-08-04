@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { BacktestResult } from "../scalping/backtest.js";
 import { applyPreset } from "../scalping/presets.js";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   buildStrategyProfileFromArgs,
   type ResolvedBacktestArgs,
@@ -23,8 +24,15 @@ import {
   selectBestForSymbol,
   selectWinner,
   validateWatchlist,
+  validateLiveExecutionMarket,
+  validateLiveExecutionStrategy,
+  resolveFuturesMarketExchange,
+  validateLiveGridConfiguration,
+  validateLiveGridWatchlist,
+  validateLiveSoakExecution,
   walkForwardCommand,
   buildValidateBacktestArgs,
+  type LiveGridConfiguration,
   type OptimizeArgs,
   type OptimizeCandidateParams,
   type OptimizeResult,
@@ -32,6 +40,167 @@ import {
   type SelectWatchlistEntry,
   type ValidationRow,
 } from "./scalp.js";
+
+describe("live execution market guard", () => {
+  it("rejects the un-gated spot live path", () => {
+    expect(validateLiveExecutionMarket(true, false)).toContain(
+      "live spot execution is disabled",
+    );
+  });
+
+  it("allows the backend-gated futures path", () => {
+    expect(validateLiveExecutionMarket(true, true)).toBeUndefined();
+  });
+
+  it("rejects the unproven directional signal path for live execution", () => {
+    expect(validateLiveExecutionStrategy(true, "signal")).toContain(
+      "live directional signal execution is disabled",
+    );
+    expect(validateLiveExecutionStrategy(true, "grid")).toBeUndefined();
+    expect(validateLiveExecutionStrategy(false, "signal")).toBeUndefined();
+  });
+
+  it("routes default futures market data to the Bitget futures gateway", () => {
+    expect(resolveFuturesMarketExchange("binance", true)).toBe(
+      "bitget-futures",
+    );
+    expect(resolveFuturesMarketExchange("bitget-futures", true)).toBe(
+      "bitget-futures",
+    );
+    expect(resolveFuturesMarketExchange("binance", false)).toBe("binance");
+  });
+
+  it("accepts only the validated BTC grid profile for live execution", () => {
+    const config = {
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
+    };
+
+    expect(validateLiveGridConfiguration(config)).toBeUndefined();
+    expect(
+      validateLiveGridConfiguration({ ...config, gridStepPct: 0.5 }),
+    ).toContain("validated BTC 15m grid");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxPositionSizePct: 51 }),
+    ).toContain("50%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxPositionSizePct: 0 }),
+    ).toContain("between 0% and 50%");
+  });
+
+  it("rejects any drift from the audited candidate fields", () => {
+    const config = {
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
+    };
+
+    const drifts: Array<Partial<LiveGridConfiguration>> = [
+      { exchange: "binance" },
+      { symbol: "ETH/USDT:USDT" },
+      { timeframe: "5m" },
+      { productType: "SPOT" },
+      { gridStepPct: 0.5 },
+      { gridMaxGrids: 1.5 },
+      { gridPauseAfterLossBars: 0 },
+      { feePct: 0.02 },
+      { slippageBps: 1 },
+      { trendFilterPeriod: 96 },
+      { onlyWithTrend: true },
+      { targetRatio: 1 },
+      { chopGateAdx: 20 },
+      { leverage: 2 },
+    ];
+
+    for (const drift of drifts) {
+      expect(validateLiveGridConfiguration({ ...config, ...drift })).toContain(
+        "validated BTC 15m grid",
+      );
+    }
+  });
+
+  it("enforces the live drawdown and daily-loss risk caps", () => {
+    const config = {
+      exchange: VALIDATED_BTC_GRID_CANDIDATE.exchange,
+      symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
+      timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
+      productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
+      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
+      gridPauseAfterLossBars:
+        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
+      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
+      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
+      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
+      chopGateAdx: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
+      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
+      maxPositionSizePct: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct,
+      maxDrawdownPct: VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct,
+      maxDailyLossPct: VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct,
+    };
+
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDrawdownPct: 5.1 }),
+    ).toContain("max drawdown must be between 0% and 5%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDrawdownPct: -1 }),
+    ).toContain("max drawdown must be between 0% and 5%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDailyLossPct: 2.1 }),
+    ).toContain("max daily loss must be between 0% and 2%");
+    expect(
+      validateLiveGridConfiguration({ ...config, maxDailyLossPct: Number.NaN }),
+    ).toContain("max daily loss must be between 0% and 2%");
+  });
+
+  it("disables the directional multi-symbol live soak surface", () => {
+    expect(validateLiveSoakExecution(true)).toContain("live soak is disabled");
+    expect(validateLiveSoakExecution(false)).toBeUndefined();
+  });
+
+  it("disables live grid watchlists that can substitute unvalidated symbols", () => {
+    expect(
+      validateLiveGridWatchlist(true, "grid", [{ symbol: "ETH/USDT:USDT" }]),
+    ).toContain("live grid watchlists are disabled");
+    expect(validateLiveGridWatchlist(true, "grid", [])).toBeUndefined();
+    expect(
+      validateLiveGridWatchlist(false, "grid", [{ symbol: "ETH/USDT:USDT" }]),
+    ).toBeUndefined();
+  });
+});
 import { Effect, Layer } from "effect";
 import { BunServices } from "@effect/platform-bun";
 import { PathLive } from "../services/path.js";
@@ -39,6 +208,13 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MarketDataRepositorySQLite } from "../market-data/repository.js";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLiteLive,
+} from "../market-data/repository.js";
+import { BacktestEngine } from "../scalping/services.js";
+import { backtestProgram } from "./scalp.js";
+import type { Candle } from "../market-data/types.js";
 
 function makeOptimizeArgs(overrides: Partial<OptimizeArgs> = {}): OptimizeArgs {
   return {
@@ -908,7 +1084,7 @@ describe("library command", () => {
     expect(output).toContain("--grid-max-grids");
     expect(output).toContain("--grid-pause-after-loss-bars");
     expect(output).toContain("--realistic");
-  });
+  }, 15_000);
 });
 
 describe("walk-forward command", () => {
@@ -1023,5 +1199,87 @@ describe("paper-trade command", () => {
     expect(output).toContain("--strategy");
     expect(output).toContain("dualEmaCross");
     expect(output).toContain("--realistic");
+  }, 15_000);
+});
+
+describe("backtestProgram fill-model option forwarding", () => {
+  it("forwards makerFeePct/entryOrderType/entryLimitOffsetBps/entryOnClose to runBacktest", async () => {
+    const db = new Database(":memory:");
+    const candles: Candle[] = Array.from({ length: 150 }, (_, i) => {
+      const close = 100 + i * 0.5;
+      return {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: close - 0.2,
+        high: close + 0.5,
+        low: close - 0.5,
+        close,
+        volume: 10,
+        timestamp: new Date(Date.now() + i * 3600_000),
+      };
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(candles);
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    let captured: {
+      makerFeePct: number | undefined;
+      entryOrderType: string | undefined;
+      entryLimitOffsetBps: number | undefined;
+      entryOnClose: boolean | undefined;
+    } | null = null;
+    const fakeEngine = Layer.succeed(BacktestEngine, {
+      runBacktest: (options) => {
+        captured = {
+          makerFeePct: options.makerFeePct,
+          entryOrderType: options.entryOrderType,
+          entryLimitOffsetBps: options.entryLimitOffsetBps,
+          entryOnClose: options.entryOnClose,
+        };
+        return Effect.succeed(makeResult());
+      },
+      runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+    });
+
+    const args = makeOptimizeArgs({
+      makerFeePct: 0.04,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 25,
+      entryOnClose: true,
+    });
+
+    await Effect.runPromise(
+      backtestProgram(args as unknown as Parameters<typeof backtestProgram>[0]).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            fakeEngine,
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    expect(captured!).toEqual({
+      makerFeePct: 0.04,
+      entryOrderType: "limit",
+      entryLimitOffsetBps: 25,
+      entryOnClose: true,
+    });
+    db.close();
   });
 });

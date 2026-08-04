@@ -40,10 +40,12 @@ import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js"
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
+import { BitgetClientLiveConfig } from "../services/bitget-client.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
 import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
+import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   runPaperTradingIteration,
   type PaperTradingOptions,
@@ -57,15 +59,7 @@ import {
   type GridPaperTradingOptions,
   type GridPaperTradingIterationResult,
 } from "../paper-trading/grid-engine.js";
-import {
-  BitgetClientLiveConfig,
-  type BitgetProductType,
-} from "../services/bitget-client.js";
-import { BitgetConfigLive } from "../services/bitget-config.js";
-import {
-  RateLimiterLive,
-  bitgetRateLimiterConfig,
-} from "../services/rate-limiter.js";
+import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLiteLive,
@@ -90,12 +84,15 @@ import {
   evaluateReadiness,
   formatReadinessReport,
 } from "../scalping/readiness.js";
+import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
   buildComposerConfigFromTemplate,
   type StrategyTemplateName,
 } from "../scalping/strategy-library.js";
 import { runWalkForward } from "../scalping/walk-forward.js";
+import { makeDemoReadinessCommand } from "./demo-readiness.js";
+import { makeParityReplayCommand } from "./parity-replay.js";
 
 const exchangeOption = Options.text("exchange").pipe(
   Options.withDefault("binance"),
@@ -1371,6 +1368,10 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
             isFutures: args.futures,
             fundingRatePct: args.fundingRatePct,
             slippageBps: args.slippageBps,
+            makerFeePct: args.makerFeePct,
+            entryOrderType: args.entryOrderType,
+            entryLimitOffsetBps: args.entryLimitOffsetBps,
+            entryOnClose: args.entryOnClose,
             trailingStopPct: args.trailingStopPct,
             trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
             minAtrPct: args.minAtrPct,
@@ -3186,13 +3187,10 @@ export const paperTradeCommand = Command.make(
         entries: watchlist,
       }).pipe(
         Effect.provide(layers),
-        Effect.catch((err) =>
-          Effect.gen(function* () {
-            yield* Console.error(
-              `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
-            );
-            return undefined;
-          }),
+        Effect.tapError((err) =>
+          Console.error(
+            `paper-trade failed: ${"reason" in err ? err.reason : String(err)}`,
+          ),
         ),
       );
 
@@ -3211,6 +3209,133 @@ function parseMarginMode(value: string): FuturesMarginMode {
   );
 }
 
+export function resolveFuturesMarketExchange(
+  exchange: string,
+  futures: boolean,
+): string {
+  return futures && exchange === "binance" ? "bitget-futures" : exchange;
+}
+
+export function validateLiveExecutionMarket(
+  live: boolean,
+  futures: boolean,
+): string | undefined {
+  if (live && !futures) {
+    return "live spot execution is disabled; use --futures for the backend risk-gated path";
+  }
+  return undefined;
+}
+
+export function validateLiveSandboxMode(
+  live: boolean,
+  sandboxValue: string | undefined,
+): string | undefined {
+  if (live && sandboxValue !== "true" && sandboxValue !== "1") {
+    return "live execution is disabled until BITGET_USE_SANDBOX=true is configured for the demo gate";
+  }
+  return undefined;
+}
+
+export function validateLiveExecutionStrategy(
+  live: boolean,
+  strategyType: "signal" | "grid",
+): string | undefined {
+  if (live && strategyType === "signal") {
+    return "live directional signal execution is disabled; use --strategy-type grid";
+  }
+  return undefined;
+}
+
+export interface LiveGridConfiguration {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly productType: string;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly feePct: number;
+  readonly slippageBps: number;
+  readonly trendFilterPeriod: number;
+  readonly onlyWithTrend: boolean;
+  readonly targetRatio: number;
+  readonly chopGateAdx: number;
+  readonly leverage: number;
+  readonly maxPositionSizePct: number;
+  readonly maxDrawdownPct: number;
+  readonly maxDailyLossPct: number;
+}
+
+export function validateLiveGridConfiguration(
+  config: LiveGridConfiguration,
+): string | undefined {
+  const validatedCandidate =
+    config.exchange === VALIDATED_BTC_GRID_CANDIDATE.exchange &&
+    config.symbol === VALIDATED_BTC_GRID_CANDIDATE.symbol &&
+    config.timeframe === VALIDATED_BTC_GRID_CANDIDATE.timeframe &&
+    config.productType === VALIDATED_BTC_GRID_CANDIDATE.productType &&
+    config.gridStepPct === VALIDATED_BTC_GRID_CANDIDATE.gridStepPct &&
+    config.gridMaxGrids === VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids &&
+    config.gridPauseAfterLossBars ===
+      VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars &&
+    config.feePct === VALIDATED_BTC_GRID_CANDIDATE.feePct &&
+    config.slippageBps === VALIDATED_BTC_GRID_CANDIDATE.slippageBps &&
+    config.trendFilterPeriod ===
+      VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod &&
+    config.onlyWithTrend === VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend &&
+    config.targetRatio === VALIDATED_BTC_GRID_CANDIDATE.targetRatio &&
+    config.chopGateAdx === VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx &&
+    config.leverage === VALIDATED_BTC_GRID_CANDIDATE.leverage;
+  if (!validatedCandidate) {
+    return "live grid must use the validated BTC 15m grid candidate";
+  }
+  if (
+    !Number.isFinite(config.maxPositionSizePct) ||
+    config.maxPositionSizePct <= 0 ||
+    config.maxPositionSizePct > VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct
+  ) {
+    return "live grid max position size must be between 0% and 50%";
+  }
+  if (
+    !Number.isFinite(config.maxDrawdownPct) ||
+    config.maxDrawdownPct <= 0 ||
+    config.maxDrawdownPct > VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct
+  ) {
+    return "live grid max drawdown must be between 0% and 5%";
+  }
+  if (
+    !Number.isFinite(config.maxDailyLossPct) ||
+    config.maxDailyLossPct <= 0 ||
+    config.maxDailyLossPct > VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct
+  ) {
+    return "live grid max daily loss must be between 0% and 2%";
+  }
+  return undefined;
+}
+
+export function validateLiveGridWatchlist(
+  live: boolean,
+  strategyType: "signal" | "grid",
+  entries: readonly Pick<WatchlistEntry, "symbol">[] | undefined,
+): string | undefined {
+  if (
+    live &&
+    strategyType === "grid" &&
+    entries !== undefined &&
+    entries.length > 0
+  ) {
+    return "live grid watchlists are disabled; run the validated BTC candidate directly";
+  }
+  return undefined;
+}
+
+export function validateLiveSoakExecution(live: boolean): string | undefined {
+  if (live) {
+    return "live soak is disabled; use scalp paper-trade --strategy-type grid";
+  }
+  return undefined;
+}
+
 function parseProductType(value: string): BitgetProductType {
   if (
     value === "USDT-FUTURES" ||
@@ -3226,6 +3351,65 @@ function parseProductType(value: string): BitgetProductType {
 
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
+    const strategyType = args.strategyType ?? "signal";
+    const liveMarketError = validateLiveExecutionMarket(
+      args.live,
+      args.futures,
+    );
+    if (liveMarketError !== undefined) {
+      return yield* Effect.fail(new Error(liveMarketError));
+    }
+    const liveSandboxError = validateLiveSandboxMode(
+      args.live,
+      process.env.BITGET_USE_SANDBOX,
+    );
+    if (liveSandboxError !== undefined) {
+      return yield* Effect.fail(new Error(liveSandboxError));
+    }
+    const liveStrategyError = validateLiveExecutionStrategy(
+      args.live,
+      strategyType,
+    );
+    if (liveStrategyError !== undefined) {
+      return yield* Effect.fail(new Error(liveStrategyError));
+    }
+    const liveGridWatchlistError = validateLiveGridWatchlist(
+      args.live,
+      strategyType,
+      args.entries,
+    );
+    if (liveGridWatchlistError !== undefined) {
+      return yield* Effect.fail(new Error(liveGridWatchlistError));
+    }
+    const marginMode = parseMarginMode(args.marginMode);
+    const productType = parseProductType(args.productType);
+    if (args.live && strategyType === "grid") {
+      const liveGridError = validateLiveGridConfiguration({
+        exchange: resolveFuturesMarketExchange(args.exchange, true),
+        symbol: args.symbol,
+        timeframe: args.timeframe,
+        productType,
+        gridStepPct: args.gridStepPct,
+        gridMaxGrids: args.gridMaxGrids,
+        gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+        feePct: args.fee,
+        slippageBps: args.slippageBps,
+        trendFilterPeriod: args.trendFilterPeriod,
+        onlyWithTrend: args.onlyWithTrend ?? false,
+        targetRatio: args.targetRatio ?? 0,
+        chopGateAdx: args.chopGateAdx ?? 0,
+        leverage: args.leverage,
+        maxPositionSizePct: Option.getOrElse(
+          args.maxPositionSizePct,
+          () => 100,
+        ),
+        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+        maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
+      });
+      if (liveGridError !== undefined) {
+        return yield* Effect.fail(new Error(liveGridError));
+      }
+    }
     const repo = yield* MarketDataRepository;
     yield* repo.ensureTables();
 
@@ -3244,11 +3428,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
     }
 
     const portfolio = yield* paperRepo.getPortfolio();
-    const startCapital =
-      portfolio.capital <= 0 ? args.capital : portfolio.capital;
+    const startCapital = portfolio.capital.lessThanOrEqualTo(0)
+      ? money(args.capital)
+      : portfolio.capital;
     yield* paperRepo.setPortfolio(
       startCapital,
-      Math.max(portfolio.peakCapital, startCapital),
+      Decimal.max(portfolio.peakCapital, startCapital),
     );
 
     const composerConfig = buildBacktestComposerConfig(
@@ -3306,20 +3491,14 @@ function paperTradeProgram(args: PaperTradeArgs) {
       volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
     });
 
-    const marginMode = parseMarginMode(args.marginMode);
-    const productType = parseProductType(args.productType);
     // Futures data and execution both live on Bitget in this port; default the
     // market-data exchange to bitget-futures unless the operator overrides it.
-    const defaultFuturesExchange =
-      args.futures && args.exchange === "binance"
-        ? "bitget-futures"
-        : args.exchange;
     const makeFuturesOptions = (
       symbol: string,
       exchangeOverride: string,
       overrides?: Partial<FuturesPaperTradingOptions>,
     ): FuturesPaperTradingOptions => ({
-      exchange: exchangeOverride ?? defaultFuturesExchange,
+      exchange: resolveFuturesMarketExchange(exchangeOverride, true),
       symbol,
       timeframe: args.timeframe,
       composerConfig,
@@ -3361,7 +3540,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       symbol: string,
       exchange: string,
     ): GridPaperTradingOptions => ({
-      exchange,
+      exchange: resolveFuturesMarketExchange(exchange, true),
       symbol,
       timeframe: args.timeframe,
       gridStepPct: args.gridStepPct,
@@ -3379,6 +3558,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
       chopGateAdxThreshold: args.chopGateAdx,
       replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       isLive: args.live,
+      executionEnvironment:
+        args.live &&
+        process.env.BITGET_USE_SANDBOX !== "true" &&
+        process.env.BITGET_USE_SANDBOX !== "1"
+          ? "bitget-live"
+          : "bitget-demo",
       productType,
       marginMode,
     });
@@ -3389,18 +3574,15 @@ function paperTradeProgram(args: PaperTradeArgs) {
           apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
         })
       : SimulatedExchangeAdapterLive();
-    const futuresAdapterLayer = args.live
-      ? Layer.provide(
-          BitgetFuturesExchangeAdapterLive,
-          Layer.provide(
-            BitgetClientLiveConfig,
-            Layer.merge(
-              BitgetConfigLive,
-              RateLimiterLive(bitgetRateLimiterConfig),
-            ),
-          ),
+    const futuresAdapterLayer = (args.live
+      ? BitgetFuturesExchangeAdapterLive.pipe(
+          Layer.provide(BitgetClientLiveConfig),
         )
-      : SimulatedFuturesExchangeAdapterLive();
+      : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+      import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+      never,
+      import("../market-data/gateway.js").MarketDataGatewayService
+    >;
 
     const runSpotIteration = (
       opts: PaperTradingOptions,
@@ -3437,13 +3619,49 @@ function paperTradeProgram(args: PaperTradeArgs) {
     ): Effect.Effect<GridPaperTradingIterationResult, never, never> =>
       runGridPaperTradingIteration(opts).pipe(
         Effect.provide(futuresAdapterLayer),
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            const tag =
+              "tag" in err && typeof err.tag === "string" ? err.tag : "";
+            // Safety-critical errors must propagate so the loop stops and the
+            // process exits for the operator; only transient network/IO errors
+            // are safe to skip and retry on the next cadence.
+            if (
+              tag === "RiskError" ||
+              tag === "KillSwitchError" ||
+              tag === "CircuitBreakerError"
+            ) {
+              return yield* Effect.fail(err);
+            }
+            const state = yield* paperRepo
+              .getGridState(opts.exchange, opts.symbol, opts.timeframe)
+              .pipe(Effect.orElseSucceed(() => null));
+            const reason =
+              "reason" in err && typeof err.reason === "string"
+                ? err.reason
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            yield* Console.error(
+              `grid iteration skipped (network/IO error): ${reason}`,
+            );
+            return {
+              action: "hold" as const,
+              side: state?.side ?? null,
+              capital: state ? toNumber(state.capital) : 0,
+              peakCapital: state ? toNumber(state.peakCapital) : 0,
+              note: `skip: ${reason}`,
+            };
+          }),
+        ),
       ) as Effect.Effect<GridPaperTradingIterationResult, never, never>;
 
     let remaining = args.iterations;
-    while (remaining !== 0) {
+    // iterations=0 means run forever.
+    while (args.iterations === 0 || remaining !== 0) {
       if (entries) {
         for (const entry of entries) {
-          if (remaining === 0) break;
+          if (remaining === 0 && args.iterations !== 0) break;
           const entryExchange = entry.exchange ?? args.exchange;
           const result =
             args.strategyType === "grid"
@@ -3475,7 +3693,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
             remaining -= 1;
           }
 
-          if (remaining !== 0) {
+          // Sleep between iterations: always in infinite mode (0), otherwise
+          // after every iteration except the final one.
+          if (args.iterations === 0 || remaining !== 0) {
             yield* Effect.sleep(`${args.interval} seconds`);
           }
         }
@@ -3500,7 +3720,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
           remaining -= 1;
         }
 
-        if (remaining !== 0) {
+        // Sleep between iterations: always in infinite mode (0), otherwise
+        // after every iteration except the final one.
+        if (args.iterations === 0 || remaining !== 0) {
           yield* Effect.sleep(`${args.interval} seconds`);
         }
       }
@@ -3691,6 +3913,18 @@ export const soakCommand = Command.make(
         ? mergeSoakArgs(args as unknown as SoakArgs, profile.value)
         : (args as unknown as SoakArgs);
 
+      const liveMarketError = validateLiveExecutionMarket(
+        mergedArgs.live,
+        mergedArgs.futures,
+      );
+      if (liveMarketError !== undefined) {
+        return yield* Effect.fail(new Error(liveMarketError));
+      }
+      const liveSoakError = validateLiveSoakExecution(mergedArgs.live);
+      if (liveSoakError !== undefined) {
+        return yield* Effect.fail(new Error(liveSoakError));
+      }
+
       const watchlistPath = resolve(path.homeDir, "data", mergedArgs.watchlist);
       const watchlistEntries = yield* loadSoakWatchlist(watchlistPath);
 
@@ -3739,18 +3973,15 @@ export const soakCommand = Command.make(
               mergedArgs.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
-      const futuresAdapterLayer = mergedArgs.live
-        ? Layer.provide(
-            BitgetFuturesExchangeAdapterLive,
-            Layer.provide(
-              BitgetClientLiveConfig,
-              Layer.merge(
-                BitgetConfigLive,
-                RateLimiterLive(bitgetRateLimiterConfig),
-              ),
-            ),
+      const futuresAdapterLayer = (mergedArgs.live
+        ? BitgetFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BitgetClientLiveConfig),
           )
-        : SimulatedFuturesExchangeAdapterLive();
+        : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+        import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+        never,
+        import("../market-data/gateway.js").MarketDataGatewayService
+      >;
 
       const composerConfig = buildBacktestComposerConfig(
         mergedArgs.priceOnly,
@@ -5097,9 +5328,17 @@ export const readinessCommand = Command.make(
   ),
 );
 
+export const demoReadinessCommand = makeDemoReadinessCommand(
+  makeDbLayer(process.env.NEURATRADE_HOME),
+);
+
+export const parityReplayCommand = makeParityReplayCommand(
+  process.env.NEURATRADE_HOME,
+);
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -5113,5 +5352,7 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     libraryCommand,
     walkForwardCommand,
     readinessCommand,
+    demoReadinessCommand,
+    parityReplayCommand,
   ]),
 );

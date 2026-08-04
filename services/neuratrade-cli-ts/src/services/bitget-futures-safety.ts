@@ -16,6 +16,7 @@ import type {
   BitgetFuturesPosition,
   BitgetMarginMode,
 } from "./bitget-client.ts";
+import { isDecimalString } from "./decimal-string.ts";
 
 export class BitgetFuturesSafetyError extends Data.TaggedError(
   "BitgetFuturesSafetyError",
@@ -42,6 +43,20 @@ export function validateLiveOrderSafety(
     const relevant = positions.filter(
       (p) => p.symbol.toUpperCase() === bsymbol,
     );
+
+    yield* requireDecimal(order.size, "order size");
+    if (order.price !== undefined) {
+      yield* requireDecimal(order.price, "order price");
+    }
+    if (intendedLeverage !== undefined) {
+      yield* requireDecimal(intendedLeverage, "intended leverage");
+    }
+    for (const position of relevant) {
+      yield* requireDecimal(position.available, "position available size");
+    }
+    for (const leverage of leverageInfo) {
+      yield* requireDecimal(leverage.leverage, "account leverage");
+    }
 
     if (compare(order.size, "0") <= 0) {
       return yield* safetyFail("order size must be positive");
@@ -101,6 +116,12 @@ export function validateLiveOrderSafety(
 
 function safetyFail(reason: string) {
   return Effect.fail(new BitgetFuturesSafetyError({ reason }));
+}
+
+function requireDecimal(value: string, field: string) {
+  return isDecimalString(value)
+    ? Effect.void
+    : safetyFail(`${field} must be a decimal string`);
 }
 
 // Minimal decimal string helpers (BigInt-based to avoid float money errors).

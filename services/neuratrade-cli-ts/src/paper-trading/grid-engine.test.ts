@@ -17,13 +17,20 @@ import {
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
+  type FuturesPosition,
 } from "../exchange/futures-adapter.js";
-import { RiskGuard, type RiskGuardService } from "../risk/guards.js";
+import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
   CircuitBreaker,
   type CircuitBreakerService,
 } from "../risk/circuit-breaker.js";
+import { money } from "../utils/money.js";
+import { ExchangeError } from "../exchange/adapter.js";
+import {
+  DEFAULT_STRATEGY_MANIFEST,
+  fingerprintStrategyManifest,
+} from "../scalping/real-money-readiness.js";
 
 function makeCandles(
   count: number,
@@ -86,7 +93,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getPortfolio() {
-    return Effect.succeed({ capital: 20, peakCapital: 20 });
+    return Effect.succeed({ capital: money(20), peakCapital: money(20) });
   }
 
   setPortfolio() {
@@ -98,14 +105,14 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   countTradesForDate() {
-    return Effect.succeed(0);
+    return Effect.succeed(this.gridTrades.length);
   }
 
   getTodayRealizedPnl() {
-    return Effect.succeed(0);
+    return Effect.succeed(money(0));
   }
 
-  getStartOfDayCapital(_date: Date, currentCapital: number) {
+  getStartOfDayCapital(_date: Date, currentCapital: ReturnType<typeof money>) {
     return Effect.succeed(currentCapital);
   }
 
@@ -171,9 +178,9 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
         side: "buy",
         productType: "USDT-FUTURES",
         marginMode: "isolated",
-        filledQty: 0,
-        filledPrice: 1000,
-        fee: 0,
+        filledQty: money(0),
+        filledPrice: money(1000),
+        fee: money(0),
         timestamp: new Date(),
       }),
     closePosition: () => Effect.succeed(null),
@@ -181,10 +188,10 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
-        available: 10_000,
-        locked: 0,
-        equity: 10_000,
-        usdtEquity: 10_000,
+        available: money(10_000),
+        locked: money(0),
+        equity: money(10_000),
+        usdtEquity: money(10_000),
       }),
     setLeverage: () => Effect.void,
     setMarginMode: () => Effect.void,
@@ -192,52 +199,71 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
   };
 }
 
-function makeTrackingFuturesAdapter(): {
+function makeTrackingFuturesAdapter(
+  closeWithFill = true,
+  initialPosition: FuturesPosition | null = null,
+): {
   adapter: FuturesExchangeAdapterService;
   orders: { side: string; size: number }[];
   closes: { side: string; size: number }[];
 } {
   const orders: { side: string; size: number }[] = [];
   const closes: { side: string; size: number }[] = [];
+  let position = initialPosition;
   const adapter: FuturesExchangeAdapterService = {
     placeOrder: (req) =>
       Effect.sync(() => {
-        orders.push({ side: req.side, size: req.size });
-        return {
+        orders.push({ side: req.side, size: req.size.toNumber() });
+        const fill = {
           orderId: "live",
           symbol: req.symbol,
           side: req.side,
           productType: req.productType,
           marginMode: req.marginMode,
           filledQty: req.size,
-          filledPrice: 1000,
-          fee: 0,
+          filledPrice: money(1000),
+          fee: money(0),
           timestamp: new Date(),
         };
+        position = {
+          symbol: req.symbol,
+          side: req.side === "buy" ? "long" : "short",
+          productType: req.productType,
+          marginMode: req.marginMode,
+          leverage: req.leverage,
+          quantity: req.size,
+          available: req.size,
+          entryPrice: fill.filledPrice,
+          marginCoin: "USDT",
+        };
+        return fill;
       }),
     closePosition: (req) =>
       Effect.sync(() => {
-        closes.push({ side: req.side, size: req.size });
-        return {
+        closes.push({ side: req.side, size: req.size.toNumber() });
+        if (!closeWithFill) return null;
+        const fill = {
           orderId: "close",
           symbol: req.symbol,
           side: req.side,
           productType: req.productType,
           marginMode: req.marginMode,
           filledQty: req.size,
-          filledPrice: 1000,
-          fee: 0,
+          filledPrice: money(1000),
+          fee: money(0),
           timestamp: new Date(),
         };
+        position = null;
+        return fill;
       }),
-    getPosition: () => Effect.succeed(null),
+    getPosition: () => Effect.succeed(position),
     getBalance: () =>
       Effect.succeed({
         marginCoin: "USDT",
-        available: 10_000,
-        locked: 0,
-        equity: 10_000,
-        usdtEquity: 10_000,
+        available: money(10_000),
+        locked: money(0),
+        equity: money(10_000),
+        usdtEquity: money(10_000),
       }),
     setLeverage: () => Effect.void,
     setMarginMode: () => Effect.void,
@@ -261,12 +287,15 @@ function makeKillSwitch(): KillSwitchService {
   };
 }
 
-function makeCircuitBreaker(): CircuitBreakerService {
+function makeCircuitBreaker(records: number[] = []): CircuitBreakerService {
   return {
     isOpen: () => Effect.succeed(false),
     getReason: () => Effect.succeed(""),
     currentDailyLossPct: () => Effect.succeed(0),
-    recordTradeResult: () => Effect.void,
+    recordTradeResult: (realizedPnl) =>
+      Effect.sync(() => {
+        records.push(realizedPnl);
+      }),
     reset: () => Effect.void,
   };
 }
@@ -291,11 +320,31 @@ function makeOptions(
   } as GridPaperTradingOptions;
 }
 
+function liveTestFingerprint(options: GridPaperTradingOptions): string {
+  return fingerprintStrategyManifest({
+    ...DEFAULT_STRATEGY_MANIFEST,
+    exchange: "bitget-live",
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    gridStepPct: options.gridStepPct.toString(),
+    gridMaxGrids: options.gridMaxGrids.toString(),
+    gridPauseAfterLossBars: options.gridPauseAfterLossBars.toString(),
+    positionFraction: (options.maxPositionPct / 100).toString(),
+    feePct: options.feePct.toString(),
+    slippageBps: options.slippageBps.toString(),
+    trendFilterPeriod: options.trendFilterPeriod.toString(),
+    adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
+  });
+}
+
 function runWithRepo(
   options: GridPaperTradingOptions,
   repo: PaperTradingRepositoryService,
   candles: Candle[],
   adapter?: FuturesExchangeAdapterService,
+  riskGuard: RiskGuardService = makeRiskGuard(),
+  circuitBreaker: CircuitBreakerService = makeCircuitBreaker(),
+  killSwitch: KillSwitchService = makeKillSwitch(),
 ) {
   return runGridPaperTradingIteration(options).pipe(
     Effect.provide(
@@ -303,9 +352,9 @@ function runWithRepo(
         Layer.succeed(MarketDataGateway, makeGateway(candles)),
         Layer.succeed(PaperTradingRepository, repo),
         Layer.succeed(FuturesExchangeAdapter, adapter ?? makeFuturesAdapter()),
-        Layer.succeed(RiskGuard, makeRiskGuard()),
-        Layer.succeed(KillSwitch, makeKillSwitch()),
-        Layer.succeed(CircuitBreaker, makeCircuitBreaker()),
+        Layer.succeed(RiskGuard, riskGuard),
+        Layer.succeed(KillSwitch, killSwitch),
+        Layer.succeed(CircuitBreaker, circuitBreaker),
       ),
     ),
     Effect.runPromise,
@@ -365,6 +414,440 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("[LIVE]");
     expect(orders.length).toBeGreaterThan(0);
     expect(orders[0].size).toBeGreaterThan(0);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.entryFillSource).toBe("live");
+    expect(state?.entryOrderId).toBe("live");
+    expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(orders[0].size, 12);
+  });
+
+  it("refuses to resume a legacy open state without provenance", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
+  });
+
+  it("re-seeds a flat state whose persisted config differs from the options", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(10_000),
+        peakCapital: money(10_000),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 1.5,
+        gridPauseAfterLossBars: 12,
+        feePct: 0.02,
+        slippageBps: 1,
+        trendFilterPeriod: 200,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const opts = makeOptions({
+      initialCapital: 20,
+      maxPositionPct: 50,
+      maxDrawdownPct: 5,
+      gridMaxGrids: 1,
+      gridPauseAfterLossBars: 12,
+      trendFilterPeriod: 0,
+      feePct: 0.06,
+      slippageBps: 2,
+    });
+    await runWithRepo(opts, repo, makeCandles(20, 1000, "oscillate"));
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state).not.toBeNull();
+    expect(state?.capital.toNumber()).toBe(20);
+    expect(state?.peakCapital.toNumber()).toBe(20);
+    expect(state?.maxPositionPct).toBe(50);
+    expect(state?.maxDrawdownPct).toBe(5);
+    expect(state?.gridMaxGrids).toBe(1);
+    expect(state?.trendFilterPeriod).toBe(0);
+  });
+
+  it("keeps a flat state whose persisted config matches the options", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(333),
+        peakCapital: money(400),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    await runWithRepo(
+      makeOptions(),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.capital.toNumber()).toBe(333);
+    expect(state?.maxPositionPct).toBe(100);
+  });
+
+  it("records both live order fills when a live grid trade closes", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter();
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    for (let i = 0; i < 10; i++) {
+      await runWithRepo(opts, repo, candles, adapter);
+    }
+
+    const trades = await Effect.runPromise(
+      repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+    );
+    expect(closes.length).toBeGreaterThan(0);
+    expect(trades.length).toBeGreaterThan(0);
+    expect(trades[0]?.fillSource).toBe("live");
+    expect(trades[0]?.entryOrderId).toBe("live");
+    expect(trades[0]?.exitOrderId).toBe("close");
+    expect(trades[0]?.realizedPnlPct).toBeDefined();
+  });
+
+  it("applies the daily trade-count risk gate to live grid entries", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.recordGridTrade({
+        id: "risk-limit-trade",
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        side: "long",
+        entryPrice: money(1000),
+        exitPrice: money(1010),
+        capitalBefore: money(20),
+        capitalAfter: money(20.1),
+        pnlPct: money(0.5),
+        exitReason: "target",
+        openedAt: new Date(Date.now() - 3_600_000),
+        closedAt: new Date(),
+      }),
+    );
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const tradeLimitGuard: RiskGuardService = {
+      check: ({ tradesTodayCount }) =>
+        tradesTodayCount > 0
+          ? Effect.fail(
+              new RiskError("trade limit reached", ["daily trade limit"]),
+            )
+          : Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      tradeLimitGuard,
+    );
+
+    expect(result.note).toContain("RISK BLOCKED");
+    expect(orders).toHaveLength(0);
+  });
+
+  it("records realized grid closes in the circuit breaker", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter();
+    const records: number[] = [];
+    const options = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    for (let iteration = 0; iteration < 10; iteration++) {
+      await runWithRepo(
+        options,
+        repo,
+        makeCandles(20, 1000, "oscillate"),
+        adapter,
+        makeRiskGuard(),
+        makeCircuitBreaker(records),
+      );
+    }
+
+    expect(records.length).toBeGreaterThan(0);
+  });
+
+  it("fails closed when the exchange has an untracked live position", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const exchangePosition: FuturesPosition = {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 1,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    };
+    const mismatchAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      getPosition: () => Effect.succeed(exchangePosition),
+    };
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      mismatchAdapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(result.note).toContain("LIVE POSITION MISMATCH");
+    expect(orders).toHaveLength(0);
+    expect(killReason).toContain(
+      "exchange position exists without local state",
+    );
+  });
+
+  it("fails closed when persisted live state has no exchange position", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.02"),
+        entryFee: money(0),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true }),
+        ),
+        cohortId: "test-live-cohort",
+        candidateLockAt: new Date("2026-01-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-01-01T00:00:00.000Z"),
+        entryOpenedAt: new Date("2026-01-01T00:15:00.000Z"),
+        executionEnvironment: "bitget-live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(result.note).toContain("LIVE POSITION MISMATCH");
+    expect(orders).toHaveLength(0);
+    expect(killReason).toContain(
+      "local state exists without exchange position",
+    );
+  });
+
+  it("does not clear a live position when the close has no exchange fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter(false);
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    await runWithRepo(opts, repo, candles, adapter);
+    let caught: unknown = null;
+    for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
+      try {
+        await runWithRepo(opts, repo, candles, adapter);
+      } catch (error) {
+        caught = error;
+      }
+    }
+
+    expect(caught instanceof ExchangeError).toBe(true);
+    expect(closes.length).toBeGreaterThan(0);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBe("long");
+    expect(
+      await Effect.runPromise(
+        repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("closes a live position at liquidation before killing local state", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter(true, {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 10,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    });
+    const baseCandles = makeCandles(20, 1000, "oscillate");
+    const lastCandle = baseCandles.at(-1);
+    if (lastCandle === undefined) throw new Error("fixture is empty");
+    const candles = [
+      ...baseCandles.slice(0, -1),
+      { ...lastCandle, high: 1001, low: 800, close: 1000 },
+    ];
+    const openedAt = new Date("2026-08-01T00:00:00.000Z");
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(1000),
+        peakCapital: money(1000),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.01"),
+        entryFee: money("0.01"),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true, leverage: 10 }),
+        ),
+        cohortId: "test-liquidation-cohort",
+        candidateLockAt: new Date("2026-08-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-08-01T00:00:00.000Z"),
+        entryOpenedAt: openedAt,
+        executionEnvironment: "bitget-live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 10,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: openedAt,
+      }),
+    );
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true, leverage: 10 }),
+      repo,
+      candles,
+      adapter,
+    );
+
+    expect(result.action).toBe("closed");
+    expect(closes).toHaveLength(1);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBeNull();
+    expect(state?.killed).toBe(true);
+    const trades = await Effect.runPromise(
+      repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 10),
+    );
+    expect(trades[0]?.exitReason).toBe("liquidation");
+    expect(trades[0]?.fillSource).toBe("live");
   });
 
   it("chop gate blocks entries in a trending market and allows them in chop", async () => {

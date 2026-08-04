@@ -14,7 +14,7 @@ import {
   MarketDataGateway,
   type MarketDataGatewayService,
 } from "../../market-data/gateway.js";
-import { Decimal, money, toNumber } from "../../utils/money.js";
+import { Decimal, money } from "../../utils/money.js";
 
 interface SimulatedAccountState {
   readonly balances: Readonly<Record<string, Decimal>>;
@@ -101,18 +101,18 @@ export function makeSimulatedFuturesExchangeAdapterService(
     const fillPrice = (
       symbol: string,
       side: "buy" | "sell",
-    ): Effect.Effect<number, ExchangeError> =>
+    ): Effect.Effect<Decimal, ExchangeError> =>
       Effect.gen(function* () {
         const mid = yield* midPriceFromOrderBook(gateway, symbol, exchange);
         // Simulate a tiny spread/slippage: buys fill slightly above mid, sells below.
         const slippage = 0.0001;
-        return side === "buy" ? mid * (1 + slippage) : mid * (1 - slippage);
+        return money(mid).times(side === "buy" ? 1 + slippage : 1 - slippage);
       });
 
     const service: FuturesExchangeAdapterService = {
       placeOrder: (request: FuturesOrderRequest) =>
         Effect.gen(function* () {
-          if (request.size <= 0) {
+          if (request.size.lessThanOrEqualTo(0)) {
             return yield* Effect.fail(
               new ExchangeError("order size must be positive"),
             );
@@ -121,8 +121,8 @@ export function makeSimulatedFuturesExchangeAdapterService(
           const marginCoin = marginCoinFor(request.productType, request.symbol);
           const balance = yield* getBalanceInternal(marginCoin);
           const price = yield* fillPrice(request.symbol, request.side);
-          const notional = money(price).times(request.size);
-          const marginRequired = notional.div(money(request.leverage));
+          const notional = price.times(request.size);
+          const marginRequired = notional.div(request.leverage);
 
           if (!request.reduceOnly && balance.lessThan(marginRequired)) {
             return yield* Effect.fail(
@@ -144,7 +144,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
                 new ExchangeError("reduce-only order has no opposing position"),
               );
             }
-            if (request.size > existing.available) {
+            if (request.size.greaterThan(existing.available)) {
               return yield* Effect.fail(
                 new ExchangeError(
                   "reduce-only size exceeds available position",
@@ -157,13 +157,11 @@ export function makeSimulatedFuturesExchangeAdapterService(
           const balanceAfterFill = request.reduceOnly
             ? balance
                 .plus(
-                  money(existing.entryPrice)
-                    .times(request.size)
-                    .div(money(request.leverage)),
+                  existing.entryPrice.times(request.size).div(request.leverage),
                 )
                 .plus(
-                  money(price)
-                    .minus(money(existing.entryPrice))
+                  price
+                    .minus(existing.entryPrice)
                     .times(request.size)
                     .times(existing.side === "long" ? 1 : -1),
                 )
@@ -180,14 +178,14 @@ export function makeSimulatedFuturesExchangeAdapterService(
             marginMode: request.marginMode,
             filledQty: request.size,
             filledPrice: price,
-            fee: toNumber(fee, 8),
+            fee,
             timestamp: new Date(),
           };
 
           if (request.reduceOnly && existing) {
-            const remaining = existing.quantity - request.size;
-            const remainingAvailable = existing.available - request.size;
-            if (remaining <= 0) {
+            const remaining = existing.quantity.minus(request.size);
+            const remainingAvailable = existing.available.minus(request.size);
+            if (remaining.lessThanOrEqualTo(0)) {
               yield* setPosition(key, undefined);
             } else {
               yield* setPosition(key, {
@@ -201,25 +199,25 @@ export function makeSimulatedFuturesExchangeAdapterService(
 
           if (existing) {
             if (existing.side === sideToPosition(request.side)) {
-              const totalQty = existing.quantity + request.size;
-              const newEntry =
-                (existing.entryPrice * existing.quantity +
-                  price * request.size) /
-                totalQty;
+              const totalQty = existing.quantity.plus(request.size);
+              const newEntry = existing.entryPrice
+                .times(existing.quantity)
+                .plus(price.times(request.size))
+                .div(totalQty);
               yield* setPosition(key, {
                 ...existing,
                 quantity: totalQty,
-                available: existing.available + request.size,
+                available: existing.available.plus(request.size),
                 entryPrice: newEntry,
               });
             } else {
-              if (request.size >= existing.quantity) {
+              if (request.size.greaterThanOrEqualTo(existing.quantity)) {
                 yield* setPosition(key, undefined);
               } else {
                 yield* setPosition(key, {
                   ...existing,
-                  quantity: existing.quantity - request.size,
-                  available: existing.available - request.size,
+                  quantity: existing.quantity.minus(request.size),
+                  available: existing.available.minus(request.size),
                 });
               }
             }
@@ -249,8 +247,8 @@ export function makeSimulatedFuturesExchangeAdapterService(
           if (!existing) {
             return null;
           }
-          const closeSize = Math.min(request.size, existing.available);
-          if (closeSize <= 0) {
+          const closeSize = Decimal.min(request.size, existing.available);
+          if (closeSize.lessThanOrEqualTo(0)) {
             return null;
           }
           const closeSide = existing.side === "long" ? "sell" : "buy";
@@ -275,10 +273,10 @@ export function makeSimulatedFuturesExchangeAdapterService(
           const amount = yield* getBalanceInternal(marginCoin);
           return {
             marginCoin,
-            available: toNumber(amount, 8),
-            locked: 0,
-            equity: toNumber(amount, 8),
-            usdtEquity: toNumber(amount, 8),
+            available: amount,
+            locked: money(0),
+            equity: amount,
+            usdtEquity: amount,
           };
         }),
 

@@ -7,6 +7,7 @@ import {
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
+import { ExchangeError } from "../exchange/adapter.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
@@ -30,6 +31,7 @@ import {
 import { defaultComposerConfig } from "../scalping/composer.js";
 import { ExitEngineLive, SignalComposerLive } from "../scalping/services.js";
 import type { ComposerConfig } from "../scalping/types.js";
+import { Decimal, money } from "../utils/money.js";
 
 const scalpingServiceLayers = Layer.merge(SignalComposerLive, ExitEngineLive);
 
@@ -72,8 +74,8 @@ function makeOrderBook(price: number): OrderBook {
 }
 
 class InMemoryPaperRepository implements PaperTradingRepositoryService {
-  private capital = 10_000;
-  private peakCapital = 10_000;
+  private capital = money(10_000);
+  private peakCapital = money(10_000);
   private position: PaperPosition | null = null;
   private trades: PaperTrade[] = [];
 
@@ -97,17 +99,19 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   closePosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     exitReason: PaperTrade["exitReason"],
     closedAt: Date,
   ) {
     return Effect.sync(() => {
       const priceDiff =
         position.side === "long"
-          ? exitPrice - position.entryPrice
-          : position.entryPrice - exitPrice;
-      const pnl = priceDiff * position.size;
-      const pnlPct = (pnl / (position.entryPrice * position.size)) * 100;
+          ? exitPrice.minus(position.entryPrice)
+          : position.entryPrice.minus(exitPrice);
+      const pnl = priceDiff.times(position.size);
+      const pnlPct = pnl
+        .div(position.entryPrice.times(position.size))
+        .times(100);
       const trade: PaperTrade = {
         id: `paper-trade-${Date.now()}`,
         exchange: position.exchange,
@@ -131,20 +135,20 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   scaleOutPosition(
     position: PaperPosition,
-    exitPrice: number,
+    exitPrice: Decimal,
     scaleOutPct: number,
     closedAt: Date,
   ) {
     return Effect.sync(() => {
       const pct = Math.max(0, Math.min(100, scaleOutPct));
-      const partialSize = position.size * (pct / 100);
-      const remainingSize = position.size - partialSize;
+      const partialSize = position.size.times(pct / 100);
+      const remainingSize = position.size.minus(partialSize);
       const priceDiff =
         position.side === "long"
-          ? exitPrice - position.entryPrice
-          : position.entryPrice - exitPrice;
-      const pnl = priceDiff * partialSize;
-      const pnlPct = (pnl / (position.entryPrice * partialSize)) * 100;
+          ? exitPrice.minus(position.entryPrice)
+          : position.entryPrice.minus(exitPrice);
+      const pnl = priceDiff.times(partialSize);
+      const pnlPct = pnl.div(position.entryPrice.times(partialSize)).times(100);
       const trade: PaperTrade = {
         id: `paper-trade-${Date.now()}`,
         exchange: position.exchange,
@@ -179,7 +183,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
-  setPortfolio(capital: number, peakCapital: number) {
+  setPortfolio(capital: Decimal, peakCapital: Decimal) {
     return Effect.sync(() => {
       this.capital = capital;
       this.peakCapital = peakCapital;
@@ -195,10 +199,12 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   getTodayRealizedPnl() {
-    return Effect.succeed(this.trades.reduce((sum, t) => sum + t.pnl, 0));
+    return Effect.succeed(
+      this.trades.reduce((sum, t) => sum.plus(t.pnl), money(0)),
+    );
   }
 
-  getStartOfDayCapital(_date: Date, currentCapital: number) {
+  getStartOfDayCapital(_date: Date, currentCapital: Decimal) {
     return Effect.succeed(currentCapital);
   }
 
@@ -266,8 +272,10 @@ class InMemoryKillSwitch implements KillSwitchService {
 
 class InMemoryCircuitBreaker implements CircuitBreakerService {
   constructor(private openState = false) {}
+  readonly recordedPnl: number[] = [];
 
-  recordTradeResult(_realizedPnl: number) {
+  recordTradeResult(realizedPnl: number) {
+    this.recordedPnl.push(realizedPnl);
     return Effect.void;
   }
 
@@ -343,6 +351,27 @@ function makeOptions(
     leverage: 10,
     marginMode: "crossed",
     productType: "USDT-FUTURES",
+  };
+}
+
+function makeOpenPosition(
+  overrides: Partial<PaperPosition> = {},
+): PaperPosition {
+  return {
+    id: "position-1",
+    exchange: "bitget-futures",
+    symbol: "BTC/USDT:USDT",
+    timeframe: "1h",
+    side: "long",
+    entryPrice: money(100),
+    size: money(1),
+    stopLoss: money(90),
+    takeProfit: money(110),
+    openedAt: new Date(Date.now() - 3_600_000),
+    signalId: "signal-1",
+    scaledOut: false,
+    scaleOutPrice: money(0),
+    ...overrides,
   };
 }
 
@@ -517,6 +546,185 @@ describe("runFuturesPaperTradingIteration", () => {
     expect(result.action).toBe("hold");
     expect(result.note).toContain("CIRCUIT BREAKER OPEN");
     expect(result.position).toBeNull();
+  });
+
+  it("fails closed when a live close returns no exchange fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition();
+    Effect.runSync(repo.saveOpenPosition(position));
+    const simulatedAdapter = makeFuturesAdapter();
+    const adapter = {
+      ...simulatedAdapter,
+      closePosition: () => Effect.succeed(null),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, adapter),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<
+          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          never
+        >,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect(
+      Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
+    ).toEqual(position);
+    expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("rejects live scale-out until it has exchange-fill reconciliation", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition({
+      scaleOutPrice: money(100),
+    });
+    Effect.runSync(repo.saveOpenPosition(position));
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, makeFuturesAdapter()),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<
+          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          never
+        >,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect(
+      Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
+    ).toEqual(position);
+    expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("records the realized PnL into the circuit breaker on a paper scale-out", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition({
+      entryPrice: money(100),
+      stopLoss: money(90),
+      takeProfit: money(110),
+      scaleOutPrice: money(105),
+    });
+    Effect.runSync(repo.saveOpenPosition(position));
+    const circuitBreaker = new InMemoryCircuitBreaker();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        scaleOutAtR: 1,
+        scaleOutPct: 50,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, makeGateway(105)),
+        Effect.provideService(FuturesExchangeAdapter, makeFuturesAdapter()),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, circuitBreaker),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("scaled_out");
+    expect(circuitBreaker.recordedPnl.length).toBeGreaterThan(0);
+  });
+
+  it("checks minimum ATR before placing a live entry order", async () => {
+    const repo = new InMemoryPaperRepository();
+    const simulatedAdapter = makeFuturesAdapter();
+    const adapter = {
+      ...simulatedAdapter,
+      placeOrder: () =>
+        Effect.fail(
+          new ExchangeError("unexpected entry order in low volatility"),
+        ),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        isLive: true,
+        minAtrPct: 100,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, makeGateway(100)),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("LOW VOLATILITY");
+    expect(result.position).toBeNull();
+    expect(result.capital).toBe(10_000);
   });
 
   it("survives random volatile candle sequences without crashing", async () => {

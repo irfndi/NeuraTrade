@@ -16,7 +16,11 @@
  */
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { runGridBacktest, type GridResult } from "../src/scalping/grid.js";
+import {
+  runGridBacktest,
+  type GridOptions,
+  type GridResult,
+} from "../src/scalping/grid.js";
 import { splitCandlesByOos } from "../src/scalping/backtest.js";
 import type { Candle } from "../src/market-data/types.js";
 
@@ -66,7 +70,7 @@ const candles: Candle[] = rows.map((r) => ({
   ),
 }));
 
-const winner = {
+const winner: GridOptions = {
   feePct: 0.02,
   slippageBps: 1,
   trendFilterPeriod: 0,
@@ -221,5 +225,100 @@ for (const frac of [1, 0.75, 0.5, 0.3]) {
   const isR = runGridBacktest(is, { ...winner, positionFraction: frac });
   const oosR = runGridBacktest(oos, { ...winner, positionFraction: frac });
   console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+}
+
+// ---- Recent 30-day realized sample (clever-cabin-er7 statistical sample) ----
+// Deterministic backtest over the LAST 30 days (2880 x 15m bars), read-only,
+// comparing recent-regime realized stats to the full-backtest expectancy. The
+// live-engine demo (real fills) is the decisive complement; this is the clean,
+// key-independent statistical anchor.
+console.log(
+  "\n=== Recent 30-day realized sample (last 2880 bars, deterministic) ===",
+);
+const RECENT = 2880;
+const recentSets: ReadonlyArray<readonly [string, typeof candles, typeof winner]> = [
+  ["BTC 15m winner", candles.slice(-RECENT), winner],
+  ["ETH 15m gated", ethCandles.slice(-RECENT), ethConfig],
+];
+for (const [label, recent, cfg] of recentSets) {
+  const r = runGridBacktest(recent, cfg);
+  const days = Math.max(1, Math.round(recent.length / 96));
+  console.log(
+    `${label.padEnd(16)} (${days}d) ret ${r.totalReturnPct.toFixed(2).padStart(7)}% ` +
+      `tr ${String(r.totalTrades).padStart(4)} (${((r.totalTrades * 30) / days).toFixed(1)}/mo) ` +
+      `win ${r.winRate.toFixed(1).padStart(5)}% PF ${r.profitFactor.toFixed(2).padStart(5)} ` +
+      `exp ${expectancyPct(r).toFixed(3).padStart(7)}%/tr DD ${r.maxDrawdownPct.toFixed(1).padStart(5)}%`,
+  );
+}
+
+// ---- Realistic maker-fill stress (clever-cabin readiness, fill realism) ----
+// Bounds the edge under realistic maker fills: sub-100% fill probability (queue
+// risk), adverse selection (skips more win-prone touches than loss-prone ones,
+// so realized trades skew toward losers), and taker fees on stop exits. This is
+// the conservative complement to the optimistic "touched = filled" assumption;
+// the live demo (real fills) is the definitive test, this is the key-free bound.
+console.log("\n=== Realistic maker-fill stress (BTC 15m winner) ===");
+function walkWindows(cfg: typeof winner): {
+  wins: number;
+  n: number;
+  meanRet: number;
+  worstDD: number;
+  trades: number;
+} {
+  let wWins = 0;
+  let wN = 0;
+  let wRet = 0;
+  let wDd = 0;
+  let wTr = 0;
+  for (let start = TRAIN; start + TEST <= candles.length; start += TEST) {
+    const slice = candles.slice(start, start + TEST);
+    const r = runGridBacktest(slice, cfg);
+    wN += 1;
+    wRet += r.totalReturnPct;
+    wDd = Math.max(wDd, r.maxDrawdownPct);
+    wTr += r.totalTrades;
+    if (r.totalReturnPct > 0) wWins += 1;
+  }
+  return {
+    wins: wWins,
+    n: wN,
+    meanRet: wRet / Math.max(1, wN),
+    worstDD: wDd,
+    trades: wTr,
+  };
+}
+
+const fillCases: ReadonlyArray<{ label: string; cfg: typeof winner }> = [
+  { label: "optimistic fp=1 sym", cfg: winner },
+  { label: "taker stops fp=1", cfg: { ...winner, takerExitFeePct: 0.06 } },
+  {
+    label: "fp=0.7 uniform+taker",
+    cfg: { ...winner, makerFillProb: 0.7, adverseSelection: false, takerExitFeePct: 0.06 },
+  },
+  {
+    label: "fp=0.7 adverse+taker",
+    cfg: { ...winner, makerFillProb: 0.7, adverseSelection: true, takerExitFeePct: 0.06 },
+  },
+  {
+    label: "fp=0.5 adverse+taker",
+    cfg: { ...winner, makerFillProb: 0.5, adverseSelection: true, takerExitFeePct: 0.06 },
+  },
+];
+console.log(
+  `${"case".padEnd(24)} ${"OOS ret".padStart(8)} ${"OOS PF".padStart(7)} ${"OOS exp".padStart(9)} ${"OOS win".padStart(8)} | ${"WF win".padStart(6)} ${"WF ret".padStart(8)} ${"WF DD".padStart(7)}`,
+);
+for (const fc of fillCases) {
+  const oosR = runGridBacktest(oos, fc.cfg);
+  const wf = walkWindows(fc.cfg);
+  const pf = Number.isFinite(oosR.profitFactor)
+    ? oosR.profitFactor.toFixed(2)
+    : "inf";
+  console.log(
+    `${fc.label.padEnd(24)} ${(oosR.totalReturnPct.toFixed(2) + "%").padStart(8)} ` +
+      `${pf.padStart(7)} ${(expectancyPct(oosR).toFixed(3) + "%").padStart(9)} ` +
+      `${(oosR.winRate.toFixed(1) + "%").padStart(8)} | ` +
+      `${(wf.wins + "/" + wf.n).padStart(6)} ${(wf.meanRet.toFixed(2) + "%").padStart(8)} ` +
+      `${(wf.worstDD.toFixed(2) + "%").padStart(7)}`,
+  );
 }
 db2.close();

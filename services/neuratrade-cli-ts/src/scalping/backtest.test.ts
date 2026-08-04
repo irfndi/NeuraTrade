@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   assessBacktestRealism,
+  attachMonteCarlo,
   calculatePositionValue,
   normalizeFeePct,
   runBacktest,
@@ -8,6 +9,7 @@ import {
 import { defaultComposerConfig } from "./composer.js";
 import type { FundingRate } from "../market-data/types.js";
 import type { CandleLike } from "./types.js";
+import type { BacktestTrade } from "./backtest.js";
 
 function makeCandles(
   count: number,
@@ -320,6 +322,49 @@ describe("runBacktest scale-out and atrRiskReward", () => {
     );
   });
 
+  it("counts ruin when capital crosses zero at any step, not just at the end", () => {
+    // A big early loss that later recovers: the unshuffled cumulative sum is
+    // positive (1000 - 1500 + 7*500 = 3000), so the pre-fix code reported 0%
+    // ruin. Some shuffled paths dip below zero mid-way, so ruin must be > 0.
+    const t = (netPnl: number): BacktestTrade => ({
+      id: "t",
+      symbol: "BTC/USDT",
+      side: "long",
+      entryTime: new Date(0),
+      exitTime: new Date(1),
+      entryPrice: 100,
+      exitPrice: 100,
+      pnl: netPnl,
+      pnlPct: 0,
+      netPnl,
+      exitReason: "signal",
+      initialRiskPct: 1,
+      fillType: "taker",
+      entryFeePct: 0,
+      exitFeePct: 0,
+    });
+    const trades = [
+      t(-1500),
+      t(500),
+      t(500),
+      t(500),
+      t(500),
+      t(500),
+      t(500),
+      t(500),
+    ];
+    const finalSum = trades.reduce((s, x) => s + x.netPnl, 0) + 1000;
+    expect(finalSum).toBeGreaterThan(0);
+
+    const result = attachMonteCarlo(
+      { trades } as unknown as Parameters<typeof attachMonteCarlo>[0],
+      1000,
+      1000,
+    );
+    expect(result.monteCarlo).toBeDefined();
+    expect(result.monteCarlo!.probabilityOfRuinPct).toBeGreaterThan(0);
+  });
+
   it("applies leverage to futures returns", () => {
     const unleveraged = runBacktest({
       symbol: "BTC/USDT",
@@ -624,6 +669,39 @@ describe("higher-timeframe signal confluence", () => {
 
     expect(baseline.totalTrades).toBeGreaterThanOrEqual(0);
     expect(confluent.totalTrades).toBeLessThanOrEqual(baseline.totalTrades);
+  });
+
+  it("slices HTF candles to each decision time (no look-ahead bias)", () => {
+    // HTF: 80 bars downtrend then 20 bars uptrend. The final full-series view
+    // is UP. Without slicing, every decision would use that final UP trend and
+    // reject shorts at every bar. With slicing, early decisions (during the
+    // down prefix) see the DOWN trend and correctly allow shorts.
+    const down = makeCandles(80, 100, "down");
+    const up = makeCandles(20, down[down.length - 1].close, "up");
+    const htf: CandleLike[] = [...down, ...up];
+    const candles = makeCandles(100, 100, "up");
+
+    const result = runBacktest({
+      symbol: "BTC/USDT",
+      exchange: "binance",
+      timeframe: "1h",
+      candles,
+      composerConfig: defaultComposerConfig,
+      initialCapital: 10_000,
+      positionSizePct: 100,
+      stopLossPct: 5,
+      takeProfitPct: 10,
+      feePct: 0,
+      minConfidence: 0.1,
+      htfCandles: htf,
+      htfTrendFastPeriod: 10,
+      htfTrendSlowPeriod: 20,
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    // The first trade (during the HTF downtrend prefix) must be a short;
+    // a look-ahead full-series view would have rejected it.
+    expect(result.trades[0].side).toBe("short");
   });
 });
 
