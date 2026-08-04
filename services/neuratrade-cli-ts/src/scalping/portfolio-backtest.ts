@@ -1384,7 +1384,12 @@ export function runMultiSymbolPortfolioBacktest(
       ((state.cash - baseOptions.initialCapital) / baseOptions.initialCapital) *
       100,
     maxDrawdownPct: state.maxDrawdown * 100,
-    profitFactor: grossLoss === 0 ? 0 : grossProfit / grossLoss,
+    profitFactor:
+      grossLoss === 0
+        ? grossProfit > 0
+          ? Number.POSITIVE_INFINITY
+          : 0
+        : grossProfit / grossLoss,
     avgTradeDurationHours: avgDurationHours,
     maxConsecutiveLosses: maxConsecLosses,
     symbolResults,

@@ -148,4 +148,30 @@ describe("runMultiSymbolPortfolioBacktest", () => {
     expect(result.symbolCount).toBe(0);
     expect(result.totalTrades).toBe(0);
   });
+
+  it("reports an infinite profit factor for an all-winning portfolio (parity with single-symbol)", () => {
+    // Wide stop + narrow take-profit on a steady uptrend: every closed trade
+    // wins, so grossLoss === 0. The multi-symbol path must report Infinity
+    // (as single-symbol performance-metrics does), not 0 — a 0 would look like
+    // the strategy lost everything.
+    const a = makeCandles(200, 100, "up");
+    const b = a.map((c, i) => ({
+      ...c,
+      timestamp: new Date(c.timestamp.getTime() + i * 1000),
+    }));
+
+    const result = runMultiSymbolPortfolioBacktest({
+      ...baseOptions,
+      maxOpenPositions: 10,
+      stopLossPct: 20,
+      takeProfitPct: 0.3,
+      symbols: makePortfolioInputs([
+        { symbol: "A/USDT", candles: a },
+        { symbol: "B/USDT", candles: b },
+      ]),
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.profitFactor).toBe(Number.POSITIVE_INFINITY);
+  });
 });
