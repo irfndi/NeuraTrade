@@ -176,6 +176,14 @@ class InMemRepo implements PaperTradingRepositoryService {
   clearWatchlist() {
     return Effect.void;
   }
+
+  listAllGridTrades(
+    _exchange: string,
+    _timeframe: string,
+    limit: number,
+  ) {
+    return Effect.succeed(this.trades.slice(-limit).reverse());
+  }
 }
 
 const gateway: MarketDataGatewayService = {

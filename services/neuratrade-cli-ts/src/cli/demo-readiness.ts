@@ -21,6 +21,12 @@ const commandOptions = {
     Options.withDefault("15m"),
     Options.withDescription("Timeframe used for the demo soak"),
   ),
+  watchlist: Options.boolean("watchlist").pipe(
+    Options.withDefault(false),
+    Options.withDescription(
+      "Aggregate live-fill evidence across ALL symbols for the exchange/timeframe instead of a single symbol",
+    ),
+  ),
   limit: Options.integer("limit").pipe(
     Options.withDefault(500),
     Options.withDescription("Maximum completed trades to evaluate"),
@@ -92,12 +98,18 @@ export function makeDemoReadinessCommand(
       const sqlite = yield* SqliteClient;
       const repository = new PaperTradingRepositorySQLite(sqlite.database);
       yield* repository.ensureTables();
-      const allTrades = yield* repository.listRecentGridTrades(
-        args.exchange,
-        args.symbol,
-        args.timeframe,
-        args.limit,
-      );
+      const allTrades = args.watchlist
+        ? yield* repository.listAllGridTrades(
+            args.exchange,
+            args.timeframe,
+            args.limit,
+          )
+        : yield* repository.listRecentGridTrades(
+            args.exchange,
+            args.symbol,
+            args.timeframe,
+            args.limit,
+          );
       // Stale simulated trades from earlier runs share the same key and
       // must never count toward the minimums or block the verdict.
       const trades = allTrades.filter(
@@ -112,6 +124,10 @@ export function makeDemoReadinessCommand(
         ),
         maximumDrawdownPct: money(args.maximumDrawdownPct),
       });
+      const scope = args.watchlist
+        ? `all ${args.exchange}:${args.timeframe} symbols`
+        : `${args.symbol}`;
+      yield* Console.log(`[demo-readiness] scope: ${scope}; live trades: ${trades.length}`);
       yield* Console.log(serializeDemoSoakReport(report));
       if (!report.passed) {
         return yield* Effect.fail(new Error("demo-soak gate failed"));

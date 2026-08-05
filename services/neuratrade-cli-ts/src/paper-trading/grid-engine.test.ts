@@ -161,6 +161,16 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   clearWatchlist() {
     return Effect.void;
   }
+
+  listAllGridTrades(
+    _exchange: string,
+    _timeframe: string,
+    limit: number,
+  ) {
+    return Effect.succeed(
+      this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
+    );
+  }
 }
 
 function makeGateway(candles: Candle[]): MarketDataGatewayService {

@@ -849,7 +849,24 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => resp.data.map(parseFuturesPosition)));
+    ).pipe(
+      Effect.catch((error) => {
+        // Some listed contracts (e.g. demo proxies for delisted or exotic
+        // pairs) return 40034 "Parameter ... does not exist" on the
+        // single-position query even though no position is open. That is
+        // not a fault of the caller — it means the position is absent.
+        if (
+          symbol.trim() !== "" &&
+          error instanceof BitgetApiError &&
+          error.body.includes("does not exist") &&
+          error.endpoint.includes("/single-position")
+        ) {
+          return Effect.succeed({ data: [] });
+        }
+        return Effect.fail(error);
+      }),
+      Effect.map((resp) => resp.data.map(parseFuturesPosition)),
+    );
   };
 
   const setLeverage = (args: {

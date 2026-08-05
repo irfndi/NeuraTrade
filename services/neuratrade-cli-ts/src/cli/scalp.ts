@@ -3595,7 +3595,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
       feePct: args.fee,
       slippageBps: args.slippageBps,
-      trendFilterPeriod: args.trendFilterPeriod,
+      trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
       initialCapital: args.capital,
       maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
       maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
@@ -5376,7 +5376,7 @@ export const readinessCommand = Command.make(
 );
 
 const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
-  gridStepPct: [0.2, 0.4, 0.6, 1.0],
+  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5],
   gridMaxGrids: [1, 2, 3],
   gridPauseAfterLossBars: [0, 6, 24],
 } as const;
@@ -5462,6 +5462,15 @@ const gridUniverseIntervalOption = Options.integer("interval").pipe(
   ),
 );
 
+const gridUniverseMinFillFrequencyOption = Options.float(
+  "min-fill-frequency-pct",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Reject survivors whose grid step touches < this % of candles (0 = disabled)",
+  ),
+);
+
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5486,6 +5495,7 @@ export const gridUniverseScanCommand = Command.make(
     output: gridUniverseOutputOption,
     watch: gridUniverseWatchOption,
     interval: gridUniverseIntervalOption,
+    minFillFrequencyPct: gridUniverseMinFillFrequencyOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -5507,6 +5517,7 @@ export const gridUniverseScanCommand = Command.make(
         testWindow: args.testWindow,
         minProfitableWindowsPct: args.minProfitableWindowsPct,
         minAggregateReturnPct: args.minAggregateReturnPct,
+        minFillFrequencyPct: args.minFillFrequencyPct,
         feePct: args.fee,
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.trendFilterPeriod,

@@ -27,6 +27,12 @@ export interface GridUniverseOptions {
   readonly feePct: number;
   readonly slippageBps: number;
   readonly trendFilterPeriod: number;
+  /**
+   * Min fraction (0..1) of candles reaching a grid step from the candle open.
+   * Default 0 disables; rejects backtest-profitable symbols whose step is too
+   * wide to fill live.
+   */
+  readonly minFillFrequencyPct?: number;
   readonly searchSpace: {
     readonly gridStepPct: readonly number[];
     readonly gridMaxGrids: readonly number[];
@@ -105,9 +111,23 @@ export function runGridUniverseScan(
         gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars[0] ?? 0,
       };
 
-      const passed =
+      const passedBase =
         walkForward.profitableWindowsPct >= options.minProfitableWindowsPct &&
         walkForward.aggregateReturnPct >= options.minAggregateReturnPct;
+
+      const fillGate = options.minFillFrequencyPct ?? 0;
+      const fillFrequencyPct =
+        fillGate > 0 && candles.length > 0
+          ? (() => {
+              const stepFactor = 1 - bestParams.gridStepPct / 100;
+              const touched = candles.filter(
+                (c) => c.low <= c.open * stepFactor,
+              ).length;
+              return (touched / candles.length) * 100;
+            })()
+          : 100;
+
+      const passed = passedBase && fillFrequencyPct >= fillGate;
 
       entries.push({
         symbol,
