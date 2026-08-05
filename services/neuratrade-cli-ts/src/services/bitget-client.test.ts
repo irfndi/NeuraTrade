@@ -892,14 +892,15 @@ describe("BitgetClient", () => {
       }
     });
 
-    it("does not treat a 40034 naming an unrecognized parameter as absent position", async () => {
+    it.each([
+      "Parameter clientType does not exist",
+      "Parameter clientType not exist",
+      "No such parameter clientType",
+    ])("does not treat a 40034 naming an unrecognized parameter (%s) as absent position", async (msg) => {
       const mock = startMock((req) => {
         const url = new URL(req.url);
         expect(url.pathname).toBe("/api/v2/mix/position/single-position");
-        return json(
-          { code: "40034", msg: "Parameter clientType does not exist" },
-          400,
-        );
+        return json({ code: "40034", msg }, 400);
       });
       try {
         const program = Effect.gen(function* () {

@@ -92,13 +92,20 @@ export function isBitgetUnsupportedInstrumentError(
   if (!/does not exist|not exist|no such parameter/i.test(error.body)) {
     return false;
   }
-  const namedParameter = /parameter\s+(\S+)\s+does not exist/i.exec(error.body);
   // Bare "Parameter does not exist" (no parameter named) is the demo proxy's
-  // generic contract-missing message -> unsupported instrument.
-  if (namedParameter === null) return true;
-  // Fail closed: a named parameter only counts when it positively identifies a
+  // generic contract-missing message -> unsupported instrument. Check it first
+  // so the named forms below cannot capture "does" as a parameter name.
+  if (/\bparameter\s+does not exist\b/i.test(error.body)) return true;
+  const namedParameter =
+    /(?:parameter\s+(\S+)\s+(?:does not exist|not exist)|no such parameter\s+(\S+))/i.exec(
+      error.body,
+    );
+  const parameterName = namedParameter?.[1] ?? namedParameter?.[2];
+  // Fail closed: an unrecognized named parameter is a config defect.
+  if (parameterName === undefined) return false;
+  // A named parameter only counts when it positively identifies a
   // symbol/contract/instrument. Anything else is a config defect.
-  return SYMBOL_OR_CONTRACT_PARAM_RE.test(namedParameter[1]);
+  return SYMBOL_OR_CONTRACT_PARAM_RE.test(parameterName);
 }
 
 // ---------------------------------------------------------------------------

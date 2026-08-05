@@ -49,7 +49,7 @@ See `services/backend-api/internal/app/AGENTS.md` and `services/backend-api/inte
 | Actor pipeline (collector→strategy→risk→execution→portfolio) | `services/backend-api/internal/app/` | One package per actor. |
 | Concurrency primitives | `services/backend-api/internal/platform/` | supervisor, actor, eventbus, retry, timeout. |
 | DB connection + migrations | `services/backend-api/internal/database/` + `services/backend-api/database/` | Two migrate scripts: `migrate.sh` (Postgres/psql) and `sqlite-migrate.sh` (SQLite CLI). |
-| Gateway CLI commands | `cmd/neuratrade-cli/main.go` + `gateway.go` | `gateway start | stop | status` lives in `gateway.go`. |
+| Gateway CLI commands | `cmd/neuratrade-cli/main.go` + `gateway.go` | `gateway start`, `gateway stop`, and `gateway status` live in `gateway.go`. |
 | Telegram bot | `services/telegram-service/index.ts` | grammY polling/webhook + Hono HTTP + gRPC. |
 | Agent control plane | `services/agent-control/cmd/agent/main.go` | Standalone; not launched by gateway CLI. |
 | Native ops scripts | `services/backend-api/scripts/` | `startup-orchestrator.sh`, `health-monitor-enhanced.sh`, `coverage-check.sh`, `bd-close-with-qa.sh`, `validate-env.sh`. |
