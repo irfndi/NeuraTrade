@@ -896,26 +896,29 @@ describe("BitgetClient", () => {
       "Parameter clientType does not exist",
       "Parameter clientType not exist",
       "No such parameter clientType",
-    ])("does not treat a 40034 naming an unrecognized parameter (%s) as absent position", async (msg) => {
-      const mock = startMock((req) => {
-        const url = new URL(req.url);
-        expect(url.pathname).toBe("/api/v2/mix/position/single-position");
-        return json({ code: "40034", msg }, 400);
-      });
-      try {
-        const program = Effect.gen(function* () {
-          const client = yield* BitgetClient;
-          return yield* client.getFuturesPositions(
-            "HYPE/USDT:USDT",
-            "USDT-FUTURES",
-          );
+    ])(
+      "does not treat a 40034 naming an unrecognized parameter (%s) as absent position",
+      async (msg) => {
+        const mock = startMock((req) => {
+          const url = new URL(req.url);
+          expect(url.pathname).toBe("/api/v2/mix/position/single-position");
+          return json({ code: "40034", msg }, 400);
         });
-        const err = await runFail(program, mock.url);
-        expect(err).toBeInstanceOf(BitgetApiError);
-        expect((err as BitgetApiError).code).toBe("40034");
-      } finally {
-        mock.stop();
-      }
-    });
+        try {
+          const program = Effect.gen(function* () {
+            const client = yield* BitgetClient;
+            return yield* client.getFuturesPositions(
+              "HYPE/USDT:USDT",
+              "USDT-FUTURES",
+            );
+          });
+          const err = await runFail(program, mock.url);
+          expect(err).toBeInstanceOf(BitgetApiError);
+          expect((err as BitgetApiError).code).toBe("40034");
+        } finally {
+          mock.stop();
+        }
+      },
+    );
   });
 });
