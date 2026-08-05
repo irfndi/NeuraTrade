@@ -426,11 +426,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
           } else {
             yield* pm.signalAndWait(telegramProc, "SIGTERM", signalTimeoutMs);
             if (backendProc !== undefined) {
-              yield* pm.signalAndWait(
-                backendProc,
-                "SIGTERM",
-                signalTimeoutMs,
-              );
+              yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
             }
             yield* gwState.writeServiceState(
               "telegram",

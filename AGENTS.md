@@ -42,14 +42,14 @@ See `services/backend-api/internal/app/AGENTS.md` and `services/backend-api/inte
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
-|------|----------|-------|
+| ------ | ---------- | ------- |
 | Process entrypoint, startup order, shutdown | `services/backend-api/cmd/server/main.go` | Explicit constructor injection. ~750 LOC. Read this first when debugging boot. |
 | Route registration + middleware | `services/backend-api/internal/api/routes.go` | Health at root; API at `/api/v1`; auth/admin middleware boundaries. |
 | Domain logic | `services/backend-api/internal/services/` | Largest code area. ~200+ files including 180K-line `ai_scalping.go`. |
 | Actor pipeline (collector→strategy→risk→execution→portfolio) | `services/backend-api/internal/app/` | One package per actor. |
 | Concurrency primitives | `services/backend-api/internal/platform/` | supervisor, actor, eventbus, retry, timeout. |
 | DB connection + migrations | `services/backend-api/internal/database/` + `services/backend-api/database/` | Two migrate scripts: `migrate.sh` (Postgres/psql) and `sqlite-migrate.sh` (SQLite CLI). |
-| Gateway CLI commands | `cmd/neuratrade-cli/main.go` + `gateway.go` | `gateway start|stop|status` lives in `gateway.go`. |
+| Gateway CLI commands | `cmd/neuratrade-cli/main.go` + `gateway.go` | `gateway start | stop | status` lives in `gateway.go`. |
 | Telegram bot | `services/telegram-service/index.ts` | grammY polling/webhook + Hono HTTP + gRPC. |
 | Agent control plane | `services/agent-control/cmd/agent/main.go` | Standalone; not launched by gateway CLI. |
 | Native ops scripts | `services/backend-api/scripts/` | `startup-orchestrator.sh`, `health-monitor-enhanced.sh`, `coverage-check.sh`, `bd-close-with-qa.sh`, `validate-env.sh`. |
@@ -95,7 +95,7 @@ make test-backend       # Go unit + integration + e2e
 make test-frontend      # Bun tests for telegram-service
 make test-scripts       # 5 shell-based script tests (no Go toolchain needed)
 
-make fmt                # gofmt + prettier
+make fmt                # gofmt + oxfmt
 make fmt-check          # CI-safe formatting check
 make lint               # golangci-lint v2.10.1 + oxlint
 make typecheck          # tsc for telegram-service
@@ -135,9 +135,9 @@ make bd-close-qa
 ## CI WORKFLOWS (`.github/workflows/`)
 
 | File | Triggers | What it does |
-|------|----------|--------------|
+| ------ | ---------- | -------------- |
 | `validation.yml` | push to main/develop/development, PRs | 6 parallel jobs: backend fmt+lint, frontend fmt+lint+build, backend tests (SQLite, -race), frontend tests, backend security (gitleaks+gosec+govulncheck+trivy), frontend security (bun audit) |
-| `autofix.yml` | PR opened/sync/reopened | Auto-formats with gofmt+goimports+golangci-lint --fix+prettier+oxlint+shfmt, auto-commits via `autofix-ci[bot]` |
+| `autofix.yml` | PR opened/sync/reopened | Auto-formats with gofmt+goimports+golangci-lint --fix+oxfmt+oxlint+shfmt, auto-commits via `autofix-ci[bot]` |
 | `codspeed.yml` | push to main/develop/development, PRs | Benchmarks on `test/benchmark/`, `internal/crypto/`, `internal/utils/`, `internal/database/` |
 | `test-ccxt-native.yml` | push | Lightweight `make test-scripts` (no Go/Bun toolchain) |
 | `backend-security-deep.yml` | push to backend paths, daily 02:37 UTC, manual | Bounded gosec taint scan on decomposed `internal/services/*` subpackages |

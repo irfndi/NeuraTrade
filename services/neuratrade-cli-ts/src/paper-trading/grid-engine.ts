@@ -238,11 +238,12 @@ export function runGridPaperTradingIteration(
     const strategyFingerprint = fingerprintStrategyManifest(
       strategyManifestFor(options, executionEnvironment),
     );
-    let state: GridPaperState = (yield* repo.getGridState(
-      options.exchange,
-      options.symbol,
-      options.timeframe,
-    )) ?? freshGridState(options);
+    let state: GridPaperState =
+      (yield* repo.getGridState(
+        options.exchange,
+        options.symbol,
+        options.timeframe,
+      )) ?? freshGridState(options);
 
     // A persisted state may belong to a previous run with different
     // parameters (e.g. the demo soak was reconfigured after a candidate
@@ -250,10 +251,7 @@ export function runGridPaperTradingIteration(
     // still used for sizing/risk — silently reusing a stale config trades the
     // wrong capital/position/drawdown limits. Re-seed the state from the
     // current options instead of resuming with the stale parameters.
-    if (
-      state.side === null &&
-      !stateConfigMatchesOptions(state, options)
-    ) {
+    if (state.side === null && !stateConfigMatchesOptions(state, options)) {
       state = freshGridState(options);
       yield* repo.saveGridState(state);
     }

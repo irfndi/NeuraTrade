@@ -193,19 +193,17 @@ export function fetchOHLCV(
         >
       >(path);
 
-    return data.map(
-      (c): Candle => ({
-        exchange: bitgetExchange(marketType),
-        symbol,
-        timeframe,
-        open: asNumber(c[1]),
-        high: asNumber(c[2]),
-        low: asNumber(c[3]),
-        close: asNumber(c[4]),
-        volume: asNumber(c[5]),
-        timestamp: new Date(Number(c[0])),
-      }),
-    );
+    return data.map((c): Candle => ({
+      exchange: bitgetExchange(marketType),
+      symbol,
+      timeframe,
+      open: asNumber(c[1]),
+      high: asNumber(c[2]),
+      low: asNumber(c[3]),
+      close: asNumber(c[4]),
+      volume: asNumber(c[5]),
+      timestamp: new Date(Number(c[0])),
+    }));
   });
 }
 

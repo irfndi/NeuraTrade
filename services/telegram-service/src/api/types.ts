@@ -168,7 +168,10 @@ export interface PortfolioResponse {
   readonly positions: readonly PortfolioPosition[];
   readonly drift_detected?: boolean;
   readonly positions_source?:
-    "exchange" | "lifecycle_repair_pending" | "lifecycle_fallback" | string;
+    | "exchange"
+    | "lifecycle_repair_pending"
+    | "lifecycle_fallback"
+    | string;
   readonly note?: string;
   readonly updated_at?: string;
 }
@@ -204,7 +207,11 @@ export interface QuestDiagnosticsResponse {
     | "recovery_gate"
     | string;
   readonly risk_lock_source?:
-    "manual_env" | "portfolio_safety" | "drawdown_threshold" | "none" | string;
+    | "manual_env"
+    | "portfolio_safety"
+    | "drawdown_threshold"
+    | "none"
+    | string;
   readonly execution_stage?: "lock" | "handler" | "persist" | "done" | string;
   readonly execution_last_progress_at?: string;
   readonly execution_in_progress_age_seconds?: number;
@@ -225,7 +232,10 @@ export interface QuestDiagnosticsResponse {
   readonly progress_block_reason?: string;
   readonly rollout_stage_current?: "shadow" | "paper" | "live" | string;
   readonly rollout_status_current?:
-    "active" | "paused" | "rolled_back" | string;
+    | "active"
+    | "paused"
+    | "rolled_back"
+    | string;
   readonly rollout_gate_reason_current?: string;
   readonly last_entry_attempt_at?: string;
   readonly minutes_since_entry_attempt?: number;
@@ -345,7 +355,10 @@ export interface AIStatusResponse {
   readonly effective_model?: string;
   readonly auto_routing?: boolean;
   readonly readiness?:
-    "ready" | "ready_auto_route" | "degraded" | "unavailable";
+    | "ready"
+    | "ready_auto_route"
+    | "degraded"
+    | "unavailable";
 }
 
 export interface AIRouteRequest {

@@ -1,6 +1,6 @@
 import { Command, Options } from "./kit/kit.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer, Option } from "effect";
+import { Console, Effect, FileSystem, Layer, Option, Schedule } from "effect";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
 import { ConfigLive } from "../services/config.js";
@@ -3176,18 +3176,16 @@ export const paperTradeCommand = Command.make(
                 `⚠️ DB watchlist is empty for ${dbExchange}:${mergedArgs.timeframe} — paper-trade will run with zero symbols; run grid-universe-scan with a matching --exchange first`,
               );
             }
-            return dbEntries.map(
-              (e): WatchlistEntry => ({
-                symbol: e.symbol,
-                exchange: e.exchange,
-                returnPct: e.returnPct,
-                gridParams: {
-                  gridStepPct: e.gridStepPct,
-                  gridMaxGrids: e.gridMaxGrids,
-                  gridPauseAfterLossBars: e.gridPauseAfterLossBars,
-                },
-              }),
-            );
+            return dbEntries.map((e): WatchlistEntry => ({
+              symbol: e.symbol,
+              exchange: e.exchange,
+              returnPct: e.returnPct,
+              gridParams: {
+                gridStepPct: e.gridStepPct,
+                gridMaxGrids: e.gridMaxGrids,
+                gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+              },
+            }));
           }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
@@ -4140,13 +4138,11 @@ export const soakCommand = Command.make(
           return runFuturesPaperTradingIteration(opts).pipe(
             Effect.provide(futuresAdapterLayer),
             Effect.provide(layers),
-            Effect.map(
-              (r): IterationResult => ({
-                action: r.action,
-                capital: r.capital,
-                note: r.note,
-              }),
-            ),
+            Effect.map((r): IterationResult => ({
+              action: r.action,
+              capital: r.capital,
+              note: r.note,
+            })),
           ) as Effect.Effect<IterationResult, unknown, never>;
         }
 
@@ -4188,13 +4184,11 @@ export const soakCommand = Command.make(
         return runPaperTradingIteration(opts).pipe(
           Effect.provide(spotAdapterLayer),
           Effect.provide(layers),
-          Effect.map(
-            (r): IterationResult => ({
-              action: r.action,
-              capital: r.capital,
-              note: r.note,
-            }),
-          ),
+          Effect.map((r): IterationResult => ({
+            action: r.action,
+            capital: r.capital,
+            note: r.note,
+          })),
         ) as Effect.Effect<IterationResult, unknown, never>;
       };
 
@@ -5762,10 +5756,13 @@ export const gridUniverseScanCommand = Command.make(
         yield* Console.log(
           `👁 Watching universe ${args.exchange}:${args.timeframe}, re-scan every ${args.interval}s...`,
         );
-        while (true) {
-          yield* runScanWithLayers();
-          yield* Effect.sleep(`${args.interval} seconds`);
-        }
+        // Repeat until interrupted: Effect.repeat + Schedule.spaced runs the
+        // scan, spaces iterations by the interval, and cancels cleanly on
+        // SIGTERM/SIGINT (BunRuntime.runMain interrupts the fiber at the
+        // schedule boundary).
+        yield* Effect.repeat(runScanWithLayers(), {
+          schedule: Schedule.spaced(`${args.interval} seconds`),
+        });
       }
 
       return yield* runScanWithLayers();

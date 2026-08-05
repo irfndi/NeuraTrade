@@ -347,8 +347,6 @@ describe("real-money-readiness CLI contract", () => {
       (gate) => gate.id === "execution-parity",
     );
     expect(parityGate?.passed).toBe(false);
-    expect(parityGate?.reasons).toContain(
-      "execution parity check failed: pnl",
-    );
+    expect(parityGate?.reasons).toContain("execution parity check failed: pnl");
   });
 });

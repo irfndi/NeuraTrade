@@ -201,9 +201,9 @@ function readExecutionParityFile(home: string): ExecutionParityEvidence {
   const filePath = join(home, "data", "execution-parity.json");
   try {
     if (!existsSync(filePath)) return absentExecutionParity();
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<
-      ExecutionParityArtifactFile
-    >;
+    const parsed = JSON.parse(
+      readFileSync(filePath, "utf8"),
+    ) as Partial<ExecutionParityArtifactFile>;
     const checks = (Array.isArray(parsed.checks) ? parsed.checks : []).filter(
       (check): check is ExecutionParityArtifactCheck =>
         typeof check === "object" &&
