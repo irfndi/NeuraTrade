@@ -3470,10 +3470,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
           maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
           maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
         },
-        args.live &&
-          strategyType === "grid" &&
-          (args.entries?.length ?? 0) > 0 &&
-          useSandbox,
+        // args.live && strategyType === "grid" are guaranteed by the
+        // enclosing if; only multi-symbol sandbox runs get relaxed guards.
+        (args.entries?.length ?? 0) > 0 && useSandbox,
       );
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
@@ -5424,12 +5423,12 @@ const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
 
 const gridUniverseTrainWindowOption = Options.integer("train-window").pipe(
   Options.withDefault(180),
-  Options.withDescription("Walk-forward training window in days"),
+  Options.withDescription("Walk-forward training window in candles"),
 );
 
 const gridUniverseTestWindowOption = Options.integer("test-window").pipe(
   Options.withDefault(60),
-  Options.withDescription("Walk-forward test window in days"),
+  Options.withDescription("Walk-forward test window in candles"),
 );
 
 const gridUniverseMinProfitableWindowsOption = Options.float(
@@ -5496,7 +5495,6 @@ const gridUniverseMinFillFrequencyOption = Options.float(
     "Reject survivors whose grid step touches < this % of candles (0 = disabled)",
   ),
 );
-
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5543,7 +5541,6 @@ export const gridUniverseScanCommand = Command.make(
           `⚠️ --min-fill-frequency-pct is 0 — the fill gate is DISABLED; survivors whose grid step is too wide to fill live will not be rejected`,
         );
       }
-
       const options: GridUniverseOptions = {
         exchange: args.exchange,
         timeframe: args.timeframe,
@@ -5558,7 +5555,6 @@ export const gridUniverseScanCommand = Command.make(
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.trendFilterPeriod,
         searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
-        outputPath,
       };
 
       const persistSurvivors = (result: {
@@ -5598,18 +5594,24 @@ export const gridUniverseScanCommand = Command.make(
             );
           }
 
-          if (outputPath) {
+          // Only ever write the whitelist file after a successful scan with
+          // survivors: a failed/empty scan must not truncate the file the
+          // demo soak consumes.
+          if (outputPath && result.survivors.length > 0) {
             const watchlistJson = result.survivors.map((e) => ({
               symbol: e.symbol,
               exchange: args.exchange,
               returnPct: e.walkForward.aggregateReturnPct,
-              sharpe: e.walkForward.aggregateReturnPct > 0 ? 1 : 0,
               gridParams: {
                 gridStepPct: e.bestParams.gridStepPct,
                 gridMaxGrids: e.bestParams.gridMaxGrids,
                 gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
               },
             }));
+            const fsys = yield* FileSystem.FileSystem;
+            yield* fsys.makeDirectory(dirname(outputPath), {
+              recursive: true,
+            });
             yield* Effect.tryPromise({
               try: () =>
                 Bun.write(outputPath, JSON.stringify(watchlistJson, null, 2)),
@@ -5647,18 +5649,11 @@ export const gridUniverseScanCommand = Command.make(
           const isFuturesSymbol = (symbol: string) =>
             futuresSet.has(symbol) || futuresSet.has(canonicalSymbol(symbol));
 
+          // Scan errors are NOT swallowed here: they propagate so a failed
+          // scan never persists (DB watchlist kept, whitelist file untouched)
+          // and the one-shot command exits non-zero.
           const rawResult = yield* runGridUniverseScan(options).pipe(
             Effect.provide(repoLayer),
-            Effect.catch((err) =>
-              Effect.gen(function* () {
-                yield* Console.error(
-                  `grid-universe-scan failed: ${
-                    "reason" in err ? err.reason : String(err)
-                  }`,
-                );
-                return { entries: [], survivors: [] };
-              }),
-            ),
           );
 
           let survivors =
@@ -5738,8 +5733,13 @@ export const gridUniverseScanCommand = Command.make(
         });
 
       const runScanWithLayers = () =>
-        runScan().pipe(
-          Effect.provide(MarketDataGatewayLive),
+        runScan().pipe(Effect.provide(MarketDataGatewayLive));
+
+      if (args.watch) {
+        // The watch loop must survive transient scan failures: log the cycle
+        // error and continue; the DB watchlist and whitelist file are left
+        // untouched on failure.
+        const watchCycle = runScanWithLayers().pipe(
           Effect.catch((err) =>
             Effect.gen(function* () {
               yield* Console.error(
@@ -5751,8 +5751,6 @@ export const gridUniverseScanCommand = Command.make(
             }),
           ),
         );
-
-      if (args.watch) {
         yield* Console.log(
           `👁 Watching universe ${args.exchange}:${args.timeframe}, re-scan every ${args.interval}s...`,
         );
@@ -5760,11 +5758,12 @@ export const gridUniverseScanCommand = Command.make(
         // scan, spaces iterations by the interval, and cancels cleanly on
         // SIGTERM/SIGINT (BunRuntime.runMain interrupts the fiber at the
         // schedule boundary).
-        yield* Effect.repeat(runScanWithLayers(), {
+        yield* Effect.repeat(watchCycle, {
           schedule: Schedule.spaced(`${args.interval} seconds`),
         });
       }
 
+      // One-shot mode: failures propagate (non-zero exit, nothing persisted).
       return yield* runScanWithLayers();
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
@@ -5837,7 +5836,6 @@ export const watchlistCommand = Command.make("watchlist", {}, () =>
   Command.withDescription("DB-backed watchlist management"),
   Command.withSubcommands([watchlistListCommand]),
 );
-
 export const demoReadinessCommand = makeDemoReadinessCommand(
   makeDbLayer(process.env.NEURATRADE_HOME),
 );

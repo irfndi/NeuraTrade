@@ -1,10 +1,11 @@
 // pm2 process definition for the Bitget PAPTRADING demo soak.
 // Run: pm2 start ecosystem.demo-soak.config.cjs
-// - neuratrade-demo-soak: runs the grid universe survivors (DB-backed watchlist)
-//   against the Bitget demo matching engine (PAPTRADING=1) at a 15-minute
-//   cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
 // - neuratrade-universe-watch: continuously re-scans the universe and upserts
 //   survivors into the DB watchlist (self-maintaining symbol selection).
+// - neuratrade-demo-soak: runs the grid universe survivors (DB-backed watchlist
+//   / grid-whitelist.json) against the Bitget demo matching engine (PAPTRADING=1)
+//   at a 15-minute cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
+//   The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -101,6 +102,8 @@ module.exports = {
         "5",
         "--max-daily-loss-pct",
         "2",
+        "--watchlist",
+        "grid-whitelist.json",
         "--iterations",
         "0",
         "--interval",

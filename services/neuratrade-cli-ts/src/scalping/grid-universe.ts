@@ -6,8 +6,6 @@
  */
 
 import { Effect } from "effect";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
@@ -39,7 +37,6 @@ export interface GridUniverseOptions {
     readonly gridMaxGrids: readonly number[];
     readonly gridPauseAfterLossBars: readonly number[];
   };
-  readonly outputPath?: string;
 }
 
 export interface GridUniverseEntry {
@@ -161,18 +158,6 @@ export function runGridUniverseScan(
     }
 
     const survivors = entries.filter((e) => e.passed);
-
-    if (options.outputPath) {
-      const whitelist = survivors.map((e) => ({
-        exchange: options.exchange,
-        symbol: e.symbol,
-        timeframe: options.timeframe,
-        gridStepPct: e.bestParams.gridStepPct,
-        gridMaxGrids: e.bestParams.gridMaxGrids,
-        gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
-      }));
-      writeFileSync(options.outputPath, JSON.stringify(whitelist, null, 2));
-    }
 
     return { entries, survivors };
   });
