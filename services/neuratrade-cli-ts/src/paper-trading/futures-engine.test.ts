@@ -257,11 +257,11 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
-  listAllGridTrades(
-    _exchange: string,
-    _timeframe: string,
-    limit: number,
-  ) {
+  replaceWatchlist() {
+    return Effect.void;
+  }
+
+  listAllGridTrades(_exchange: string, _timeframe: string, limit: number) {
     return Effect.succeed(
       this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
     );

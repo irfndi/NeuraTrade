@@ -226,4 +226,164 @@ describe("PaperTradingRepositorySQLite", () => {
     expect(loaded?.scaleOutPrice.toString()).toBe("70500");
     db.close();
   });
+
+  it("upsertWatchlist writes entry.updatedAt, not the wall clock", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const legacyUpdatedAt = new Date("2026-07-01T00:00:00.000Z");
+    const freshUpdatedAt = new Date("2026-08-01T00:00:00.000Z");
+    const entry = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      returnPct: 12.5,
+      profitableWindowsPct: 80,
+      aggregateReturnPct: 5.2,
+      gridStepPct: 1,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      updatedAt: legacyUpdatedAt,
+    };
+
+    await Effect.runPromise(repository.upsertWatchlist([entry]));
+    const first = await Effect.runPromise(
+      repository.listWatchlist(entry.exchange, entry.timeframe),
+    );
+    expect(first[0]?.updatedAt.toISOString()).toBe(
+      legacyUpdatedAt.toISOString(),
+    );
+
+    // Re-upsert with a caller-supplied newer timestamp; the persisted value
+    // must reflect the entry, not `new Date()` at write time.
+    await Effect.runPromise(
+      repository.upsertWatchlist([
+        { ...entry, returnPct: 99.9, updatedAt: freshUpdatedAt },
+      ]),
+    );
+    const second = await Effect.runPromise(
+      repository.listWatchlist(entry.exchange, entry.timeframe),
+    );
+    expect(second).toHaveLength(1);
+    expect(second[0]?.returnPct).toBe(99.9);
+    expect(second[0]?.updatedAt.toISOString()).toBe(
+      freshUpdatedAt.toISOString(),
+    );
+    db.close();
+  });
+
+  it("replaceWatchlist atomically swaps only the matching exchange/timeframe", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const now = new Date("2026-08-01T00:00:00.000Z");
+    const entry = (symbol: string, returnPct: number) => ({
+      exchange: "bitget-futures",
+      symbol,
+      timeframe: "15m",
+      returnPct,
+      profitableWindowsPct: 80,
+      aggregateReturnPct: 5.2,
+      gridStepPct: 1,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      updatedAt: now,
+    });
+
+    await Effect.runPromise(
+      repository.upsertWatchlist([
+        entry("BTC/USDT:USDT", 10),
+        entry("ETH/USDT:USDT", 20),
+      ]),
+    );
+    // A different timeframe must be untouched by the replace below.
+    await Effect.runPromise(
+      repository.upsertWatchlist([
+        { ...entry("SOL/USDT:USDT", 30), timeframe: "1h" },
+      ]),
+    );
+
+    await Effect.runPromise(
+      repository.replaceWatchlist("bitget-futures", "15m", [
+        entry("BTC/USDT:USDT", 42),
+      ]),
+    );
+
+    const replaced = await Effect.runPromise(
+      repository.listWatchlist("bitget-futures", "15m"),
+    );
+    expect(replaced.map((e) => e.symbol)).toEqual(["BTC/USDT:USDT"]);
+    expect(replaced[0]?.returnPct).toBe(42);
+    const untouched = await Effect.runPromise(
+      repository.listWatchlist("bitget-futures", "1h"),
+    );
+    expect(untouched.map((e) => e.symbol)).toEqual(["SOL/USDT:USDT"]);
+    expect(untouched[0]?.aggregateReturnPct).toBe(5.2);
+    db.close();
+  });
+
+  it("listAllGridTrades applies the live-only filter before the LIMIT cap", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const trade = (
+      id: string,
+      closedAt: string,
+      fillSource: "live" | "simulated",
+    ) =>
+      ({
+        id,
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "15m",
+        side: "long",
+        entryPrice: money("70000"),
+        exitPrice: money("70100"),
+        capitalBefore: money("1000"),
+        capitalAfter: money("1002"),
+        pnlPct: money("0.2"),
+        exitReason: "target",
+        openedAt: new Date("2026-08-01T00:00:00.000Z"),
+        closedAt: new Date(closedAt),
+        fillSource,
+      }) as const;
+
+    await Effect.runPromise(
+      repository.recordGridTrade(
+        trade("live-1", "2026-08-01T02:00:00.000Z", "live"),
+      ),
+    );
+    await Effect.runPromise(
+      repository.recordGridTrade(
+        trade("live-2", "2026-08-01T01:00:00.000Z", "live"),
+      ),
+    );
+    await Effect.runPromise(
+      repository.recordGridTrade(
+        trade("sim-1", "2026-08-01T03:00:00.000Z", "simulated"),
+      ),
+    );
+
+    // With liveOnly, the simulated row must be excluded before LIMIT applies:
+    // only live rows are eligible, so cap=2 returns both and cap=1 the newest.
+    const all = await Effect.runPromise(
+      repository.listAllGridTrades("bitget-futures", "15m", 100),
+    );
+    expect(all.map((t) => t.id).sort()).toEqual(["live-1", "live-2", "sim-1"]);
+
+    const live = await Effect.runPromise(
+      repository.listAllGridTrades("bitget-futures", "15m", 2, true),
+    );
+    expect(live.map((t) => t.id)).toEqual(["live-1", "live-2"]);
+    expect(live.every((t) => t.fillSource === "live")).toBe(true);
+
+    const liveCapped = await Effect.runPromise(
+      repository.listAllGridTrades("bitget-futures", "15m", 1, true),
+    );
+    expect(liveCapped.map((t) => t.id)).toEqual(["live-1"]);
+    db.close();
+  });
 });

@@ -784,5 +784,87 @@ describe("BitgetClient", () => {
         mock.stop();
       }
     });
+
+    it("parses the business code from a JSON error body", async () => {
+      const mock = startMock(() =>
+        json({ code: "40034", msg: "Parameter does not exist" }, 400),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getTicker("HYPEUSDT");
+        });
+        const err = await runFail(program, mock.url);
+        expect(err).toBeInstanceOf(BitgetApiError);
+        expect((err as BitgetApiError).code).toBe("40034");
+      } finally {
+        mock.stop();
+      }
+    });
+
+    it("tolerates a JSON 40034 from the single-position query as no position", async () => {
+      const mock = startMock((req) => {
+        const url = new URL(req.url);
+        expect(url.pathname).toBe("/api/v2/mix/position/single-position");
+        return json({ code: "40034", msg: "Parameter does not exist" }, 400);
+      });
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getFuturesPositions(
+            "HYPE/USDT:USDT",
+            "USDT-FUTURES",
+          );
+        });
+        const result = await runOk(program, mock.url);
+        expect(result).toHaveLength(0);
+      } finally {
+        mock.stop();
+      }
+    });
+
+    it("tolerates a text-prefixed 40034 from the single-position query", async () => {
+      const mock = startMock(
+        () =>
+          new Response("40034: Parameter symbol does not exist", {
+            status: 400,
+          }),
+      );
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getFuturesPositions(
+            "HYPE/USDT:USDT",
+            "USDT-FUTURES",
+          );
+        });
+        const result = await runOk(program, mock.url);
+        expect(result).toHaveLength(0);
+      } finally {
+        mock.stop();
+      }
+    });
+
+    it("does not swallow a non-40034 single-position error", async () => {
+      const mock = startMock((req) => {
+        const url = new URL(req.url);
+        expect(url.pathname).toBe("/api/v2/mix/position/single-position");
+        return json({ code: "40001", msg: "Invalid symbol" }, 400);
+      });
+      try {
+        const program = Effect.gen(function* () {
+          const client = yield* BitgetClient;
+          return yield* client.getFuturesPositions(
+            "HYPE/USDT:USDT",
+            "USDT-FUTURES",
+          );
+        });
+        const err = await runFail(program, mock.url);
+        expect(err).toBeInstanceOf(BitgetApiError);
+        expect((err as BitgetApiError).code).toBe("40001");
+      } finally {
+        mock.stop();
+      }
+    });
   });
 });

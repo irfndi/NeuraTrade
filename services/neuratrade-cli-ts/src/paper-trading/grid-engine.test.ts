@@ -162,11 +162,11 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
-  listAllGridTrades(
-    _exchange: string,
-    _timeframe: string,
-    limit: number,
-  ) {
+  replaceWatchlist() {
+    return Effect.void;
+  }
+
+  listAllGridTrades(_exchange: string, _timeframe: string, limit: number) {
     return Effect.succeed(
       this.gridTrades.slice(-limit).reverse() as GridPaperTrade[],
     );
@@ -556,11 +556,7 @@ describe("grid paper engine", () => {
         updatedAt: new Date(),
       } satisfies GridPaperState),
     );
-    await runWithRepo(
-      makeOptions(),
-      repo,
-      makeCandles(20, 1000, "oscillate"),
-    );
+    await runWithRepo(makeOptions(), repo, makeCandles(20, 1000, "oscillate"));
 
     const state = await Effect.runPromise(
       repo.getGridState("binance", "ETH/USDT", "15m"),

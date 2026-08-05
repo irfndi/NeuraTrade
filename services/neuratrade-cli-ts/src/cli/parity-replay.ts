@@ -10,7 +10,11 @@ import {
   MarketDataGateway,
   type MarketDataGatewayService,
 } from "../market-data/gateway.js";
-import { runGridBacktest, type GridOptions, type GridTrade } from "../scalping/grid.js";
+import {
+  runGridBacktest,
+  type GridOptions,
+  type GridTrade,
+} from "../scalping/grid.js";
 import {
   runGridPaperTradingIteration,
   type GridPaperTradingOptions,
@@ -76,9 +80,7 @@ interface RawCandle {
 }
 
 function parseCandleTimestamp(raw: string): Date {
-  return new Date(
-    raw.endsWith("Z") ? raw : raw.replace(" ", "T").concat("Z"),
-  );
+  return new Date(raw.endsWith("Z") ? raw : raw.replace(" ", "T").concat("Z"));
 }
 
 class InMemRepo implements PaperTradingRepositoryService {
@@ -178,11 +180,11 @@ class InMemRepo implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
-  listAllGridTrades(
-    _exchange: string,
-    _timeframe: string,
-    limit: number,
-  ) {
+  replaceWatchlist() {
+    return Effect.void;
+  }
+
+  listAllGridTrades(_exchange: string, _timeframe: string, limit: number) {
     return Effect.succeed(this.trades.slice(-limit).reverse());
   }
 }
@@ -258,8 +260,7 @@ function computeExecutionParityChecks(
     {
       name: "exit-reason",
       passed:
-        btTrades.length === 0 ||
-        (reasonMatches === n && n === btTrades.length),
+        btTrades.length === 0 || (reasonMatches === n && n === btTrades.length),
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${reasonMatches}/${n} exit reasons equal (target/stop/liquidation)`,
@@ -402,9 +403,8 @@ function runReplay(
       recordTradeResult: () => Effect.void,
       reset: () => Effect.void,
     };
-    const simulatedAdapter: FuturesExchangeAdapterService = yield* (
-      makeSimulatedFuturesExchangeAdapterService(gateway)
-    );
+    const simulatedAdapter: FuturesExchangeAdapterService =
+      yield* makeSimulatedFuturesExchangeAdapterService(gateway);
     const repo = new InMemRepo();
     const layer = Layer.mergeAll(
       Layer.succeed(MarketDataGateway, gateway),
@@ -459,9 +459,7 @@ function humanReport(
     const b = btTrades[i];
     const d = depTrades[i];
     if (!b || !d) {
-      lines.push(
-        `  trade[${i}] exists only in ${b ? "backtest" : "deployed"}`,
-      );
+      lines.push(`  trade[${i}] exists only in ${b ? "backtest" : "deployed"}`);
       continue;
     }
     lines.push(
@@ -469,7 +467,9 @@ function humanReport(
         b.entryPrice - money(d.entryPrice).toNumber(),
       ).toFixed(4)} pnlDelta=${Math.abs(
         b.pnlPct * 100 - money(d.pnlPct).toNumber(),
-      ).toFixed(4)}pp btReason=${inferBtExitReason(b)} depReason=${d.exitReason}`,
+      ).toFixed(
+        4,
+      )}pp btReason=${inferBtExitReason(b)} depReason=${d.exitReason}`,
     );
   }
   lines.push(`\n8-dimension parity check:`);

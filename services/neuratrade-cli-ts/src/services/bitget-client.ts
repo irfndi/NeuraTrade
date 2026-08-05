@@ -42,6 +42,8 @@ export class BitgetApiError extends Data.TaggedError("BitgetApiError")<{
   readonly status: number;
   readonly body: string;
   readonly endpoint: string;
+  /** Parsed Bitget business code (e.g. "40034"), when the body carries one. */
+  readonly code?: string;
 }> {}
 
 export type BitgetClientError =
@@ -49,6 +51,24 @@ export type BitgetClientError =
   | BitgetRateLimitError
   | BitgetAuthError
   | BitgetApiError;
+
+/**
+ * Extract the Bitget business code from an error body. Bitget returns JSON
+ * bodies (`{"code":"40034","msg":...}`), but some proxies/edges return plain
+ * text prefixed with the code (`"40034: Parameter does not exist"`). We return
+ * the code only when it is unambiguous so callers can compare it exactly
+ * instead of substring-matching the raw body.
+ */
+function parseBitgetErrorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    if (typeof parsed.code === "string") return parsed.code;
+  } catch {
+    // Not JSON — fall through to the text-prefix heuristic below.
+  }
+  const match = /^(\d{5})(?:\s*:|\s)/.exec(body);
+  return match?.[1];
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -461,6 +481,7 @@ function fetchBitget<T>(
           status: response.status,
           body: responseBody,
           endpoint,
+          code: parseBitgetErrorCode(responseBody),
         }),
       );
     }
@@ -489,6 +510,7 @@ function fetchBitget<T>(
           status: response.status,
           body: `${parsed.code}: ${msg}`,
           endpoint,
+          code: parsed.code,
         }),
       );
     }
@@ -858,7 +880,7 @@ function makeBitgetClientImpl(
         if (
           symbol.trim() !== "" &&
           error instanceof BitgetApiError &&
-          error.body.includes("does not exist") &&
+          error.code === "40034" &&
           error.endpoint.includes("/single-position")
         ) {
           return Effect.succeed({ data: [] });

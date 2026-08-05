@@ -129,6 +129,7 @@ export interface PaperTradingRepositoryService {
     exchange: string,
     timeframe: string,
     limit: number,
+    liveOnly?: boolean,
   ) => Effect.Effect<
     readonly GridPaperTrade[],
     PaperTradingRepositoryError,
@@ -138,7 +139,11 @@ export interface PaperTradingRepositoryService {
   readonly listWatchlist: (
     exchange: string,
     timeframe: string,
-  ) => Effect.Effect<readonly WatchlistEntry[], PaperTradingRepositoryError, never>;
+  ) => Effect.Effect<
+    readonly WatchlistEntry[],
+    PaperTradingRepositoryError,
+    never
+  >;
 
   readonly upsertWatchlist: (
     entries: readonly WatchlistEntry[],
@@ -147,6 +152,12 @@ export interface PaperTradingRepositoryService {
   readonly clearWatchlist: (
     exchange: string,
     timeframe: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  readonly replaceWatchlist: (
+    exchange: string,
+    timeframe: string,
+    entries: readonly WatchlistEntry[],
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 }
 
@@ -1447,8 +1458,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
-        const upsert = this.db
-          .query(
+        this.db.transaction(() => {
+          const upsert = this.db.query(
             `INSERT INTO watchlist
              (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
               aggregate_return_pct, grid_step_pct, grid_max_grids,
@@ -1463,25 +1474,75 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
                updated_at = excluded.updated_at`,
           );
-        const now = new Date().toISOString();
-        for (const e of entries) {
-          upsert.run(
-            e.exchange,
-            e.symbol,
-            e.timeframe,
-            e.returnPct,
-            e.profitableWindowsPct,
-            e.aggregateReturnPct,
-            e.gridStepPct,
-            e.gridMaxGrids,
-            e.gridPauseAfterLossBars,
-            now,
-          );
-        }
+          for (const e of entries) {
+            upsert.run(
+              e.exchange,
+              e.symbol,
+              e.timeframe,
+              e.returnPct,
+              e.profitableWindowsPct,
+              e.aggregateReturnPct,
+              e.gridStepPct,
+              e.gridMaxGrids,
+              e.gridPauseAfterLossBars,
+              e.updatedAt.toISOString(),
+            );
+          }
+        })();
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to upsert watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  replaceWatchlist(
+    exchange: string,
+    timeframe: string,
+    entries: readonly WatchlistEntry[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.transaction(() => {
+          this.db
+            .query("DELETE FROM watchlist WHERE exchange = ? AND timeframe = ?")
+            .run(exchange, timeframe);
+          const upsert = this.db.query(
+            `INSERT INTO watchlist
+             (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
+              aggregate_return_pct, grid_step_pct, grid_max_grids,
+              grid_pause_after_loss_bars, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+               return_pct = excluded.return_pct,
+               profitable_windows_pct = excluded.profitable_windows_pct,
+               aggregate_return_pct = excluded.aggregate_return_pct,
+               grid_step_pct = excluded.grid_step_pct,
+               grid_max_grids = excluded.grid_max_grids,
+               grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+               updated_at = excluded.updated_at`,
+          );
+          for (const e of entries) {
+            upsert.run(
+              e.exchange,
+              e.symbol,
+              e.timeframe,
+              e.returnPct,
+              e.profitableWindowsPct,
+              e.aggregateReturnPct,
+              e.gridStepPct,
+              e.gridMaxGrids,
+              e.gridPauseAfterLossBars,
+              e.updatedAt.toISOString(),
+            );
+          }
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to replace watchlist: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });
@@ -1509,6 +1570,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     exchange: string,
     timeframe: string,
     limit: number,
+    liveOnly = false,
   ): Effect.Effect<
     readonly GridPaperTrade[],
     PaperTradingRepositoryError,
@@ -1534,7 +1596,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     dataset_cutoff_at, entry_opened_at, execution_environment,
                     exit_reason, opened_at, closed_at
              FROM grid_paper_trades
-             WHERE exchange = ? AND timeframe = ?
+             WHERE exchange = ? AND timeframe = ?${liveOnly ? " AND fill_source = 'live'" : ""}
              ORDER BY closed_at DESC
              LIMIT ?`,
           )
@@ -1595,9 +1657,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           entryFee: r.entry_fee_value
             ? new Decimal(r.entry_fee_value)
             : undefined,
-          exitFee: r.exit_fee_value
-            ? new Decimal(r.exit_fee_value)
-            : undefined,
+          exitFee: r.exit_fee_value ? new Decimal(r.exit_fee_value) : undefined,
           realizedPnlPct: r.realized_pnl_pct_value
             ? new Decimal(r.realized_pnl_pct_value)
             : undefined,

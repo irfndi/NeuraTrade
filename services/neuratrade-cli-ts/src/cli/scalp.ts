@@ -35,15 +35,17 @@ import {
   StrategyLibraryLive,
 } from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
-import {
-  MarketDataGateway,
-} from "../market-data/gateway.js";
+import { MarketDataGateway } from "../market-data/gateway.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
-import { BitgetClientLiveConfig, BitgetClient } from "../services/bitget-client.js";
+import {
+  BitgetClientLiveConfig,
+  BitgetClient,
+  BitgetApiError,
+} from "../services/bitget-client.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -3155,20 +3157,25 @@ export const paperTradeCommand = Command.make(
             const paperRepo = yield* PaperTradingRepository;
             yield* paperRepo.ensureTables();
             const dbEntries = yield* paperRepo.listWatchlist(
-              resolveFuturesMarketExchange(mergedArgs.exchange, mergedArgs.futures),
+              resolveFuturesMarketExchange(
+                mergedArgs.exchange,
+                mergedArgs.futures,
+              ),
               mergedArgs.timeframe,
             );
-            return dbEntries.map((e): WatchlistEntry => ({
-              symbol: e.symbol,
-              exchange: e.exchange,
-              returnPct: e.aggregateReturnPct,
-              sharpe: e.aggregateReturnPct > 0 ? 1 : 0,
-              gridParams: {
-                gridStepPct: e.gridStepPct,
-                gridMaxGrids: e.gridMaxGrids,
-                gridPauseAfterLossBars: e.gridPauseAfterLossBars,
-              },
-            }));
+            return dbEntries.map(
+              (e): WatchlistEntry => ({
+                symbol: e.symbol,
+                exchange: e.exchange,
+                returnPct: e.aggregateReturnPct,
+                sharpe: e.aggregateReturnPct > 0 ? 1 : 0,
+                gridParams: {
+                  gridStepPct: e.gridStepPct,
+                  gridMaxGrids: e.gridMaxGrids,
+                  gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+                },
+              }),
+            );
           }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
@@ -3425,32 +3432,35 @@ function paperTradeProgram(args: PaperTradeArgs) {
     const marginMode = parseMarginMode(args.marginMode);
     const productType = parseProductType(args.productType);
     if (args.live && strategyType === "grid") {
-      const liveGridError = validateLiveGridConfiguration({
-        exchange: resolveFuturesMarketExchange(args.exchange, true),
-        symbol: args.symbol,
-        timeframe: args.timeframe,
-        productType,
-        gridStepPct: args.gridStepPct,
-        gridMaxGrids: args.gridMaxGrids,
-        gridPauseAfterLossBars: args.gridPauseAfterLossBars,
-        feePct: args.fee,
-        slippageBps: args.slippageBps,
-        trendFilterPeriod: args.trendFilterPeriod,
-        onlyWithTrend: args.onlyWithTrend ?? false,
-        targetRatio: args.targetRatio ?? 0,
-        chopGateAdx: args.chopGateAdx ?? 0,
-        leverage: args.leverage,
-        maxPositionSizePct: Option.getOrElse(
-          args.maxPositionSizePct,
-          () => 100,
-        ),
-        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
-        maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
-      }, args.live &&
-        strategyType === "grid" &&
-        (args.entries?.length ?? 0) > 0 &&
-        (process.env.BITGET_USE_SANDBOX === "true" ||
-          process.env.BITGET_USE_SANDBOX === "1"));
+      const liveGridError = validateLiveGridConfiguration(
+        {
+          exchange: resolveFuturesMarketExchange(args.exchange, true),
+          symbol: args.symbol,
+          timeframe: args.timeframe,
+          productType,
+          gridStepPct: args.gridStepPct,
+          gridMaxGrids: args.gridMaxGrids,
+          gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+          feePct: args.fee,
+          slippageBps: args.slippageBps,
+          trendFilterPeriod: args.trendFilterPeriod,
+          onlyWithTrend: args.onlyWithTrend ?? false,
+          targetRatio: args.targetRatio ?? 0,
+          chopGateAdx: args.chopGateAdx ?? 0,
+          leverage: args.leverage,
+          maxPositionSizePct: Option.getOrElse(
+            args.maxPositionSizePct,
+            () => 100,
+          ),
+          maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+          maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
+        },
+        args.live &&
+          strategyType === "grid" &&
+          (args.entries?.length ?? 0) > 0 &&
+          (process.env.BITGET_USE_SANDBOX === "true" ||
+            process.env.BITGET_USE_SANDBOX === "1"),
+      );
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
       }
@@ -3621,11 +3631,13 @@ function paperTradeProgram(args: PaperTradeArgs) {
           apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
         })
       : SimulatedExchangeAdapterLive();
-    const futuresAdapterLayer = (args.live
-      ? BitgetFuturesExchangeAdapterLive.pipe(
-          Layer.provide(BitgetClientLiveConfig),
-        )
-      : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+    const futuresAdapterLayer = (
+      args.live
+        ? BitgetFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BitgetClientLiveConfig),
+          )
+        : SimulatedFuturesExchangeAdapterLive()
+    ) as Layer.Layer<
       import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
       never,
       import("../market-data/gateway.js").MarketDataGatewayService
@@ -3713,7 +3725,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
           const result =
             args.strategyType === "grid"
               ? yield* runGridIteration(
-                  makeGridOptions(entry.symbol, entryExchange, entry.gridParams),
+                  makeGridOptions(
+                    entry.symbol,
+                    entryExchange,
+                    entry.gridParams,
+                  ),
                 )
               : args.futures
                 ? yield* runFuturesIteration(
@@ -4020,11 +4036,13 @@ export const soakCommand = Command.make(
               mergedArgs.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
-      const futuresAdapterLayer = (mergedArgs.live
-        ? BitgetFuturesExchangeAdapterLive.pipe(
-            Layer.provide(BitgetClientLiveConfig),
-          )
-        : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+      const futuresAdapterLayer = (
+        mergedArgs.live
+          ? BitgetFuturesExchangeAdapterLive.pipe(
+              Layer.provide(BitgetClientLiveConfig),
+            )
+          : SimulatedFuturesExchangeAdapterLive()
+      ) as Layer.Layer<
         import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
         never,
         import("../market-data/gateway.js").MarketDataGatewayService
@@ -5436,7 +5454,9 @@ const gridUniverseSlippageOption = Options.float("slippage-bps").pipe(
   Options.withDescription("Slippage in basis points applied to grid fills"),
 );
 
-const gridUniverseTrendFilterOption = Options.integer("trend-filter-period").pipe(
+const gridUniverseTrendFilterOption = Options.integer(
+  "trend-filter-period",
+).pipe(
   Options.withDefault(0),
   Options.withDescription("SMA trend filter period for the grid backtests"),
 );
@@ -5543,11 +5563,20 @@ export const gridUniverseScanCommand = Command.make(
             gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
             updatedAt: new Date(),
           }));
-          yield* paperRepo.clearWatchlist(args.exchange, args.timeframe);
-          yield* paperRepo.upsertWatchlist(entries);
-          yield* Console.log(
-            `💾 Watchlist upserted: ${entries.length} survivors into DB (${args.exchange}:${args.timeframe})`,
-          );
+          if (entries.length === 0) {
+            yield* Console.log(
+              `💾 No survivors this cycle — keeping existing watchlist unchanged`,
+            );
+          } else {
+            yield* paperRepo.replaceWatchlist(
+              args.exchange,
+              args.timeframe,
+              entries,
+            );
+            yield* Console.log(
+              `💾 Watchlist upserted: ${entries.length} survivors into DB (${args.exchange}:${args.timeframe})`,
+            );
+          }
 
           if (outputPath) {
             const watchlistJson = result.survivors.map((e) => ({
@@ -5562,7 +5591,8 @@ export const gridUniverseScanCommand = Command.make(
               },
             }));
             yield* Effect.tryPromise({
-              try: () => Bun.write(outputPath, JSON.stringify(watchlistJson, null, 2)),
+              try: () =>
+                Bun.write(outputPath, JSON.stringify(watchlistJson, null, 2)),
               catch: (err) =>
                 new MarketDataRepositoryError(
                   `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
@@ -5577,12 +5607,14 @@ export const gridUniverseScanCommand = Command.make(
           const gateway = yield* MarketDataGateway;
           const futuresSymbols = yield* gateway
             .fetchSymbols(args.exchange)
-            .pipe(
-              Effect.catch(() => Effect.succeed<readonly string[]>([])),
-            );
+            .pipe(Effect.catch(() => Effect.succeed<readonly string[]>([])));
           const futuresSet = new Set(futuresSymbols);
+          const canonicalSymbol = (symbol: string) =>
+            symbol.includes(":")
+              ? symbol.slice(0, symbol.lastIndexOf(":"))
+              : symbol;
           const isFuturesSymbol = (symbol: string) =>
-            futuresSet.has(symbol) || futuresSet.has(symbol.replace(/^(.+):(.+)$/, "$1/$2"));
+            futuresSet.has(symbol) || futuresSet.has(canonicalSymbol(symbol));
 
           const rawResult = yield* runGridUniverseScan(options).pipe(
             Effect.provide(repoLayer),
@@ -5615,10 +5647,28 @@ export const gridUniverseScanCommand = Command.make(
                 .pipe(Effect.result);
               if (probe._tag === "Success") {
                 tradeable.push(entry);
-              } else {
+              } else if (
+                probe._tag === "Failure" &&
+                probe.failure instanceof BitgetApiError &&
+                probe.failure.code === "40034"
+              ) {
+                // 40034 = unsupported instrument on the demo engine. This is the
+                // only probe outcome that proves the symbol is untradeable; auth,
+                // rate-limit, and transport failures must NOT drop survivors.
                 yield* Console.log(
                   `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo`,
                 );
+              } else {
+                const reason =
+                  probe._tag === "Failure"
+                    ? probe.failure instanceof Error
+                      ? probe.failure.message
+                      : String(probe.failure)
+                    : "unknown";
+                yield* Console.log(
+                  `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
+                );
+                tradeable.push(entry);
               }
             }
             if (tradeable.length < survivors.length) {
@@ -5656,20 +5706,19 @@ export const gridUniverseScanCommand = Command.make(
         });
 
       const runScanWithLayers = () =>
-        runScan()
-          .pipe(
-            Effect.provide(MarketDataGatewayLive),
-            Effect.catch((err) =>
-              Effect.gen(function* () {
-                yield* Console.error(
-                  `grid-universe scan cycle failed: ${
-                    err instanceof Error ? err.message : String(err)
-                  }`,
-                );
-                return [] as readonly GridUniverseEntry[];
-              }),
-            ),
-          );
+        runScan().pipe(
+          Effect.provide(MarketDataGatewayLive),
+          Effect.catch((err) =>
+            Effect.gen(function* () {
+              yield* Console.error(
+                `grid-universe scan cycle failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+              return [] as readonly GridUniverseEntry[];
+            }),
+          ),
+        );
 
       if (args.watch) {
         yield* Console.log(
@@ -5710,7 +5759,12 @@ export const watchlistListCommand = Command.make(
       const sqlite = yield* SqliteClient;
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(sqlite.database);
       const entries = yield* PaperTradingRepository.pipe(
-        Effect.flatMap((repo) => repo.listWatchlist(args.exchange, args.timeframe)),
+        Effect.flatMap((repo) =>
+          Effect.gen(function* () {
+            yield* repo.ensureTables();
+            return yield* repo.listWatchlist(args.exchange, args.timeframe);
+          }),
+        ),
         Effect.provide(paperRepoLayer),
       );
       yield* Console.log(
@@ -5734,7 +5788,11 @@ export const watchlistListCommand = Command.make(
       }
       return entries;
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
-).pipe(Command.withDescription("List the DB-backed watchlist for an exchange/timeframe"));
+).pipe(
+  Command.withDescription(
+    "List the DB-backed watchlist for an exchange/timeframe",
+  ),
+);
 
 export const watchlistCommand = Command.make("watchlist", {}, () =>
   Console.log(

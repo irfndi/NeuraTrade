@@ -103,6 +103,7 @@ export function makeDemoReadinessCommand(
             args.exchange,
             args.timeframe,
             args.limit,
+            true,
           )
         : yield* repository.listRecentGridTrades(
             args.exchange,
@@ -112,9 +113,7 @@ export function makeDemoReadinessCommand(
           );
       // Stale simulated trades from earlier runs share the same key and
       // must never count toward the minimums or block the verdict.
-      const trades = allTrades.filter(
-        (trade) => trade.fillSource === "live",
-      );
+      const trades = allTrades.filter((trade) => trade.fillSource === "live");
       const report = evaluateDemoSoak(trades, {
         minimumTrades: args.minimumTrades,
         minimumDurationDays: args.minimumDurationDays,
@@ -127,7 +126,9 @@ export function makeDemoReadinessCommand(
       const scope = args.watchlist
         ? `all ${args.exchange}:${args.timeframe} symbols`
         : `${args.symbol}`;
-      yield* Console.log(`[demo-readiness] scope: ${scope}; live trades: ${trades.length}`);
+      yield* Console.log(
+        `[demo-readiness] scope: ${scope}; live trades: ${trades.length}`,
+      );
       yield* Console.log(serializeDemoSoakReport(report));
       if (!report.passed) {
         return yield* Effect.fail(new Error("demo-soak gate failed"));

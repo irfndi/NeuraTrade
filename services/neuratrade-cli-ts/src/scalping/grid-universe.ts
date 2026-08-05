@@ -13,6 +13,7 @@ import {
   MarketDataRepositoryError,
   type MarketDataRepositoryService,
 } from "../market-data/repository.js";
+import type { Candle } from "../market-data/types.js";
 import { runGridWalkForward, type GridWalkForwardResult } from "./grid.js";
 
 export interface GridUniverseOptions {
@@ -28,9 +29,9 @@ export interface GridUniverseOptions {
   readonly slippageBps: number;
   readonly trendFilterPeriod: number;
   /**
-   * Min fraction (0..1) of candles reaching a grid step from the candle open.
-   * Default 0 disables; rejects backtest-profitable symbols whose step is too
-   * wide to fill live.
+   * Min % of candles (0-100) reaching a grid step from the candle open in
+   * either direction. Default 0 disables; rejects backtest-profitable symbols
+   * whose step is too wide to fill live.
    */
   readonly minFillFrequencyPct?: number;
   readonly searchSpace: {
@@ -56,6 +57,28 @@ export interface GridUniverseEntry {
 export interface GridUniverseResult {
   readonly entries: readonly GridUniverseEntry[];
   readonly survivors: readonly GridUniverseEntry[];
+}
+
+/**
+ * Fraction (as 0-100 %) of candles whose range reaches a grid step away from
+ * the candle open in EITHER direction (a buy grid below the open or a sell
+ * grid above it). This is the fill-frequency gate: a backtest-profitable grid
+ * whose step is too wide to reach in practice will rarely fill live and should
+ * be rejected. A `minFillFrequencyPct` of 0 (or an empty candle set) disables
+ * the gate and reports 100.
+ */
+export function computeFillFrequencyPct(
+  candles: readonly Pick<Candle, "open" | "high" | "low">[],
+  gridStepPct: number,
+  minFillFrequencyPct: number,
+): number {
+  if (minFillFrequencyPct <= 0 || candles.length === 0) return 100;
+  const lowFactor = 1 - gridStepPct / 100;
+  const highFactor = 1 + gridStepPct / 100;
+  const touched = candles.filter(
+    (c) => c.low <= c.open * lowFactor || c.high >= c.open * highFactor,
+  ).length;
+  return (touched / candles.length) * 100;
 }
 
 export function runGridUniverseScan(
@@ -103,12 +126,12 @@ export function runGridUniverseScan(
         },
       });
 
-      const lastWindow =
-        walkForward.windows[walkForward.windows.length - 1];
+      const lastWindow = walkForward.windows[walkForward.windows.length - 1];
       const bestParams = lastWindow?.params ?? {
         gridStepPct: options.searchSpace.gridStepPct[0] ?? 1,
         gridMaxGrids: options.searchSpace.gridMaxGrids[0] ?? 2,
-        gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars[0] ?? 0,
+        gridPauseAfterLossBars:
+          options.searchSpace.gridPauseAfterLossBars[0] ?? 0,
       };
 
       const passedBase =
@@ -116,16 +139,11 @@ export function runGridUniverseScan(
         walkForward.aggregateReturnPct >= options.minAggregateReturnPct;
 
       const fillGate = options.minFillFrequencyPct ?? 0;
-      const fillFrequencyPct =
-        fillGate > 0 && candles.length > 0
-          ? (() => {
-              const stepFactor = 1 - bestParams.gridStepPct / 100;
-              const touched = candles.filter(
-                (c) => c.low <= c.open * stepFactor,
-              ).length;
-              return (touched / candles.length) * 100;
-            })()
-          : 100;
+      const fillFrequencyPct = computeFillFrequencyPct(
+        candles,
+        bestParams.gridStepPct,
+        fillGate,
+      );
 
       const passed = passedBase && fillFrequencyPct >= fillGate;
 

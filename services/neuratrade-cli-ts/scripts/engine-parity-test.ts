@@ -10,10 +10,7 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
-import {
-  runGridBacktest,
-  type GridTrade,
-} from "../src/scalping/grid.js";
+import { runGridBacktest, type GridTrade } from "../src/scalping/grid.js";
 import {
   runGridPaperTradingIteration,
   type GridPaperTradingOptions,
@@ -45,7 +42,9 @@ import {
 import { makeSimulatedFuturesExchangeAdapterService } from "../src/exchange/adapters/simulated-futures.js";
 
 const home = process.env.HOME + "/.neuratrade";
-const db = new Database(join(home, "data", "neuratrade.db"), { readonly: true });
+const db = new Database(join(home, "data", "neuratrade.db"), {
+  readonly: true,
+});
 const rows = db
   .query(
     `SELECT o.open_price, o.high_price, o.low_price, o.close_price, o.volume, o.timestamp
@@ -177,11 +176,11 @@ class InMemRepo implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
-  listAllGridTrades(
-    _exchange: string,
-    _timeframe: string,
-    limit: number,
-  ) {
+  replaceWatchlist() {
+    return Effect.void;
+  }
+
+  listAllGridTrades(_exchange: string, _timeframe: string, limit: number) {
     return Effect.succeed(this.trades.slice(-limit).reverse());
   }
 }
@@ -217,8 +216,9 @@ const circuitBreaker: CircuitBreakerService = {
   reset: () => Effect.void,
 };
 
-const simulatedAdapter: FuturesExchangeAdapterService =
-  await Effect.runPromise(makeSimulatedFuturesExchangeAdapterService(gateway));
+const simulatedAdapter: FuturesExchangeAdapterService = await Effect.runPromise(
+  makeSimulatedFuturesExchangeAdapterService(gateway),
+);
 
 function withinTol(a: number, b: number, tol = 0.005): boolean {
   if (a === 0 && b === 0) return true;
@@ -275,9 +275,7 @@ async function runScenario(chopGateAdxThreshold: number) {
   return { bt, btTrades, depTrades: deployed };
 }
 
-function inferBtExitReason(
-  t: GridTrade,
-): "target" | "stop" | "liquidation" {
+function inferBtExitReason(t: GridTrade): "target" | "stop" | "liquidation" {
   if (t.isLiquidation) return "liquidation";
   return t.win ? "target" : "stop";
 }
@@ -295,7 +293,8 @@ function report(
     const b = btTrades[i];
     const d = depTrades[i];
     if (withinTol(b.entryPrice, money(d.entryPrice).toNumber())) priceMatches++;
-    if (d.side === b.side && d.exitReason === inferBtExitReason(b)) reasonMatches++;
+    if (d.side === b.side && d.exitReason === inferBtExitReason(b))
+      reasonMatches++;
     if (withinTol(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
   }
   const countMatch = btTrades.length === depTrades.length;
@@ -310,8 +309,7 @@ function report(
     },
     "fill-price": {
       match:
-        btTrades.length === 0 ||
-        (priceMatches === n && n === btTrades.length),
+        btTrades.length === 0 || (priceMatches === n && n === btTrades.length),
       note:
         btTrades.length === 0
           ? "N/A (0 trades on both)"
@@ -337,15 +335,15 @@ function report(
     },
     "exit-reason": {
       match:
-        btTrades.length === 0 ||
-        (reasonMatches === n && n === btTrades.length),
+        btTrades.length === 0 || (reasonMatches === n && n === btTrades.length),
       note:
         btTrades.length === 0
           ? "N/A (0 trades on both)"
           : `${reasonMatches}/${n} equal (target/stop/liquidation)`,
     },
     pnl: {
-      match: btTrades.length === 0 || (pnlMatches === n && n === btTrades.length),
+      match:
+        btTrades.length === 0 || (pnlMatches === n && n === btTrades.length),
       note:
         btTrades.length === 0
           ? "N/A (0 trades on both)"
@@ -377,7 +375,9 @@ function report(
     const b = btTrades[i];
     const d = depTrades[i];
     if (!b || !d) {
-      console.log(`  trade[${i}] exists only in ${b ? "backtest" : "deployed"}`);
+      console.log(
+        `  trade[${i}] exists only in ${b ? "backtest" : "deployed"}`,
+      );
       continue;
     }
     console.log(
@@ -387,7 +387,9 @@ function report(
   console.log(`\n8-dimension parity check:`);
   let allMatch = true;
   for (const [k, v] of Object.entries(checks)) {
-    console.log(`  ${k.padEnd(12)} ${v.match ? "MATCH" : "MISMATCH"}  ${v.note}`);
+    console.log(
+      `  ${k.padEnd(12)} ${v.match ? "MATCH" : "MISMATCH"}  ${v.note}`,
+    );
     if (!v.match) allMatch = false;
   }
   console.log(
@@ -398,8 +400,16 @@ function report(
 
 const scenarioA = await runScenario(24);
 const scenarioB = await runScenario(0);
-const a = report("spec params (chopGate=24)", scenarioA.bt, scenarioA.depTrades);
-const b = report("chop gate OFF (chopGate=0)", scenarioB.bt, scenarioB.depTrades);
+const a = report(
+  "spec params (chopGate=24)",
+  scenarioA.bt,
+  scenarioA.depTrades,
+);
+const b = report(
+  "chop gate OFF (chopGate=0)",
+  scenarioB.bt,
+  scenarioB.depTrades,
+);
 
 console.log(`\n${"=".repeat(72)}`);
 console.log("SUMMARY");
