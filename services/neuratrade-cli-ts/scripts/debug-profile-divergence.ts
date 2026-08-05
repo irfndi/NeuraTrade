@@ -35,7 +35,9 @@ const candles: Candle[] = rows.map((r) => ({
   close: r.close_price,
   volume: r.volume,
   timestamp: new Date(
-    r.timestamp.endsWith("Z") ? r.timestamp : r.timestamp.replace(" ", "T") + "Z",
+    r.timestamp.endsWith("Z")
+      ? r.timestamp
+      : r.timestamp.replace(" ", "T") + "Z",
   ),
 }));
 const frows = db
@@ -48,7 +50,9 @@ const fundingRates: FundingRate[] = frows.map((r) => ({
   symbol: "BTC/USDT:USDT",
   fundingRate: r.funding_rate,
   timestamp: new Date(
-    r.timestamp.endsWith("Z") ? r.timestamp : r.timestamp.replace(" ", "T") + "Z",
+    r.timestamp.endsWith("Z")
+      ? r.timestamp
+      : r.timestamp.replace(" ", "T") + "Z",
   ),
 }));
 db.close();

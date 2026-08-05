@@ -1,9 +1,11 @@
 // pm2 process definition for the Bitget PAPTRADING demo soak.
 // Run: pm2 start ecosystem.demo-soak.config.cjs
-// The soak runs the grid universe survivors (grid-whitelist.json) against the
-// Bitget demo matching engine (PAPTRADING=1) at a 15-minute cadence, forever,
-// persisting fills to ~/.neuratrade/data/neuratrade.db via NEURATRADE_HOME.
-// The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
+// - neuratrade-universe-watch: continuously re-scans the universe and upserts
+//   survivors into the DB watchlist (self-maintaining symbol selection).
+// - neuratrade-demo-soak: runs the grid universe survivors (DB-backed watchlist
+//   / grid-whitelist.json) against the Bitget demo matching engine (PAPTRADING=1)
+//   at a 15-minute cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
+//   The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -15,9 +17,10 @@ function loadDotEnv(file) {
     if (!trimmed || trimmed.startsWith("#")) continue;
     const eq = trimmed.indexOf("=");
     if (eq <= 0) continue;
-    let key = trimmed.slice(0, eq).trim();
+    const key = trimmed.slice(0, eq).trim();
     let value = trimmed.slice(eq + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (value.startsWith('"') && value.endsWith('"'))
+      value = value.slice(1, -1);
     env[key] = value;
   }
   return env;
@@ -25,14 +28,46 @@ function loadDotEnv(file) {
 
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 const cliTsDir = __dirname;
-const neuratradeHome =
-  (rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`).replace(
-    "${HOME}",
-    process.env.HOME,
-  );
+const neuratradeHome = (
+  rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`
+).replace("${HOME}", process.env.HOME);
 
 module.exports = {
   apps: [
+    {
+      name: "neuratrade-universe-watch",
+      script: "bun",
+      args: [
+        "run",
+        "index.ts",
+        "scalp",
+        "grid-universe-scan",
+        "--exchange",
+        "bitget-futures",
+        "--timeframe",
+        "15m",
+        "--min-candles",
+        "500",
+        "--min-fill-frequency-pct",
+        "10",
+        "--watch",
+        "--interval",
+        "21600",
+      ],
+      cwd: cliTsDir,
+      env: {
+        ...rootEnv,
+        NEURATRADE_HOME: neuratradeHome,
+        NODE_ENV: "production",
+      },
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 30_000,
+      out_file: path.join(neuratradeHome, "logs", "universe-watch.out.log"),
+      error_file: path.join(neuratradeHome, "logs", "universe-watch.err.log"),
+      merge_logs: true,
+      time: true,
+    },
     {
       name: "neuratrade-demo-soak",
       script: "bun",
@@ -58,6 +93,8 @@ module.exports = {
         "--leverage",
         "1",
         "--capital",
+        "50",
+        "--min-capital",
         "50",
         "--max-position-size-pct",
         "50",

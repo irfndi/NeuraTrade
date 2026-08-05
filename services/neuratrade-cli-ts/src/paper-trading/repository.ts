@@ -19,6 +19,19 @@ export class PaperTradingRepositoryError {
   ) {}
 }
 
+export interface WatchlistEntry {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly returnPct: number;
+  readonly profitableWindowsPct: number;
+  readonly aggregateReturnPct: number;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly updatedAt: Date;
+}
+
 export interface PaperTradingRepositoryService {
   readonly ensureTables: () => Effect.Effect<
     void,
@@ -111,6 +124,41 @@ export interface PaperTradingRepositoryService {
     PaperTradingRepositoryError,
     never
   >;
+
+  readonly listAllGridTrades: (
+    exchange: string,
+    timeframe: string,
+    limit: number,
+    liveOnly?: boolean,
+  ) => Effect.Effect<
+    readonly GridPaperTrade[],
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  readonly listWatchlist: (
+    exchange: string,
+    timeframe: string,
+  ) => Effect.Effect<
+    readonly WatchlistEntry[],
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  readonly upsertWatchlist: (
+    entries: readonly WatchlistEntry[],
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  readonly clearWatchlist: (
+    exchange: string,
+    timeframe: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  readonly replaceWatchlist: (
+    exchange: string,
+    timeframe: string,
+    entries: readonly WatchlistEntry[],
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 }
 
 export const PaperTradingRepository =
@@ -264,6 +312,23 @@ CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_symbol
   ON grid_paper_trades(exchange, symbol, timeframe);
 CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_closed_at
   ON grid_paper_trades(closed_at DESC);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  return_pct REAL NOT NULL,
+  profitable_windows_pct REAL NOT NULL,
+  aggregate_return_pct REAL NOT NULL,
+  grid_step_pct REAL NOT NULL,
+  grid_max_grids INTEGER NOT NULL,
+  grid_pause_after_loss_bars INTEGER NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (exchange, symbol, timeframe)
+);
+
+CREATE INDEX IF NOT EXISTS idx_watchlist_scope
+  ON watchlist(exchange, timeframe);
 `;
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
@@ -1329,6 +1394,269 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to list grid paper trades: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  listWatchlist(
+    exchange: string,
+    timeframe: string,
+  ): Effect.Effect<
+    readonly WatchlistEntry[],
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const rows = this.db
+          .query(
+            `SELECT exchange, symbol, timeframe, return_pct,
+                    profitable_windows_pct, aggregate_return_pct,
+                    grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+                    updated_at
+             FROM watchlist
+             WHERE exchange = ? AND timeframe = ?
+             ORDER BY aggregate_return_pct DESC`,
+          )
+          .all(exchange, timeframe) as Array<{
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          return_pct: number;
+          profitable_windows_pct: number;
+          aggregate_return_pct: number;
+          grid_step_pct: number;
+          grid_max_grids: number;
+          grid_pause_after_loss_bars: number;
+          updated_at: string;
+        }>;
+
+        return rows.map((r) => ({
+          exchange: r.exchange,
+          symbol: r.symbol,
+          timeframe: r.timeframe,
+          returnPct: r.return_pct,
+          profitableWindowsPct: r.profitable_windows_pct,
+          aggregateReturnPct: r.aggregate_return_pct,
+          gridStepPct: r.grid_step_pct,
+          gridMaxGrids: r.grid_max_grids,
+          gridPauseAfterLossBars: r.grid_pause_after_loss_bars,
+          updatedAt: new Date(r.updated_at),
+        }));
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to list watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  private runWatchlistUpsert(entries: readonly WatchlistEntry[]): void {
+    const upsert = this.db.query(
+      `INSERT INTO watchlist
+       (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
+        aggregate_return_pct, grid_step_pct, grid_max_grids,
+        grid_pause_after_loss_bars, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+         return_pct = excluded.return_pct,
+         profitable_windows_pct = excluded.profitable_windows_pct,
+         aggregate_return_pct = excluded.aggregate_return_pct,
+         grid_step_pct = excluded.grid_step_pct,
+         grid_max_grids = excluded.grid_max_grids,
+         grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+         updated_at = excluded.updated_at`,
+    );
+    for (const e of entries) {
+      upsert.run(
+        e.exchange,
+        e.symbol,
+        e.timeframe,
+        e.returnPct,
+        e.profitableWindowsPct,
+        e.aggregateReturnPct,
+        e.gridStepPct,
+        e.gridMaxGrids,
+        e.gridPauseAfterLossBars,
+        e.updatedAt.toISOString(),
+      );
+    }
+  }
+
+  upsertWatchlist(
+    entries: readonly WatchlistEntry[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.transaction(() => {
+          this.runWatchlistUpsert(entries);
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to upsert watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  replaceWatchlist(
+    exchange: string,
+    timeframe: string,
+    entries: readonly WatchlistEntry[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.transaction(() => {
+          this.db
+            .query("DELETE FROM watchlist WHERE exchange = ? AND timeframe = ?")
+            .run(exchange, timeframe);
+          this.runWatchlistUpsert(entries);
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to replace watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  clearWatchlist(
+    exchange: string,
+    timeframe: string,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query("DELETE FROM watchlist WHERE exchange = ? AND timeframe = ?")
+          .run(exchange, timeframe);
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to clear watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  listAllGridTrades(
+    exchange: string,
+    timeframe: string,
+    limit: number,
+    liveOnly = false,
+  ): Effect.Effect<
+    readonly GridPaperTrade[],
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const rows = this.db
+          .query(
+            `SELECT id, exchange, symbol, timeframe, side,
+                    COALESCE(entry_price_decimal, CAST(entry_price AS TEXT)) AS entry_price_value,
+                    COALESCE(exit_price_decimal, CAST(exit_price AS TEXT)) AS exit_price_value,
+                    COALESCE(capital_before_decimal, CAST(capital_before AS TEXT)) AS capital_before_value,
+                    COALESCE(capital_after_decimal, CAST(capital_after AS TEXT)) AS capital_after_value,
+                    COALESCE(pnl_pct_decimal, CAST(pnl_pct AS TEXT)) AS pnl_pct_value,
+                    fill_source, entry_order_id, entry_client_oid, exit_order_id, exit_client_oid,
+                    COALESCE(entry_filled_qty_decimal, CAST(entry_filled_qty AS TEXT)) AS entry_filled_qty_value,
+                    COALESCE(exit_filled_qty_decimal, CAST(exit_filled_qty AS TEXT)) AS exit_filled_qty_value,
+                    COALESCE(entry_fee_decimal, CAST(entry_fee AS TEXT)) AS entry_fee_value,
+                    COALESCE(exit_fee_decimal, CAST(exit_fee AS TEXT)) AS exit_fee_value,
+                    COALESCE(realized_pnl_pct_decimal, CAST(realized_pnl_pct AS TEXT)) AS realized_pnl_pct_value,
+                    strategy_config_fingerprint, cohort_id, candidate_lock_at,
+                    dataset_cutoff_at, entry_opened_at, execution_environment,
+                    exit_reason, opened_at, closed_at
+             FROM grid_paper_trades
+             WHERE exchange = ? AND timeframe = ?${liveOnly ? " AND fill_source = 'live'" : ""}
+             ORDER BY closed_at DESC
+             LIMIT ?`,
+          )
+          .all(exchange, timeframe, limit) as Array<{
+          id: string;
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          side: string;
+          entry_price_value: string;
+          exit_price_value: string;
+          capital_before_value: string;
+          capital_after_value: string;
+          pnl_pct_value: string;
+          fill_source: "simulated" | "live" | null;
+          entry_order_id: string | null;
+          entry_client_oid: string | null;
+          exit_order_id: string | null;
+          exit_client_oid: string | null;
+          entry_filled_qty_value: string | null;
+          exit_filled_qty_value: string | null;
+          entry_fee_value: string | null;
+          exit_fee_value: string | null;
+          realized_pnl_pct_value: string | null;
+          strategy_config_fingerprint: string | null;
+          cohort_id: string | null;
+          candidate_lock_at: string | null;
+          dataset_cutoff_at: string | null;
+          entry_opened_at: string | null;
+          execution_environment: "bitget-demo" | "bitget-live" | null;
+          exit_reason: string;
+          opened_at: string;
+          closed_at: string;
+        }>;
+
+        return rows.map((r) => ({
+          id: r.id,
+          exchange: r.exchange,
+          symbol: r.symbol,
+          timeframe: r.timeframe,
+          side: r.side as GridPaperTrade["side"],
+          entryPrice: new Decimal(r.entry_price_value),
+          exitPrice: new Decimal(r.exit_price_value),
+          capitalBefore: new Decimal(r.capital_before_value),
+          capitalAfter: new Decimal(r.capital_after_value),
+          pnlPct: new Decimal(r.pnl_pct_value),
+          fillSource: r.fill_source ?? undefined,
+          entryOrderId: r.entry_order_id ?? undefined,
+          entryClientOid: r.entry_client_oid ?? undefined,
+          exitOrderId: r.exit_order_id ?? undefined,
+          exitClientOid: r.exit_client_oid ?? undefined,
+          entryFilledQty: r.entry_filled_qty_value
+            ? new Decimal(r.entry_filled_qty_value)
+            : undefined,
+          exitFilledQty: r.exit_filled_qty_value
+            ? new Decimal(r.exit_filled_qty_value)
+            : undefined,
+          entryFee: r.entry_fee_value
+            ? new Decimal(r.entry_fee_value)
+            : undefined,
+          exitFee: r.exit_fee_value ? new Decimal(r.exit_fee_value) : undefined,
+          realizedPnlPct: r.realized_pnl_pct_value
+            ? new Decimal(r.realized_pnl_pct_value)
+            : undefined,
+          strategyConfigFingerprint: r.strategy_config_fingerprint ?? undefined,
+          cohortId: r.cohort_id ?? undefined,
+          candidateLockAt: r.candidate_lock_at
+            ? new Date(r.candidate_lock_at)
+            : undefined,
+          datasetCutoffAt: r.dataset_cutoff_at
+            ? new Date(r.dataset_cutoff_at)
+            : undefined,
+          entryOpenedAt: r.entry_opened_at
+            ? new Date(r.entry_opened_at)
+            : undefined,
+          executionEnvironment: r.execution_environment ?? undefined,
+          exitReason: r.exit_reason as GridPaperTrade["exitReason"],
+          openedAt: new Date(r.opened_at),
+          closedAt: new Date(r.closed_at),
+        }));
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to list all grid trades: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

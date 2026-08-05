@@ -1,13 +1,13 @@
 import { Command, Options } from "./kit/kit.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer, Option } from "effect";
+import { Console, Effect, FileSystem, Layer, Option, Schedule } from "effect";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
 import { ConfigLive } from "../services/config.js";
 import {
   SqliteClient,
   SqliteClientLiveRaw,
-  SqliteError,
+  type SqliteError,
 } from "../services/sqlite.js";
 import {
   MarketDataRepository,
@@ -35,12 +35,19 @@ import {
   StrategyLibraryLive,
 } from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
+import { MarketDataGateway } from "../market-data/gateway.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
-import { BitgetClientLiveConfig } from "../services/bitget-client.js";
+import {
+  BitgetClientLiveConfig,
+  BitgetClient,
+  BitgetApiError,
+  isBitgetUnsupportedInstrumentError,
+} from "../services/bitget-client.js";
+import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -63,6 +70,7 @@ import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLiteLive,
+  type WatchlistEntry as DbWatchlistEntry,
 } from "../paper-trading/repository.js";
 import {
   runSoak,
@@ -87,6 +95,7 @@ import {
 import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   runGridUniverseScan,
+  type GridUniverseEntry,
   type GridUniverseOptions,
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
@@ -2869,7 +2878,12 @@ export interface WatchlistEntry {
   readonly symbol: string;
   readonly exchange?: string;
   readonly returnPct: number;
-  readonly sharpe: number;
+  /**
+   * Present on file-based watchlists. DB-backed rows have no persisted Sharpe
+   * (the watchlist schema has no sharpe column) and nothing downstream ranks on
+   * this field, so it may be absent.
+   */
+  readonly sharpe?: number;
   readonly bestParams?: {
     readonly atrStopMultiplier: number;
     readonly atrTakeProfitMultiplier: number;
@@ -3137,18 +3151,46 @@ export const paperTradeCommand = Command.make(
       const sqlite = yield* SqliteClient;
       const db = sqlite.database;
 
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
+
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
       const mergedArgs = Option.isSome(profile)
         ? mergePaperTradeArgs(args as unknown as PaperTradeArgs, profile.value)
         : (args as unknown as PaperTradeArgs);
 
       const watchlist = yield* Option.match(mergedArgs.watchlist, {
-        onNone: () => Effect.succeed<readonly WatchlistEntry[]>([]),
+        onNone: () =>
+          Effect.gen(function* () {
+            const paperRepo = yield* PaperTradingRepository;
+            yield* paperRepo.ensureTables();
+            const dbExchange = resolveFuturesMarketExchange(
+              mergedArgs.exchange,
+              mergedArgs.futures,
+            );
+            const dbEntries = yield* paperRepo.listWatchlist(
+              dbExchange,
+              mergedArgs.timeframe,
+            );
+            if (dbEntries.length === 0) {
+              yield* Console.warn(
+                `⚠️ DB watchlist is empty for ${dbExchange}:${mergedArgs.timeframe} — paper-trade will run with zero symbols; run grid-universe-scan with a matching --exchange first`,
+              );
+            }
+            return dbEntries.map((e): WatchlistEntry => ({
+              symbol: e.symbol,
+              exchange: e.exchange,
+              returnPct: e.returnPct,
+              gridParams: {
+                gridStepPct: e.gridStepPct,
+                gridMaxGrids: e.gridMaxGrids,
+                gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+              },
+            }));
+          }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
-      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
       const riskGuardLayer = RiskGuardLive(
         mergedArgs.live,
         buildRiskOverrides(mergedArgs),
@@ -3237,9 +3279,9 @@ export function validateLiveExecutionMarket(
 
 export function validateLiveSandboxMode(
   live: boolean,
-  sandboxValue: string | undefined,
+  sandbox: boolean,
 ): string | undefined {
-  if (live && sandboxValue !== "true" && sandboxValue !== "1") {
+  if (live && !sandbox) {
     return "live execution is disabled until BITGET_USE_SANDBOX=true is configured for the demo gate";
   }
   return undefined;
@@ -3366,6 +3408,15 @@ function parseProductType(value: string): BitgetProductType {
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
     const strategyType = args.strategyType ?? "signal";
+    // Sandbox is a property of the resolved Bitget client configuration, not
+    // free-floating environment state: BitgetClientLiveConfig derives isDemo
+    // from the exact same BitgetConfig.useSandbox value, so validation
+    // relaxation and demo routing can never disagree.
+    const useSandbox = yield* BitgetConfig.pipe(
+      Effect.map((config) => config.useSandbox),
+      Effect.provide(BitgetConfigLive),
+      Effect.orDie,
+    );
     const liveMarketError = validateLiveExecutionMarket(
       args.live,
       args.futures,
@@ -3373,10 +3424,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
     }
-    const liveSandboxError = validateLiveSandboxMode(
-      args.live,
-      process.env.BITGET_USE_SANDBOX,
-    );
+    const liveSandboxError = validateLiveSandboxMode(args.live, useSandbox);
     if (liveSandboxError !== undefined) {
       return yield* Effect.fail(new Error(liveSandboxError));
     }
@@ -3391,8 +3439,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.live,
       strategyType,
       args.entries,
-      process.env.BITGET_USE_SANDBOX === "true" ||
-        process.env.BITGET_USE_SANDBOX === "1",
+      useSandbox,
     );
     if (liveGridWatchlistError !== undefined) {
       return yield* Effect.fail(new Error(liveGridWatchlistError));
@@ -3400,32 +3447,33 @@ function paperTradeProgram(args: PaperTradeArgs) {
     const marginMode = parseMarginMode(args.marginMode);
     const productType = parseProductType(args.productType);
     if (args.live && strategyType === "grid") {
-      const liveGridError = validateLiveGridConfiguration({
-        exchange: resolveFuturesMarketExchange(args.exchange, true),
-        symbol: args.symbol,
-        timeframe: args.timeframe,
-        productType,
-        gridStepPct: args.gridStepPct,
-        gridMaxGrids: args.gridMaxGrids,
-        gridPauseAfterLossBars: args.gridPauseAfterLossBars,
-        feePct: args.fee,
-        slippageBps: args.slippageBps,
-        trendFilterPeriod: args.trendFilterPeriod,
-        onlyWithTrend: args.onlyWithTrend ?? false,
-        targetRatio: args.targetRatio ?? 0,
-        chopGateAdx: args.chopGateAdx ?? 0,
-        leverage: args.leverage,
-        maxPositionSizePct: Option.getOrElse(
-          args.maxPositionSizePct,
-          () => 100,
-        ),
-        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
-        maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
-      }, args.live &&
-        strategyType === "grid" &&
-        (args.entries?.length ?? 0) > 0 &&
-        (process.env.BITGET_USE_SANDBOX === "true" ||
-          process.env.BITGET_USE_SANDBOX === "1"));
+      const liveGridError = validateLiveGridConfiguration(
+        {
+          exchange: resolveFuturesMarketExchange(args.exchange, true),
+          symbol: args.symbol,
+          timeframe: args.timeframe,
+          productType,
+          gridStepPct: args.gridStepPct,
+          gridMaxGrids: args.gridMaxGrids,
+          gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+          feePct: args.fee,
+          slippageBps: args.slippageBps,
+          trendFilterPeriod: args.trendFilterPeriod,
+          onlyWithTrend: args.onlyWithTrend ?? false,
+          targetRatio: args.targetRatio ?? 0,
+          chopGateAdx: args.chopGateAdx ?? 0,
+          leverage: args.leverage,
+          maxPositionSizePct: Option.getOrElse(
+            args.maxPositionSizePct,
+            () => 100,
+          ),
+          maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+          maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
+        },
+        // args.live && strategyType === "grid" are guaranteed by the
+        // enclosing if; only multi-symbol sandbox runs get relaxed guards.
+        (args.entries?.length ?? 0) > 0 && useSandbox,
+      );
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
       }
@@ -3570,7 +3618,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
       feePct: args.fee,
       slippageBps: args.slippageBps,
-      trendFilterPeriod: args.trendFilterPeriod,
+      trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
       initialCapital: args.capital,
       maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
       maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
@@ -3581,11 +3629,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       isLive: args.live,
       executionEnvironment:
-        args.live &&
-        process.env.BITGET_USE_SANDBOX !== "true" &&
-        process.env.BITGET_USE_SANDBOX !== "1"
-          ? "bitget-live"
-          : "bitget-demo",
+        args.live && !useSandbox ? "bitget-live" : "bitget-demo",
       productType,
       marginMode,
     });
@@ -3596,11 +3640,13 @@ function paperTradeProgram(args: PaperTradeArgs) {
           apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
         })
       : SimulatedExchangeAdapterLive();
-    const futuresAdapterLayer = (args.live
-      ? BitgetFuturesExchangeAdapterLive.pipe(
-          Layer.provide(BitgetClientLiveConfig),
-        )
-      : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+    const futuresAdapterLayer = (
+      args.live
+        ? BitgetFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BitgetClientLiveConfig),
+          )
+        : SimulatedFuturesExchangeAdapterLive()
+    ) as Layer.Layer<
       import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
       never,
       import("../market-data/gateway.js").MarketDataGatewayService
@@ -3995,11 +4041,13 @@ export const soakCommand = Command.make(
               mergedArgs.apiSecret || process.env.BINANCE_API_SECRET || "",
           })
         : SimulatedExchangeAdapterLive();
-      const futuresAdapterLayer = (mergedArgs.live
-        ? BitgetFuturesExchangeAdapterLive.pipe(
-            Layer.provide(BitgetClientLiveConfig),
-          )
-        : SimulatedFuturesExchangeAdapterLive()) as Layer.Layer<
+      const futuresAdapterLayer = (
+        mergedArgs.live
+          ? BitgetFuturesExchangeAdapterLive.pipe(
+              Layer.provide(BitgetClientLiveConfig),
+            )
+          : SimulatedFuturesExchangeAdapterLive()
+      ) as Layer.Layer<
         import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
         never,
         import("../market-data/gateway.js").MarketDataGatewayService
@@ -4085,13 +4133,11 @@ export const soakCommand = Command.make(
           return runFuturesPaperTradingIteration(opts).pipe(
             Effect.provide(futuresAdapterLayer),
             Effect.provide(layers),
-            Effect.map(
-              (r): IterationResult => ({
-                action: r.action,
-                capital: r.capital,
-                note: r.note,
-              }),
-            ),
+            Effect.map((r): IterationResult => ({
+              action: r.action,
+              capital: r.capital,
+              note: r.note,
+            })),
           ) as Effect.Effect<IterationResult, unknown, never>;
         }
 
@@ -4133,13 +4179,11 @@ export const soakCommand = Command.make(
         return runPaperTradingIteration(opts).pipe(
           Effect.provide(spotAdapterLayer),
           Effect.provide(layers),
-          Effect.map(
-            (r): IterationResult => ({
-              action: r.action,
-              capital: r.capital,
-              note: r.note,
-            }),
-          ),
+          Effect.map((r): IterationResult => ({
+            action: r.action,
+            capital: r.capital,
+            note: r.note,
+          })),
         ) as Effect.Effect<IterationResult, unknown, never>;
       };
 
@@ -5351,7 +5395,7 @@ export const readinessCommand = Command.make(
 );
 
 const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
-  gridStepPct: [0.2, 0.4, 0.6, 1.0],
+  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5],
   gridMaxGrids: [1, 2, 3],
   gridPauseAfterLossBars: [0, 6, 24],
 } as const;
@@ -5375,12 +5419,12 @@ const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
 
 const gridUniverseTrainWindowOption = Options.integer("train-window").pipe(
   Options.withDefault(180),
-  Options.withDescription("Walk-forward training window in days"),
+  Options.withDescription("Walk-forward training window in candles"),
 );
 
 const gridUniverseTestWindowOption = Options.integer("test-window").pipe(
   Options.withDefault(60),
-  Options.withDescription("Walk-forward test window in days"),
+  Options.withDescription("Walk-forward test window in candles"),
 );
 
 const gridUniverseMinProfitableWindowsOption = Options.float(
@@ -5411,7 +5455,9 @@ const gridUniverseSlippageOption = Options.float("slippage-bps").pipe(
   Options.withDescription("Slippage in basis points applied to grid fills"),
 );
 
-const gridUniverseTrendFilterOption = Options.integer("trend-filter-period").pipe(
+const gridUniverseTrendFilterOption = Options.integer(
+  "trend-filter-period",
+).pipe(
   Options.withDefault(0),
   Options.withDescription("SMA trend filter period for the grid backtests"),
 );
@@ -5423,6 +5469,28 @@ const gridUniverseOutputOption = Options.text("output").pipe(
   ),
 );
 
+const gridUniverseWatchOption = Options.boolean("watch").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Continuously re-scan the universe and upsert survivors into the DB watchlist",
+  ),
+);
+
+const gridUniverseIntervalOption = Options.integer("interval").pipe(
+  Options.withDefault(3600),
+  Options.withDescription(
+    "Seconds between scans in --watch continuous mode (default 3600)",
+  ),
+);
+
+const gridUniverseMinFillFrequencyOption = Options.float(
+  "min-fill-frequency-pct",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Reject survivors whose grid step touches < this % of candles (0 = disabled)",
+  ),
+);
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5445,17 +5513,30 @@ export const gridUniverseScanCommand = Command.make(
     slippageBps: gridUniverseSlippageOption,
     trendFilterPeriod: gridUniverseTrendFilterOption,
     output: gridUniverseOutputOption,
+    watch: gridUniverseWatchOption,
+    interval: gridUniverseIntervalOption,
+    minFillFrequencyPct: gridUniverseMinFillFrequencyOption,
   },
   (args) =>
     Effect.gen(function* () {
       const path = yield* Path;
       const sqlite = yield* SqliteClient;
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(sqlite.database);
 
       const outputPath = Option.isSome(args.output)
         ? resolve(path.homeDir, "data", args.output.value)
         : undefined;
 
+      // One resolved futures-market key for delete-write-read consistency:
+      // scan with --exchange binance then paper-trade --futures must both
+      // resolve to bitget-futures, or the watchlist lookups disagree.
+      const marketExchange = resolveFuturesMarketExchange(args.exchange, true);
+      if (args.minFillFrequencyPct <= 0) {
+        yield* Console.warn(
+          `⚠️ --min-fill-frequency-pct is 0 — the fill gate is DISABLED; survivors whose grid step is too wide to fill live will not be rejected`,
+        );
+      }
       const options: GridUniverseOptions = {
         exchange: args.exchange,
         timeframe: args.timeframe,
@@ -5465,71 +5546,221 @@ export const gridUniverseScanCommand = Command.make(
         testWindow: args.testWindow,
         minProfitableWindowsPct: args.minProfitableWindowsPct,
         minAggregateReturnPct: args.minAggregateReturnPct,
+        minFillFrequencyPct: args.minFillFrequencyPct,
         feePct: args.fee,
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.trendFilterPeriod,
         searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
-        outputPath,
       };
 
-      const result = yield* runGridUniverseScan(options).pipe(
-        Effect.provide(repoLayer),
-        Effect.catch((err) =>
-          Effect.gen(function* () {
-            yield* Console.error(
-              `grid-universe-scan failed: ${
-                "reason" in err ? err.reason : String(err)
-              }`,
-            );
-            return { entries: [], survivors: [] };
-          }),
-        ),
-      );
-
-      if (outputPath) {
-        const watchlist = result.survivors.map((e) => ({
-          symbol: e.symbol,
-          exchange: args.exchange,
-          returnPct: e.walkForward.aggregateReturnPct,
-          sharpe: e.walkForward.aggregateReturnPct > 0 ? 1 : 0,
-          gridParams: {
+      const persistSurvivors = (result: {
+        readonly survivors: readonly GridUniverseEntry[];
+      }) =>
+        Effect.gen(function* () {
+          const paperRepo = yield* PaperTradingRepository;
+          yield* paperRepo.ensureTables();
+          const entries: DbWatchlistEntry[] = result.survivors.map((e) => ({
+            // Persist under the resolved futures-market key so scan-write
+            // and paper-trade read always agree, even when the scan was run
+            // with a raw exchange name that resolves differently (e.g.
+            // --exchange binance + futures => bitget-futures).
+            exchange: marketExchange,
+            symbol: e.symbol,
+            timeframe: args.timeframe,
+            returnPct: e.walkForward.aggregateReturnPct,
+            profitableWindowsPct: e.walkForward.profitableWindowsPct,
+            aggregateReturnPct: e.walkForward.aggregateReturnPct,
             gridStepPct: e.bestParams.gridStepPct,
             gridMaxGrids: e.bestParams.gridMaxGrids,
             gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
-          },
-        }));
-        yield* Effect.tryPromise({
-          try: () => Bun.write(outputPath, JSON.stringify(watchlist, null, 2)),
-          catch: (err) =>
-            new MarketDataRepositoryError(
-              `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
-            ),
+            updatedAt: new Date(),
+          }));
+          if (entries.length === 0) {
+            yield* Console.log(
+              `💾 No survivors this cycle — keeping existing watchlist unchanged`,
+            );
+          } else {
+            yield* paperRepo.replaceWatchlist(
+              marketExchange,
+              args.timeframe,
+              entries,
+            );
+            yield* Console.log(
+              `💾 Watchlist replaced: ${entries.length} survivors now in DB (${marketExchange}:${args.timeframe}); prior symbols in this scope were removed`,
+            );
+          }
+
+          // Only ever write the whitelist file after a successful scan with
+          // survivors: a failed/empty scan must not truncate the file the
+          // demo soak consumes.
+          if (outputPath && result.survivors.length > 0) {
+            const watchlistJson = result.survivors.map((e) => ({
+              symbol: e.symbol,
+              exchange: args.exchange,
+              returnPct: e.walkForward.aggregateReturnPct,
+              gridParams: {
+                gridStepPct: e.bestParams.gridStepPct,
+                gridMaxGrids: e.bestParams.gridMaxGrids,
+                gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+              },
+            }));
+            const fsys = yield* FileSystem.FileSystem;
+            yield* fsys.makeDirectory(dirname(outputPath), {
+              recursive: true,
+            });
+            yield* Effect.tryPromise({
+              try: () =>
+                Bun.write(outputPath, JSON.stringify(watchlistJson, null, 2)),
+              catch: (err) =>
+                new MarketDataRepositoryError(
+                  `Failed to write grid whitelist: ${err instanceof Error ? err.message : String(err)}`,
+                ),
+            });
+            yield* Console.log(`Whitelist written to ${outputPath}`);
+          }
         });
-        yield* Console.log(`Whitelist written to ${outputPath}`);
-      }
 
-      yield* Console.log(
-        `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
-      );
-      yield* Console.log(
-        "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
-      );
-      yield* Console.log(
-        "------------------------------------------------------------------",
-      );
-      for (const e of result.entries) {
-        const mark = e.passed ? " ✔" : "";
-        yield* Console.log(
-          `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
-            `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
-            `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
-            `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
-            `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
-            `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+      const runScan = () =>
+        Effect.gen(function* () {
+          const gateway = yield* MarketDataGateway;
+          const futuresSymbols = yield* gateway
+            .fetchSymbols(args.exchange)
+            .pipe(
+              Effect.catch((err) =>
+                Effect.gen(function* () {
+                  const reason =
+                    err instanceof Error ? err.message : String(err);
+                  yield* Console.warn(
+                    `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
+                  );
+                  return [] as readonly string[];
+                }),
+              ),
+            );
+          const futuresSet = new Set(futuresSymbols);
+          const canonicalSymbol = (symbol: string) =>
+            symbol.includes(":")
+              ? symbol.slice(0, symbol.lastIndexOf(":"))
+              : symbol;
+          const isFuturesSymbol = (symbol: string) =>
+            futuresSet.has(symbol) || futuresSet.has(canonicalSymbol(symbol));
+
+          // Scan errors are NOT swallowed here: they propagate so a failed
+          // scan never persists (DB watchlist kept, whitelist file untouched)
+          // and the one-shot command exits non-zero.
+          const rawResult = yield* runGridUniverseScan(options).pipe(
+            Effect.provide(repoLayer),
+          );
+
+          let survivors =
+            rawResult.survivors.length > 0 && futuresSet.size > 0
+              ? rawResult.survivors.filter((e) => isFuturesSymbol(e.symbol))
+              : rawResult.survivors;
+
+          if (survivors.length > 0) {
+            const client = yield* BitgetClient;
+            const tradeable: GridUniverseEntry[] = [];
+            for (const entry of survivors) {
+              const probe = yield* client
+                .getLeverage({
+                  symbol: entry.symbol,
+                  productType: "USDT-FUTURES",
+                })
+                .pipe(Effect.result);
+              if (probe._tag === "Success") {
+                tradeable.push(entry);
+              } else if (
+                probe._tag === "Failure" &&
+                probe.failure instanceof BitgetApiError &&
+                isBitgetUnsupportedInstrumentError(probe.failure)
+              ) {
+                // Only a probe error that proves the instrument is unsupported
+                // (40034 with a missing-symbol/contract message) drops the
+                // survivor; auth, rate-limit, transport, and other parameter
+                // defects must NOT drop survivors.
+                yield* Console.log(
+                  `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo`,
+                );
+              } else {
+                const reason =
+                  probe._tag === "Failure"
+                    ? probe.failure instanceof Error
+                      ? probe.failure.message
+                      : String(probe.failure)
+                    : "unknown";
+                yield* Console.log(
+                  `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
+                );
+                tradeable.push(entry);
+              }
+            }
+            if (tradeable.length < survivors.length) {
+              yield* Console.log(
+                `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
+              );
+            }
+            survivors = tradeable;
+          }
+          const result = { entries: rawResult.entries, survivors };
+
+          yield* Console.log(
+            `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
+          );
+          yield* Console.log(
+            "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
+          );
+          yield* Console.log(
+            "------------------------------------------------------------------",
+          );
+          for (const e of result.entries) {
+            const mark = e.passed ? " ✔" : "";
+            yield* Console.log(
+              `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
+                `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
+                `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
+                `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
+                `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
+                `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+            );
+          }
+
+          yield* persistSurvivors(result).pipe(Effect.provide(paperRepoLayer));
+          return result.survivors;
+        });
+
+      const runScanWithLayers = () =>
+        runScan().pipe(Effect.provide(MarketDataGatewayLive));
+
+      if (args.watch) {
+        // The watch loop must survive transient scan failures: log the cycle
+        // error and continue; the DB watchlist and whitelist file are left
+        // untouched on failure.
+        const watchCycle = runScanWithLayers().pipe(
+          Effect.catch((err) =>
+            Effect.gen(function* () {
+              yield* Console.error(
+                `grid-universe scan cycle failed: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+              return [] as readonly GridUniverseEntry[];
+            }),
+          ),
         );
+        yield* Console.log(
+          `👁 Watching universe ${args.exchange}:${args.timeframe}, re-scan every ${args.interval}s...`,
+        );
+        // Repeat until interrupted: Effect.repeat + Schedule.spaced runs the
+        // scan, spaces iterations by the interval, and cancels cleanly on
+        // SIGTERM/SIGINT (BunRuntime.runMain interrupts the fiber at the
+        // schedule boundary).
+        yield* Effect.repeat(watchCycle, {
+          schedule: Schedule.spaced(`${args.interval} seconds`),
+        });
       }
 
-      return result.survivors;
+      // One-shot mode: failures propagate (non-zero exit, nothing persisted).
+      return yield* runScanWithLayers();
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(
   Command.withDescription(
@@ -5537,6 +5768,70 @@ export const gridUniverseScanCommand = Command.make(
   ),
 );
 
+const watchlistListExchangeOption = Options.text("exchange").pipe(
+  Options.withDefault("bitget-futures"),
+  Options.withDescription("Exchange to list watchlist for"),
+);
+
+const watchlistListTimeframeOption = Options.text("timeframe").pipe(
+  Options.withDefault("15m"),
+  Options.withDescription("Timeframe to list watchlist for"),
+);
+
+export const watchlistListCommand = Command.make(
+  "list",
+  {
+    exchange: watchlistListExchangeOption,
+    timeframe: watchlistListTimeframeOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const sqlite = yield* SqliteClient;
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(sqlite.database);
+      const entries = yield* PaperTradingRepository.pipe(
+        Effect.flatMap((repo) =>
+          Effect.gen(function* () {
+            yield* repo.ensureTables();
+            return yield* repo.listWatchlist(args.exchange, args.timeframe);
+          }),
+        ),
+        Effect.provide(paperRepoLayer),
+      );
+      yield* Console.log(
+        `\n📋 Watchlist ${args.exchange}:${args.timeframe} (${entries.length} symbols)`,
+      );
+      yield* Console.log(
+        "Symbol        Return%   ProfitWin%  Step%  Grids  Pause  Updated",
+      );
+      yield* Console.log(
+        "------------------------------------------------------------------",
+      );
+      for (const e of entries) {
+        yield* Console.log(
+          `${e.symbol.padEnd(13)} ${e.aggregateReturnPct.toFixed(2).padStart(8)}%  ` +
+            `${e.profitableWindowsPct.toFixed(0).padStart(8)}%  ` +
+            `${e.gridStepPct.toFixed(2).padStart(5)}  ` +
+            `${String(e.gridMaxGrids).padStart(5)}  ` +
+            `${String(e.gridPauseAfterLossBars).padStart(5)}  ` +
+            `  ${e.updatedAt.toISOString().slice(0, 16)}`,
+        );
+      }
+      return entries;
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "List the DB-backed watchlist for an exchange/timeframe",
+  ),
+);
+
+export const watchlistCommand = Command.make("watchlist", {}, () =>
+  Console.log(
+    "Watchlist commands. Use 'watchlist list --exchange <ex> --timeframe <tf>'.",
+  ),
+).pipe(
+  Command.withDescription("DB-backed watchlist management"),
+  Command.withSubcommands([watchlistListCommand]),
+);
 export const demoReadinessCommand = makeDemoReadinessCommand(
   makeDbLayer(process.env.NEURATRADE_HOME),
 );
@@ -5564,5 +5859,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     demoReadinessCommand,
     parityReplayCommand,
     gridUniverseScanCommand,
+    watchlistCommand,
   ]),
 );

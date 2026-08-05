@@ -42,6 +42,8 @@ export class BitgetApiError extends Data.TaggedError("BitgetApiError")<{
   readonly status: number;
   readonly body: string;
   readonly endpoint: string;
+  /** Parsed Bitget business code (e.g. "40034"), when the body carries one. */
+  readonly code?: string;
 }> {}
 
 export type BitgetClientError =
@@ -49,6 +51,62 @@ export type BitgetClientError =
   | BitgetRateLimitError
   | BitgetAuthError
   | BitgetApiError;
+
+/**
+ * Extract the Bitget business code from an error body. Bitget returns JSON
+ * bodies (`{"code":"40034","msg":...}`), but some proxies/edges return plain
+ * text prefixed with the code (`"40034: Parameter does not exist"`). We return
+ * the code only when it is unambiguous so callers can compare it exactly
+ * instead of substring-matching the raw body.
+ */
+function parseBitgetErrorCode(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { code?: unknown };
+    if (typeof parsed.code === "string") return parsed.code;
+  } catch {
+    // Not JSON — fall through to the text-prefix heuristic below.
+  }
+  const match = /^(\d{5})(?:\s*:|\s)/.exec(body);
+  return match?.[1];
+}
+
+const SYMBOL_OR_CONTRACT_PARAM_RE =
+  /\b(symbols?|contracts?|instruments?|instid|inst_id|tradecoin|trade_coin)\b/i;
+
+/**
+ * True when a `BitgetApiError` proves the instrument/contract itself is
+ * unsupported. Bitget returns code 40034 ("parameter does not exist") for a
+ * variety of parameter defects, so the code alone is not proof. To fail closed
+ * we only treat a 40034 as an unsupported instrument when the message
+ * *positively* names a symbol/contract/instrument parameter (e.g. "Parameter
+ * symbol does not exist") or is the demo proxy's bare generic message with no
+ * parameter named at all ("Parameter does not exist"). Any named parameter that
+ * is not obviously a symbol — marginCoin, clientType, leverage, ... — is a
+ * configuration defect and must propagate so callers never mistake it for an
+ * absent position or an untradeable instrument.
+ */
+export function isBitgetUnsupportedInstrumentError(
+  error: BitgetApiError,
+): boolean {
+  if (error.code !== "40034") return false;
+  if (!/does not exist|not exist|no such parameter/i.test(error.body)) {
+    return false;
+  }
+  // Bare "Parameter does not exist" (no parameter named) is the demo proxy's
+  // generic contract-missing message -> unsupported instrument. Check it first
+  // so the named forms below cannot capture "does" as a parameter name.
+  if (/\bparameter\s+does not exist\b/i.test(error.body)) return true;
+  const namedParameter =
+    /(?:parameter\s+(\S+)\s+(?:does not exist|not exist)|no such parameter\s+(\S+))/i.exec(
+      error.body,
+    );
+  const parameterName = namedParameter?.[1] ?? namedParameter?.[2];
+  // Fail closed: an unrecognized named parameter is a config defect.
+  if (parameterName === undefined) return false;
+  // A named parameter only counts when it positively identifies a
+  // symbol/contract/instrument. Anything else is a config defect.
+  return SYMBOL_OR_CONTRACT_PARAM_RE.test(parameterName);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -461,6 +519,7 @@ function fetchBitget<T>(
           status: response.status,
           body: responseBody,
           endpoint,
+          code: parseBitgetErrorCode(responseBody),
         }),
       );
     }
@@ -489,6 +548,7 @@ function fetchBitget<T>(
           status: response.status,
           body: `${parsed.code}: ${msg}`,
           endpoint,
+          code: parsed.code,
         }),
       );
     }
@@ -849,7 +909,24 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => resp.data.map(parseFuturesPosition)));
+    ).pipe(
+      Effect.catch((error) => {
+        // Some listed contracts (e.g. demo proxies for delisted or exotic
+        // pairs) return 40034 "Parameter ... does not exist" on the
+        // single-position query even though no position is open. That is
+        // not a fault of the caller — it means the position is absent.
+        if (
+          symbol.trim() !== "" &&
+          error instanceof BitgetApiError &&
+          isBitgetUnsupportedInstrumentError(error) &&
+          error.endpoint.includes("/single-position")
+        ) {
+          return Effect.succeed({ data: [] });
+        }
+        return Effect.fail(error);
+      }),
+      Effect.map((resp) => resp.data.map(parseFuturesPosition)),
+    );
   };
 
   const setLeverage = (args: {

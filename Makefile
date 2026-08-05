@@ -100,11 +100,11 @@ fmt: ## Format backend + frontend code
 	@cd cmd/neuratrade-cli && gofmt -w .
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Formatting Telegram service...$(NC)"; \
-		cd services/telegram-service && bunx prettier --write .; \
+		cd services/telegram-service && bunx oxfmt; \
 	fi
 	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Formatting TypeScript CLI...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx prettier --write .; \
+		cd services/neuratrade-cli-ts && bunx oxfmt; \
 	fi
 
 fmt-check: ## Check if code is formatted (for CI)
@@ -113,11 +113,11 @@ fmt-check: ## Check if code is formatted (for CI)
 	@cd cmd/neuratrade-cli && test -z "$$(gofmt -l .)" || (echo "$(RED)CLI Go code is not formatted. Run 'make fmt'$(NC)" && gofmt -l . && exit 1)
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
-		cd services/telegram-service && bunx prettier --check .; \
+		cd services/telegram-service && bunx oxfmt --check .; \
 	fi
 	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
 		echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx prettier --check .; \
+		cd services/neuratrade-cli-ts && bunx oxfmt --check .; \
 	fi
 	@echo "$(GREEN)Format checks passed!$(NC)"
 

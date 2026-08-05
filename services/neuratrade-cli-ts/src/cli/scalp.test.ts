@@ -1269,7 +1269,9 @@ describe("backtestProgram fill-model option forwarding", () => {
     });
 
     await Effect.runPromise(
-      backtestProgram(args as unknown as Parameters<typeof backtestProgram>[0]).pipe(
+      backtestProgram(
+        args as unknown as Parameters<typeof backtestProgram>[0],
+      ).pipe(
         Effect.provide(
           Layer.mergeAll(
             MarketDataRepositorySQLiteLive(db),

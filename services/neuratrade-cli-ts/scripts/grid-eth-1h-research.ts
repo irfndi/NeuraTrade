@@ -8,13 +8,13 @@ const rows = db
     "SELECT open_price as open, high_price as high, low_price as low, close_price as close, volume, timestamp FROM ohlcv_data WHERE exchange_id = (SELECT id FROM exchanges WHERE name = ?) AND trading_pair_id = (SELECT id FROM trading_pairs WHERE symbol = ?) AND timeframe = ? ORDER BY timestamp ASC",
   )
   .all("bitget-futures", "ETH/USDT:USDT", "1h") as {
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-    timestamp: string;
-  }[];
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: string;
+}[];
 
 const candles = rows.map((r) => ({
   open: r.open,

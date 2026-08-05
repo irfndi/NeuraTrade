@@ -34,7 +34,9 @@ const timeframe = arg("--timeframe", "15m");
 
 const home =
   process.env.NEURATRADE_HOME ?? join(process.env.HOME!, ".neuratrade");
-const db = new Database(join(home, "data", "neuratrade.db"), { readonly: true });
+const db = new Database(join(home, "data", "neuratrade.db"), {
+  readonly: true,
+});
 const rows = db
   .query(
     `SELECT o.open_price, o.high_price, o.low_price, o.close_price, o.volume, o.timestamp
@@ -105,14 +107,18 @@ console.log(
     `(IS ${is.length} bars / OOS ${oos.length} bars, last 20%)\n`,
 );
 
-console.log("=== Slippage sweep (winner config, round-trip fee fixed at 0.04%) ===");
+console.log(
+  "=== Slippage sweep (winner config, round-trip fee fixed at 0.04%) ===",
+);
 console.log(
   `${"slip".padEnd(6)} ${"--- IN-SAMPLE ---".padEnd(58)} ${"--- OUT-OF-SAMPLE ---"}`,
 );
 for (const slip of [1, 2, 3, 4, 5, 7, 10]) {
   const isR = runGridBacktest(is, { ...winner, slippageBps: slip });
   const oosR = runGridBacktest(oos, { ...winner, slippageBps: slip });
-  console.log(`${String(slip).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+  console.log(
+    `${String(slip).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`,
+  );
 }
 
 // Walk-forward Pass B: fixed winner config on rolling 45d windows across all
@@ -215,7 +221,9 @@ for (const frac of [1, 0.75, 0.5, 0.3]) {
     ...ethConfig,
     positionFraction: frac,
   });
-  console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+  console.log(
+    `${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`,
+  );
 }
 
 console.log(
@@ -224,7 +232,9 @@ console.log(
 for (const frac of [1, 0.75, 0.5, 0.3]) {
   const isR = runGridBacktest(is, { ...winner, positionFraction: frac });
   const oosR = runGridBacktest(oos, { ...winner, positionFraction: frac });
-  console.log(`${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`);
+  console.log(
+    `${String(frac).padEnd(6)} ${line("IS", isR)}   ${line("OOS", oosR)}`,
+  );
 }
 
 // ---- Recent 30-day realized sample (clever-cabin-er7 statistical sample) ----
@@ -236,7 +246,9 @@ console.log(
   "\n=== Recent 30-day realized sample (last 2880 bars, deterministic) ===",
 );
 const RECENT = 2880;
-const recentSets: ReadonlyArray<readonly [string, typeof candles, typeof winner]> = [
+const recentSets: ReadonlyArray<
+  readonly [string, typeof candles, typeof winner]
+> = [
   ["BTC 15m winner", candles.slice(-RECENT), winner],
   ["ETH 15m gated", ethCandles.slice(-RECENT), ethConfig],
 ];
@@ -293,15 +305,30 @@ const fillCases: ReadonlyArray<{ label: string; cfg: typeof winner }> = [
   { label: "taker stops fp=1", cfg: { ...winner, takerExitFeePct: 0.06 } },
   {
     label: "fp=0.7 uniform+taker",
-    cfg: { ...winner, makerFillProb: 0.7, adverseSelection: false, takerExitFeePct: 0.06 },
+    cfg: {
+      ...winner,
+      makerFillProb: 0.7,
+      adverseSelection: false,
+      takerExitFeePct: 0.06,
+    },
   },
   {
     label: "fp=0.7 adverse+taker",
-    cfg: { ...winner, makerFillProb: 0.7, adverseSelection: true, takerExitFeePct: 0.06 },
+    cfg: {
+      ...winner,
+      makerFillProb: 0.7,
+      adverseSelection: true,
+      takerExitFeePct: 0.06,
+    },
   },
   {
     label: "fp=0.5 adverse+taker",
-    cfg: { ...winner, makerFillProb: 0.5, adverseSelection: true, takerExitFeePct: 0.06 },
+    cfg: {
+      ...winner,
+      makerFillProb: 0.5,
+      adverseSelection: true,
+      takerExitFeePct: 0.06,
+    },
   },
 ];
 console.log(

@@ -41,12 +41,12 @@ function run(
       { order, instrument, balances, feeRate: "0.001" },
       price,
     ).pipe(
-      Effect.map(
-        (normalized): GuardRunResult => ({ ok: true, order: normalized }),
-      ),
-      Effect.catch(
-        (err): Effect.Effect<GuardRunResult, never> =>
-          Effect.succeed({ ok: false, error: err }),
+      Effect.map((normalized): GuardRunResult => ({
+        ok: true,
+        order: normalized,
+      })),
+      Effect.catch((err): Effect.Effect<GuardRunResult, never> =>
+        Effect.succeed({ ok: false, error: err }),
       ),
     ),
   );

@@ -19,10 +19,7 @@ interface GridResult {
   profitFactor: number;
 }
 
-function loadCandles(
-  symbol: string,
-  timeframe: string,
-): Candle[] {
+function loadCandles(symbol: string, timeframe: string): Candle[] {
   const dbPath = resolve(homedir(), ".neuratrade", "data", "neuratrade.db");
   const db = new Database(dbPath);
   const [base, quote] = symbol.split("/");
@@ -39,13 +36,13 @@ function loadCandles(
        ORDER BY o.timestamp ASC`,
     )
     .all(base, quote, timeframe) as Array<{
-      open: number;
-      high: number;
-      low: number;
-      close: number;
-      volume: number;
-      timestamp: string;
-    }>;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    timestamp: string;
+  }>;
   db.close();
   return rows;
 }
@@ -120,7 +117,7 @@ function runGrid(
       if (c.high >= target) {
         const exitPrice = target / slippage;
         const pnl = (exitPrice - entryPrice) / entryPrice;
-        const fee = options.feePct / 100 * 2;
+        const fee = (options.feePct / 100) * 2;
         const net = pnl - fee;
         capital *= 1 + net;
         if (net > 0) {
@@ -134,7 +131,7 @@ function runGrid(
       } else if (c.low <= stop) {
         const exitPrice = stop * slippage;
         const pnl = (exitPrice - entryPrice) / entryPrice;
-        const fee = options.feePct / 100 * 2;
+        const fee = (options.feePct / 100) * 2;
         const net = pnl - fee;
         capital *= 1 + net;
         if (net > 0) {
@@ -153,7 +150,7 @@ function runGrid(
       if (c.low <= target) {
         const exitPrice = target * slippage;
         const pnl = (entryPrice - exitPrice) / entryPrice;
-        const fee = options.feePct / 100 * 2;
+        const fee = (options.feePct / 100) * 2;
         const net = pnl - fee;
         capital *= 1 + net;
         if (net > 0) {
@@ -167,7 +164,7 @@ function runGrid(
       } else if (c.high >= stop) {
         const exitPrice = stop / slippage;
         const pnl = (entryPrice - exitPrice) / entryPrice;
-        const fee = options.feePct / 100 * 2;
+        const fee = (options.feePct / 100) * 2;
         const net = pnl - fee;
         capital *= 1 + net;
         if (net > 0) {
@@ -185,11 +182,13 @@ function runGrid(
 
   const totalTrades = totalWins + totalLosses;
   return {
-    totalReturnPct: ((capital - options.initialCapital) / options.initialCapital) * 100,
+    totalReturnPct:
+      ((capital - options.initialCapital) / options.initialCapital) * 100,
     maxDrawdownPct: maxDrawdown * 100,
     winRate: totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0,
     totalTrades,
-    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
+    profitFactor:
+      grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
   };
 }
 
@@ -199,7 +198,10 @@ const timeframe = "15m";
 const FEE_PCT = 0.2; // 0.1% per side = criterion
 const SLIPPAGE_BPS = 5;
 
-function gridSearch(candles: Candle[], subset: [number, number]): GridResult & { params: object } {
+function gridSearch(
+  candles: Candle[],
+  subset: [number, number],
+): GridResult & { params: object } {
   let best: (GridResult & { params: object }) | null = null;
   for (const step of [0.5, 0.8, 1.0, 1.5, 2.0]) {
     for (const maxGrids of [2, 3, 5]) {
@@ -224,7 +226,9 @@ function gridSearch(candles: Candle[], subset: [number, number]): GridResult & {
 
 for (const symbol of symbols) {
   const candles = loadCandles(symbol, timeframe);
-  console.log(`\n=== Walk-forward grid ${symbol} ${timeframe}: ${candles.length} candles ===`);
+  console.log(
+    `\n=== Walk-forward grid ${symbol} ${timeframe}: ${candles.length} candles ===`,
+  );
   const trainSize = 96 * 30; // 30 days
   const testSize = 96 * 10; // 10 days
   let start = 0;
@@ -239,7 +243,10 @@ for (const symbol of symbols) {
   while (start + trainSize + testSize <= candles.length) {
     windowNum++;
     const train = [start, start + trainSize] as [number, number];
-    const test = [start + trainSize, start + trainSize + testSize] as [number, number];
+    const test = [start + trainSize, start + trainSize + testSize] as [
+      number,
+      number,
+    ];
     const best = gridSearch(candles, train);
     const testRes = runGrid(candles.slice(...test), {
       gridStepPct: (best.params as { step: number }).step,
@@ -263,7 +270,9 @@ for (const symbol of symbols) {
 
   aggregateReturn = ((runningCapital - 20) / 20) * 100;
   console.log(`\nAggregate return: ${aggregateReturn.toFixed(2)}%`);
-  console.log(`Profitable windows: ${wins}/${windows} (${((wins / windows) * 100).toFixed(1)}%)`);
+  console.log(
+    `Profitable windows: ${wins}/${windows} (${((wins / windows) * 100).toFixed(1)}%)`,
+  );
   console.log(`Max single-window DD: ${maxDd.toFixed(2)}%`);
   console.log(`Total test trades: ${totalTestTrades}`);
 }
