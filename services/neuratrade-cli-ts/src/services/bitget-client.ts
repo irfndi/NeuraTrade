@@ -70,17 +70,19 @@ function parseBitgetErrorCode(body: string): string | undefined {
   return match?.[1];
 }
 
-const NON_SYMBOL_PARAMETER_RE =
-  /\b(margincoin|margin_coin|producttype|product_type|leverage|holdside|hold_side|orderid|order_id|clientoid|client_oid|coin|size|price|amount|direction|timestamp)\b/i;
+const SYMBOL_OR_CONTRACT_PARAM_RE =
+  /\b(symbols?|contracts?|instruments?|instid|inst_id|tradecoin|trade_coin)\b/i;
 
 /**
  * True when a `BitgetApiError` proves the instrument/contract itself is
  * unsupported. Bitget returns code 40034 ("parameter does not exist") for a
- * variety of parameter defects, so the code alone is not proof: the message
- * must indicate a missing contract/symbol parameter (e.g. "Parameter symbol
- * does not exist" or the demo proxy's generic "Parameter does not exist") and
- * must NOT name a non-symbol parameter (marginCoin, productType, ...). Anything
- * ambiguous propagates, so callers never mistake a config defect for an
+ * variety of parameter defects, so the code alone is not proof. To fail closed
+ * we only treat a 40034 as an unsupported instrument when the message
+ * *positively* names a symbol/contract/instrument parameter (e.g. "Parameter
+ * symbol does not exist") or is the demo proxy's bare generic message with no
+ * parameter named at all ("Parameter does not exist"). Any named parameter that
+ * is not obviously a symbol — marginCoin, clientType, leverage, ... — is a
+ * configuration defect and must propagate so callers never mistake it for an
  * absent position or an untradeable instrument.
  */
 export function isBitgetUnsupportedInstrumentError(
@@ -90,7 +92,13 @@ export function isBitgetUnsupportedInstrumentError(
   if (!/does not exist|not exist|no such parameter/i.test(error.body)) {
     return false;
   }
-  return !NON_SYMBOL_PARAMETER_RE.test(error.body);
+  const namedParameter = /parameter\s+(\S+)\s+does not exist/i.exec(error.body);
+  // Bare "Parameter does not exist" (no parameter named) is the demo proxy's
+  // generic contract-missing message -> unsupported instrument.
+  if (namedParameter === null) return true;
+  // Fail closed: a named parameter only counts when it positively identifies a
+  // symbol/contract/instrument. Anything else is a config defect.
+  return SYMBOL_OR_CONTRACT_PARAM_RE.test(namedParameter[1]);
 }
 
 // ---------------------------------------------------------------------------
