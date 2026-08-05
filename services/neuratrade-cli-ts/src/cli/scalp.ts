@@ -3734,7 +3734,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
           const result =
             args.strategyType === "grid"
               ? yield* runGridIteration(
-                  makeGridOptions(entry.symbol, entryExchange, entry.gridParams),
+                  makeGridOptions(
+                    entry.symbol,
+                    entryExchange,
+                    entry.gridParams,
+                  ),
                 )
               : args.futures
                 ? yield* runFuturesIteration(

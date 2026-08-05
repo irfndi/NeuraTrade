@@ -150,7 +150,10 @@ describe("live execution market guard", () => {
     }
 
     expect(
-      validateLiveGridConfiguration({ ...config, symbol: "ETH/USDT:USDT" }, true),
+      validateLiveGridConfiguration(
+        { ...config, symbol: "ETH/USDT:USDT" },
+        true,
+      ),
     ).toBeUndefined();
   });
 
@@ -204,7 +207,12 @@ describe("live execution market guard", () => {
       validateLiveGridWatchlist(false, "grid", [{ symbol: "ETH/USDT:USDT" }]),
     ).toBeUndefined();
     expect(
-      validateLiveGridWatchlist(true, "grid", [{ symbol: "ETH/USDT:USDT" }], true),
+      validateLiveGridWatchlist(
+        true,
+        "grid",
+        [{ symbol: "ETH/USDT:USDT" }],
+        true,
+      ),
     ).toBeUndefined();
   });
 });
