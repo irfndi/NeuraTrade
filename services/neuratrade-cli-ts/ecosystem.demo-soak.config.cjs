@@ -18,7 +18,8 @@ function loadDotEnv(file) {
     if (eq <= 0) continue;
     const key = trimmed.slice(0, eq).trim();
     let value = trimmed.slice(eq + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+    if (value.startsWith('"') && value.endsWith('"'))
+      value = value.slice(1, -1);
     env[key] = value;
   }
   return env;
@@ -26,11 +27,9 @@ function loadDotEnv(file) {
 
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 const cliTsDir = __dirname;
-const neuratradeHome =
-  (rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`).replace(
-    "${HOME}",
-    process.env.HOME,
-  );
+const neuratradeHome = (
+  rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`
+).replace("${HOME}", process.env.HOME);
 
 module.exports = {
   apps: [
