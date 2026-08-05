@@ -259,11 +259,14 @@ export function registerStatusCommand(bot: Bot, api: BackendApiClient): void {
       if (questDiagnosticsResult.status === "fulfilled") {
         const diagnostics = questDiagnosticsResult.value;
         const heartbeat = diagnostics.heartbeat as
-          Readonly<Record<string, unknown>> | undefined;
+          | Readonly<Record<string, unknown>>
+          | undefined;
         const questRuntime = diagnostics.quest_runtime as
-          Readonly<Record<string, unknown>> | undefined;
+          | Readonly<Record<string, unknown>>
+          | undefined;
         const chatRuntime = diagnostics.chat_runtime as
-          Readonly<Record<string, unknown>> | undefined;
+          | Readonly<Record<string, unknown>>
+          | undefined;
         const aiRuntime =
           readRecordField(chatRuntime, "ai_runtime") ?? undefined;
 

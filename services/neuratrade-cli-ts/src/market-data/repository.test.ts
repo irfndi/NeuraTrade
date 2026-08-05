@@ -189,7 +189,10 @@ describe("MarketDataRepositorySQLite", () => {
       .query(
         "SELECT base_currency, quote_currency FROM trading_pairs WHERE symbol = ?",
       )
-      .get("BTC/USDT:USDT") as { base_currency: string; quote_currency: string };
+      .get("BTC/USDT:USDT") as {
+      base_currency: string;
+      quote_currency: string;
+    };
     expect(pair).toEqual({ base_currency: "BTC", quote_currency: "USDT" });
 
     const loaded = await Effect.runPromise(

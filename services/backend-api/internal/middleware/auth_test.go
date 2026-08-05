@@ -469,3 +469,78 @@ func TestJWTClaims(t *testing.T) {
 		assert.NotNil(t, claims.IssuedAt)
 	})
 }
+
+func TestExtractBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"missing header", "", ""},
+		{"malformed single part", "Bearer", ""},
+		{"wrong scheme", "Basic abc123", ""},
+		{"case-insensitive scheme", "bearer token123", "token123"},
+		{"normal bearer", "Bearer token123", "token123"},
+		{"whitespace around token", "Bearer   token123  ", "token123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			if tt.header != "" {
+				req.Header.Set("Authorization", tt.header)
+			}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = req
+			assert.Equal(t, tt.want, extractBearerToken(c))
+		})
+	}
+}
+
+func TestRequireAuthOrAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := generateTestSecret()
+	am := MustNewAuthMiddleware(secret)
+	adminKey := "admin-secret-key-123"
+
+	t.Run("admin key via X-API-Key header", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/", nil)
+		c.Request.Header.Set("X-API-Key", adminKey)
+		called := false
+		am.RequireAuthOrAdmin(adminKey)(c)
+		assert.False(t, called || c.IsAborted())
+		assert.Equal(t, "admin", c.GetString("user_id"))
+		assert.Equal(t, "admin_key", c.GetString("auth_method"))
+	})
+
+	t.Run("admin key via Authorization bearer", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/", nil)
+		c.Request.Header.Set("Authorization", "Bearer "+adminKey)
+		am.RequireAuthOrAdmin(adminKey)(c)
+		assert.Equal(t, "admin", c.GetString("user_id"))
+		assert.Equal(t, "admin_key", c.GetString("auth_method"))
+	})
+
+	t.Run("no credentials returns unauthorized", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/", nil)
+		am.RequireAuthOrAdmin(adminKey)(c)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("valid JWT falls through to standard auth", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		token, err := am.GenerateToken("user-42", "user@example.com", time.Hour)
+		require.NoError(t, err)
+		c.Request = httptest.NewRequest("GET", "/", nil)
+		c.Request.Header.Set("Authorization", "Bearer "+token)
+		am.RequireAuthOrAdmin(adminKey)(c)
+		assert.Equal(t, "user-42", c.GetString("user_id"))
+	})
+}

@@ -34,6 +34,9 @@ async function snapshot(root: string): Promise<readonly string[]> {
     const children = await readdir(path, { withFileTypes: true });
     for (const child of children) {
       const childPath = join(path, child.name);
+      // SQLite WAL-mode transient files (-wal/-shm) are timing artifacts of
+      // the DB close/checkpoint and must not be treated as state changes.
+      if (child.name.endsWith("-wal") || child.name.endsWith("-shm")) continue;
       entries.push(
         `${childPath}:${child.isDirectory() ? "directory" : (await stat(childPath)).size}`,
       );

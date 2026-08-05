@@ -8,13 +8,13 @@ const rows = db
     "SELECT open_price as open, high_price as high, low_price as low, close_price as close, volume, timestamp FROM ohlcv_data WHERE exchange_id = (SELECT id FROM exchanges WHERE name = ?) AND trading_pair_id = (SELECT id FROM trading_pairs WHERE symbol = ?) AND timeframe = ? ORDER BY timestamp ASC",
   )
   .all("bitget-futures", "ETH/USDT:USDT", "1h") as {
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-    timestamp: string;
-  }[];
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: string;
+}[];
 
 const candles = rows.map((r) => ({
   open: r.open,
@@ -87,8 +87,15 @@ function run(candles: CandleLike[], options: Opts) {
     }
 
     const fee = (options.feePct / 100) * 2;
-    const closeTrade = (exitPrice: number, exitSide: "long" | "short", isLiquidation: boolean) => {
-      const pricePnl = exitSide === "long" ? (exitPrice - entryPrice) / entryPrice : (entryPrice - exitPrice) / entryPrice;
+    const closeTrade = (
+      exitPrice: number,
+      exitSide: "long" | "short",
+      isLiquidation: boolean,
+    ) => {
+      const pricePnl =
+        exitSide === "long"
+          ? (exitPrice - entryPrice) / entryPrice
+          : (entryPrice - exitPrice) / entryPrice;
       const net = pricePnl - fee;
       const leveragedReturn = isLiquidation ? -1 : net * leverage;
       const rawCapitalAfter = capital * (1 + leveragedReturn);
@@ -107,14 +114,16 @@ function run(candles: CandleLike[], options: Opts) {
       const target = entryPrice + step * options.targetRatio;
       const stop = entryPrice - step * options.gridMaxGrids;
       const liq = entryPrice * (1 - 1 / leverage);
-      if (leverage > 1 && c.low <= liq) closeTrade(liq * slippage, "long", true);
+      if (leverage > 1 && c.low <= liq)
+        closeTrade(liq * slippage, "long", true);
       else if (c.high >= target) closeTrade(target / slippage, "long", false);
       else if (c.low <= stop) closeTrade(stop * slippage, "long", false);
     } else {
       const target = entryPrice - step * options.targetRatio;
       const stop = entryPrice + step * options.gridMaxGrids;
       const liq = entryPrice * (1 + 1 / leverage);
-      if (leverage > 1 && c.high >= liq) closeTrade(liq / slippage, "short", true);
+      if (leverage > 1 && c.high >= liq)
+        closeTrade(liq / slippage, "short", true);
       else if (c.low <= target) closeTrade(target * slippage, "short", false);
       else if (c.high >= stop) closeTrade(stop / slippage, "short", false);
     }
@@ -122,11 +131,13 @@ function run(candles: CandleLike[], options: Opts) {
 
   const totalTrades = totalWins + totalLosses;
   return {
-    totalReturnPct: ((capital - options.initialCapital) / options.initialCapital) * 100,
+    totalReturnPct:
+      ((capital - options.initialCapital) / options.initialCapital) * 100,
     maxDrawdownPct: maxDrawdown * 100,
     winRate: totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0,
     totalTrades,
-    profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
+    profitFactor:
+      grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
   };
 }
 

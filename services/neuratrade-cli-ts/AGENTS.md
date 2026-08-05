@@ -76,7 +76,7 @@ bun run scripts/scalp-readiness-scan.ts --exchange bitget-futures --symbol BTC/U
 bun run scripts/sweep-to-profile.ts --sweep /tmp/sweep-btc-5m.json
 ```
 
-**Wired `scalp` subcommands**: backtest, optimize, scan, paper-trade, soak, profile, library, walk-forward, readiness, demo-readiness. Anything else you may remember (`select`, `validate`, `preset`, `run`) is NOT wired — `selectBestForSymbol`/`validateWatchlist`/`applyPreset` exist only as exported functions used by walk-forward and tests.
+**Wired `scalp` subcommands**: backtest, optimize, scan, paper-trade, soak, profile, library, walk-forward, readiness, demo-readiness, grid-universe-scan, watchlist. Anything else you may remember (`select`, `validate`, `preset`, `run`) is NOT wired — `selectBestForSymbol`/`validateWatchlist`/`applyPreset` exist only as exported functions used by walk-forward and tests.
 
 ## READINESS GATES (`scalp readiness`)
 

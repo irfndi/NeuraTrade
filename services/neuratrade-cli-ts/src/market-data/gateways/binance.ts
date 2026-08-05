@@ -114,19 +114,17 @@ export function fetchOHLCV(
       `/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`,
     );
 
-    return data.map(
-      (c): Candle => ({
-        exchange: "binance",
-        symbol,
-        timeframe,
-        open: Number(c[1]),
-        high: Number(c[2]),
-        low: Number(c[3]),
-        close: Number(c[4]),
-        volume: Number(c[5]),
-        timestamp: new Date(c[0]),
-      }),
-    );
+    return data.map((c): Candle => ({
+      exchange: "binance",
+      symbol,
+      timeframe,
+      open: Number(c[1]),
+      high: Number(c[2]),
+      low: Number(c[3]),
+      close: Number(c[4]),
+      volume: Number(c[5]),
+      timestamp: new Date(c[0]),
+    }));
   });
 }
 

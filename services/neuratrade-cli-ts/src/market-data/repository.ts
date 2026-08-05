@@ -321,14 +321,12 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
           funding_rate: number;
           timestamp: string;
         }>;
-        return rows.map(
-          (r): FundingRate => ({
-            exchange,
-            symbol,
-            fundingRate: r.funding_rate,
-            timestamp: new Date(r.timestamp),
-          }),
-        );
+        return rows.map((r): FundingRate => ({
+          exchange,
+          symbol,
+          fundingRate: r.funding_rate,
+          timestamp: new Date(r.timestamp),
+        }));
       },
       catch: (err) =>
         new MarketDataRepositoryError(
@@ -512,19 +510,17 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
           return rows
             .slice()
             .reverse()
-            .map(
-              (r): Candle => ({
-                exchange: query.exchange,
-                symbol: query.symbol,
-                timeframe: query.timeframe,
-                open: r.open_price,
-                high: r.high_price,
-                low: r.low_price,
-                close: r.close_price,
-                volume: r.volume,
-                timestamp: new Date(r.timestamp),
-              }),
-            );
+            .map((r): Candle => ({
+              exchange: query.exchange,
+              symbol: query.symbol,
+              timeframe: query.timeframe,
+              open: r.open_price,
+              high: r.high_price,
+              low: r.low_price,
+              close: r.close_price,
+              volume: r.volume,
+              timestamp: new Date(r.timestamp),
+            }));
         },
         catch: (err) =>
           new MarketDataRepositoryError(
