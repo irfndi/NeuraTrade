@@ -70,6 +70,29 @@ function parseBitgetErrorCode(body: string): string | undefined {
   return match?.[1];
 }
 
+const NON_SYMBOL_PARAMETER_RE =
+  /\b(margincoin|margin_coin|producttype|product_type|leverage|holdside|hold_side|orderid|order_id|clientoid|client_oid|coin|size|price|amount|direction|timestamp)\b/i;
+
+/**
+ * True when a `BitgetApiError` proves the instrument/contract itself is
+ * unsupported. Bitget returns code 40034 ("parameter does not exist") for a
+ * variety of parameter defects, so the code alone is not proof: the message
+ * must indicate a missing contract/symbol parameter (e.g. "Parameter symbol
+ * does not exist" or the demo proxy's generic "Parameter does not exist") and
+ * must NOT name a non-symbol parameter (marginCoin, productType, ...). Anything
+ * ambiguous propagates, so callers never mistake a config defect for an
+ * absent position or an untradeable instrument.
+ */
+export function isBitgetUnsupportedInstrumentError(
+  error: BitgetApiError,
+): boolean {
+  if (error.code !== "40034") return false;
+  if (!/does not exist|not exist|no such parameter/i.test(error.body)) {
+    return false;
+  }
+  return !NON_SYMBOL_PARAMETER_RE.test(error.body);
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -880,7 +903,7 @@ function makeBitgetClientImpl(
         if (
           symbol.trim() !== "" &&
           error instanceof BitgetApiError &&
-          error.code === "40034" &&
+          isBitgetUnsupportedInstrumentError(error) &&
           error.endpoint.includes("/single-position")
         ) {
           return Effect.succeed({ data: [] });

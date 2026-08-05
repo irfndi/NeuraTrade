@@ -1453,41 +1453,45 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
+  private runWatchlistUpsert(entries: readonly WatchlistEntry[]): void {
+    const upsert = this.db.query(
+      `INSERT INTO watchlist
+       (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
+        aggregate_return_pct, grid_step_pct, grid_max_grids,
+        grid_pause_after_loss_bars, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+         return_pct = excluded.return_pct,
+         profitable_windows_pct = excluded.profitable_windows_pct,
+         aggregate_return_pct = excluded.aggregate_return_pct,
+         grid_step_pct = excluded.grid_step_pct,
+         grid_max_grids = excluded.grid_max_grids,
+         grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+         updated_at = excluded.updated_at`,
+    );
+    for (const e of entries) {
+      upsert.run(
+        e.exchange,
+        e.symbol,
+        e.timeframe,
+        e.returnPct,
+        e.profitableWindowsPct,
+        e.aggregateReturnPct,
+        e.gridStepPct,
+        e.gridMaxGrids,
+        e.gridPauseAfterLossBars,
+        e.updatedAt.toISOString(),
+      );
+    }
+  }
+
   upsertWatchlist(
     entries: readonly WatchlistEntry[],
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
         this.db.transaction(() => {
-          const upsert = this.db.query(
-            `INSERT INTO watchlist
-             (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
-              aggregate_return_pct, grid_step_pct, grid_max_grids,
-              grid_pause_after_loss_bars, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
-               return_pct = excluded.return_pct,
-               profitable_windows_pct = excluded.profitable_windows_pct,
-               aggregate_return_pct = excluded.aggregate_return_pct,
-               grid_step_pct = excluded.grid_step_pct,
-               grid_max_grids = excluded.grid_max_grids,
-               grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
-               updated_at = excluded.updated_at`,
-          );
-          for (const e of entries) {
-            upsert.run(
-              e.exchange,
-              e.symbol,
-              e.timeframe,
-              e.returnPct,
-              e.profitableWindowsPct,
-              e.aggregateReturnPct,
-              e.gridStepPct,
-              e.gridMaxGrids,
-              e.gridPauseAfterLossBars,
-              e.updatedAt.toISOString(),
-            );
-          }
+          this.runWatchlistUpsert(entries);
         })();
       },
       catch: (err) =>
@@ -1509,35 +1513,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           this.db
             .query("DELETE FROM watchlist WHERE exchange = ? AND timeframe = ?")
             .run(exchange, timeframe);
-          const upsert = this.db.query(
-            `INSERT INTO watchlist
-             (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
-              aggregate_return_pct, grid_step_pct, grid_max_grids,
-              grid_pause_after_loss_bars, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
-               return_pct = excluded.return_pct,
-               profitable_windows_pct = excluded.profitable_windows_pct,
-               aggregate_return_pct = excluded.aggregate_return_pct,
-               grid_step_pct = excluded.grid_step_pct,
-               grid_max_grids = excluded.grid_max_grids,
-               grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
-               updated_at = excluded.updated_at`,
-          );
-          for (const e of entries) {
-            upsert.run(
-              e.exchange,
-              e.symbol,
-              e.timeframe,
-              e.returnPct,
-              e.profitableWindowsPct,
-              e.aggregateReturnPct,
-              e.gridStepPct,
-              e.gridMaxGrids,
-              e.gridPauseAfterLossBars,
-              e.updatedAt.toISOString(),
-            );
-          }
+          this.runWatchlistUpsert(entries);
         })();
       },
       catch: (err) =>

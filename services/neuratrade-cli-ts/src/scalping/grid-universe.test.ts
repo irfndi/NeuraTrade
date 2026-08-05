@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import * as fc from "fast-check";
 import { computeFillFrequencyPct } from "./grid-universe.js";
 
 const candle = (open: number, high: number, low: number) => ({
@@ -51,5 +52,32 @@ describe("computeFillFrequencyPct", () => {
     // regressing the doc'd 0-100 % semantics.
     const candles = [candle(100, 102.1, 97.9)];
     expect(computeFillFrequencyPct(candles, 2, 80)).toBe(100);
+  });
+
+  it("stays within 0..100 and never rises as the grid step widens", () => {
+    const arbCandle = fc
+      .record({
+        open: fc.double({ min: 1, max: 1000, noNaN: true }),
+        up: fc.double({ min: 0, max: 50, noNaN: true }),
+        down: fc.double({ min: 0, max: 50, noNaN: true }),
+      })
+      .map(({ open, up, down }) => ({
+        open,
+        high: open + up,
+        low: open - down,
+      }));
+    fc.assert(
+      fc.property(
+        fc.array(arbCandle, { minLength: 1, maxLength: 50 }),
+        fc.double({ min: 0.1, max: 5, noNaN: true }),
+        (candles, step) => {
+          const narrow = computeFillFrequencyPct(candles, step, 1);
+          const wide = computeFillFrequencyPct(candles, step * 2, 1);
+          expect(narrow).toBeGreaterThanOrEqual(0);
+          expect(narrow).toBeLessThanOrEqual(100);
+          expect(wide).toBeLessThanOrEqual(narrow);
+        },
+      ),
+    );
   });
 });

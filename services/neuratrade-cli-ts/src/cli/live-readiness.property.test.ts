@@ -49,20 +49,15 @@ describe("validated live grid profile properties", () => {
 
   it("requires the exchange sandbox for every live execution", () => {
     fc.assert(
-      fc.property(
-        fc.option(fc.string(), { nil: undefined }),
-        (sandboxValue) => {
-          const sandboxEnabled =
-            sandboxValue === "true" || sandboxValue === "1";
-          const result = validateLiveSandboxMode(true, sandboxValue);
-          if (sandboxEnabled) {
-            expect(result).toBeUndefined();
-          } else {
-            expect(result).toBeDefined();
-          }
-          expect(validateLiveSandboxMode(false, sandboxValue)).toBeUndefined();
-        },
-      ),
+      fc.property(fc.boolean(), (sandbox) => {
+        const result = validateLiveSandboxMode(true, sandbox);
+        if (sandbox) {
+          expect(result).toBeUndefined();
+        } else {
+          expect(result).toBeDefined();
+        }
+        expect(validateLiveSandboxMode(false, sandbox)).toBeUndefined();
+      }),
       { numRuns: 100 },
     );
   });

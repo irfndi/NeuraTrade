@@ -7,7 +7,7 @@ import { ConfigLive } from "../services/config.js";
 import {
   SqliteClient,
   SqliteClientLiveRaw,
-  SqliteError,
+  type SqliteError,
 } from "../services/sqlite.js";
 import {
   MarketDataRepository,
@@ -45,7 +45,9 @@ import {
   BitgetClientLiveConfig,
   BitgetClient,
   BitgetApiError,
+  isBitgetUnsupportedInstrumentError,
 } from "../services/bitget-client.js";
+import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -2876,7 +2878,12 @@ export interface WatchlistEntry {
   readonly symbol: string;
   readonly exchange?: string;
   readonly returnPct: number;
-  readonly sharpe: number;
+  /**
+   * Present on file-based watchlists. DB-backed rows have no persisted Sharpe
+   * (the watchlist schema has no sharpe column) and nothing downstream ranks on
+   * this field, so it may be absent.
+   */
+  readonly sharpe?: number;
   readonly bestParams?: {
     readonly atrStopMultiplier: number;
     readonly atrTakeProfitMultiplier: number;
@@ -3156,19 +3163,24 @@ export const paperTradeCommand = Command.make(
           Effect.gen(function* () {
             const paperRepo = yield* PaperTradingRepository;
             yield* paperRepo.ensureTables();
+            const dbExchange = resolveFuturesMarketExchange(
+              mergedArgs.exchange,
+              mergedArgs.futures,
+            );
             const dbEntries = yield* paperRepo.listWatchlist(
-              resolveFuturesMarketExchange(
-                mergedArgs.exchange,
-                mergedArgs.futures,
-              ),
+              dbExchange,
               mergedArgs.timeframe,
             );
+            if (dbEntries.length === 0) {
+              yield* Console.warn(
+                `⚠️ DB watchlist is empty for ${dbExchange}:${mergedArgs.timeframe} — paper-trade will run with zero symbols; run grid-universe-scan with a matching --exchange first`,
+              );
+            }
             return dbEntries.map(
               (e): WatchlistEntry => ({
                 symbol: e.symbol,
                 exchange: e.exchange,
-                returnPct: e.aggregateReturnPct,
-                sharpe: e.aggregateReturnPct > 0 ? 1 : 0,
+                returnPct: e.returnPct,
                 gridParams: {
                   gridStepPct: e.gridStepPct,
                   gridMaxGrids: e.gridMaxGrids,
@@ -3269,9 +3281,9 @@ export function validateLiveExecutionMarket(
 
 export function validateLiveSandboxMode(
   live: boolean,
-  sandboxValue: string | undefined,
+  sandbox: boolean,
 ): string | undefined {
-  if (live && sandboxValue !== "true" && sandboxValue !== "1") {
+  if (live && !sandbox) {
     return "live execution is disabled until BITGET_USE_SANDBOX=true is configured for the demo gate";
   }
   return undefined;
@@ -3398,6 +3410,15 @@ function parseProductType(value: string): BitgetProductType {
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
     const strategyType = args.strategyType ?? "signal";
+    // Sandbox is a property of the resolved Bitget client configuration, not
+    // free-floating environment state: BitgetClientLiveConfig derives isDemo
+    // from the exact same BitgetConfig.useSandbox value, so validation
+    // relaxation and demo routing can never disagree.
+    const useSandbox = yield* BitgetConfig.pipe(
+      Effect.map((config) => config.useSandbox),
+      Effect.provide(BitgetConfigLive),
+      Effect.orDie,
+    );
     const liveMarketError = validateLiveExecutionMarket(
       args.live,
       args.futures,
@@ -3405,10 +3426,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
     }
-    const liveSandboxError = validateLiveSandboxMode(
-      args.live,
-      process.env.BITGET_USE_SANDBOX,
-    );
+    const liveSandboxError = validateLiveSandboxMode(args.live, useSandbox);
     if (liveSandboxError !== undefined) {
       return yield* Effect.fail(new Error(liveSandboxError));
     }
@@ -3423,8 +3441,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.live,
       strategyType,
       args.entries,
-      process.env.BITGET_USE_SANDBOX === "true" ||
-        process.env.BITGET_USE_SANDBOX === "1",
+      useSandbox,
     );
     if (liveGridWatchlistError !== undefined) {
       return yield* Effect.fail(new Error(liveGridWatchlistError));
@@ -3458,8 +3475,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         args.live &&
           strategyType === "grid" &&
           (args.entries?.length ?? 0) > 0 &&
-          (process.env.BITGET_USE_SANDBOX === "true" ||
-            process.env.BITGET_USE_SANDBOX === "1"),
+          useSandbox,
       );
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
@@ -3616,11 +3632,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       isLive: args.live,
       executionEnvironment:
-        args.live &&
-        process.env.BITGET_USE_SANDBOX !== "true" &&
-        process.env.BITGET_USE_SANDBOX !== "1"
-          ? "bitget-live"
-          : "bitget-demo",
+        args.live && !useSandbox ? "bitget-live" : "bitget-demo",
       productType,
       marginMode,
     });
@@ -5528,6 +5540,16 @@ export const gridUniverseScanCommand = Command.make(
         ? resolve(path.homeDir, "data", args.output.value)
         : undefined;
 
+      // One resolved futures-market key for delete-write-read consistency:
+      // scan with --exchange binance then paper-trade --futures must both
+      // resolve to bitget-futures, or the watchlist lookups disagree.
+      const marketExchange = resolveFuturesMarketExchange(args.exchange, true);
+      if (args.minFillFrequencyPct <= 0) {
+        yield* Console.warn(
+          `⚠️ --min-fill-frequency-pct is 0 — the fill gate is DISABLED; survivors whose grid step is too wide to fill live will not be rejected`,
+        );
+      }
+
       const options: GridUniverseOptions = {
         exchange: args.exchange,
         timeframe: args.timeframe,
@@ -5552,7 +5574,11 @@ export const gridUniverseScanCommand = Command.make(
           const paperRepo = yield* PaperTradingRepository;
           yield* paperRepo.ensureTables();
           const entries: DbWatchlistEntry[] = result.survivors.map((e) => ({
-            exchange: args.exchange,
+            // Persist under the resolved futures-market key so scan-write
+            // and paper-trade read always agree, even when the scan was run
+            // with a raw exchange name that resolves differently (e.g.
+            // --exchange binance + futures => bitget-futures).
+            exchange: marketExchange,
             symbol: e.symbol,
             timeframe: args.timeframe,
             returnPct: e.walkForward.aggregateReturnPct,
@@ -5569,12 +5595,12 @@ export const gridUniverseScanCommand = Command.make(
             );
           } else {
             yield* paperRepo.replaceWatchlist(
-              args.exchange,
+              marketExchange,
               args.timeframe,
               entries,
             );
             yield* Console.log(
-              `💾 Watchlist upserted: ${entries.length} survivors into DB (${args.exchange}:${args.timeframe})`,
+              `💾 Watchlist replaced: ${entries.length} survivors now in DB (${marketExchange}:${args.timeframe}); prior symbols in this scope were removed`,
             );
           }
 
@@ -5607,7 +5633,18 @@ export const gridUniverseScanCommand = Command.make(
           const gateway = yield* MarketDataGateway;
           const futuresSymbols = yield* gateway
             .fetchSymbols(args.exchange)
-            .pipe(Effect.catch(() => Effect.succeed<readonly string[]>([])));
+            .pipe(
+              Effect.catch((err) =>
+                Effect.gen(function* () {
+                  const reason =
+                    err instanceof Error ? err.message : String(err);
+                  yield* Console.warn(
+                    `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
+                  );
+                  return [] as readonly string[];
+                }),
+              ),
+            );
           const futuresSet = new Set(futuresSymbols);
           const canonicalSymbol = (symbol: string) =>
             symbol.includes(":")
@@ -5650,11 +5687,12 @@ export const gridUniverseScanCommand = Command.make(
               } else if (
                 probe._tag === "Failure" &&
                 probe.failure instanceof BitgetApiError &&
-                probe.failure.code === "40034"
+                isBitgetUnsupportedInstrumentError(probe.failure)
               ) {
-                // 40034 = unsupported instrument on the demo engine. This is the
-                // only probe outcome that proves the symbol is untradeable; auth,
-                // rate-limit, and transport failures must NOT drop survivors.
+                // Only a probe error that proves the instrument is unsupported
+                // (40034 with a missing-symbol/contract message) drops the
+                // survivor; auth, rate-limit, transport, and other parameter
+                // defects must NOT drop survivors.
                 yield* Console.log(
                   `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo`,
                 );
