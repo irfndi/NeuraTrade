@@ -43,7 +43,7 @@ import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js"
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
-import { BitgetClientLiveConfig } from "../services/bitget-client.js";
+import { BitgetClientLiveConfig, BitgetClient } from "../services/bitget-client.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -5598,17 +5598,37 @@ export const gridUniverseScanCommand = Command.make(
             ),
           );
 
-          const survivors =
+          let survivors =
             rawResult.survivors.length > 0 && futuresSet.size > 0
               ? rawResult.survivors.filter((e) => isFuturesSymbol(e.symbol))
               : rawResult.survivors;
-          const result = { entries: rawResult.entries, survivors };
 
-          if (survivors.length < rawResult.survivors.length) {
-            yield* Console.log(
-              `🎯 Filtered ${rawResult.survivors.length - survivors.length} survivors without a live ${args.exchange} contract`,
-            );
+          if (survivors.length > 0) {
+            const client = yield* BitgetClient;
+            const tradeable: GridUniverseEntry[] = [];
+            for (const entry of survivors) {
+              const probe = yield* client
+                .getLeverage({
+                  symbol: entry.symbol,
+                  productType: "USDT-FUTURES",
+                })
+                .pipe(Effect.result);
+              if (probe._tag === "Success") {
+                tradeable.push(entry);
+              } else {
+                yield* Console.log(
+                  `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo`,
+                );
+              }
+            }
+            if (tradeable.length < survivors.length) {
+              yield* Console.log(
+                `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
+              );
+            }
+            survivors = tradeable;
           }
+          const result = { entries: rawResult.entries, survivors };
 
           yield* Console.log(
             `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
