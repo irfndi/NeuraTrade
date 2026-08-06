@@ -686,6 +686,10 @@ export function runGridPaperTradingIteration(
                 productType,
                 marginMode,
               );
+              // Grids trade both directions on one symbol: force one-way
+              // position mode so Bitget doesn't reject orders with 40774
+              // (order type must match the account's position type).
+              yield* adapter.setPositionMode(productType, "one_way");
               const fill = yield* adapter.placeOrder({
                 symbol: options.symbol,
                 side: entrySide === "long" ? "buy" : "sell",

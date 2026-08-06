@@ -46,6 +46,7 @@ import {
   BitgetClient,
   BitgetApiError,
   isBitgetUnsupportedInstrumentError,
+  toBitgetFuturesSymbol,
 } from "../services/bitget-client.js";
 import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
@@ -5404,6 +5405,32 @@ const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
   gridPauseAfterLossBars: [0, 6, 24],
 } as const;
 
+/**
+ * True when a 40034 body names the probed symbol itself, e.g.
+ * `Parameter BLESSUSDT does not exist`. Bitget reports the instrument as
+ * the parameter value rather than a parameter *name*, so
+ * `isBitgetUnsupportedInstrumentError` (which only accepts literal
+ * symbol/contract/instrument parameter names) misses it. Still fails closed:
+ * a message naming any other parameter (marginCoin, clientType, ...) or an
+ * unrelated token is not treated as an unsupported instrument.
+ */
+export function probeNamesProbedSymbol(
+  error: BitgetApiError,
+  probedSymbol: string,
+  probedProductType: BitgetProductType = "USDT-FUTURES",
+): boolean {
+  if (error.code !== "40034") return false;
+  // Bitget uses both "Parameter X does not exist" and "Parameter X not exist".
+  const token = /\bparameter\s+(\S+)\s+(?:does not|not)\s+exist\b/i.exec(
+    error.body,
+  )?.[1];
+  if (token === undefined) return false;
+  const bitgetSymbol = toBitgetFuturesSymbol(
+    probedSymbol,
+    probedProductType,
+  ).symbol;
+  return token.toUpperCase() === bitgetSymbol.toUpperCase();
+}
 const gridUniverseExchangeOption = Options.text("exchange").pipe(
   Options.withDefault("bitget-futures"),
   Options.withDescription("Exchange to scan for grid candidates"),
@@ -5676,7 +5703,12 @@ export const gridUniverseScanCommand = Command.make(
               } else if (
                 probe._tag === "Failure" &&
                 probe.failure instanceof BitgetApiError &&
-                isBitgetUnsupportedInstrumentError(probe.failure)
+                (isBitgetUnsupportedInstrumentError(probe.failure) ||
+                  probeNamesProbedSymbol(
+                    probe.failure,
+                    entry.symbol,
+                    "USDT-FUTURES",
+                  ))
               ) {
                 // Only a probe error that proves the instrument is unsupported
                 // (40034 with a missing-symbol/contract message) drops the
@@ -5688,9 +5720,11 @@ export const gridUniverseScanCommand = Command.make(
               } else {
                 const reason =
                   probe._tag === "Failure"
-                    ? probe.failure instanceof Error
-                      ? probe.failure.message
-                      : String(probe.failure)
+                    ? probe.failure instanceof BitgetApiError
+                      ? `BitgetApiError code=${probe.failure.code ?? "-"}: ${probe.failure.body.slice(0, 140)}`
+                      : probe.failure instanceof Error
+                        ? probe.failure.message
+                        : String(probe.failure)
                     : "unknown";
                 yield* Console.log(
                   `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,

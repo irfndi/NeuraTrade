@@ -30,6 +30,7 @@ import {
   validateLiveGridConfiguration,
   validateLiveGridWatchlist,
   validateLiveSoakExecution,
+  probeNamesProbedSymbol,
   walkForwardCommand,
   buildValidateBacktestArgs,
   type LiveGridConfiguration,
@@ -1298,5 +1299,87 @@ describe("backtestProgram fill-model option forwarding", () => {
       entryOnClose: true,
     });
     db.close();
+  });
+});
+
+describe("probeNamesProbedSymbol", () => {
+  const apiErr = (code: string, body: string) =>
+    new (class extends Error {
+      readonly status = 400;
+      readonly body = body;
+      readonly code = code;
+      readonly endpoint = "/api/v2/mix/account/account";
+    })() as never;
+
+  it("drops a 40034 that names the probed symbol as the parameter value", () => {
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter BLESSUSDT does not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(true);
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter SOLUSDT does not exist"}',
+        ),
+        "SOL/USDT:USDT",
+      ),
+    ).toBe(true);
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter BLESSUSDT not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed on named config parameters and unrelated tokens", () => {
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter marginCoin does not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(false);
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter clientType does not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(false);
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter FOOUSDT does not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores non-40034 codes", () => {
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40774",
+          '{"code":"40774","msg":"Parameter BLESSUSDT does not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(false);
   });
 });
