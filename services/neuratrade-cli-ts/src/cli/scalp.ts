@@ -2863,6 +2863,11 @@ const watchlistOption = Options.text("watchlist").pipe(
     "Path to a JSON watchlist in NEURATRADE_HOME/data (uses per-symbol best params)",
   ),
 );
+const noWatchlistOption = Options.boolean("no-watchlist").pipe(
+  Options.withDescription(
+    "Run paper-trade with the --symbol only, ignoring the DB watchlist fallback (validated single-candidate soaks)",
+  ),
+);
 
 const killSwitchOption = Options.boolean("kill-switch").pipe(
   Options.withDefault(false),
@@ -2913,6 +2918,7 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly maxTradesPerDay: Option.Option<number>;
   readonly minCapital: Option.Option<number>;
   readonly watchlist: Option.Option<string>;
+  readonly noWatchlist: boolean;
   readonly killSwitch: boolean;
   readonly disengage: boolean;
   readonly entries?: readonly WatchlistEntry[];
@@ -3103,6 +3109,7 @@ export const paperTradeCommand = Command.make(
     maxTradesPerDay: maxTradesPerDayOption,
     minCapital: minCapitalOption,
     watchlist: watchlistOption,
+    noWatchlist: noWatchlistOption,
     killSwitch: killSwitchOption,
     disengage: disengageOption,
     strategy: strategyOption,
@@ -3162,7 +3169,9 @@ export const paperTradeCommand = Command.make(
 
       const watchlist = yield* Option.match(mergedArgs.watchlist, {
         onNone: () =>
-          Effect.gen(function* () {
+          mergedArgs.noWatchlist
+            ? Effect.succeed([] as readonly WatchlistEntry[])
+            : Effect.gen(function* () {
             const paperRepo = yield* PaperTradingRepository;
             yield* paperRepo.ensureTables();
             const dbExchange = resolveFuturesMarketExchange(

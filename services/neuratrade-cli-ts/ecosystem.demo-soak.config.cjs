@@ -91,6 +91,7 @@ module.exports = {
         "3",
         "--chop-gate-adx",
         "24",
+        "--no-watchlist",
         "--iterations",
         "0",
         "--interval",
