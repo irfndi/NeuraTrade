@@ -92,16 +92,17 @@ export function makeBitgetFuturesAdapter(
     });
 
   // Bitget rejects prices that are not multiples of the instrument's tick
-  // (code 45115: "The price you enter should be a multiple of ..."). Round
-  // limit prices to the contract's pricePrecision; market orders carry no
-  // price (the engine passes a theoretical reference price that would fail
-  // validation on low-priced symbols such as ADA/USDT ~0.19).
+  // (code 45115: "The price you enter should be a multiple of ...") and
+  // requires a price parameter even on market orders (code 40020 when
+  // absent). Round whatever price the engine provides to the contract's
+  // pricePrecision — for market orders the value is only a reference (the
+  // fill price comes from the order detail); for limit orders it becomes
+  // the actual limit.
   const normalizePrice = (
-    type: FuturesOrderRequest["type"],
     price: Decimal | undefined,
     precision: string,
   ): string | undefined => {
-    if (type === "market" || price === undefined) return undefined;
+    if (price === undefined) return undefined;
     const decimals = Number(precision);
     return price
       .toDecimalPlaces(Number.isFinite(decimals) ? decimals : 0)
@@ -133,7 +134,6 @@ export function makeBitgetFuturesAdapter(
       // instrument tick (45115); market orders drop the price entirely.
       const contract = yield* runPreTradeGuard(order);
       const normalizedPrice = normalizePrice(
-        request.type,
         request.price,
         contract.pricePrecision,
       );

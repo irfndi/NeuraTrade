@@ -350,7 +350,8 @@ describe("BitgetFuturesExchangeAdapter", () => {
     const adapter = makeBitgetFuturesAdapter(client);
     const layer = Layer.succeed(FuturesExchangeAdapter, adapter);
 
-    // Market order with an unrounded theoretical price -> price omitted.
+    // Market order with an unrounded theoretical price -> rounded to tick
+    // (Bitget requires a price parameter even on market orders, 40020).
     await Effect.runPromise(
       Effect.gen(function* () {
         const svc = yield* FuturesExchangeAdapter;
@@ -366,7 +367,7 @@ describe("BitgetFuturesExchangeAdapter", () => {
         });
       }).pipe(Effect.provide(layer)),
     );
-    expect(calls.at(-1)).not.toContain("price");
+    expect(calls.at(-1)).toContain('"price":"0.1905"');
 
     // Limit order -> price rounded to 4 decimals.
     await Effect.runPromise(
