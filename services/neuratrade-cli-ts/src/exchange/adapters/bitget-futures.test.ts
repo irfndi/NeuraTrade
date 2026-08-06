@@ -14,7 +14,7 @@ import { money } from "../../utils/money.js";
 
 let calls: string[] = [];
 
-function makeStubClient(): BitgetClientImpl {
+function makeStubClient(overrides: { feeOverride?: string } = {}): BitgetClientImpl {
   calls = [];
   return {
     getBalances: () => Effect.succeed([]),
@@ -165,7 +165,7 @@ function makeStubClient(): BitgetClientImpl {
         priceAvg: "70000",
         filledSize: "0.1",
         filledAmount: "7000",
-        fee: "1",
+        fee: overrides.feeOverride ?? "1",
         marginMode: "crossed",
       }),
     cancelFuturesOrder: () => Effect.void,
@@ -299,6 +299,33 @@ describe("BitgetFuturesExchangeAdapter", () => {
 
     expect(fill).not.toBeNull();
     expect(calls).toContain("placeFuturesOrder:BTCUSDT:sell:true");
+  });
+
+  it("normalizes a negative exchange fee to a non-negative cost (kill-switch regression)", async () => {
+    // Bitget signs the fill fee as a negative debit; the engine's live
+    // reconciliation and demo-readiness require entryFee >= 0. Without
+    // normalization the kill switch engaged on every live fill.
+    const adapter = makeBitgetFuturesAdapter(
+      makeStubClient({
+        feeOverride: "-4.2",
+      }),
+    );
+    const layer = Layer.succeed(FuturesExchangeAdapter, adapter);
+    const fill = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* FuturesExchangeAdapter;
+        return yield* svc.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(fill.fee.toNumber()).toBe(4.2);
   });
 
   it("configures leverage, margin mode and position mode", async () => {

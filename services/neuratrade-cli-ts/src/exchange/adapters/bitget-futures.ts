@@ -169,7 +169,10 @@ export function makeBitgetFuturesAdapter(
         marginMode: data.marginMode,
         filledQty,
         filledPrice,
-        fee: money(data.fee),
+        // Bitget signs the fill fee as a negative debit; the codebase stores
+        // fees as non-negative costs (reconciliation + demo-readiness require
+        // entryFee >= 0). Normalize the sign at the exchange boundary.
+        fee: money(data.fee).abs(),
         timestamp: new Date(),
       };
       return fill;
