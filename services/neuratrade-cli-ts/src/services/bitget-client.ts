@@ -627,8 +627,12 @@ function parseContract(data: Record<string, unknown>): BitgetContract {
     ) as BitgetProductType,
     status: String(data.status ?? ""),
     symbolStatus: String(data.symbolStatus ?? data.status ?? ""),
-    pricePrecision: String(data.pricePrecision ?? "0"),
-    quantityPrecision: String(data.quantityPrecision ?? "0"),
+    // The futures contracts endpoint reports decimal places as pricePlace
+    // (e.g. ADA "4" => tick 0.0001); pricePrecision is absent there.
+    pricePrecision: String(data.pricePlace ?? data.pricePrecision ?? "0"),
+    quantityPrecision: String(
+      data.volumePlace ?? data.quantityPrecision ?? "0",
+    ),
     minTradeAmount: String(data.minTradeAmount ?? "0"),
     minTradeNum: String(data.minTradeNum ?? data.minTradeAmount ?? "0"),
     minTradeUSDT: String(data.minTradeUSDT ?? "0"),
