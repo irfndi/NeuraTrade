@@ -28,9 +28,11 @@ function loadDotEnv(file) {
 
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 
-// Promoted real-money candidate per docs/superpowers/specs/2026-08-03-gate-scored-grid-search.md:
-// step 1%, grids 1.5, pause 24, chop-gate ADX 24, trend filter 0, maker fee 0.02%/side,
-// slippage 1bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
+// Promoted real-money candidate per docs/superpowers/specs/2026-08-03-gate-scored-grid-search.md
+// and the readiness fingerprint (src/scalping/grid-candidate.ts VALIDATED_BTC_GRID_CANDIDATE):
+// step 1%, grids 1, target ratio 3, pause 24, chop-gate ADX 24, trend filter 0,
+// fee 0.06%/side, slippage 2bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
+// MUST match the manifest exactly — the provenance gate rejects fills whose fingerprint differs.
 // STOPPED BY DEFAULT (pm2 start <id> only): the demo account has ~$50 USDT and is used
 // by neuratrade-demo-soak; the readiness cohort needs a DEDICATED funded demo account
 // (bd: BTC candidate soak issue). Start with:
@@ -64,9 +66,9 @@ module.exports = {
         "--trend-filter-period",
         "0",
         "--fee",
-        "0.02",
+        "0.06",
         "--slippage-bps",
-        "1",
+        "2",
         "--leverage",
         "1",
         "--capital",
@@ -82,9 +84,11 @@ module.exports = {
         "--grid-step-pct",
         "1",
         "--grid-max-grids",
-        "1.5",
+        "1",
         "--grid-pause-after-loss-bars",
         "24",
+        "--target-ratio",
+        "3",
         "--chop-gate-adx",
         "24",
         "--iterations",
