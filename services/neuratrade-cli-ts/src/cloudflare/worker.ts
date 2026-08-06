@@ -87,7 +87,7 @@ function runScan(kv: {
     if (whitelist.length > 0) {
       yield* Effect.promise(() =>
         kv.put(WATCHLIST_KEY, JSON.stringify(whitelist)),
-      );
+      ).pipe(Effect.timeout("10 seconds"));
     }
     yield* Effect.log(
       `grid-universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
@@ -148,7 +148,7 @@ export default {
       const symbols = (await request.json()) as unknown;
       if (
         !Array.isArray(symbols) ||
-        symbols.some((s) => typeof s !== "string")
+        symbols.some((s) => typeof s !== "string" || s.trim().length === 0)
       ) {
         return Response.json(
           { error: "seed must be a JSON array of symbol strings" },

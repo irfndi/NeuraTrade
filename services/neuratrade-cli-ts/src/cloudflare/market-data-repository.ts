@@ -51,12 +51,17 @@ export const CloudflareMarketDataRepositoryLive = (
       const service: MarketDataRepositoryService = {
         getCandles,
         listSymbolsByCandleCount: (exchange, timeframe, limit) =>
-          Effect.forEach(seedSymbols, (symbol) =>
-            gateway
-              .fetchOHLCV(exchange, symbol, timeframe, limit)
-              .pipe(
-                Effect.map((candles) => ({ symbol, count: candles.length })),
-              ),
+          // Bounded concurrency: the seed universe can be large and the
+          // gateway is a public rate-limited API.
+          Effect.forEach(
+            seedSymbols,
+            (symbol) =>
+              gateway
+                .fetchOHLCV(exchange, symbol, timeframe, limit)
+                .pipe(
+                  Effect.map((candles) => ({ symbol, count: candles.length })),
+                ),
+            { concurrency: 4 },
           ).pipe(
             Effect.mapError((err) =>
               toRepoError(err, "listSymbolsByCandleCount"),
