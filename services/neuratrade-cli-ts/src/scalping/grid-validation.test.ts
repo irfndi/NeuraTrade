@@ -120,6 +120,39 @@ describe("deterministic grid validation", () => {
     expect(first.lowerBoundPct).toBeLessThanOrEqual(first.upperBoundPct);
   });
 
+  it("produces a non-degenerate interval (regression: all resamples were identical)", () => {
+    // High-variance input: a degenerate bootstrap (same seed for every run)
+    // collapses to width 0 and makes the confidence gate compare the raw
+    // block mean against zero — fail-open vs the intended 95% lower bound.
+    const values = [
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+    ];
+    for (const seed of [20260802, 20260803, 1, 42]) {
+      const result = bootstrapBlockConfidence(values, seed, 5, 5000);
+      expect(result.lowerBoundPct).toBeLessThan(result.upperBoundPct);
+    }
+  });
+
+  it("matches the checked-in golden vector (independent xorshift32/block implementation)", () => {
+    // Reference values computed with an independent Python implementation of
+    // the plan protocol (xorshift32, block length 5, seed+run state, 5000
+    // resamples, floor/ceil linear-interpolated 0.025/0.975 quantiles).
+    const values = [
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+    ];
+    const result = bootstrapBlockConfidence(values, 20260802, 5, 5000);
+    expect(result.lowerBoundPct).toBe(-0.5333333333333333);
+    expect(result.upperBoundPct).toBe(0.5);
+    expect(result.sampleCount).toBe(30);
+    expect(result.resamples).toBe(5000);
+    expect(result.blockLength).toBe(5);
+    expect(result.seed).toBe(20260802);
+  });
+
   it("rejects exponent-form values at the bootstrap boundary", () => {
     expect(() =>
       bootstrapBlockConfidence(

@@ -125,7 +125,13 @@ export function bootstrapBlockConfidence(
   const estimands: number[] = [];
   const maximumBlockStart = numeric.length - blockLength;
   for (let iteration = 0; iteration < resamples; iteration += 1) {
-    let state = seed >>> 0;
+    // Per-run state = seed + run index. Seeding EVERY run with the same
+    // value makes all resamples identical (xorshift32 is deterministic),
+    // collapsing the interval to width 0: the gate then compares the raw
+    // block mean against zero and can pass while the true 95% lower bound
+    // is negative (fail-open). Determinism is preserved: same seed + same
+    // input always yields the same interval.
+    let state = (seed + iteration) >>> 0;
     const sample: number[] = [];
     while (sample.length < numeric.length) {
       state = nextState(state);
