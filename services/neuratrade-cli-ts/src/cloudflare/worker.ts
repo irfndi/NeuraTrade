@@ -145,7 +145,12 @@ export default {
     }
 
     if (request.method === "PUT" && url.pathname.endsWith("/seed")) {
-      const symbols = (await request.json()) as unknown;
+      let symbols: unknown;
+      try {
+        symbols = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+      }
       if (
         !Array.isArray(symbols) ||
         symbols.some((s) => typeof s !== "string" || s.trim().length === 0)
