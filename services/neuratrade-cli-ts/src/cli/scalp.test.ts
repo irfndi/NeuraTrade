@@ -1330,6 +1330,15 @@ describe("probeNamesProbedSymbol", () => {
         "SOL/USDT:USDT",
       ),
     ).toBe(true);
+    expect(
+      probeNamesProbedSymbol(
+        apiErr(
+          "40034",
+          '{"code":"40034","msg":"Parameter BLESSUSDT not exist"}',
+        ),
+        "BLESS/USDT",
+      ),
+    ).toBe(true);
   });
 
   it("fails closed on named config parameters and unrelated tokens", () => {

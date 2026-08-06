@@ -5417,13 +5417,17 @@ const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
 export function probeNamesProbedSymbol(
   error: BitgetApiError,
   probedSymbol: string,
+  probedProductType: BitgetProductType = "USDT-FUTURES",
 ): boolean {
   if (error.code !== "40034") return false;
-  const token = /\bparameter\s+(\S+)\s+does not exist\b/i.exec(error.body)?.[1];
+  // Bitget uses both "Parameter X does not exist" and "Parameter X not exist".
+  const token = /\bparameter\s+(\S+)\s+(?:does not|not)\s+exist\b/i.exec(
+    error.body,
+  )?.[1];
   if (token === undefined) return false;
   const bitgetSymbol = toBitgetFuturesSymbol(
     probedSymbol,
-    "USDT-FUTURES",
+    probedProductType,
   ).symbol;
   return token.toUpperCase() === bitgetSymbol.toUpperCase();
 }
@@ -5700,7 +5704,11 @@ export const gridUniverseScanCommand = Command.make(
                 probe._tag === "Failure" &&
                 probe.failure instanceof BitgetApiError &&
                 (isBitgetUnsupportedInstrumentError(probe.failure) ||
-                  probeNamesProbedSymbol(probe.failure, entry.symbol))
+                  probeNamesProbedSymbol(
+                    probe.failure,
+                    entry.symbol,
+                    "USDT-FUTURES",
+                  ))
               ) {
                 // Only a probe error that proves the instrument is unsupported
                 // (40034 with a missing-symbol/contract message) drops the
