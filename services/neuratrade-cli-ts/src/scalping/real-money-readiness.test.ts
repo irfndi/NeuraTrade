@@ -113,6 +113,12 @@ function passingInput(): RealMoneyReadinessInput {
       adxGate: "30",
       targetRatio: "3",
       onlyWithTrend: "false",
+      leverage: "1",
+      productType: "USDT-FUTURES",
+      marginMode: "crossed",
+      maxDrawdownPct: "5",
+      maxDailyLossPct: "2",
+      validationProfile: "gate-scored-grid-search-2026-08-03",
       orderType: "market-after-trigger",
       triggerTiming: "next-bar",
       engineVersion: "grid-engine/v1",
@@ -340,6 +346,23 @@ describe("real-money readiness contract", () => {
     expect(changed).not.toBe(original);
   });
 
+  it("changes the fingerprint when leverage, margin mode, or risk limits change", () => {
+    const manifest: StrategyManifest = passingInput().manifest;
+    const original = fingerprintStrategyManifest(manifest);
+    for (const variant of [
+      { leverage: "2" },
+      { marginMode: "isolated" },
+      { productType: "COIN-FUTURES" },
+      { maxDrawdownPct: "10" },
+      { maxDailyLossPct: "5" },
+      { validationProfile: "other-profile" },
+    ]) {
+      expect(fingerprintStrategyManifest({ ...manifest, ...variant })).not.toBe(
+        original,
+      );
+    }
+  });
+
   it("is stable for reordered manifest construction and canonical decimals", () => {
     const manifest: StrategyManifest = passingInput().manifest;
     const reordered: StrategyManifest = {
@@ -347,6 +370,12 @@ describe("real-money readiness contract", () => {
       engineVersion: manifest.engineVersion,
       orderType: manifest.orderType,
       triggerTiming: manifest.triggerTiming,
+      validationProfile: manifest.validationProfile,
+      maxDailyLossPct: "2.00",
+      maxDrawdownPct: "5.0",
+      marginMode: manifest.marginMode,
+      productType: manifest.productType,
+      leverage: "1.00",
       onlyWithTrend: manifest.onlyWithTrend,
       targetRatio: "3.00",
       adxGate: "30.0",

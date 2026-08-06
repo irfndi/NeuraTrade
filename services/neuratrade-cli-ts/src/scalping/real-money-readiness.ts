@@ -71,6 +71,12 @@ export interface StrategyManifest {
   readonly adxGate: string;
   readonly targetRatio: string;
   readonly onlyWithTrend: string;
+  readonly leverage: string;
+  readonly productType: string;
+  readonly marginMode: string;
+  readonly maxDrawdownPct: string;
+  readonly maxDailyLossPct: string;
+  readonly validationProfile: string;
   readonly orderType: string;
   readonly triggerTiming: string;
   readonly engineVersion: string;
@@ -96,6 +102,12 @@ export const DEFAULT_STRATEGY_MANIFEST = {
   adxGate: String(VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx),
   targetRatio: String(VALIDATED_BTC_GRID_CANDIDATE.targetRatio),
   onlyWithTrend: String(VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend),
+  leverage: String(VALIDATED_BTC_GRID_CANDIDATE.leverage),
+  productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
+  marginMode: "crossed",
+  maxDrawdownPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct),
+  maxDailyLossPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct),
+  validationProfile: "gate-scored-grid-search-2026-08-03",
   orderType: "market-after-trigger",
   triggerTiming: "next-bar",
   engineVersion: "grid-engine/v1",
@@ -293,7 +305,10 @@ export function canonicalizeStrategyManifest(
       key === "timeframe" ||
       key === "orderType" ||
       key === "triggerTiming" ||
-      key === "onlyWithTrend"
+      key === "onlyWithTrend" ||
+      key === "productType" ||
+      key === "marginMode" ||
+      key === "validationProfile"
         ? value
         : normalizeDecimal(value);
   }
