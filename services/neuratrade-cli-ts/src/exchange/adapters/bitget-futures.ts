@@ -18,6 +18,7 @@ import {
 } from "../../services/bitget-client.js";
 import { validateFuturesOrder } from "../../services/bitget-futures-guards.js";
 import { validateLiveOrderSafety } from "../../services/bitget-futures-safety.js";
+import { Decimal } from "../../utils/money.js";
 import { money } from "../../utils/money.js";
 
 function toExchangeError(error: BitgetClientError): ExchangeError {
@@ -87,7 +88,25 @@ export function makeBitgetFuturesAdapter(
             new ExchangeError(`futures guard rejected: ${err.reason}`, err),
         ),
       );
+      return contract;
     });
+
+  // Bitget rejects prices that are not multiples of the instrument's tick
+  // (code 45115: "The price you enter should be a multiple of ..."). Round
+  // limit prices to the contract's pricePrecision; market orders carry no
+  // price (the engine passes a theoretical reference price that would fail
+  // validation on low-priced symbols such as ADA/USDT ~0.19).
+  const normalizePrice = (
+    type: FuturesOrderRequest["type"],
+    price: Decimal | undefined,
+    precision: string,
+  ): string | undefined => {
+    if (type === "market" || price === undefined) return undefined;
+    const decimals = Number(precision);
+    return price
+      .toDecimalPlaces(Number.isFinite(decimals) ? decimals : 0)
+      .toString();
+  };
 
   const placeOrder = (request: FuturesOrderRequest) =>
     Effect.gen(function* () {
@@ -104,31 +123,43 @@ export function makeBitgetFuturesAdapter(
         marginMode: request.marginMode,
         clientOid: request.clientOid,
         reduceOnly: request.reduceOnly,
-        price: request.price?.toString(),
         leverage: request.leverage,
       };
 
       // Pre-trade guards must run inside the adapter so both the direct CLI
       // order path and the live paper-trading path reject unsafe orders before
-      // any signed request leaves the process.
-      yield* runPreTradeGuard(order);
+      // any signed request leaves the process. The guard also returns the
+      // contract, whose pricePrecision normalizes limit prices to the
+      // instrument tick (45115); market orders drop the price entirely.
+      const contract = yield* runPreTradeGuard(order);
+      const normalizedPrice = normalizePrice(
+        request.type,
+        request.price,
+        contract.pricePrecision,
+      );
+      const finalOrder: BitgetFuturesOrderRequest =
+        normalizedPrice === undefined
+          ? order
+          : { ...order, price: normalizedPrice };
 
       // Account-state safety checks catch reduce-only mismatches, margin-mode
       // conflicts, and leverage mismatches before a signed order is sent.
       const [positions, leverageInfo] = yield* Effect.all([
-        withError(client.getFuturesPositions(order.symbol, order.productType)),
+        withError(client.getFuturesPositions(finalOrder.symbol, finalOrder.productType)),
         withError(
           client.getLeverage({
-            symbol: order.symbol,
-            productType: order.productType,
+            symbol: finalOrder.symbol,
+            productType: finalOrder.productType,
           }),
         ),
       ]);
       yield* validateLiveOrderSafety({
-        order,
+        order: finalOrder,
         positions,
         leverageInfo,
-        intendedLeverage: order.leverage ? String(order.leverage) : undefined,
+        intendedLeverage: finalOrder.leverage
+          ? String(finalOrder.leverage)
+          : undefined,
       }).pipe(
         Effect.mapError(
           (err) =>
@@ -136,15 +167,15 @@ export function makeBitgetFuturesAdapter(
         ),
       );
 
-      const ack = yield* withError(client.placeFuturesOrder(order));
+      const ack = yield* withError(client.placeFuturesOrder(finalOrder));
 
       // Bitget's place-order response is an acknowledgement. Query the order
       // detail endpoint to obtain the actual filled size, price and fee before
       // the trading engine records the position.
       const data = yield* withError(
         client.getFuturesOrder({
-          symbol: order.symbol,
-          productType: order.productType,
+          symbol: finalOrder.symbol,
+          productType: finalOrder.productType,
           orderId: ack.orderId || undefined,
           clientOid: ack.clientOid || undefined,
         }),

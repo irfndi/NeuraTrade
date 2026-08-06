@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import {
   BitgetClient,
   type BitgetClientImpl,
+  type BitgetFuturesOrderRequest,
   type BitgetFuturesPosition,
 } from "../../services/bitget-client.js";
 import {
@@ -14,7 +15,13 @@ import { money } from "../../utils/money.js";
 
 let calls: string[] = [];
 
-function makeStubClient(overrides: { feeOverride?: string } = {}): BitgetClientImpl {
+function makeStubClient(
+  overrides: {
+    feeOverride?: string;
+    pricePrecisionOverride?: string;
+    placeHook?: (order: BitgetFuturesOrderRequest) => void;
+  } = {},
+): BitgetClientImpl {
   calls = [];
   return {
     getBalances: () => Effect.succeed([]),
@@ -67,7 +74,7 @@ function makeStubClient(overrides: { feeOverride?: string } = {}): BitgetClientI
           productType: "USDT-FUTURES" as const,
           status: "online",
           symbolStatus: "online",
-          pricePrecision: "2",
+          pricePrecision: overrides.pricePrecisionOverride ?? "2",
           quantityPrecision: "4",
           minTradeAmount: "5",
           minTradeNum: "0.0001",
@@ -132,6 +139,7 @@ function makeStubClient(overrides: { feeOverride?: string } = {}): BitgetClientI
         calls.push(
           `placeFuturesOrder:${order.symbol}:${order.side}:${order.reduceOnly ?? "no"}`,
         );
+        overrides.placeHook?.(order);
         return {
           orderId: "fut-1",
           clientOid: order.clientOid ?? "",
@@ -326,6 +334,57 @@ describe("BitgetFuturesExchangeAdapter", () => {
       }).pipe(Effect.provide(layer)),
     );
     expect(fill.fee.toNumber()).toBe(4.2);
+  });
+
+  it("drops the price on market orders and rounds limit prices to the instrument tick (45115 regression)", async () => {
+    // ADA-style low-priced symbol: pricePrecision 4 (~0.19 USDT). The grid
+    // engine passes a theoretical reference price even on market orders;
+    // Bitget validates it (code 45115) unless it is a tick multiple.
+    const calls: string[] = [];
+    const client = makeStubClient({
+      pricePrecisionOverride: "4",
+      placeHook: (order: { orderType?: string; price?: string }) => {
+        calls.push(JSON.stringify({ orderType: order.orderType, price: order.price }));
+      },
+    });
+    const adapter = makeBitgetFuturesAdapter(client);
+    const layer = Layer.succeed(FuturesExchangeAdapter, adapter);
+
+    // Market order with an unrounded theoretical price -> price omitted.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* FuturesExchangeAdapter;
+        return yield* svc.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+          price: money(0.190548),
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(calls.at(-1)).not.toContain("price");
+
+    // Limit order -> price rounded to 4 decimals.
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* FuturesExchangeAdapter;
+        return yield* svc.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "sell",
+          type: "limit",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+          price: money(0.190548),
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+    expect(calls.at(-1)).toContain('"price":"0.1905"');
   });
 
   it("configures leverage, margin mode and position mode", async () => {
