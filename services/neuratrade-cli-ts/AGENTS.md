@@ -141,3 +141,26 @@ The composer supports an optional contrarian funding-rate component for perpetua
 - Do not leave stale PID files after process death.
 - Do not reintroduce v3 idioms: `Context.Tag`, `Either`, `@effect/cli`, `@effect/platform`, `Layer.scoped` (use `Context.Service`, `Result`, the CLI kit, core `effect` services, `Layer.effect`).
 - Do not edit profiles keyed `BTC/USDT` expecting them to apply to `BTC/USDT:USDT` runs — `findSymbolOverride` now matches both, but exact keys win.
+
+## CLOUDFLARE (alchemy) SCAFFOLD
+
+`alchemy.run.ts` + `src/cloudflare/` deploy part of the TS port to Cloudflare
+Workers via [alchemy](https://github.com/alchemy-run/alchemy) (Infrastructure-
+as-Effects, requires `effect >= 4.0.0` — this package is on 4.0.0-beta.102).
+
+- `bun run deploy:cf` / `dev:cf` / `destroy:cf` / `logs:cf` / `tail:cf`.
+- First deploy: interactive Cloudflare OAuth (no tokens needed); saved to
+  `~/.alchemy/profiles.json`.
+- Worker `neuratrade-universe-watch` (async form): cron `0 */6 * * *` scans a
+  seeded symbol universe via live Bitget public candles and persists survivors
+  to KV as a `WatchlistEntry`-compatible whitelist. HTTP: `GET /health`,
+  `GET /watchlist`, `POST /scan`, `PUT /seed` (admin-gated via
+  `CF_ADMIN_API_KEY`, bound as a Cloudflare secret from the deployer env).
+- The porting seam: `src/cloudflare/market-data-repository.ts` implements only
+  the two `runGridUniverseScan` methods (`listSymbolsByCandleCount`,
+  `getCandles`) over the fetch-based `MarketDataGatewayLive`; the rest are
+  loud stubs so nothing silently pretends to persist on the edge. A D1-backed
+  implementation replaces it later without touching the scanner.
+- Does NOT migrate: local SQLite storage (D1 pending), the Bitget leverage
+  probe (needs creds; skip or bind as secrets), telegram-service (still on
+  effect 3 — upgrade to effect 4 before it can join an alchemy stack).

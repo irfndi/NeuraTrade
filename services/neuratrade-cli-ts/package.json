@@ -12,14 +12,21 @@
     "typecheck": "tsc --noEmit",
     "lint": "bunx oxlint .",
     "fmt:check": "bunx oxfmt --check .",
-    "fmt": "bunx oxfmt"
+    "fmt": "bunx oxfmt",
+    "deploy:cf": "alchemy deploy",
+    "dev:cf": "alchemy dev",
+    "destroy:cf": "alchemy destroy",
+    "logs:cf": "alchemy logs",
+    "tail:cf": "alchemy tail"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-beta.102",
     "decimal.js": "^10.6.0",
     "effect": "4.0.0-beta.102",
     "ky": "^2.0.2",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "alchemy": "next",
+    "@effect/platform-node": "4.0.0-beta.102"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

@@ -98,6 +98,7 @@ import {
   runGridUniverseScan,
   type GridUniverseEntry,
   type GridUniverseOptions,
+  DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
@@ -5398,12 +5399,6 @@ export const readinessCommand = Command.make(
     "Evaluate scalping readiness gates (G1-G4) for a config; exits non-zero when any gate fails",
   ),
 );
-
-const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
-  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5],
-  gridMaxGrids: [1, 2, 3],
-  gridPauseAfterLossBars: [0, 6, 24],
-} as const;
 
 /**
  * True when a 40034 body names the probed symbol itself, e.g.

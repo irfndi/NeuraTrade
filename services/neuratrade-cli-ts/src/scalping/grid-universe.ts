@@ -14,6 +14,16 @@ import {
 import type { Candle } from "../market-data/types.js";
 import { runGridWalkForward, type GridWalkForwardResult } from "./grid.js";
 
+/**
+ * Default grid parameter search space used by the universe scanner. Fixed so
+ * survivors are comparable across symbols and runs.
+ */
+export const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
+  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5],
+  gridMaxGrids: [1, 2, 3],
+  gridPauseAfterLossBars: [0, 6, 24],
+} as const;
+
 export interface GridUniverseOptions {
   readonly exchange: string;
   readonly timeframe: string;
