@@ -55,6 +55,28 @@ and `stress` pass — parity was established by the golden-replay fixture
 The gate-scored search must be re-run with the corrected bootstrap (`clever-cabin-bnb`,
 `clever-cabin-58v`) before any new candidate is locked for the demo soak.
 
+## Re-sweep results (2026-08-06, corrected bootstrap)
+
+`scripts/gate-scored-grid-search-2026-08-06.ts` — 1,728 configs × 2 cost models on the
+70,240-candle BTC 15m dataset (2024-08 → 2026-08-03):
+
+- **Taker economics (fee 0.06, slippage 2 — current deployed market-after-trigger):
+  **0/1728 PASS**.** Every config fails the stress confidence LB; the closest config
+  (`step 1, grids 1.5, pause 36, target 3, ADX 28`) misses only `stressLB` at
+  **−0.00014**. The Aug-3 promotion (pause 24/ADX 24) also fails (confLB −0.0015).
+- **Maker economics (fee 0.02, slippage 1):** the frontier passes. Fast sweep found:
+  - `step 1, grids 1.5, pause 36, target 3, ADX 28` — windows 53.8%, **+8.50%**,
+    DD 12.1%, OOS 34, **confLB +0.00180**, stressRet +8.05%, **stressLB +0.00037**
+  - `step 1, grids 1.5, pause 42, target 3, ADX 28` — same LBs, +6.15%
+  Full-space sweep running to map the complete frontier.
+
+**Conclusion:** the grid family has statistically significant edge on BTC 15m only
+under **maker/limit fills** (~+0.12%/trade advantage). The grid engine hardcodes
+market entries (`grid-engine.ts` placeOrder `type: "market"`), and the plan's
+execution-parity gate requires the deployed model to match the validated replay —
+so limit-entry execution must be implemented and revalidated end-to-end before any
+candidate can be locked. Until then the gate stays FAIL by design.
+
 ## The path to real-money review
 
 1. Re-run the gate-scored grid search with the corrected bootstrap → lock a candidate
