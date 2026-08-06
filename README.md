@@ -2,13 +2,14 @@
 
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/irfndi/NeuraTrade?utm_source=badge)
 
-NeuraTrade is a multi-service crypto trading platform with a Go backend and Bun sidecar services for exchange and Telegram integrations.
+NeuraTrade is a multi-service crypto trading platform. The active stack is **TypeScript/Effect-TS** (Bun): a trading CLI (`services/neuratrade-cli-ts/`) that runs grid scalping/paper-trading soaks under pm2 and deploys a universe-watch worker to Cloudflare via alchemy. The Go backend (`services/backend-api`) is **legacy/frozen** and slated for deletion — see `AGENTS.md` → MIGRATION STATUS.
 
 ## Core Services
 
-- `services/backend-api` (Go): API, strategy/risk engine, persistence, autonomous orchestration
-- `services/ccxt-service` (Bun): exchange bridge
+- `services/neuratrade-cli-ts` (Bun + Effect-TS): **active** — grid scalping, paper-trading, Bitget demo live, readiness gate, Cloudflare worker
 - `services/telegram-service` (Bun): Telegram bot and delivery
+- `services/backend-api` (Go): **LEGACY/FROZEN** — API/strategy/risk engine, persistence (deletion tracked in bd)
+- `services/ccxt-service` (Bun): exchange bridge (stub; real CCXT logic is embedded in the legacy Go backend)
 
 ## Prerequisites
 

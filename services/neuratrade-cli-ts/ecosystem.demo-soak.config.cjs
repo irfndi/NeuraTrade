@@ -27,6 +27,15 @@ function loadDotEnv(file) {
 }
 
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
+
+// Promoted real-money candidate per docs/superpowers/specs/2026-08-03-gate-scored-grid-search.md:
+// step 1%, grids 1.5, pause 24, chop-gate ADX 24, trend filter 0, maker fee 0.02%/side,
+// slippage 1bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
+// STOPPED BY DEFAULT (pm2 start <id> only): the demo account has ~$50 USDT and is used
+// by neuratrade-demo-soak; the readiness cohort needs a DEDICATED funded demo account
+// (bd: BTC candidate soak issue). Start with:
+//   pm2 start ecosystem.demo-soak.config.cjs --only neuratrade-btc-candidate
+// and raise --capital after funding (defaults here match the ~$50 demo balance).
 const cliTsDir = __dirname;
 const neuratradeHome = (
   rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`
@@ -34,6 +43,69 @@ const neuratradeHome = (
 
 module.exports = {
   apps: [
+    {
+      name: "neuratrade-btc-candidate",
+      script: "bun",
+      args: [
+        "run",
+        "index.ts",
+        "scalp",
+        "paper-trade",
+        "--exchange",
+        "bitget-futures",
+        "--symbol",
+        "BTC/USDT:USDT",
+        "--timeframe",
+        "15m",
+        "--futures",
+        "--live",
+        "--strategy-type",
+        "grid",
+        "--trend-filter-period",
+        "0",
+        "--fee",
+        "0.02",
+        "--slippage-bps",
+        "1",
+        "--leverage",
+        "1",
+        "--capital",
+        "50",
+        "--min-capital",
+        "50",
+        "--max-position-size-pct",
+        "50",
+        "--max-drawdown-pct",
+        "5",
+        "--max-daily-loss-pct",
+        "2",
+        "--grid-step-pct",
+        "1",
+        "--grid-max-grids",
+        "1.5",
+        "--grid-pause-after-loss-bars",
+        "24",
+        "--chop-gate-adx",
+        "24",
+        "--iterations",
+        "0",
+        "--interval",
+        "900",
+      ],
+      cwd: cliTsDir,
+      env: {
+        ...rootEnv,
+        NEURATRADE_HOME: neuratradeHome,
+        NODE_ENV: "production",
+      },
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 30_000,
+      out_file: path.join(neuratradeHome, "logs", "btc-candidate.out.log"),
+      error_file: path.join(neuratradeHome, "logs", "btc-candidate.err.log"),
+      merge_logs: true,
+      time: true,
+    },
     {
       name: "neuratrade-universe-watch",
       script: "bun",

@@ -1,6 +1,6 @@
 # NeuraTrade — Agent Knowledge Base
 
-> Read this first. It is intentionally short. It assumes you know Go, the `make` command line, and the `bd` issue tracker. Anything you cannot verify here, grep/Read in the source of truth.
+> Read this first. It is intentionally short. It assumes you know TypeScript/Bun, the `make` command line, and the `bd` issue tracker. Anything you cannot verify here, grep/Read in the source of truth.
 
 > **Shell commands**: this project uses [RTK](RTK.md) (Rust Token Killer). When executing shell commands, prefix them with `rtk` (e.g., `rtk git status`, `rtk go test ./...`) so output is token-efficient. If a command is not recognized by RTK it passes through unchanged.
 
@@ -8,14 +8,37 @@
 
 NeuraTrade is a multi-service crypto trading platform. The runtime is native (no Docker required). SQLite is the default database; Redis is optional and non-fatal if absent.
 
-- `services/backend-api/` — Go. Main HTTP server, domain logic, DB, telemetry, ops scripts.
-- `services/agent-control/` — Go. Standalone agent control plane (playbooks, policy, audit).
+**Active (TypeScript/Effect-TS — the migration target):**
+
+- `services/neuratrade-cli-ts/` — Bun + Effect-TS. The **active gateway CLI** (`scalp`, `bitget`, `market`, grid paper-trading, demo soak, Cloudflare worker via alchemy). This is what pm2 runs and what deploys to Cloudflare.
 - `services/telegram-service/` — Bun + grammY + Hono. Telegram bot + gRPC delivery.
-- `services/ccxt/` — Bun. **Stub by default.** The real CCXT integration is embedded in `services/backend-api/internal/ccxt/`. CCXT runs as a separate process only when `CCXT_SERVICE_URL` or `CCXT_GRPC_ADDRESS` is set.
-- `cmd/neuratrade-cli/` — Go. The `neuratrade` gateway CLI. **It is a process manager, not the backend.** It spawns `neuratrade-server` + (optionally) `telegram-service` as child processes and manages PIDs under `NEURATRADE_HOME`.
+- `services/ccxt/` — Bun. **Stub by default.**
+
+**LEGACY / FROZEN (Go — being deleted, see MIGRATION STATUS):**
+
+- `services/backend-api/` — Go. Main HTTP server, domain logic, DB, telemetry, ops scripts. **Frozen:** no new features; deletion criteria in MIGRATION STATUS. `neuratrade-server` is still spawned by the TS gateway (`gateway start`) and serves `:8080` — do not break this until D1 ships.
+- `services/agent-control/` — Go. Standalone agent control plane (playbooks, policy, audit). Frozen.
+- `cmd/neuratrade-cli/` — Go. The legacy `neuratrade` gateway CLI (process manager). Superseded by `services/neuratrade-cli-ts/`; frozen.
 - `protos/` — Shared protobuf contracts (`ccxt_service.proto`, `telegram_service.proto`). Generated artifacts live in `services/backend-api/pkg/pb/` and `services/*/proto/`.
 
+## MIGRATION STATUS (2026-08-06)
+
+Go → TypeScript/Effect-TS migration epic: `NeuraTrade-alnz` — **6/7 children complete (85%)**; the last child is `clever-cabin-va5` (Bitget real-money exchange adapter, in progress). Archive safety net: git tag `archive/go-backend-2026-08-06` holds the full Go tree.
+
+**Deletion criteria (bd-tracked; delete Go in ONE PR only when ALL are green):**
+
+| ID | Criterion |
+| --- | --- |
+| D1 | TS gateway no longer spawns `neuratrade-server` (`process-manager.ts` / `gateway-orchestrator.ts` updated; `:8080` story decided) |
+| D2 | `clever-cabin-va5` ships → readiness path is 100% TS |
+| D3 | Makefile / CI / docker-compose Go targets neutralized (CI green without Go) |
+| D4 | telegram/ccxt wiring no longer references `services/backend-api` |
+
+Until then: **no new Go features, Go fixes only when they unblock the active TS path.** The active runtime (pm2 soak, Cloudflare worker, readiness gate) never touches Go.
+
 ## ARCHITECTURE — THE TRADING PIPELINE
+
+> The actor pipeline below is the LEGACY Go architecture (frozen). The active TS stack (`services/neuratrade-cli-ts/`) implements the same safety intent with pre-trade risk guards (`--max-drawdown-pct`, `--max-daily-loss-pct`, `--max-position-size-pct`) instead of actors. Read the Go pipeline for history; read `src/scalping/` + `src/paper-trading/` for the live behavior.
 
 This is the single most important flow. Internalize it.
 
@@ -43,15 +66,14 @@ See `services/backend-api/internal/app/AGENTS.md` and `services/backend-api/inte
 
 | Task | Location | Notes |
 | ------ | ---------- | ------- |
-| Process entrypoint, startup order, shutdown | `services/backend-api/cmd/server/main.go` | Explicit constructor injection. ~750 LOC. Read this first when debugging boot. |
-| Route registration + middleware | `services/backend-api/internal/api/routes.go` | Health at root; API at `/api/v1`; auth/admin middleware boundaries. |
-| Domain logic | `services/backend-api/internal/services/` | Largest code area. ~200+ files including 180K-line `ai_scalping.go`. |
-| Actor pipeline (collector→strategy→risk→execution→portfolio) | `services/backend-api/internal/app/` | One package per actor. |
-| Concurrency primitives | `services/backend-api/internal/platform/` | supervisor, actor, eventbus, retry, timeout. |
-| DB connection + migrations | `services/backend-api/internal/database/` + `services/backend-api/database/` | Two migrate scripts: `migrate.sh` (Postgres/psql) and `sqlite-migrate.sh` (SQLite CLI). |
-| Gateway CLI commands | `cmd/neuratrade-cli/main.go` + `gateway.go` | `gateway start`, `gateway stop`, and `gateway status` live in `gateway.go`. |
+| **Active CLI (pm2 runs this)** | `services/neuratrade-cli-ts/` | `bun run index.ts scalp ...` — grid universe scan, paper-trade soak, readiness, bitget client. Entry: `index.ts`; commands: `src/cli/`. |
+| Cloudflare worker (alchemy) | `services/neuratrade-cli-ts/alchemy.run.ts` + `src/cloudflare/` | Deploy: `bun run deploy:cf` (env from repo root `.env`). Secrets bound from deployer env as `secret_text`. |
+| Grid paper-trading engine | `services/neuratrade-cli-ts/src/paper-trading/` + `src/scalping/` | `grid-engine.ts`, `grid-universe.ts`, readiness gate plan `.omo/plans/real-money-readiness-gate.md`. |
+| Market data gateways | `services/neuratrade-cli-ts/src/market-data/` | fetch-based bitget/binance (public API, no creds). |
 | Telegram bot | `services/telegram-service/index.ts` | grammY polling/webhook + Hono HTTP + gRPC. |
-| Agent control plane | `services/agent-control/cmd/agent/main.go` | Standalone; not launched by gateway CLI. |
+| Go backend (LEGACY, frozen) | `services/backend-api/` | Serves `:8080` (spawned by TS gateway); DB + migrations. See MIGRATION STATUS. |
+| Go gateway CLI (LEGACY, frozen) | `cmd/neuratrade-cli/` | Superseded by `services/neuratrade-cli-ts/`. |
+| Agent control plane (LEGACY, frozen) | `services/agent-control/` | Standalone; not launched by gateway CLI. |
 | Native ops scripts | `services/backend-api/scripts/` | `startup-orchestrator.sh`, `health-monitor-enhanced.sh`, `coverage-check.sh`, `bd-close-with-qa.sh`, `validate-env.sh`. |
 | Recovery / scalping tunables | README "Recovery Tuning" section | `NEURATRADE_RECOVERY_*`, `NEURATRADE_SCALPING_*` env vars. |
 | Proto sources | `protos/*.proto` | Regenerate via `make proto-gen` (manual, requires `protoc` + plugins). |

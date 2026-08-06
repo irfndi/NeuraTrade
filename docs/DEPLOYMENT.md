@@ -1,5 +1,13 @@
 # Deployment Guide
 
+> **CURRENT DEPLOYMENT (2026-08)** — the sections below describe the **legacy Docker/GitHub Actions pipeline (frozen)**. The live deployment is:
+
+> **Local (pm2):** `services/neuratrade-cli-ts/ecosystem.demo-soak.config.cjs` runs the Bitget demo soak + universe watch under pm2 (`pm2 start ecosystem.demo-soak.config.cjs`). Env comes from the repo-root `.env` (gitignored; holds `BITGET_API_KEY/API_SECRET/PASSPHRASE`, `BITGET_USE_SANDBOX=true`, `CF_ADMIN_API_KEY`). Logs: `~/.neuratrade/logs/`. Monitor: `services/neuratrade-cli-ts/scripts/demo-soak-monitor.sh`.
+>
+> **Cloudflare (alchemy):** `services/neuratrade-cli-ts/alchemy.run.ts` defines the `neuratrade-universe-watch` worker (cron `0 */6 * * *`, KV `NeuraTradeWatchlist`). Deploy: `cd services/neuratrade-cli-ts && bunx alchemy deploy --env-file ../../.env --yes`. Secrets (`BITGET_*`, `CF_ADMIN_API_KEY`) are bound from the deployer env as `secret_text`. Verify: `GET /health`, `GET /watchlist`, `POST /scan` (x-api-key).
+
+# Legacy Deployment Guide (frozen)
+
 This document describes the automated CD pipeline for NeuraTrade using GitHub Actions.
 The pipeline builds a Docker image, deploys to staging automatically, and promotes to production
 after manual approval.
