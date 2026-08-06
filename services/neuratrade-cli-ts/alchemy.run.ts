@@ -22,11 +22,32 @@ const adminKey = Config.redacted("CF_ADMIN_API_KEY").pipe(
   Config.withDefault(Redacted.make("")),
 );
 
+// Bitget demo (PAPTRADING) credentials — bound from the deployer env as
+// Cloudflare secret_text bindings. The universe-watch scan itself uses only
+// public market data; these are available for private-API features (e.g. the
+// leverage probe) without leaking into the worker bundle.
+const bitgetApiKey = Config.redacted("BITGET_API_KEY").pipe(
+  Config.withDefault(Redacted.make("")),
+);
+const bitgetApiSecret = Config.redacted("BITGET_API_SECRET").pipe(
+  Config.withDefault(Redacted.make("")),
+);
+const bitgetPassphrase = Config.redacted("BITGET_PASSPHRASE").pipe(
+  Config.withDefault(Redacted.make("")),
+);
+const bitgetUseSandbox = Config.boolean("BITGET_USE_SANDBOX").pipe(
+  Config.withDefault(true),
+);
+
 export const UniverseWatch = Cloudflare.Worker("neuratrade-universe-watch", {
   main: "./src/cloudflare/worker.ts",
   env: {
     watchlist: Cloudflare.KV.Namespace("NeuraTradeWatchlist"),
     adminKey,
+    bitgetApiKey,
+    bitgetApiSecret,
+    bitgetPassphrase,
+    bitgetUseSandbox,
   },
   crons: ["0 */6 * * *"],
 });

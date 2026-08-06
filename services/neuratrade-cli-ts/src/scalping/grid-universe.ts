@@ -101,7 +101,7 @@ export function runGridUniverseScan(
     const symbolsWithCount = yield* repo.listSymbolsByCandleCount(
       options.exchange,
       options.timeframe,
-      100,
+      options.minCandles,
     );
 
     const symbols = symbolsWithCount

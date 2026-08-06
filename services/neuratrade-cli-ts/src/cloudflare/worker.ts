@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect";
 
+import { MarketDataGateway } from "../market-data/gateway.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import {
   runGridUniverseScan,
@@ -32,9 +33,11 @@ function scanOptions(): GridUniverseOptions {
     exchange: EXCHANGE,
     timeframe: TIMEFRAME,
     initialCapital: 10000,
-    minCandles: 500,
-    trainWindow: 180,
-    testWindow: 60,
+    // Live-fetch horizon: Bitget futures /history-candles caps at 200 per
+    // request, so 500 is unreachable on the edge (SQLite local scans differ).
+    minCandles: 200,
+    trainWindow: 120,
+    testWindow: 40,
     minProfitableWindowsPct: 60,
     minAggregateReturnPct: 0,
     feePct: 0.06,
@@ -63,17 +66,38 @@ function runScan(kv: {
   return Effect.gen(function* () {
     const seed = yield* Effect.promise(() => kv.get(SEED_KEY)).pipe(
       Effect.map(readSeed),
+      Effect.timeout("10 seconds"),
     );
 
-    const result = yield* Effect.provide(
-      runGridUniverseScan(scanOptions()),
-      Layer.provide(
-        CloudflareMarketDataRepositoryLive(seed),
-        MarketDataGatewayLive,
+    const gateway = yield* MarketDataGateway;
+
+    const result = yield* runGridUniverseScan(scanOptions()).pipe(
+      Effect.provide(
+        Layer.provide(
+          CloudflareMarketDataRepositoryLive(seed),
+          Layer.succeed(MarketDataGateway, gateway),
+        ),
       ),
     );
 
-    const whitelist = result.survivors.map((e) => ({
+    // Same futures-symbol guard as the local scan: drop survivors whose
+    // symbol has no Bitget USDT-M futures contract (public API, no creds).
+    const futuresSymbols = yield* gateway
+      .fetchSymbols(EXCHANGE)
+      .pipe(Effect.catch(() => Effect.succeed([] as readonly string[])));
+    const futuresSet = new Set(futuresSymbols);
+    const canonical = (symbol: string) =>
+      symbol.includes(":")
+        ? symbol.slice(0, symbol.lastIndexOf(":"))
+        : symbol;
+    const survivors =
+      futuresSet.size > 0
+        ? result.survivors.filter(
+            (e) => futuresSet.has(e.symbol) || futuresSet.has(canonical(e.symbol)),
+          )
+        : result.survivors;
+
+    const whitelist = survivors.map((e) => ({
       symbol: e.symbol,
       exchange: EXCHANGE,
       returnPct: e.walkForward.aggregateReturnPct,
@@ -93,7 +117,7 @@ function runScan(kv: {
       `grid-universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
     );
     return whitelist;
-  });
+  }).pipe(Effect.provide(MarketDataGatewayLive));
 }
 
 export default {
