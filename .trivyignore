@@ -1,0 +1,9 @@
+# lodash is an unmaintained transitive of the alchemy CLI (alchemy ->
+# @prisma/dev -> @mrleebo/prisma-ast -> chevrotain -> lodash@4.17.21).
+# All advisories below share the same root cause: lodash has no patched
+# release (advisory ranges extend past the latest 4.17.21). The code is
+# dev-time deploy tooling, never bundled into the deployed Cloudflare
+# Worker, and no application path passes untrusted template options.
+GHSA-r5fr-rjxr-66jc  # lodash: code injection via _.template imports key names (HIGH)
+GHSA-f23m-r3pf-42rh  # lodash: prototype pollution via array path bypass in _.unset/_.omit
+GHSA-xxjr-mmjv-4gpg  # lodash: prototype pollution in _.unset/_.omit
