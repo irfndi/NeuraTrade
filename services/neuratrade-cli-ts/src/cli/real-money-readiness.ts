@@ -339,6 +339,7 @@ function buildInput(
   trades: readonly RawTrade[],
   now: Date,
   executionParity: ExecutionParityEvidence,
+  timeframe: string,
 ): RealMoneyReadinessInput {
   const complete = trades.filter(completeTrade);
   const pValues = complete.map(
@@ -364,6 +365,9 @@ function buildInput(
   );
   const grid = validateGridEvidence(candles, {
     now,
+    timeframeMinutes: timeframe.endsWith("m")
+      ? Number(timeframe.slice(0, -1))
+      : 15,
     grid: {
       gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
       gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
@@ -499,7 +503,7 @@ function executeReadiness(
     const candles = readCandles(db, args);
     const trades = readTrades(db, args);
     return evaluateRealMoneyReadiness(
-      buildInput(candles, trades, now, executionParity),
+      buildInput(candles, trades, now, executionParity, args.timeframe),
     );
   } finally {
     db.close();

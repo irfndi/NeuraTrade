@@ -7,6 +7,8 @@ export const READINESS_STRESS_SEEDS = [
 
 export interface GridValidationOptions {
   readonly now: Date;
+  /** Candle interval in minutes; drives the spacing/freshness checks (default 15). */
+  readonly timeframeMinutes?: number;
   readonly trainBars?: number;
   readonly testBars?: number;
   readonly minimumWindows?: number;
@@ -82,7 +84,6 @@ export interface GridValidationInvalid {
 
 export type GridValidationResult = GridValidationOk | GridValidationInvalid;
 
-const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 const MAX_FRESHNESS_HOURS = 48;
 const CONFIDENCE_RESAMPLES = 5000;
 const CONFIDENCE_BLOCK_LENGTH = 5;
@@ -187,8 +188,10 @@ export function validateCandleDataQuality(
   trainBars = 11520,
   testBars = 4320,
   minimumWindows = 10,
+  timeframeMinutes = 15,
 ): CandleDataQuality {
   const failures: string[] = [];
+  const barMillis = timeframeMinutes * 60 * 1000;
   let previousTimestamp: number | null = null;
   for (const [index, candle] of candles.entries()) {
     const values = [
@@ -222,9 +225,9 @@ export function validateCandleDataQuality(
       failures.push(`candle ${index} timestamp is invalid`);
     } else if (previousTimestamp !== null) {
       const delta = timestamp - previousTimestamp;
-      if (delta !== FIFTEEN_MINUTES_MS) {
+      if (delta !== barMillis) {
         failures.push(
-          `candle ${index} is not exactly 15m after the previous candle`,
+          `candle ${index} is not exactly ${timeframeMinutes}m after the previous candle`,
         );
       }
     }
@@ -296,6 +299,7 @@ export function validateGridEvidence(
     trainBars,
     testBars,
     minimumWindows,
+    options.timeframeMinutes ?? 15,
   );
   if (!dataQuality.valid) {
     return { kind: "invalid", dataQuality, failures: dataQuality.failures };

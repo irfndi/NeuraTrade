@@ -25,11 +25,22 @@ import type { GridOptions } from "../src/scalping/grid.js";
 
 // Sweep parameters: --fee and --slippage-bps vary the execution-cost model
 // (0.06/2 = taker market-after-trigger; 0.02/1 = maker/limit assumption).
-const fee = Number(process.argv[process.argv.indexOf("--fee") + 1] ?? "0.06");
-const slippage = Number(
-  process.argv[process.argv.indexOf("--slippage-bps") + 1] ?? "2",
-);
+const argValue = (name: string, fallback: string): string => {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? fallback : (process.argv[index + 1] ?? fallback);
+};
+const fee = Number(argValue("--fee", "0.06"));
+const slippage = Number(argValue("--slippage-bps", "2"));
 const fast = process.argv.includes("--fast");
+// Timeframe-aware: 5m pause arrays are the 15m wall-clock equivalents x3.
+const timeframe = argValue("--timeframe", "15m");
+const symbol = argValue("--symbol", "BTC/USDT:USDT");
+const barMinutes = timeframe === "5m" ? 5 : 15;
+// Chunking: --pauses filters the pause space (comma list); --tag suffixes
+// the output file. Needed because per-call heap churn (bootstraps) grows
+// ~5x on 5m and a single long run can exhaust JSC's heap under load.
+const pauseFilter = argValue("--pauses", "");
+const tag = argValue("--tag", "");
 const home =
   process.env.NEURATRADE_HOME ?? join(process.env.HOME!, ".neuratrade");
 const db = new Database(join(home, "data", "neuratrade.db"), {
@@ -41,7 +52,7 @@ const rows = db
    FROM ohlcv_data o JOIN exchanges e ON e.id = o.exchange_id JOIN trading_pairs p ON p.id = o.trading_pair_id
    WHERE e.name = ? AND p.symbol = ? AND o.timeframe = ? ORDER BY o.timestamp ASC`,
   )
-  .all("bitget-futures", "BTC/USDT:USDT", "15m");
+  .all("bitget-futures", symbol, timeframe);
 const candles = rows.map((r) => ({
   open: r.open_price as number,
   high: r.high_price as number,
@@ -54,7 +65,9 @@ console.log(
   `candles: ${candles.length} | last: ${candles.at(-1)!.timestamp.toISOString()}`,
 );
 
-const now = new Date(candles.at(-1)!.timestamp.getTime() + 15 * 60 * 1000);
+const now = new Date(
+  candles.at(-1)!.timestamp.getTime() + barMinutes * 60 * 1000,
+);
 const base: GridOptions = {
   initialCapital: 100,
   gridStepPct: 1,
@@ -92,7 +105,14 @@ interface SweepResult {
 const results: SweepResult[] = [];
 const steps = fast ? [1, 1.25] : [0.75, 1, 1.25];
 const grids = fast ? [1, 1.5, 2] : [1, 1.5, 2];
-const pauses = fast ? [18, 24, 30, 36, 42] : [6, 12, 18, 24, 30, 36, 42, 48];
+const pauses =
+  timeframe === "5m"
+    ? fast
+      ? [54, 72, 90, 108, 126]
+      : [18, 36, 54, 72, 90, 108, 126, 144]
+    : fast
+      ? [18, 24, 30, 36, 42]
+      : [6, 12, 18, 24, 30, 36, 42, 48];
 const targets = fast ? [2, 3, 4] : [1, 2, 3, 4];
 const adxGates = fast ? [24, 26, 28, 30] : [20, 22, 24, 26, 28, 30];
 let total = 0;
@@ -101,7 +121,9 @@ const t0 = Date.now();
 
 for (const step of steps)
   for (const maxGrids of grids)
-    for (const pause of pauses)
+    for (const pause of pauses.filter(
+      (p) => !pauseFilter || pauseFilter.split(",").includes(String(p)),
+    ))
       for (const target of targets)
         for (const adx of adxGates) {
           total += 1;
@@ -115,6 +137,7 @@ for (const step of steps)
           };
           const r = validateGridEvidence(candles, {
             now,
+            timeframeMinutes: barMinutes,
             grid,
             executionParityPassed: true,
           });
@@ -179,7 +202,7 @@ const output = {
 const outPath = join(
   home,
   "tuning",
-  `gate-scored-search-2026-08-06-fee${fee}-slip${slippage}.json`,
+  `gate-scored-search-2026-08-06-fee${fee}-slip${slippage}-${timeframe}-${symbol.replace("/", "-").replace(":", "")}${tag ? `-${tag}` : ""}.json`,
 );
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, JSON.stringify(output, null, 2));

@@ -82,6 +82,37 @@ describe("deterministic grid validation", () => {
     );
   });
 
+  it("accepts 5m-spaced candles when timeframeMinutes is set", () => {
+    const series: CandleLike[] = [];
+    let price = 100;
+    const start = new Date("2026-01-01T00:00:00.000Z");
+    for (let index = 0; index < 120; index += 1) {
+      const direction = index % 2 === 0 ? 1 : -1;
+      const open = price;
+      const close = open + direction * 0.35;
+      series.push({
+        open,
+        high: Math.max(open, close) + 0.4,
+        low: Math.min(open, close) - 0.4,
+        close,
+        volume: 10,
+        timestamp: new Date(start.getTime() + index * 5 * 60 * 1000),
+      });
+      price = close;
+    }
+    const result = validateGridEvidence(series, {
+      ...options(new Date("2026-01-02T06:00:00.000Z")),
+      timeframeMinutes: 5,
+    });
+    expect(result.kind).toBe("ok");
+    // The same series must FAIL the default 15m spacing check.
+    const as15m = validateGridEvidence(
+      series,
+      options(new Date("2026-01-02T06:00:00.000Z")),
+    );
+    expect(as15m.kind).toBe("invalid");
+  });
+
   it("pools the 5-seed sequence for the stress LB (amendment 2026-08-07)", () => {
     const series = candles(120);
     const result = validateGridEvidence(
