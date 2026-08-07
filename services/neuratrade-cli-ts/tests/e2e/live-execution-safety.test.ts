@@ -96,7 +96,7 @@ describe("live execution safety", () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(result.output).toContain(
-        "live grid must use the validated BTC 15m grid candidate",
+        "live grid must use a validated readiness cohort candidate",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

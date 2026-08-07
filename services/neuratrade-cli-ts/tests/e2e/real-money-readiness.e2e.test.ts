@@ -95,7 +95,7 @@ describe("real-money-readiness CLI", () => {
       expect(help.stdout.length).toBeGreaterThan(0);
       expect(help.stderr).toBe("");
       expect(version.exitCode).toBe(0);
-      expect(version.stdout).toContain("real-money-readiness/v1");
+      expect(version.stdout).toContain("real-money-readiness/v2");
       expect(version.stderr).toBe("");
       expect(await snapshot(home)).toEqual(before);
     } finally {
@@ -342,7 +342,7 @@ describe("real-money-readiness CLI", () => {
         );
         INSERT INTO exchanges VALUES (1, 'bitget-futures');
         INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
-        INSERT INTO trading_pairs VALUES (2, 'ETH/USDT:USDT');
+        INSERT INTO trading_pairs VALUES (2, 'SOL/USDT:USDT');
       `);
       const expectedFingerprint = fingerprintStrategyManifest(
         DEFAULT_STRATEGY_MANIFEST,
@@ -369,8 +369,8 @@ describe("real-money-readiness CLI", () => {
         "2026-08-01T00:00:00.000Z",
       );
       insert.run(
-        "eth-trade-1",
-        "ETH/USDT:USDT",
+        "sol-trade-1",
+        "SOL/USDT:USDT",
         "2026-08-01T00:00:00.000Z",
         "2026-08-01T01:00:00.000Z",
         expectedFingerprint,
@@ -381,12 +381,12 @@ describe("real-money-readiness CLI", () => {
       db.close();
 
       const btc = await runCli(["scalp", "real-money-readiness"], home);
-      const eth = await runCli(
+      const sol = await runCli(
         [
           "scalp",
           "real-money-readiness",
           "--symbol",
-          "ETH/USDT:USDT",
+          "SOL/USDT:USDT",
           "--exchange",
           "bitget-futures",
           "--timeframe",
@@ -399,14 +399,16 @@ describe("real-money-readiness CLI", () => {
           readonly prospective: { readonly completeTradeCount: number };
         };
       };
-      const ethReport = JSON.parse(eth.stdout) as {
+      const solReport = JSON.parse(sol.stdout) as {
         readonly metrics: {
           readonly prospective: { readonly completeTradeCount: number };
         };
       };
 
-      expect(btcReport.metrics.prospective.completeTradeCount).toBe(1);
-      expect(ethReport.metrics.prospective.completeTradeCount).toBe(1);
+      // Default = full BTC+SOL cohort: the union sees both fills.
+      expect(btcReport.metrics.prospective.completeTradeCount).toBe(2);
+      // Scoped run: only the SOL fill.
+      expect(solReport.metrics.prospective.completeTradeCount).toBe(1);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

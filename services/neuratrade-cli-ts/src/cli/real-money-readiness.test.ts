@@ -103,11 +103,33 @@ describe("real-money-readiness CLI contract", () => {
       kind: "ok",
       args: {
         exchange: "bitget-futures",
-        symbol: "BTC/USDT:USDT",
+        symbols: [],
         timeframe: "15m",
       },
     });
-    expect(explicit).toEqual(defaults);
+    expect(explicit).toEqual({
+      kind: "ok",
+      args: {
+        exchange: "bitget-futures",
+        symbols: ["BTC/USDT:USDT"],
+        timeframe: "15m",
+      },
+    });
+    expect(
+      parseRealMoneyReadinessArgs([
+        "--symbol",
+        "BTC/USDT:USDT",
+        "--symbol",
+        "SOL/USDT:USDT",
+      ]),
+    ).toEqual({
+      kind: "ok",
+      args: {
+        exchange: "bitget-futures",
+        symbols: ["BTC/USDT:USDT", "SOL/USDT:USDT"],
+        timeframe: "15m",
+      },
+    });
   });
 
   it("rejects unknown, missing, and test-only production arguments", () => {
@@ -128,7 +150,7 @@ describe("real-money-readiness CLI contract", () => {
   });
 
   it("returns ERROR/2 when the requested database is absent", () => {
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home: "/tmp/neuratrade-readiness-unit-database-does-not-exist",
     });
 
@@ -146,7 +168,7 @@ describe("real-money-readiness CLI contract", () => {
     db.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
     db.close();
 
-    const result = runRealMoneyReadiness([], { home });
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], { home });
 
     expect(result.exitCode).toBe(2);
     expect(result.report.status).toBe("ERROR");
@@ -175,7 +197,7 @@ describe("real-money-readiness CLI contract", () => {
     `);
     db.close();
 
-    const result = runRealMoneyReadiness([], { home });
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], { home });
 
     expect(result.exitCode).toBe(2);
     expect(result.report.status).toBe("ERROR");
@@ -186,7 +208,7 @@ describe("real-money-readiness CLI contract", () => {
     const home = makeSeededHome(60);
     tempHomes.push(home);
 
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home,
       now: new Date("2026-08-02T00:00:00.000Z"),
     });
@@ -213,6 +235,34 @@ describe("real-money-readiness CLI contract", () => {
     );
   });
 
+  it("merges the BTC+SOL cohort into one gate board (v2)", () => {
+    const home = makeSeededHome(60);
+    tempHomes.push(home);
+
+    const result = runRealMoneyReadiness([], {
+      home,
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    // Default = full cohort: both symbols evaluated, one merged board.
+    expect(result.report.schemaVersion).toBe("real-money-readiness/v2");
+    expect(result.report.cohort).toHaveLength(2);
+    expect(result.report.cohort?.map((member) => member.symbol)).toEqual([
+      "BTC/USDT:USDT",
+      "SOL/USDT:USDT",
+    ]);
+    // BTC contributes the seeded fills; SOL has none in the fixture home —
+    // the union prospective still sees the 60 BTC fills.
+    expect(result.report.metrics.prospective.completeTradeCount).toBe(60);
+    // SOL's missing evidence fails the merged board (data-quality etc.).
+    expect(result.report.failedGateIds).toContain("data-quality");
+    expect(result.report.cohort?.[1]?.status).toBe("FAIL");
+    // Per-symbol manifests: SOL's fingerprint differs from BTC's.
+    expect(result.report.cohort?.[0]?.expectedFingerprint).not.toBe(
+      result.report.cohort?.[1]?.expectedFingerprint,
+    );
+  });
+
   it("ignores untagged legacy fills outside the readiness cohort", () => {
     const home = makeSeededHome(60);
     tempHomes.push(home);
@@ -229,7 +279,7 @@ describe("real-money-readiness CLI contract", () => {
               NULL, NULL, NULL, NULL, NULL, 'bitget-demo')`);
     db.close();
 
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home,
       now: new Date("2026-08-02T00:00:00.000Z"),
     });
@@ -247,7 +297,7 @@ describe("real-money-readiness CLI contract", () => {
     const home = makeSeededHome(60, true);
     tempHomes.push(home);
 
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home,
       now: new Date("2026-08-02T00:00:00.000Z"),
     });
@@ -339,7 +389,7 @@ describe("real-money-readiness CLI contract", () => {
       }),
     );
 
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home,
       now: new Date("2026-08-02T00:00:00.000Z"),
     });
@@ -376,7 +426,7 @@ describe("real-money-readiness CLI contract", () => {
       JSON.stringify({ protocolVersion: "execution-parity/v1", checks }),
     );
 
-    const result = runRealMoneyReadiness([], {
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
       home,
       now: new Date("2026-08-02T00:00:00.000Z"),
     });

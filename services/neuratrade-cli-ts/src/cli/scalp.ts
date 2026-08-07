@@ -93,7 +93,10 @@ import {
   evaluateReadiness,
   formatReadinessReport,
 } from "../scalping/readiness.js";
-import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
+import {
+  VALIDATED_BTC_GRID_CANDIDATE,
+  candidateForSymbol,
+} from "../scalping/grid-candidate.js";
 import {
   runGridUniverseScan,
   type GridUniverseEntry,
@@ -3332,44 +3335,50 @@ export function validateLiveGridConfiguration(
   config: LiveGridConfiguration,
   sandbox = false,
 ): string | undefined {
+  const candidate = candidateForSymbol(config.symbol);
   const validatedCandidate =
-    config.exchange === VALIDATED_BTC_GRID_CANDIDATE.exchange &&
-    config.symbol === VALIDATED_BTC_GRID_CANDIDATE.symbol &&
-    config.timeframe === VALIDATED_BTC_GRID_CANDIDATE.timeframe &&
-    config.productType === VALIDATED_BTC_GRID_CANDIDATE.productType &&
-    config.gridStepPct === VALIDATED_BTC_GRID_CANDIDATE.gridStepPct &&
-    config.gridMaxGrids === VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids &&
-    config.gridPauseAfterLossBars ===
-      VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars &&
-    config.feePct === VALIDATED_BTC_GRID_CANDIDATE.feePct &&
-    config.slippageBps === VALIDATED_BTC_GRID_CANDIDATE.slippageBps &&
-    config.trendFilterPeriod ===
-      VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod &&
-    config.onlyWithTrend === VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend &&
-    config.targetRatio === VALIDATED_BTC_GRID_CANDIDATE.targetRatio &&
-    config.chopGateAdx === VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx &&
-    config.leverage === VALIDATED_BTC_GRID_CANDIDATE.leverage;
+    candidate !== undefined &&
+    config.exchange === candidate.exchange &&
+    config.timeframe === candidate.timeframe &&
+    config.productType === candidate.productType &&
+    config.gridStepPct === candidate.gridStepPct &&
+    config.gridMaxGrids === candidate.gridMaxGrids &&
+    config.gridPauseAfterLossBars === candidate.gridPauseAfterLossBars &&
+    config.feePct === candidate.feePct &&
+    config.slippageBps === candidate.slippageBps &&
+    config.trendFilterPeriod === candidate.trendFilterPeriod &&
+    config.onlyWithTrend === candidate.onlyWithTrend &&
+    config.targetRatio === candidate.targetRatio &&
+    config.chopGateAdx === candidate.chopGateAdx &&
+    config.leverage === candidate.leverage;
   if (!validatedCandidate && !sandbox) {
-    return "live grid must use the validated BTC 15m grid candidate";
+    return "live grid must use a validated readiness cohort candidate";
   }
+  const riskCap =
+    candidate?.maxPositionSizePct ??
+    VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct;
+  const ddCap =
+    candidate?.maxDrawdownPct ?? VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct;
+  const dailyCap =
+    candidate?.maxDailyLossPct ?? VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct;
   if (
     !Number.isFinite(config.maxPositionSizePct) ||
     config.maxPositionSizePct <= 0 ||
-    config.maxPositionSizePct > VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct
+    config.maxPositionSizePct > riskCap
   ) {
     return "live grid max position size must be between 0% and 50%";
   }
   if (
     !Number.isFinite(config.maxDrawdownPct) ||
     config.maxDrawdownPct <= 0 ||
-    config.maxDrawdownPct > VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct
+    config.maxDrawdownPct > ddCap
   ) {
     return "live grid max drawdown must be between 0% and 5%";
   }
   if (
     !Number.isFinite(config.maxDailyLossPct) ||
     config.maxDailyLossPct <= 0 ||
-    config.maxDailyLossPct > VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct
+    config.maxDailyLossPct > dailyCap
   ) {
     return "live grid max daily loss must be between 0% and 2%";
   }

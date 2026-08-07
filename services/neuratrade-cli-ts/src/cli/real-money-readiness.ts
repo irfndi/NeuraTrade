@@ -3,7 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CandleLike } from "../scalping/types.js";
-import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
+import {
+  READINESS_COHORT_CANDIDATES,
+  candidateForSymbol,
+  type ValidatedGridCandidate,
+} from "../scalping/grid-candidate.js";
 import {
   bootstrapBlockConfidence,
   validateGridEvidence,
@@ -11,12 +15,15 @@ import {
 } from "../scalping/grid-validation.js";
 import {
   DEFAULT_READINESS_THRESHOLDS,
-  DEFAULT_STRATEGY_MANIFEST,
   EXECUTION_PARITY_CHECK_NAMES,
   evaluateRealMoneyReadiness,
   fingerprintStrategyManifest,
   serializeRealMoneyReadiness,
+  strategyManifestFor,
   type ExecutionParityEvidence,
+  type ProspectiveEvidence,
+  type ReadinessGate,
+  type ReadinessGateId,
   type RealMoneyReadinessInput,
   type RealMoneyReadinessReport,
 } from "../scalping/real-money-readiness.js";
@@ -30,7 +37,8 @@ export interface RealMoneyReadinessCliOptions {
 
 export interface ParsedRealMoneyReadinessArgs {
   readonly exchange: string;
-  readonly symbol: string;
+  /** Empty = full readiness cohort (READINESS_COHORT_CANDIDATES). */
+  readonly symbols: readonly string[];
   readonly timeframe: string;
 }
 
@@ -73,9 +81,13 @@ type ParseResult =
 export function parseRealMoneyReadinessArgs(
   argv: readonly string[],
 ): ParseResult {
-  const values = {
+  const values: {
+    exchange: string;
+    symbols: string[];
+    timeframe: string;
+  } = {
     exchange: "bitget-futures",
-    symbol: "BTC/USDT:USDT",
+    symbols: [],
     timeframe: "15m",
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -92,8 +104,13 @@ export function parseRealMoneyReadinessArgs(
     if (next === undefined || next.startsWith("--")) {
       return { kind: "error", message: `missing value for --${name}` };
     }
-    if (name === "exchange" || name === "symbol" || name === "timeframe") {
+    if (name === "exchange" || name === "timeframe") {
       values[name] = next;
+      index += 1;
+      continue;
+    }
+    if (name === "symbol") {
+      values.symbols = [...values.symbols, next];
       index += 1;
       continue;
     }
@@ -104,13 +121,14 @@ export function parseRealMoneyReadinessArgs(
 
 function errorReport(message: string): RealMoneyReadinessReport {
   return {
-    schemaVersion: "real-money-readiness/v1",
+    schemaVersion: "real-money-readiness/v2",
     status: "ERROR",
     exitCode: 2,
     candidateFingerprint: "",
     thresholds: DEFAULT_READINESS_THRESHOLDS,
     gates: [],
     failedGateIds: [],
+    cohort: [],
     errors: [message],
     metrics: {
       prospective: {
@@ -267,7 +285,9 @@ function requireSchema(db: Database): void {
 
 function readCandles(
   db: Database,
-  args: ParsedRealMoneyReadinessArgs,
+  exchange: string,
+  symbol: string,
+  timeframe: string,
 ): readonly CandleLike[] {
   const rows = db
     .query<RawCandle, string[]>(
@@ -278,7 +298,7 @@ function readCandles(
        WHERE e.name = ? AND p.symbol = ? AND o.timeframe = ?
        ORDER BY o.timestamp ASC`,
     )
-    .all(args.exchange, args.symbol, args.timeframe);
+    .all(exchange, symbol, timeframe);
   return rows.map((row) => ({
     open: row.open_price,
     high: row.high_price,
@@ -291,7 +311,9 @@ function readCandles(
 
 function readTrades(
   db: Database,
-  args: ParsedRealMoneyReadinessArgs,
+  exchange: string,
+  symbol: string,
+  timeframe: string,
 ): readonly RawTrade[] {
   return db
     .query<RawTrade, string[]>(
@@ -305,7 +327,7 @@ function readTrades(
        WHERE exchange = ? AND symbol = ? AND timeframe = ? AND cohort_id IS NOT NULL
        ORDER BY closed_at ASC, id ASC`,
     )
-    .all(args.exchange, args.symbol, args.timeframe);
+    .all(exchange, symbol, timeframe);
 }
 
 function completeTrade(trade: RawTrade): boolean {
@@ -334,13 +356,10 @@ function demoDrawdown(trades: readonly RawTrade[]): string {
   return maximum.toString();
 }
 
-function buildInput(
-  candles: readonly CandleLike[],
+/** Cohort-union prospective evidence (≥50 fills across the cohort symbols). */
+function computeProspective(
   trades: readonly RawTrade[],
-  now: Date,
-  executionParity: ExecutionParityEvidence,
-  timeframe: string,
-): RealMoneyReadinessInput {
+): ProspectiveEvidence {
   const complete = trades.filter(completeTrade);
   const pValues = complete.map(
     (trade) => trade.realized_pnl_pct_decimal ?? "0",
@@ -359,29 +378,49 @@ function buildInput(
   const totalPnl = pValues.reduce((sum, value) => sum + Number(value), 0);
   const earliest = complete.at(0)?.opened_at ?? "1970-01-01T00:00:00.000Z";
   const latest = complete.at(-1)?.closed_at ?? "1970-01-01T00:00:00.000Z";
+  return {
+    completeTradeCount: complete.length,
+    durationDays:
+      (Date.parse(latest) - Date.parse(earliest)) / (24 * 60 * 60 * 1000),
+    expectancyPct:
+      pValues.length > 0 ? (totalPnl / pValues.length).toString() : "0",
+    confidenceLowerBoundPct: confidence.lowerBoundPct.toString(),
+    maximumDrawdownPct: demoDrawdown(complete),
+    allTradesHaveLiveFillEvidence:
+      complete.length === trades.length && trades.length > 0,
+  };
+}
+
+function buildInput(
+  candles: readonly CandleLike[],
+  trades: readonly RawTrade[],
+  now: Date,
+  executionParity: ExecutionParityEvidence,
+  timeframe: string,
+  candidate: ValidatedGridCandidate,
+  prospective: ProspectiveEvidence,
+): RealMoneyReadinessInput {
   const firstProvenance = trades.at(0);
-  const expectedFingerprint = fingerprintStrategyManifest(
-    DEFAULT_STRATEGY_MANIFEST,
-  );
+  const manifest = strategyManifestFor(candidate);
+  const expectedFingerprint = fingerprintStrategyManifest(manifest);
   const grid = validateGridEvidence(candles, {
     now,
     timeframeMinutes: timeframe.endsWith("m")
       ? Number(timeframe.slice(0, -1))
       : 15,
     grid: {
-      gridStepPct: VALIDATED_BTC_GRID_CANDIDATE.gridStepPct,
-      gridMaxGrids: VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids,
-      gridPauseAfterLossBars:
-        VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
-      feePct: VALIDATED_BTC_GRID_CANDIDATE.feePct,
-      slippageBps: VALIDATED_BTC_GRID_CANDIDATE.slippageBps,
+      gridStepPct: candidate.gridStepPct,
+      gridMaxGrids: candidate.gridMaxGrids,
+      gridPauseAfterLossBars: candidate.gridPauseAfterLossBars,
+      feePct: candidate.feePct,
+      slippageBps: candidate.slippageBps,
       initialCapital: 100,
-      trendFilterPeriod: VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod,
-      leverage: VALIDATED_BTC_GRID_CANDIDATE.leverage,
-      positionFraction: VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct / 100,
-      chopGateAdxThreshold: VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx,
-      targetRatio: VALIDATED_BTC_GRID_CANDIDATE.targetRatio,
-      onlyWithTrend: VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend,
+      trendFilterPeriod: candidate.trendFilterPeriod,
+      leverage: candidate.leverage,
+      positionFraction: candidate.maxPositionSizePct / 100,
+      chopGateAdxThreshold: candidate.chopGateAdx,
+      targetRatio: candidate.targetRatio,
+      onlyWithTrend: candidate.onlyWithTrend,
     },
     executionParityPassed: executionParity.passed,
   });
@@ -414,18 +453,10 @@ function buildInput(
   const datasetCutoff = firstProvenance?.dataset_cutoff_at ?? "";
   const provenanceFingerprint =
     firstProvenance?.strategy_config_fingerprint ?? "";
+  const earliest = firstProvenance?.entry_opened_at ?? "1970-01-01T00:00:00.000Z";
+  const latest = trades.at(-1)?.closed_at ?? "1970-01-01T00:00:00.000Z";
   return {
-    prospectiveEvidence: {
-      completeTradeCount: complete.length,
-      durationDays:
-        (Date.parse(latest) - Date.parse(earliest)) / (24 * 60 * 60 * 1000),
-      expectancyPct:
-        pValues.length > 0 ? (totalPnl / pValues.length).toString() : "0",
-      confidenceLowerBoundPct: confidence.lowerBoundPct.toString(),
-      maximumDrawdownPct: demoDrawdown(complete),
-      allTradesHaveLiveFillEvidence:
-        complete.length === trades.length && trades.length > 0,
-    },
+    prospectiveEvidence: prospective,
     historicalRobustness: {
       completeWindows: dataQuality.completeWindows,
       profitableWindowPct: historical.profitableWindowPct,
@@ -477,7 +508,7 @@ function buildInput(
       latestCandle: dataQuality.latestCandle?.toISOString() ?? "",
     },
     evaluatedAt: now.toISOString(),
-    manifest: DEFAULT_STRATEGY_MANIFEST,
+    manifest,
   };
 }
 
@@ -493,6 +524,18 @@ function executeReadiness(
     options.parityFixture === "golden"
       ? goldenExecutionParity
       : readExecutionParityFile(home);
+  const candidates: readonly ValidatedGridCandidate[] =
+    args.symbols.length === 0
+      ? [...READINESS_COHORT_CANDIDATES]
+      : args.symbols.map((symbol) => {
+          const candidate = candidateForSymbol(symbol);
+          if (!candidate) {
+            throw new ReadinessInfrastructureError(
+              `not a validated cohort symbol: ${symbol}`,
+            );
+          }
+          return candidate;
+        });
   const db = new Database(databasePath(home), {
     readonly: true,
     create: false,
@@ -500,11 +543,127 @@ function executeReadiness(
   try {
     requireSchema(db);
     const now = options.now ?? new Date();
-    const candles = readCandles(db, args);
-    const trades = readTrades(db, args);
-    return evaluateRealMoneyReadiness(
-      buildInput(candles, trades, now, executionParity, args.timeframe),
+    const perSymbol = candidates.map((candidate) => ({
+      candidate,
+      candles: readCandles(db, args.exchange, candidate.symbol, args.timeframe),
+      trades: readTrades(db, args.exchange, candidate.symbol, args.timeframe),
+    }));
+    // Cohort-union prospective evidence: ≥50 fills across ALL cohort symbols.
+    const prospective = computeProspective(
+      perSymbol.flatMap((entry) => entry.trades),
     );
+    const cohort = perSymbol.map(({ candidate, candles, trades }) => {
+      const report = evaluateRealMoneyReadiness(
+        buildInput(
+          candles,
+          trades,
+          now,
+          executionParity,
+          args.timeframe,
+          candidate,
+          prospective,
+        ),
+      );
+      return {
+        symbol: candidate.symbol,
+        status: report.status,
+        gates: report.gates,
+        failedGateIds: report.failedGateIds,
+        errors: report.errors,
+        metrics: report.metrics,
+        fingerprint: report.candidateFingerprint,
+        expectedFingerprint: fingerprintStrategyManifest(
+          strategyManifestFor(candidate),
+        ),
+      };
+    });
+    // Merged board: each gate passes iff it passes for EVERY cohort symbol.
+    const mergedGates: ReadinessGate[] = cohort[0]?.gates.map((gate) => {
+      const failed = cohort.filter(
+        (member) => !member.gates.find((g) => g.id === gate.id)?.passed,
+      );
+      return {
+        id: gate.id,
+        passed: failed.length === 0,
+        reasons: failed.flatMap((member) =>
+          (
+            member.gates.find((g) => g.id === gate.id)?.reasons ?? []
+          ).map((reason) =>
+            cohort.length > 1 ? `${member.symbol}: ${reason}` : reason,
+          ),
+        ),
+      };
+    }) ?? [];
+    const failedGateIds: readonly ReadinessGateId[] = mergedGates
+      .filter((gate) => !gate.passed)
+      .map((gate) => gate.id);
+    const allPassed = cohort.every((member) => member.status === "PASS");
+    const mergedProvenance = cohort.reduce<{
+      valid: boolean;
+      queriedRows: number;
+      expectedRows: number;
+    }>(
+      (merged, member) => ({
+        valid: merged.valid && member.metrics.provenance.valid,
+        queriedRows: merged.queriedRows + member.metrics.provenance.queriedRows,
+        expectedRows: merged.expectedRows + member.metrics.provenance.expectedRows,
+      }),
+      { valid: true, queriedRows: 0, expectedRows: 0 },
+    );
+    const first = cohort[0]?.metrics;
+    return {
+      schemaVersion: "real-money-readiness/v2",
+      status: allPassed ? "PASS" : "FAIL",
+      exitCode: allPassed ? 0 : 1,
+      candidateFingerprint: first?.provenance.fingerprint ?? "",
+      thresholds: DEFAULT_READINESS_THRESHOLDS,
+      gates: mergedGates,
+      failedGateIds,
+      errors: [],
+      cohort,
+      metrics: {
+        prospective,
+        historical: first?.historical ?? {
+          completeWindows: 0,
+          profitableWindowPct: 0,
+          compoundedReturnPct: "0",
+          maximumDrawdownPct: "0",
+          totalTrades: 0,
+        },
+        confidence: first?.confidence ?? {
+          sampleCount: 0,
+          lowerBoundPct: "0",
+          upperBoundPct: "0",
+          resamples: 0,
+          blockLength: 5,
+          seed: 0,
+        },
+        stress: first?.stress ?? {
+          returnPct: "0",
+          lowerBoundPct: "0",
+          seeds: [],
+        },
+        provenance: {
+          valid: mergedProvenance.valid,
+          fingerprint: first?.provenance.fingerprint ?? "",
+          expectedFingerprint: first?.provenance.expectedFingerprint ?? "",
+          cohortId: first?.provenance.cohortId ?? "",
+          candidateLock: first?.provenance.candidateLock ?? "",
+          datasetCutoff: first?.provenance.datasetCutoff ?? "",
+          earliestEntry: first?.provenance.earliestEntry ?? "",
+          latestClose: first?.provenance.latestClose ?? "",
+          queriedRows: mergedProvenance.queriedRows,
+          expectedRows: mergedProvenance.expectedRows,
+        },
+        dataQuality: first?.dataQuality ?? {
+          valid: false,
+          candleCount: 0,
+          completeWindows: 0,
+          latestCandle: "",
+        },
+        evaluatedAt: now.toISOString(),
+      },
+    };
   } finally {
     db.close();
   }
@@ -522,13 +681,13 @@ export function helpText(): string {
     "",
     "Options:",
     "  --exchange <text>   Candle exchange (default: bitget-futures)",
-    "  --symbol <text>     Candidate symbol (default: BTC/USDT:USDT)",
+    "  --symbol <text>     Cohort symbol (repeatable; default: BTC+SOL cohort)",
     "  --timeframe <text>  Candidate timeframe (default: 15m)",
   ].join("\n");
 }
 
 export function versionText(): string {
-  return "real-money-readiness/v1";
+  return "real-money-readiness/v2";
 }
 
 export function runRealMoneyReadiness(

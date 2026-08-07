@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
-import { VALIDATED_BTC_GRID_CANDIDATE } from "./grid-candidate.js";
+import {
+  VALIDATED_BTC_GRID_CANDIDATE,
+  type ValidatedGridCandidate,
+} from "./grid-candidate.js";
 
-export const READINESS_SCHEMA_VERSION = "real-money-readiness/v1" as const;
+export const READINESS_SCHEMA_VERSION = "real-money-readiness/v2" as const;
 
 export const READINESS_GATE_IDS = [
   "prospective-evidence",
@@ -83,36 +86,39 @@ export interface StrategyManifest {
   readonly protocolVersion: string;
 }
 
-export const DEFAULT_STRATEGY_MANIFEST = {
-  schema: READINESS_SCHEMA_VERSION,
-  exchange: "bitget-demo",
-  symbol: VALIDATED_BTC_GRID_CANDIDATE.symbol,
-  timeframe: VALIDATED_BTC_GRID_CANDIDATE.timeframe,
-  gridStepPct: String(VALIDATED_BTC_GRID_CANDIDATE.gridStepPct),
-  gridMaxGrids: String(VALIDATED_BTC_GRID_CANDIDATE.gridMaxGrids),
-  gridPauseAfterLossBars: String(
-    VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars,
-  ),
-  positionFraction: String(
-    VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct / 100,
-  ),
-  feePct: String(VALIDATED_BTC_GRID_CANDIDATE.feePct),
-  slippageBps: String(VALIDATED_BTC_GRID_CANDIDATE.slippageBps),
-  trendFilterPeriod: String(VALIDATED_BTC_GRID_CANDIDATE.trendFilterPeriod),
-  adxGate: String(VALIDATED_BTC_GRID_CANDIDATE.chopGateAdx),
-  targetRatio: String(VALIDATED_BTC_GRID_CANDIDATE.targetRatio),
-  onlyWithTrend: String(VALIDATED_BTC_GRID_CANDIDATE.onlyWithTrend),
-  leverage: String(VALIDATED_BTC_GRID_CANDIDATE.leverage),
-  productType: VALIDATED_BTC_GRID_CANDIDATE.productType,
-  marginMode: "crossed",
-  maxDrawdownPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct),
-  maxDailyLossPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct),
-  validationProfile: "gate-scored-grid-search-2026-08-06-maker",
-  orderType: "limit-at-grid-level",
-  triggerTiming: "level-touch",
-  engineVersion: "grid-engine/v2",
-  protocolVersion: READINESS_SCHEMA_VERSION,
-} as const satisfies StrategyManifest;
+export function strategyManifestFor(
+  candidate: ValidatedGridCandidate,
+): StrategyManifest {
+  return {
+    schema: READINESS_SCHEMA_VERSION,
+    exchange: "bitget-demo",
+    symbol: candidate.symbol,
+    timeframe: candidate.timeframe,
+    gridStepPct: String(candidate.gridStepPct),
+    gridMaxGrids: String(candidate.gridMaxGrids),
+    gridPauseAfterLossBars: String(candidate.gridPauseAfterLossBars),
+    positionFraction: String(candidate.maxPositionSizePct / 100),
+    feePct: String(candidate.feePct),
+    slippageBps: String(candidate.slippageBps),
+    trendFilterPeriod: String(candidate.trendFilterPeriod),
+    adxGate: String(candidate.chopGateAdx),
+    targetRatio: String(candidate.targetRatio),
+    onlyWithTrend: String(candidate.onlyWithTrend),
+    leverage: String(candidate.leverage),
+    productType: candidate.productType,
+    marginMode: "crossed",
+    maxDrawdownPct: String(candidate.maxDrawdownPct),
+    maxDailyLossPct: String(candidate.maxDailyLossPct),
+    validationProfile: "gate-scored-grid-search-2026-08-06-maker",
+    orderType: "limit-at-grid-level",
+    triggerTiming: "level-touch",
+    engineVersion: "grid-engine/v2",
+    protocolVersion: READINESS_SCHEMA_VERSION,
+  } as const satisfies StrategyManifest;
+}
+
+export const DEFAULT_STRATEGY_MANIFEST: StrategyManifest =
+  strategyManifestFor(VALIDATED_BTC_GRID_CANDIDATE);
 
 export interface ProspectiveEvidence {
   readonly completeTradeCount: number;
@@ -214,6 +220,17 @@ export interface ReadinessGate {
   readonly reasons: readonly string[];
 }
 
+export interface CohortMemberReport {
+  readonly symbol: string;
+  readonly status: ReadinessStatus;
+  readonly gates: readonly ReadinessGate[];
+  readonly failedGateIds: readonly ReadinessGateId[];
+  readonly errors: readonly string[];
+  readonly metrics: RealMoneyReadinessReport["metrics"];
+  readonly fingerprint: string;
+  readonly expectedFingerprint: string;
+}
+
 export interface RealMoneyReadinessReport {
   readonly schemaVersion: typeof READINESS_SCHEMA_VERSION;
   readonly status: ReadinessStatus;
@@ -223,6 +240,8 @@ export interface RealMoneyReadinessReport {
   readonly gates: readonly ReadinessGate[];
   readonly failedGateIds: readonly ReadinessGateId[];
   readonly errors: readonly string[];
+  /** v2: per-symbol evaluation details for the multi-symbol cohort. */
+  readonly cohort?: readonly CohortMemberReport[];
   readonly metrics: {
     readonly prospective: ProspectiveEvidence;
     readonly historical: HistoricalRobustnessEvidence;

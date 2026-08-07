@@ -96,7 +96,7 @@ describe("live execution market guard", () => {
     expect(validateLiveGridConfiguration(config)).toBeUndefined();
     expect(
       validateLiveGridConfiguration({ ...config, gridStepPct: 0.5 }),
-    ).toContain("validated BTC 15m grid");
+    ).toContain("validated readiness cohort");
     expect(
       validateLiveGridConfiguration({ ...config, maxPositionSizePct: 51 }),
     ).toContain("50%");
@@ -146,7 +146,7 @@ describe("live execution market guard", () => {
 
     for (const drift of drifts) {
       expect(validateLiveGridConfiguration({ ...config, ...drift })).toContain(
-        "validated BTC 15m grid",
+        "validated readiness cohort",
       );
     }
 
