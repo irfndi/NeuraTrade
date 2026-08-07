@@ -247,3 +247,28 @@ verified via ps: `--grid-pause-after-loss-bars 24 --target-ratio 3
 --chop-gate-adx 28`. Cycling every 15m: `HOLD | capital=50.00 | no action`.
 Fills, when they come, carry the pause-24 fingerprint matching the readiness
 manifest.
+
+## BTC+SOL cohort (schema v2) 2026-08-07 — clock ~7.3 → ~3.3 months
+
+Owner decision: multi-symbol cohort to cut the 50-fill clock without weakening
+any gate threshold. `real-money-readiness/v2`: each cohort symbol is evaluated
+against its own backtest-validated candidate; the gate board merges (every
+gate must pass for every symbol); prospective evidence is the cohort UNION of
+complete fills; provenance is merged across symbols (per-symbol manifest
+fingerprints). ETH rejected (0 PASS in the fast sweep — no edge in this
+family). SOL validated: `step 1.25, grids 2, pause 36, target 4, ADX 26`
+(confLB +0.00133, stressLB +0.00325, OOS 39 ≈ 8 fills/mo). BTC+SOL ≈ 15
+fills/mo → 50 fills ≈ 3.3 months. Soaks: `neuratrade-btc-candidate` +
+`neuratrade-sol-candidate` (both on the ~$50 demo, `--capital 50`).
+
+### Operational incident 2026-08-07 (resolved)
+
+The universe soak opened a SOL position (0.3 @ 73.235, universe params) whose
+exchange record showed available 0 vs total 0.3 → account-wide persisted kill
+switch engaged and held BOTH candidate soaks even after the exchange-side
+record vanished. Resolved: deleted the phantom `grid_paper_state`/watchlist
+rows, disengaged the kill switch after verifying zero exchange positions and
+clean local cohort state, restarted soaks (clean `HOLD | no action` cycles).
+Root-cause fix: `persistSurvivors` excludes `READINESS_COHORT_CANDIDATES`
+symbols from the universe watchlist/whitelist. Future resets:
+`scalp paper-trade --disengage`.
