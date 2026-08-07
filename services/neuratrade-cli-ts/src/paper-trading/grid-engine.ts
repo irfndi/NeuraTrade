@@ -632,14 +632,21 @@ export function runGridPaperTradingIteration(
 
       let entrySide: GridPaperPositionSide | null = null;
       let theoreticalEntryPrice = money(0);
+      // Maker parity with the validated backtest model: entries are LIMIT
+      // orders resting at the raw grid level (the bar has already touched the
+      // level, so the order fills immediately at that price). The slippage
+      // factor only feeds conservative sizing.
+      let entryLevelPrice = money(0);
       if (allowLong && money(current.low).lessThanOrEqualTo(buyLevel)) {
         entrySide = "long";
+        entryLevelPrice = buyLevel;
         theoreticalEntryPrice = buyLevel.times(slippageFactor);
       } else if (
         allowShort &&
         money(current.high).greaterThanOrEqualTo(sellLevel)
       ) {
         entrySide = "short";
+        entryLevelPrice = sellLevel;
         theoreticalEntryPrice = sellLevel.div(slippageFactor);
       }
 
@@ -693,12 +700,12 @@ export function runGridPaperTradingIteration(
               const fill = yield* adapter.placeOrder({
                 symbol: options.symbol,
                 side: entrySide === "long" ? "buy" : "sell",
-                type: "market",
+                type: "limit",
                 size,
                 productType,
                 marginMode,
                 leverage: state.leverage,
-                price: theoreticalEntryPrice,
+                price: entryLevelPrice,
               });
               state = {
                 ...state,
@@ -755,7 +762,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "long",
           "liquidation",
-          liq.times(slippageFactor),
+          liq,
         );
         state = {
           ...state,
@@ -773,7 +780,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "long",
           "target",
-          target.div(slippageFactor),
+          target,
         );
         state = {
           ...state,
@@ -790,7 +797,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "long",
           "stop",
-          stop.times(slippageFactor),
+          stop,
         );
         state = {
           ...state,
@@ -813,7 +820,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "short",
           "liquidation",
-          liq.div(slippageFactor),
+          liq,
         );
         state = {
           ...state,
@@ -831,7 +838,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "short",
           "target",
-          target.times(slippageFactor),
+          target,
         );
         state = {
           ...state,
@@ -848,7 +855,7 @@ export function runGridPaperTradingIteration(
         const close = yield* closeGridPosition(
           "short",
           "stop",
-          stop.div(slippageFactor),
+          stop,
         );
         state = {
           ...state,

@@ -107,10 +107,10 @@ export const DEFAULT_STRATEGY_MANIFEST = {
   marginMode: "crossed",
   maxDrawdownPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct),
   maxDailyLossPct: String(VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct),
-  validationProfile: "gate-scored-grid-search-2026-08-03",
-  orderType: "market-after-trigger",
-  triggerTiming: "next-bar",
-  engineVersion: "grid-engine/v1",
+  validationProfile: "gate-scored-grid-search-2026-08-06-maker",
+  orderType: "limit-at-grid-level",
+  triggerTiming: "level-touch",
+  engineVersion: "grid-engine/v2",
   protocolVersion: READINESS_SCHEMA_VERSION,
 } as const satisfies StrategyManifest;
 

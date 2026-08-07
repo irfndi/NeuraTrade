@@ -226,16 +226,31 @@ function makeTrackingFuturesAdapter(
   initialPosition: FuturesPosition | null = null,
 ): {
   adapter: FuturesExchangeAdapterService;
-  orders: { side: string; size: number }[];
+  orders: {
+    side: string;
+    size: number;
+    type: string;
+    price: number | null;
+  }[];
   closes: { side: string; size: number }[];
 } {
-  const orders: { side: string; size: number }[] = [];
+  const orders: {
+    side: string;
+    size: number;
+    type: string;
+    price: number | null;
+  }[] = [];
   const closes: { side: string; size: number }[] = [];
   let position = initialPosition;
   const adapter: FuturesExchangeAdapterService = {
     placeOrder: (req) =>
       Effect.sync(() => {
-        orders.push({ side: req.side, size: req.size.toNumber() });
+        orders.push({
+          side: req.side,
+          size: req.size.toNumber(),
+          type: req.type,
+          price: req.price?.toNumber() ?? null,
+        });
         const fill = {
           orderId: "live",
           symbol: req.symbol,
@@ -442,6 +457,33 @@ describe("grid paper engine", () => {
     expect(state?.entryFillSource).toBe("live");
     expect(state?.entryOrderId).toBe("live");
     expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(orders[0].size, 12);
+  });
+
+  it("places live entries as LIMIT orders at the grid level (maker parity)", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({
+      isLive: true,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 1,
+    });
+    const result = await runWithRepo(opts, repo, candles, adapter);
+    expect(result.note).toContain("[LIVE]");
+    expect(orders.length).toBeGreaterThan(0);
+    // Entries must rest as limit orders (maker), not market orders, so the
+    // deployed path matches the validated backtest's fill-at-grid-level model.
+    expect(orders[0].type).toBe("limit");
+    expect(orders[0].price).not.toBeNull();
+    // The limit price must be the raw grid level (mid - gridStepPct%). In
+    // live shadow mode the engine evaluates only the latest candle, so the
+    // expected level is the last bar's open minus the step (the oscillating
+    // series crosses it), not a market/slippage-adjusted price.
+    const lastBar = candles.at(-1)!;
+    const expectedLevel = lastBar.open * (1 - opts.gridStepPct / 100);
+    expect(lastBar.low).toBeLessThanOrEqual(expectedLevel);
+    expect(orders[0].price).toBeCloseTo(expectedLevel, 6);
   });
 
   it("refuses to resume a legacy open state without provenance", async () => {

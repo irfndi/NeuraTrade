@@ -139,11 +139,13 @@ describe("real-money readiness contract", () => {
     expect(first.thresholds).toEqual(DEFAULT_READINESS_THRESHOLDS);
   });
 
-  it("uses market execution assumptions for the validated BTC candidate", () => {
+  it("uses maker (limit-at-grid-level) execution assumptions for the validated BTC candidate", () => {
     expect(DEFAULT_STRATEGY_MANIFEST).toMatchObject({
-      feePct: "0.06",
-      slippageBps: "2",
+      feePct: "0.02",
+      slippageBps: "1",
       trendFilterPeriod: "0",
+      orderType: "limit-at-grid-level",
+      engineVersion: "grid-engine/v2",
     });
   });
 

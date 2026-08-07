@@ -120,7 +120,13 @@ export function makeSimulatedFuturesExchangeAdapterService(
 
           const marginCoin = marginCoinFor(request.productType, request.symbol);
           const balance = yield* getBalanceInternal(marginCoin);
-          const price = yield* fillPrice(request.symbol, request.side);
+          // Limit orders fill at the requested limit price (maker parity with
+          // the backtest's fill-at-level model); market orders fill at mid
+          // with a tiny simulated spread.
+          const price =
+            request.price !== undefined
+              ? request.price
+              : yield* fillPrice(request.symbol, request.side);
           const notional = price.times(request.size);
           const marginRequired = notional.div(request.leverage);
 
