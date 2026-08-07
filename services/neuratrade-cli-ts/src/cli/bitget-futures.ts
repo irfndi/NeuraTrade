@@ -139,9 +139,13 @@ function parsePositionMode(raw: string): BitgetPositionMode {
 }
 
 export function handleErr(err: unknown): Effect.Effect<never, Error> {
+  // ExchangeError carries its message in .reason; Error.message is empty
+  // there, which made every adapter rejection print as an empty failure.
   const details =
     err instanceof Error
-      ? err.message
+      ? "reason" in err && typeof err.reason === "string" && err.reason.length > 0
+        ? err.reason
+        : err.message
       : err && typeof err === "object"
         ? "_tag" in err
           ? `${String(err._tag)}: ${JSON.stringify(err)}`
