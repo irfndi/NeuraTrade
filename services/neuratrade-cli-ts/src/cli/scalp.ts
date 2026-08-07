@@ -94,6 +94,7 @@ import {
   formatReadinessReport,
 } from "../scalping/readiness.js";
 import {
+  READINESS_COHORT_CANDIDATES,
   VALIDATED_BTC_GRID_CANDIDATE,
   candidateForSymbol,
 } from "../scalping/grid-candidate.js";
@@ -5603,7 +5604,16 @@ export const gridUniverseScanCommand = Command.make(
         Effect.gen(function* () {
           const paperRepo = yield* PaperTradingRepository;
           yield* paperRepo.ensureTables();
-          const entries: DbWatchlistEntry[] = result.survivors.map((e) => ({
+          // Readiness cohort symbols are owned by their candidate soaks;
+          // the universe soak must never trade them (its fills/positions
+          // carry a different manifest and trip the account kill switch).
+          const cohortSymbols = new Set<string>(
+            READINESS_COHORT_CANDIDATES.map((candidate) => candidate.symbol),
+          );
+          const survivors = result.survivors.filter(
+            (entry) => !cohortSymbols.has(entry.symbol),
+          );
+          const entries: DbWatchlistEntry[] = survivors.map((e) => ({
             // Persist under the resolved futures-market key so scan-write
             // and paper-trade read always agree, even when the scan was run
             // with a raw exchange name that resolves differently (e.g.
@@ -5637,8 +5647,8 @@ export const gridUniverseScanCommand = Command.make(
           // Only ever write the whitelist file after a successful scan with
           // survivors: a failed/empty scan must not truncate the file the
           // demo soak consumes.
-          if (outputPath && result.survivors.length > 0) {
-            const watchlistJson = result.survivors.map((e) => ({
+          if (outputPath && survivors.length > 0) {
+            const watchlistJson = survivors.map((e) => ({
               symbol: e.symbol,
               exchange: args.exchange,
               returnPct: e.walkForward.aggregateReturnPct,
