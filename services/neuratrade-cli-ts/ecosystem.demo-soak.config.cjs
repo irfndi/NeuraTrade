@@ -28,11 +28,12 @@ function loadDotEnv(file) {
 
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 
-// Promoted real-money candidate per docs/superpowers/specs/2026-08-03-gate-scored-grid-search.md
+// Promoted readiness candidate per docs/superpowers/specs/2026-08-06-readiness-gate-status.md
 // and the readiness fingerprint (src/scalping/grid-candidate.ts VALIDATED_BTC_GRID_CANDIDATE):
-// step 1%, grids 1, target ratio 3, pause 24, chop-gate ADX 24, trend filter 0,
-// fee 0.06%/side, slippage 2bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
-// MUST match the manifest exactly — the provenance gate rejects fills whose fingerprint differs.
+// step 1%, grids 1.5, target ratio 3, pause 36, chop-gate ADX 28, trend filter 0,
+// fee 0.02% maker, slippage 1bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
+// The args below MUST match the manifest exactly — the provenance gate rejects
+// fills whose fingerprint differs.
 // STOPPED BY DEFAULT (pm2 start <id> only): the demo account has ~$50 USDT and is used
 // by neuratrade-demo-soak; the readiness cohort needs a DEDICATED funded demo account
 // (bd: BTC candidate soak issue). Start with:

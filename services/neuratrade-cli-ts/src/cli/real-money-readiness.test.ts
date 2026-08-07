@@ -203,6 +203,44 @@ describe("real-money-readiness CLI contract", () => {
     // Data-quality/robustness gates need candles; with none present the
     // cohort must fail closed on the historical and data-quality gates.
     expect(result.report.failedGateIds).toContain("data-quality");
+    // No backtest evidence → the stress gate must FAIL CLOSED, not pass on
+    // zero/zero defaults (regression: the missing-evidence default carried
+    // the full seed set, so the gate passed spuriously).
+    const stressGate = result.report.gates.find((gate) => gate.id === "stress");
+    expect(stressGate?.passed).toBe(false);
+    expect(stressGate?.reasons).toContain(
+      "adverse stress seed set is incomplete",
+    );
+  });
+
+  it("ignores untagged legacy fills outside the readiness cohort", () => {
+    const home = makeSeededHome(60);
+    tempHomes.push(home);
+    const db = new Database(nodePath.join(home, "data", "neuratrade.db"));
+    db.exec(`INSERT INTO grid_paper_trades
+      (id, exchange, symbol, timeframe, fill_source, entry_order_id, exit_order_id,
+       entry_filled_qty_decimal, exit_filled_qty_decimal, entry_fee_decimal,
+       exit_fee_decimal, realized_pnl_pct_decimal, opened_at, closed_at,
+       strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
+       entry_opened_at, execution_environment)
+      VALUES ('legacy-1', 'bitget-futures', 'BTC/USDT:USDT', '15m', 'live',
+              'legacy-entry', 'legacy-exit', '0.01', '0.01', '0.1', '0.1', '0.1',
+              '2026-07-01T00:00:00.000Z', '2026-07-02T00:00:00.000Z',
+              NULL, NULL, NULL, NULL, NULL, 'bitget-demo')`);
+    db.close();
+
+    const result = runRealMoneyReadiness([], {
+      home,
+      now: new Date("2026-08-02T00:00:00.000Z"),
+    });
+
+    // Untagged fills are rejected (excluded from the cohort): they must not
+    // count toward prospective evidence nor veto the provenance gate
+    // (regression: the evidence query returned every row, so a single old
+    // fill blocked the gate forever once the cohort was clean).
+    expect(result.report.metrics.prospective.completeTradeCount).toBe(60);
+    expect(result.report.metrics.provenance.valid).toBe(true);
+    expect(result.report.metrics.provenance.queriedRows).toBe(60);
   });
 
   it("fails the provenance gate when a seeded trade fingerprint is tampered", () => {

@@ -61,6 +61,13 @@ export interface GridValidationOk {
     }[];
     readonly worstReturnPct: number;
     readonly worstLowerBoundPct: number;
+    /**
+     * Plan amendment 2026-08-07 (owner decision B): the gate's stress LB is
+     * the block bootstrap over the COMBINED 5-seed trade sequence (n≈145),
+     * not the worst per-seed LB (n≈29/seed widens the CI past the mean).
+     * Per-seed runs stay as evidence; the ≥0 threshold is unchanged.
+     */
+    readonly pooledLowerBoundPct: number;
   };
   readonly executionParity: {
     readonly passed: boolean;
@@ -365,6 +372,14 @@ export function validateGridEvidence(
       confidence: confidenceForResult(result, seed),
     };
   });
+  // Amendment 2026-08-07: gate LB = bootstrap over the combined 5-seed
+  // sequence (same protocol: block 5, 5000 resamples, seed 20260802).
+  const pooledStressLowerBoundPct = bootstrapBlockConfidence(
+    stressRuns.flatMap((run) =>
+      run.result.trades.map((trade) => trade.pnlPct.toString()),
+    ),
+    20260802,
+  ).lowerBoundPct;
   return {
     kind: "ok",
     dataQuality,
@@ -386,6 +401,7 @@ export function validateGridEvidence(
       worstLowerBoundPct: Math.min(
         ...stressRuns.map((run) => run.confidence.lowerBoundPct),
       ),
+      pooledLowerBoundPct: pooledStressLowerBoundPct,
     },
     executionParity: {
       passed: options.executionParityPassed ?? false,

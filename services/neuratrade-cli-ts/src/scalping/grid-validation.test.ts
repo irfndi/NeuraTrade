@@ -82,6 +82,30 @@ describe("deterministic grid validation", () => {
     );
   });
 
+  it("pools the 5-seed sequence for the stress LB (amendment 2026-08-07)", () => {
+    const series = candles(120);
+    const result = validateGridEvidence(
+      series,
+      options(new Date("2026-01-02T06:00:00.000Z")),
+    );
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+
+    const pooled = bootstrapBlockConfidence(
+      result.stress.runs.flatMap((run) =>
+        run.result.trades.map((trade) => trade.pnlPct.toString()),
+      ),
+      20260802,
+    );
+    // The gate LB is the bootstrap over the combined seed sequence, in seed
+    // order — not the worst per-seed interval.
+    expect(result.stress.pooledLowerBoundPct).toBe(pooled.lowerBoundPct);
+    expect(Number.isFinite(result.stress.pooledLowerBoundPct)).toBe(true);
+    expect(pooled.sampleCount).toBe(
+      result.stress.runs.reduce((sum, run) => sum + run.result.totalTrades, 0),
+    );
+  });
+
   it("rejects empty, duplicate, gapped, stale, and malformed evidence", () => {
     const now = new Date("2026-01-02T06:00:00.000Z");
     expect(validateGridEvidence([], options(now)).kind).toBe("invalid");
@@ -125,9 +149,36 @@ describe("deterministic grid validation", () => {
     // collapses to width 0 and makes the confidence gate compare the raw
     // block mean against zero — fail-open vs the intended 95% lower bound.
     const values = [
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
     ];
     for (const seed of [20260802, 20260803, 1, 42]) {
       const result = bootstrapBlockConfidence(values, seed, 5, 5000);
@@ -140,9 +191,36 @@ describe("deterministic grid validation", () => {
     // the plan protocol (xorshift32, block length 5, seed+run state, 5000
     // resamples, floor/ceil linear-interpolated 0.025/0.975 quantiles).
     const values = [
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
-      "5", "-5", "4", "-4", "3", "-3", "2", "-2", "1", "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
+      "5",
+      "-5",
+      "4",
+      "-4",
+      "3",
+      "-3",
+      "2",
+      "-2",
+      "1",
+      "-1",
     ];
     const result = bootstrapBlockConfidence(values, 20260802, 5, 5000);
     expect(result.lowerBoundPct).toBe(-0.5333333333333333);

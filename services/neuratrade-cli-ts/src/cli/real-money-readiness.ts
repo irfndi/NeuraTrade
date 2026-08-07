@@ -6,7 +6,6 @@ import type { CandleLike } from "../scalping/types.js";
 import { VALIDATED_BTC_GRID_CANDIDATE } from "../scalping/grid-candidate.js";
 import {
   bootstrapBlockConfidence,
-  READINESS_STRESS_SEEDS,
   validateGridEvidence,
   type GridValidationOk,
 } from "../scalping/grid-validation.js";
@@ -303,7 +302,7 @@ function readTrades(
               candidate_lock_at, dataset_cutoff_at, entry_opened_at,
               execution_environment
        FROM grid_paper_trades
-       WHERE exchange = ? AND symbol = ? AND timeframe = ?
+       WHERE exchange = ? AND symbol = ? AND timeframe = ? AND cohort_id IS NOT NULL
        ORDER BY closed_at ASC, id ASC`,
     )
     .all(args.exchange, args.symbol, args.timeframe);
@@ -400,9 +399,13 @@ function buildInput(
     seed: 0,
   };
   const stress = gridOk?.stress ?? {
+    // Fail closed: no backtest stress evidence → empty seed set trips the
+    // "adverse stress seed set is incomplete" check instead of passing on
+    // zero/zero defaults (regression fix 2026-08-07).
     worstReturnPct: 0,
     worstLowerBoundPct: 0,
-    seeds: [...READINESS_STRESS_SEEDS],
+    pooledLowerBoundPct: 0,
+    seeds: [],
   };
   const candidateLock = firstProvenance?.candidate_lock_at ?? "";
   const datasetCutoff = firstProvenance?.dataset_cutoff_at ?? "";
@@ -438,7 +441,10 @@ function buildInput(
     executionParity,
     stress: {
       returnPct: stress.worstReturnPct?.toString() ?? "0",
-      lowerBoundPct: stress.worstLowerBoundPct?.toString() ?? "0",
+      // Amendment 2026-08-07 (B): gate LB = pooled 5-seed bootstrap; the
+      // worst per-seed LB stays available in grid-validation evidence as a
+      // diagnostic, but is no longer the gate input.
+      lowerBoundPct: stress.pooledLowerBoundPct?.toString() ?? "0",
       seeds: stress.seeds,
     },
     provenance: {
