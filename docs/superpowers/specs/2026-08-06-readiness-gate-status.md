@@ -115,3 +115,89 @@ statistical protocol to the combined-seed sequence / extend history).
    gate flips eligible: `scalp real-money-readiness` → PASS → human review.
 5. The command never places orders; real-money activation remains a separate,
    manual, human-reviewed decision with the existing sandbox/risk controls.
+
+## Plan amendment 2026-08-07 (owner decision B): pooled stress LB
+
+**Decision:** amend the stress gate's statistical protocol — the stress LB is the
+moving-block bootstrap (block 5, 5,000 resamples, seed `20260802`) over the
+**combined 5-seed trade sequence** (n≈145), not the worst of the per-seed LBs.
+Threshold unchanged (LB ≥ 0). Seeds, resample count, and block length unchanged.
+
+**Rationale:** the binding failure was estimator-wide, not edge: per-seed trade
+counts of 28–30 make the 95% per-seed interval (mean ± 1.96·SE, SE ≈ 0.35–0.7%)
+wider than the per-seed mean (+0.003…+0.008/trade, all five seeds positive).
+Pooled n=145 → SE ≈ 0.15% → LB +0.0023 on the same candidate, same data. The
+plan's letter ("stress LB ≥ 0, seeds `20260802`–`20260806`") lists the seeds as
+the evidence set, not as five separate tests; the worst-of-seeds reading was
+introduced by the implementation. Option A (keep gate) was rejected as
+hope-based; option C (3–5y history) rejected as months of collector work for an
+estimator artifact.
+
+**Conditions (unchanged):** per-seed runs remain in the evidence as diagnostics;
+`worstReturnPct` remains the gate's stress-return input (conservative, passes at
++2.90…+6.10%). Regime sensitivity is NOT cured by pooling — the OOS window flip
+(+0.00037 → −0.0033 worst-of-seeds when fresh candles moved the window) is
+monitored by re-running the gate on every fresh backfill. The cohort clock
+(`prospective-evidence` ≥50 fills over ≥7 days) and `provenance` remain binding
+and unamendable.
+
+**Code:** `grid-validation.ts` emits `stress.pooledLowerBoundPct`;
+`cli/real-money-readiness.ts` feeds it to the `stress` gate;
+`scripts/gate-scored-grid-search-2026-08-06.ts` scores on it. Regression test
+added in `grid-validation.test.ts`.
+
+**Gate board after amendment (fresh 70,583-candle dataset):** `stress` PASS.
+Remaining FAIL = `prospective-evidence` (0 demo fills) + `provenance` (no
+cohort) — both gated on the demo soak, per protocol.
+
+## Sweep re-run under the amended protocol (2026-08-07)
+
+`gate-scored-grid-search-2026-08-06.ts` (maker: fee 0.02, slip 1) on the fresh
+70,583-candle dataset, stress LB = pooled 5-seed bootstrap:
+
+- **Fast space (360 configs): 12 PASS** (was 0 under worst-of-seeds). Locked
+  candidate `step 1, grids 1.5, pause 36, target 3, ADX 28` passes:
+  windows 53.8%, ret +8.50%, dd 12.06%, OOS 33, confLB +0.00227,
+  stressLB +0.00235. Results:
+  `~/.neuratrade/tuning/gate-scored-search-2026-08-06-fee0.02-slip1.json`.
+- **Lock unchanged** (owner decision B kept the locked candidate as the soak
+  target). Note: `pause 24, target 3, grids 1.5` now also passes with the
+  fattest margins in the space (confLB +0.00367, stressLB +0.00422, ret
+  +10.10%, dd 10.76%) and trades more often — available re-lock candidate if
+  the owner wants a faster cohort clock; not applied to avoid churning the
+  lock outside the agreed amendment.
+- **⚠ Full-space re-sweep stalled** at config ~1050–1100 (step 1, grids 2, pause
+  12–24 region) on the fresh dataset. **Diagnosed 2026-08-07: NOT a code bug.**
+  A per-config repro driver over the exact region (configs 1030–1120) completed
+  clean (91/91, ≤2.5 s each), and the re-run stalled again under system load
+  avg ~32 on an 8-core M1 with near-zero CPU delivered to the process —
+  scheduler starvation (hundreds of runnable threads from editor/MCP servers).
+  The full sweep is CPU-bound (~1.3 s/config ≈ 40 min on an idle machine);
+  re-run when the host is idle.
+
+## Additional fix 2026-08-07: stress gate fail-closed on missing evidence
+
+The CLI's missing-evidence default for the stress gate carried the full seed
+set with zero/zero metrics, so `stress` PASSED spuriously whenever the backtest
+validation failed (e.g., no/stale candles) — inconsistent with `confidence`
+(resamples 0 trips its protocol check). Fix: when `validateGridEvidence` yields
+no OK result, the stress evidence now emits `seeds: []`, tripping the existing
+"adverse stress seed set is incomplete" check. Regression test in
+`src/cli/real-money-readiness.test.ts` (no-candles home must fail the stress
+gate). Live board with real evidence is unchanged: `stress` still PASS.
+
+## Additional fix 2026-08-07: readiness evidence scoped to the cohort
+
+The readiness queries returned **every** demo fill for the symbol/timeframe and
+required **all** of them to carry the canonical fingerprint + cohort fields
+(`trades.every`). The DB holds 17 legacy BTC/USDT:USDT 15m fills (pre-provenance
+engine) with NULL provenance fields — so the provenance gate could NEVER pass,
+even after the new soak produced a clean tagged cohort. Fix: the evidence query
+now scopes to `cohort_id IS NOT NULL` ("untagged fills are rejected" per the
+protocol). Legacy rows are excluded from prospective evidence and provenance;
+the gate fails only on a genuinely missing cohort. Regression test: an untagged
+legacy row must not count toward the cohort nor veto provenance. Also corrected
+the stale candidate description in `ecosystem.demo-soak.config.cjs` (comment
+still described the Aug-3 pause-24/ADX-24 promotion; the app args were already
+the locked pause-36/ADX-28 candidate). Live: `provenance rows 0/0`, gate FAIL =
+no cohort yet (correct).
