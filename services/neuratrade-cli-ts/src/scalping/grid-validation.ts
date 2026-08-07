@@ -60,7 +60,6 @@ export interface GridValidationOk {
       readonly confidence: BlockConfidence;
     }[];
     readonly worstReturnPct: number;
-    readonly worstLowerBoundPct: number;
     /**
      * Plan amendment 2026-08-07 (owner decision B): the gate's stress LB is
      * the block bootstrap over the COMBINED 5-seed trade sequence (n≈145),
@@ -397,9 +396,6 @@ export function validateGridEvidence(
       runs: stressRuns,
       worstReturnPct: Math.min(
         ...stressRuns.map((run) => run.result.totalReturnPct),
-      ),
-      worstLowerBoundPct: Math.min(
-        ...stressRuns.map((run) => run.confidence.lowerBoundPct),
       ),
       pooledLowerBoundPct: pooledStressLowerBoundPct,
     },

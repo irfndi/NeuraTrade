@@ -403,7 +403,6 @@ function buildInput(
     // "adverse stress seed set is incomplete" check instead of passing on
     // zero/zero defaults (regression fix 2026-08-07).
     worstReturnPct: 0,
-    worstLowerBoundPct: 0,
     pooledLowerBoundPct: 0,
     seeds: [],
   };
@@ -441,9 +440,7 @@ function buildInput(
     executionParity,
     stress: {
       returnPct: stress.worstReturnPct?.toString() ?? "0",
-      // Amendment 2026-08-07 (B): gate LB = pooled 5-seed bootstrap; the
-      // worst per-seed LB stays available in grid-validation evidence as a
-      // diagnostic, but is no longer the gate input.
+      // Amendment 2026-08-07 (B): gate LB = pooled 5-seed bootstrap.
       lowerBoundPct: stress.pooledLowerBoundPct?.toString() ?? "0",
       seeds: stress.seeds,
     },
