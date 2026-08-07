@@ -201,3 +201,25 @@ the stale candidate description in `ecosystem.demo-soak.config.cjs` (comment
 still described the Aug-3 pause-24/ADX-24 promotion; the app args were already
 the locked pause-36/ADX-28 candidate). Live: `provenance rows 0/0`, gate FAIL =
 no cohort yet (correct).
+
+## Candidate re-lock 2026-08-07: pause 24 (owner decision, frequency review)
+
+Fill-frequency review of the 12 passing configs (fresh data, OOS 147 days):
+the whole family is pinned at 6.6–7.5 fills/month (~7 months to the 50-fill
+cohort gate); ADX-28 is the dominant throttle and every passer shares it, so
+no passing config materially accelerates the clock. On evidence quality,
+`pause 24, target 3, grids 1.5` strictly dominates the prior lock (pause 36):
+
+| | pause 36 (old lock) | **pause 24 (new lock)** |
+| --- | --- | --- |
+| confLB | +0.00227 | **+0.00367** |
+| stressLB | +0.00235 | **+0.00422** |
+| ret / dd | +8.50% / 12.06% | **+10.10% / 10.76%** |
+| OOS trades | 33 | 33 |
+| cohort clock | ~7.3 mo | ~7.3 mo |
+
+Re-locked: `VALIDATED_BTC_GRID_CANDIDATE.gridPauseAfterLossBars 36 → 24`;
+soak args + comments aligned (`--grid-pause-after-loss-bars 24`). Fingerprint
+derives from the candidate, so the provenance manifest updates automatically.
+Verified live: confLB +0.003667, stressLB +0.004222, all backtest gates PASS,
+remaining FAIL = prospective-evidence + provenance (no cohort yet).
