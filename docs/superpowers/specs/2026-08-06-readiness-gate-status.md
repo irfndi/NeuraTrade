@@ -71,11 +71,31 @@ The gate-scored search must be re-run with the corrected bootstrap (`clever-cabi
   Full-space sweep running to map the complete frontier.
 
 **Conclusion:** the grid family has statistically significant edge on BTC 15m only
-under **maker/limit fills** (~+0.12%/trade advantage). The grid engine hardcodes
-market entries (`grid-engine.ts` placeOrder `type: "market"`), and the plan's
-execution-parity gate requires the deployed model to match the validated replay —
-so limit-entry execution must be implemented and revalidated end-to-end before any
-candidate can be locked. Until then the gate stays FAIL by design.
+under **maker/limit fills** (~+0.12%/trade advantage).
+
+## Locked candidate + maker execution (2026-08-07, shipped `ca2276d0`)
+
+- **Locked candidate** (`VALIDATED_BTC_GRID_CANDIDATE`): `step 1%, grids 1.5,
+  pause 36, target ratio 3, ADX gate 28, fee 0.02 (maker), slippage 1bp,
+  leverage 1, position fraction 0.5` — the only passing configs from the full
+  1,728-config sweep (pause 36 and pause 42; pause 36 chosen for the higher
+  compounded return, +8.50% vs +6.15%).
+- **Maker execution shipped**: the grid engine now places LIMIT orders at the raw
+  grid level (the bar has already touched the level, so the fill is a maker fill
+  at that price); exits use raw target/stop/liquidation levels. The simulated
+  adapter fills limits at the requested price.
+- **Execution parity: PASS 8/8** (live `scalp parity-replay`, entry delta 0.0000
+  vs the backtest) — the deployed engine now matches the validated replay model.
+- Manifest: `orderType limit-at-grid-level`, `engine grid-engine/v2`,
+  validation profile `gate-scored-grid-search-2026-08-06-maker`.
+- The BTC candidate soak (`neuratrade-btc-candidate`) runs the locked candidate
+  on the demo account; fills carry the new fingerprint.
+
+**Remaining before the gate can PASS:** the prospective-evidence cohort — ≥50
+complete live fills over ≥7 days on the locked candidate (provenance already
+persisted by the engine), plus fresh candle data (the DB backfill ends
+2026-08-03; a collector must refresh BTC 15m candles so data-quality/freshness
+pass).
 
 ## The path to real-money review
 
