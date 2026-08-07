@@ -91,11 +91,15 @@ under **maker/limit fills** (~+0.12%/trade advantage).
 - The BTC candidate soak (`neuratrade-btc-candidate`) runs the locked candidate
   on the demo account; fills carry the new fingerprint.
 
-**Remaining before the gate can PASS:** the prospective-evidence cohort — ≥50
-complete live fills over ≥7 days on the locked candidate (provenance already
-persisted by the engine), plus fresh candle data (the DB backfill ends
-2026-08-03; a collector must refresh BTC 15m candles so data-quality/freshness
-pass).
+**Status 2026-08-07 (fresh data):** BTC 15m candles backfilled to 2026-08-07
+(70,583, zero gaps) → `data-quality`, `freshness`, `historical-robustness`,
+`confidence` (plain OOS LB +0.0023), `execution-parity` all PASS. The gate that
+blocks everything is the **worst-of-5-seeds adverse-fill bootstrap LB** (stress
+gate): per-seed trade counts are 28–30, so the 95% LB = mean − 1.96·SE is
+negative for every config in the full 1,728-config sweep (locked candidate
+−0.0033; best −0.0017). Every seed's mean is positive; the pooled 5-seed LB is
++0.0023. Owner decision tracked in `clever-cabin-out` (keep gate / amend plan's
+statistical protocol to the combined-seed sequence / extend history).
 
 ## The path to real-money review
 
