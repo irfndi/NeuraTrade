@@ -223,3 +223,27 @@ soak args + comments aligned (`--grid-pause-after-loss-bars 24`). Fingerprint
 derives from the candidate, so the provenance manifest updates automatically.
 Verified live: confLB +0.003667, stressLB +0.004222, all backtest gates PASS,
 remaining FAIL = prospective-evidence + provenance (no cohort yet).
+
+## Full-space sweep completed 2026-08-07 (1,728 configs, pooled stress LB)
+
+The previously stalled full sweep completed on an eased host: **16 PASS** (12
+fast-space + 3 new: `grids 1 pause 48 t3`, `grids 1.5 pause 12 t2`, `grids 1.5
+pause 48 t1` — all adx 28). **Lock confirmed optimal on evidence margins:**
+pause-24/t3/grids-1.5 holds the fattest LBs in the entire space (confLB
++0.00367, stressLB +0.00422; nearest rival +0.00131/+0.00128, and the
+higher-return configs run 3–19× thinner margins). No config outside the fast
+space dominates the lock; the ~7.3-month cohort clock stands (fastest
+alternative, pause-12 t2 at ~6.5 mo, has the thinnest margins in the set).
+Results: `~/.neuratrade/tuning/gate-scored-search-2026-08-06-fee0.02-slip1.json`
+(now the full-space pooled run).
+
+## Soak re-verified 2026-08-07
+
+`neuratrade-btc-candidate` was found ONLINE (pm2, ~12h uptime) running the
+pre-re-lock pause-36 args from pm2's config snapshot. No fills had been placed
+(DB shows only the 17 Jul-18 legacy rows — cohort still clean). Restarted via
+`pm2 startOrRestart ecosystem.demo-soak.config.cjs --only neuratrade-btc-candidate`;
+verified via ps: `--grid-pause-after-loss-bars 24 --target-ratio 3
+--chop-gate-adx 28`. Cycling every 15m: `HOLD | capital=50.00 | no action`.
+Fills, when they come, carry the pause-24 fingerprint matching the readiness
+manifest.
