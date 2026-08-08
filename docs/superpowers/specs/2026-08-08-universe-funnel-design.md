@@ -69,6 +69,27 @@ Pass-through estimate: 2000 → 1500 (volume) → 300 (stats) → 50
   `BitgetClient.getContracts` for the registry; multi-product enumeration;
   surface rate-limit headers.
 
+## Batch digestion (larger batches, better opportunity finding)
+
+The funnel is batch-shaped by construction — the expensive stages never scale
+with the batch:
+
+- **Stage 0–1 (whole market, cheap):** enumerate (~2000 contracts, 1 request);
+  volume screen = ONE request for the entire market (`fetch24hrVolumes`);
+  spec sanity from the contracts endpoint.
+- **Stage 2 (whole market, cached):** volatility/ADX/fill-freq from the candle
+  cache — zero requests once the cache is warm; the incremental tail keeps it
+  warm at 1 request/symbol/cycle.
+- **Concurrency:** tail-fetch with 2–3 workers (per-request pacing preserved,
+  ~300ms) → ~2000 symbols in ~8–12 min instead of ~35.
+- **Two-phase cadence:** discovery pass (stages 1–2 over ALL symbols) daily;
+  deep pass (walk-forward + gates on survivors) every 6h; new listings
+  fast-tracked through the funnel via the registry's launchTime.
+- **Candidate pool, not a single list:** the deep pass ranks survivors by
+  (edge/trade × fills/day); the frequency-targeted selection picks the day's
+  top-K portfolio from the pool. Filtering finds *eligible*; ranking finds
+  *best*.
+
 ## Implementation order (scan universe first)
 
 1. **Symbol registry + incremental candle cache** — persist what the market

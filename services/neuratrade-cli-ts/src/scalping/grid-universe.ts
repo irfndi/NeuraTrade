@@ -5,7 +5,7 @@
  * parameters in-sample, and reports which ones pass a survival gate.
  */
 
-import { Effect } from "effect";
+import { Effect, Ref } from "effect";
 import {
   MarketDataGateway,
   type MarketDataError,
@@ -203,7 +203,7 @@ export function runMarketUniverseScan(
 ): Effect.Effect<
   GridUniverseResult,
   MarketDataRepositoryError | MarketDataError,
-  MarketDataGatewayService
+  MarketDataGatewayService | MarketDataRepositoryService
 > {
   const timeframeMillis = (() => {
     const match = /^(\d+)(m|h|d)$/.exec(options.timeframe);
@@ -217,9 +217,14 @@ export function runMarketUniverseScan(
   // Public API pacing: sequential scans burst past the rate limit without a
   // delay between every request (observed HTTP 429 mid-scan).
   const REQUEST_DELAY_MS = 250;
+  // Tail-fetch concurrency: the sequential 250ms pacing is the binding
+  // constraint on batch size, not the rate limit — 2 workers keep the batch
+  // ~2x faster while staying well under Bitget's public limit.
+  const TAIL_CONCURRENCY = 2;
 
   return Effect.gen(function* () {
     const gateway = yield* MarketDataGateway;
+    const repo = yield* MarketDataRepository;
 
     const [marketSymbols, volumes] = yield* Effect.all([
       gateway.fetchSymbols(options.exchange),
@@ -243,38 +248,28 @@ export function runMarketUniverseScan(
       // watchlist, soak, and grid engine all expect.
       .map((symbol) => (symbol.includes(":") ? symbol : `${symbol}:USDT`));
 
-    const fetchCandles = (symbol: string) =>
+    const fetchBatch = (symbol: string, startTime: Date | undefined) =>
       Effect.gen(function* () {
-        const byTimestamp = new Map<number, Candle>();
-        let startTime: Date | undefined;
-        while (byTimestamp.size < options.minCandles) {
-          yield* Effect.sleep(REQUEST_DELAY_MS);
-          const batch = yield* gateway.fetchOHLCV(
-            options.exchange,
-            symbol,
-            options.timeframe,
-            BATCH,
-            startTime,
-          );
-          if (batch.length === 0) break;
-          for (const candle of batch) {
-            byTimestamp.set(candle.timestamp.getTime(), candle);
-          }
-          const oldest = [...byTimestamp.keys()].sort((a, b) => a - b)[0];
-          startTime = new Date(oldest - timeframeMillis);
-        }
-        return [...byTimestamp.values()].sort(
-          (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+        yield* Effect.sleep(REQUEST_DELAY_MS);
+        return yield* gateway.fetchOHLCV(
+          options.exchange,
+          symbol,
+          options.timeframe,
+          BATCH,
+          startTime,
         );
       });
 
     // Retry rate-limited batches with backoff; non-429 failures propagate so
-    // a failed scan never persists a partial watchlist.
-    const fetchCandlesRetry = (symbol: string) =>
+    // a broken scan never persists a partial watchlist.
+    const withRetry = (
+      symbol: string,
+      run: () => Effect.Effect<readonly Candle[], MarketDataError, never>,
+    ) =>
       Effect.gen(function* () {
         let attempt = 0;
         for (;;) {
-          const outcome = yield* fetchCandles(symbol).pipe(Effect.result);
+          const outcome = yield* run().pipe(Effect.result);
           if (outcome._tag === "Success") return outcome.success;
           const reason =
             (outcome.failure as { reason?: string } | undefined)?.reason ??
@@ -289,22 +284,85 @@ export function runMarketUniverseScan(
         }
       });
 
-    const entries: GridUniverseEntry[] = [];
+    // Backward pagination to fill the window when the cache is thin.
+    const backfill = (symbol: string) =>
+      withRetry(symbol, () =>
+        Effect.gen(function* () {
+          const byTimestamp = new Map<number, Candle>();
+          let startTime: Date | undefined;
+          while (byTimestamp.size < options.minCandles) {
+            const batch = yield* fetchBatch(symbol, startTime);
+            if (batch.length === 0) break;
+            for (const candle of batch) {
+              byTimestamp.set(candle.timestamp.getTime(), candle);
+            }
+            const oldest = [...byTimestamp.keys()].sort((a, b) => a - b)[0];
+            startTime = new Date(oldest - timeframeMillis);
+          }
+          return [...byTimestamp.values()].sort(
+            (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+          );
+        }),
+      );
 
-    let scanned = 0;
-    for (const symbol of candidates) {
-      scanned += 1;
-      if (scanned % 50 === 0) {
-        yield* Effect.log(
-          `market scan: ${scanned}/${candidates.length} symbols, ${entries.length} entries`,
+    // Incremental candle cache: fetch only bars newer than the DB max, save
+    // them, backfill only when the cache is too thin. Steady state = 1
+    // request/symbol/cycle; the batch no longer refetches history each run.
+    const ensureCandles = (symbol: string) =>
+      Effect.gen(function* () {
+        const range = yield* repo.getCandleRange(
+          options.exchange,
+          symbol,
+          options.timeframe,
         );
-      }
-      const candles = yield* fetchCandlesRetry(symbol);
+        const latest = range.latest;
+        if (latest !== null) {
+          const tail = yield* withRetry(symbol, () =>
+            fetchBatch(
+              symbol,
+              new Date(latest.getTime() + timeframeMillis),
+            ),
+          );
+          if (tail.length > 0) yield* repo.saveCandles(tail);
+        }
+        const cached = yield* repo.getCandles({
+          exchange: options.exchange,
+          symbol,
+          timeframe: options.timeframe,
+          limit: options.minCandles,
+        });
+        if (cached.length >= options.minCandles) return cached;
+        const filled = yield* backfill(symbol);
+        if (filled.length > 0) yield* repo.saveCandles(filled);
+        return yield* repo.getCandles({
+          exchange: options.exchange,
+          symbol,
+          timeframe: options.timeframe,
+          limit: options.minCandles,
+        });
+      });
 
-      if (candles.length < options.minCandles) continue;
+    const entries: GridUniverseEntry[] = [];
+    const scanned = yield* Ref.make(0);
 
-      entries.push(evaluateUniverseSymbol(symbol, candles, options));
-    }
+    const scanSymbol = (symbol: string) =>
+      Effect.gen(function* () {
+        const done = yield* Ref.updateAndGet(scanned, (n) => n + 1);
+        if (done % 50 === 0) {
+          yield* Effect.log(
+            `market scan: ${done}/${candidates.length} symbols, ${entries.length} entries`,
+          );
+        }
+        const candles = yield* ensureCandles(symbol);
+
+        if (candles.length < options.minCandles) return;
+
+        entries.push(evaluateUniverseSymbol(symbol, candles, options));
+      });
+
+    yield* Effect.forEach(candidates, scanSymbol, {
+      concurrency: TAIL_CONCURRENCY,
+    });
 
     const survivors = entries.filter((e) => e.passed);
 
