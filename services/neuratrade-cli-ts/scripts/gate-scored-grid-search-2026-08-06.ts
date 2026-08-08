@@ -40,6 +40,9 @@ const barMinutes = timeframe === "5m" ? 5 : 15;
 // the output file. Needed because per-call heap churn (bootstraps) grows
 // ~5x on 5m and a single long run can exhaust JSC's heap under load.
 const pauseFilter = argValue("--pauses", "");
+const stepFilter = argValue("--steps", "");
+const targetFilter = argValue("--targets", "");
+const adxFilter = argValue("--adx", "");
 const tag = argValue("--tag", "");
 const home =
   process.env.NEURATRADE_HOME ?? join(process.env.HOME!, ".neuratrade");
@@ -103,7 +106,13 @@ interface SweepResult {
 }
 
 const results: SweepResult[] = [];
-const steps = fast ? [1, 1.25] : [0.75, 1, 1.25];
+// --steps/--targets/--adx OVERRIDE the space (comma list), so values
+// outside the default arrays (e.g. small steps) can be swept.
+const steps = stepFilter
+  ? stepFilter.split(",").map(Number)
+  : fast
+    ? [1, 1.25]
+    : [0.75, 1, 1.25];
 const grids = fast ? [1, 1.5, 2] : [1, 1.5, 2];
 const pauses =
   timeframe === "5m"
@@ -113,8 +122,16 @@ const pauses =
     : fast
       ? [18, 24, 30, 36, 42]
       : [6, 12, 18, 24, 30, 36, 42, 48];
-const targets = fast ? [2, 3, 4] : [1, 2, 3, 4];
-const adxGates = fast ? [24, 26, 28, 30] : [20, 22, 24, 26, 28, 30];
+const targets = targetFilter
+  ? targetFilter.split(",").map(Number)
+  : fast
+    ? [2, 3, 4]
+    : [1, 2, 3, 4];
+const adxGates = adxFilter
+  ? adxFilter.split(",").map(Number)
+  : fast
+    ? [24, 26, 28, 30]
+    : [20, 22, 24, 26, 28, 30];
 let total = 0;
 const failures: string[] = [];
 const t0 = Date.now();
