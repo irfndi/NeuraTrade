@@ -260,8 +260,22 @@ export function runMarketUniverseScan(
         );
       });
 
-    // Retry rate-limited batches with backoff; non-429 failures propagate so
-    // a broken scan never persists a partial watchlist.
+    // Transient failures (rate limit, transport abort, DNS, timeouts) are
+    // retried with backoff then SKIPPED with a warning — a degraded scan
+    // persists the healthy majority; non-transient failures propagate so a
+    // broken scan never persists a partial watchlist.
+    const isTransient = (reason: string) =>
+      reason.includes("429") ||
+      reason.includes("aborted") ||
+      reason.includes("fetch failed") ||
+      reason.includes("ENOTFOUND") ||
+      reason.includes("ETIMEDOUT") ||
+      reason.includes("ECONNRESET") ||
+      reason.includes("ECONNREFUSED") ||
+      reason.includes("ConnectionRefused") ||
+      reason.includes("Unable to connect") ||
+      reason.includes("network error") ||
+      /HTTP 5\d\d/.test(reason);
     const withRetry = (
       symbol: string,
       run: () => Effect.Effect<readonly Candle[], MarketDataError, never>,
@@ -276,10 +290,15 @@ export function runMarketUniverseScan(
             (outcome.failure instanceof Error
               ? outcome.failure.message
               : String(outcome.failure));
-          if (!reason.includes("429"))
+          if (!isTransient(reason))
             return yield* Effect.fail(outcome.failure);
           attempt += 1;
-          if (attempt >= 4) return yield* Effect.fail(outcome.failure);
+          if (attempt >= 6) {
+            yield* Effect.logWarning(
+              `Transient failure past retries; skipping ${symbol} this cycle`,
+            );
+            return [] as readonly Candle[];
+          }
           yield* Effect.sleep(1_000 * 2 ** attempt);
         }
       });
