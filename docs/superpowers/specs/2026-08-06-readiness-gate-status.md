@@ -272,3 +272,19 @@ clean local cohort state, restarted soaks (clean `HOLD | no action` cycles).
 Root-cause fix: `persistSurvivors` excludes `READINESS_COHORT_CANDIDATES`
 symbols from the universe watchlist/whitelist. Future resets:
 `scalp paper-trade --disengage`.
+
+## Universe market-sourced discovery 2026-08-08 (--market)
+
+`grid-universe-scan` no longer depends on a static watchlist/whitelist or the
+previously collected DB candle set: `--market` sources symbols from the
+exchange's full USDT-FUTURES contract list, filters by 24h quote volume
+(>= 1M USDT), and fetches candles live (paginated; Bitget caps
+history-candles at 200/request). Same per-symbol walk-forward survival gates;
+survivors persist to the DB watchlist (cohort symbols excluded). Rate
+limiting: 250ms between every request, 429 retries (5s x2 backoff, 6
+attempts), persistently-limited symbols skipped with a warning; non-429
+failures propagate so a broken scan never persists. `neuratrade-universe-watch`
+runs `--market`; `neuratrade-demo-soak` reads the dynamic DB watchlist (the
+static grid-whitelist.json dependency is dropped). DB-sourced path and the
+Cloudflare worker are unchanged. First market scan: in flight, ~50-60 min
+under current host load (fits the 6h cadence).
