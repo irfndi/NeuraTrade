@@ -1,5 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import * as fc from "fast-check";
+import { Effect, Layer } from "effect";
+import { MarketDataGateway, MarketDataError } from "../market-data/gateway.js";
+import {
+  MarketDataRepository,
+  type MarketDataRepositoryService,
+} from "../market-data/repository.js";
+import type { Candle, Tick } from "../market-data/types.js";
+import {
+  DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  MIN_UNIVERSE_24H_VOLUME_USDT,
+  runMarketUniverseScan,
+  type GridUniverseOptions,
+} from "./grid-universe.js";
 import {
   accountScaledTargetFillsPerDay,
   barsPerDayForTimeframe,
@@ -120,7 +133,7 @@ describe("computeFillFrequencyPct", () => {
 
 describe("passesStage2Screen", () => {
   it("accepts a trending, liquid-volatility candidate", () => {
-    expect(passesStage2Screen({ adx14: 25, atr14Pct: 1 })).toBe(true);
+    expect(passesStage2Screen({ adx14: 25, atr14Pct: 0.01 })).toBe(true);
   });
 
   it("accepts boundary values exactly at the thresholds", () => {
@@ -139,20 +152,20 @@ describe("passesStage2Screen", () => {
   });
 
   it("rejects chop (ADX below 15)", () => {
-    expect(passesStage2Screen({ adx14: STAGE2_MIN_ADX - 1, atr14Pct: 1 })).toBe(
-      false,
-    );
+    expect(
+      passesStage2Screen({ adx14: STAGE2_MIN_ADX - 1, atr14Pct: 0.01 }),
+    ).toBe(false);
   });
 
-  it("rejects dead markets (ATR% below 0.02)", () => {
+  it("rejects dead markets (ATR% below the floor)", () => {
     expect(
-      passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 0.019 }),
+      passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 0.0004 }),
     ).toBe(false);
   });
 
   it("rejects moon-shots (ATR% above 10)", () => {
     expect(
-      passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 10.001 }),
+      passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 0.2 }),
     ).toBe(false);
   });
 });
@@ -221,5 +234,277 @@ describe("selectUniversePortfolio", () => {
 
   it("selects nothing for a zero target", () => {
     expect(selectUniversePortfolio([entry("A", 0.9, 10)], 0)).toEqual([]);
+  });
+});
+
+
+describe("runMarketUniverseScan (market-sourced batch)", () => {
+  const SCAN_OPTIONS: GridUniverseOptions = {
+    exchange: "bitget-futures",
+    timeframe: "15m",
+    initialCapital: 10000,
+    minCandles: 500,
+    trainWindow: 180,
+    testWindow: 60,
+    minProfitableWindowsPct: 60,
+    minAggregateReturnPct: 0,
+    minFillFrequencyPct: 10,
+    feePct: 0.06,
+    slippageBps: 2,
+    trendFilterPeriod: 0,
+    searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  };
+
+  const BAR_MS = 15 * 60 * 1000;
+
+  /** Trending candle series: steady rise + small noise -> ADX above the
+   * stage-2 floor, so the cheap screen does not skip them. */
+  function trendingCandle(symbol: string, ts: number, i: number): Candle {
+    const base = 100 + i * 0.05 + Math.sin(i / 11) * 0.4;
+    return {
+      exchange: "bitget-futures",
+      symbol,
+      timeframe: "15m",
+      open: base,
+      high: base + 0.6,
+      low: base - 0.3,
+      close: base + 0.2,
+      volume: 100,
+      timestamp: new Date(ts),
+    };
+  }
+
+  function flatCandle(symbol: string, ts: number): Candle {
+    return {
+      exchange: "bitget-futures",
+      symbol,
+      timeframe: "15m",
+      open: 100,
+      high: 100,
+      low: 100,
+      close: 100,
+      volume: 100,
+      timestamp: new Date(ts),
+    };
+  }
+
+  function makeGateway(
+    behavior: {
+      symbols: string[];
+      volumes: Record<string, number>;
+      fetchCalls: Map<string, number>;
+      fail?: { symbol: string; reason: string };
+      flatSymbols?: Set<string>;
+    },
+  ) {
+    return Layer.succeed(MarketDataGateway, {
+      fetchTick: () => Effect.die("unused"),
+      fetchOHLCV: (_ex, symbol, _tf, limit, startTime) => {
+        behavior.fetchCalls.set(
+          symbol,
+          (behavior.fetchCalls.get(symbol) ?? 0) + 1,
+        );
+        if (
+          behavior.fail &&
+          behavior.fail.symbol === symbol &&
+          behavior.fetchCalls.get(symbol) === 1
+        ) {
+          return Effect.fail(new MarketDataError(behavior.fail.reason));
+        }
+        const effective = Math.min(limit, 200);
+        const end = startTime === undefined ? Date.now() : startTime.getTime();
+        return Effect.succeed(
+          Array.from({ length: effective }, (_, i) => {
+            const ts = end - (effective - 1 - i) * BAR_MS;
+            return behavior.flatSymbols?.has(symbol)
+              ? flatCandle(symbol, ts)
+              : trendingCandle(symbol, ts, i);
+          }),
+        );
+      },
+      fetchOrderBook: () => Effect.die("unused"),
+      fetchSymbols: () => Effect.succeed(behavior.symbols),
+      fetch24hrVolumes: () => Effect.succeed(behavior.volumes),
+      fetchFundingRates: () => Effect.die("unused"),
+    });
+  }
+
+  function makeRepo() {
+    const candlesByKey = new Map<string, Candle[]>();
+    const repo: MarketDataRepositoryService = {
+      saveTick: () => Effect.die("unused"),
+      saveCandles: (candles) =>
+        Effect.sync(() => {
+          const first = candles[0];
+          if (first === undefined) return 0;
+          const key = `${first.symbol}:${first.timeframe}`;
+          const merged = new Map<number, Candle>();
+          for (const c of candlesByKey.get(key) ?? []) {
+            merged.set(c.timestamp.getTime(), c);
+          }
+          let added = 0;
+          for (const c of candles) {
+            if (!merged.has(c.timestamp.getTime())) {
+              merged.set(c.timestamp.getTime(), c);
+              added += 1;
+            }
+          }
+          candlesByKey.set(
+            key,
+            [...merged.values()].sort(
+              (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+            ),
+          );
+          return added;
+        }),
+      getCandles: (query) =>
+        Effect.sync(() => {
+          const all = candlesByKey.get(`${query.symbol}:${query.timeframe}`) ?? [];
+          return query.limit === undefined
+            ? all
+            : all.slice(-query.limit);
+        }),
+      getLatestTick: () => Effect.succeed(null),
+      listSymbols: () => Effect.die("unused"),
+      listSymbolsByCandleCount: () => Effect.die("unused"),
+      deleteCandles: () => Effect.die("unused"),
+      getCandleRange: (_ex, symbol, timeframe) =>
+        Effect.sync(() => {
+          const all = candlesByKey.get(`${symbol}:${timeframe}`) ?? [];
+          return {
+            earliest: all[0]?.timestamp ?? null,
+            latest: all.at(-1)?.timestamp ?? null,
+            count: all.length,
+          };
+        }),
+      getCoverageReport: () => Effect.die("unused"),
+      ensureTables: () => Effect.die("unused"),
+      ensureFundingRatesTable: () => Effect.die("unused"),
+      saveFundingRates: () => Effect.die("unused"),
+      getFundingRates: () => Effect.die("unused"),
+      getLatestFundingRateBefore: () => Effect.die("unused"),
+    };
+    return { repo, candlesByKey };
+  }
+
+  function runScan(
+    gateway: ReturnType<typeof makeGateway>,
+    repo: ReturnType<typeof makeRepo>,
+    options: GridUniverseOptions = SCAN_OPTIONS,
+  ) {
+    return Effect.runPromise(
+      Effect.provide(
+        Effect.provide(
+          runMarketUniverseScan(options),
+          Layer.succeed(MarketDataRepository, repo.repo),
+        ),
+        gateway,
+      ),
+    );
+  }
+
+  it("digests the volume-filtered market batch, caching every fetched candle", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["ALPHA/USDT", "BETA/USDT", "GAMMA/USDT"],
+      volumes: {
+        ALPHAUSDT: 5_000_000,
+        BETAUSDT: 500_000,
+        GAMMAUSDT: 2_000_000,
+      },
+      fetchCalls,
+    });
+    const { repo, candlesByKey } = makeRepo();
+
+    const result = await runScan(gateway, { repo, candlesByKey });
+
+    // BETA is below the 1M USDT volume floor: never fetched, never cached.
+    expect(fetchCalls.has("BETA/USDT:USDT")).toBe(false);
+    expect(fetchCalls.get("ALPHA/USDT:USDT")).toBeGreaterThanOrEqual(1);
+    // Both volume-passing symbols were evaluated (entries = evaluated, not
+    // only survivors).
+    expect(result.entries.map((e) => e.symbol).sort()).toEqual([
+      "ALPHA/USDT:USDT",
+      "GAMMA/USDT:USDT",
+    ]);
+    // The candle cache persisted the fetched history (>= minCandles).
+    expect(candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
+    expect(candlesByKey.get("GAMMA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
+    expect(candlesByKey.has("BETA/USDT:USDT")).toBe(false);
+    // Entries carry the funnel metrics.
+    for (const entry of result.entries) {
+      expect(entry.volatility).toBeGreaterThan(0);
+      expect(entry.oosTrades ?? 0).toBeGreaterThan(0);
+      expect(entry.fillsPerDay ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it("fetches only the tail for symbols already in the cache (1 req/cycle)", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["ALPHA/USDT"],
+      volumes: { ALPHAUSDT: 5_000_000 },
+      fetchCalls,
+    });
+    const { repo, candlesByKey } = makeRepo();
+    const now = Date.now();
+    const seeded = Array.from({ length: 500 }, (_, i) =>
+      trendingCandle("ALPHA/USDT:USDT", now - (500 - i) * BAR_MS, i),
+    );
+    candlesByKey.set("ALPHA/USDT:USDT:15m", seeded);
+
+    await runScan(gateway, { repo, candlesByKey });
+
+    // Warm cache: one tail request per symbol — no history pagination.
+    expect(fetchCalls.get("ALPHA/USDT:USDT")).toBe(1);
+    expect(candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
+  });
+
+  it("caches before screening and skips chop symbols (stage-2)", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["TREND/USDT", "FLAT/USDT"],
+      volumes: { TRENDUSDT: 5_000_000, FLATUSDT: 5_000_000 },
+      fetchCalls,
+      flatSymbols: new Set(["FLAT/USDT:USDT"]),
+    });
+    const { repo, candlesByKey } = makeRepo();
+
+    const result = await runScan(gateway, { repo, candlesByKey });
+
+    const evaluated = result.entries.map((e) => e.symbol);
+    expect(evaluated).toContain("TREND/USDT:USDT");
+    expect(evaluated).not.toContain("FLAT/USDT:USDT");
+    // The flat symbol was still cached (stage 2 runs after the cache fill).
+    expect((candlesByKey.get("FLAT/USDT:USDT:15m")?.length ?? 0)).toBeGreaterThanOrEqual(500);
+  });
+
+  it("retries transient failures (429) and completes the batch", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["ALPHA/USDT"],
+      volumes: { ALPHAUSDT: 5_000_000 },
+      fetchCalls,
+      fail: { symbol: "ALPHA/USDT:USDT", reason: "Bitget HTTP 429 for /api/v2" },
+    });
+    const { repo, candlesByKey } = makeRepo();
+
+    const result = await runScan(gateway, { repo, candlesByKey });
+
+    expect(fetchCalls.get("ALPHA/USDT:USDT") ?? 0).toBeGreaterThanOrEqual(2);
+    expect(result.entries.map((e) => e.symbol)).toContain("ALPHA/USDT:USDT");
+  }, 30_000);
+
+  it("propagates non-transient failures (a broken scan never persists)", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["ALPHA/USDT"],
+      volumes: { ALPHAUSDT: 5_000_000 },
+      fetchCalls,
+      fail: { symbol: "ALPHA/USDT:USDT", reason: "Bitget HTTP 40053 invalid" },
+    });
+    const { repo, candlesByKey } = makeRepo();
+
+    await expect(runScan(gateway, { repo, candlesByKey })).rejects.toThrow();
   });
 });

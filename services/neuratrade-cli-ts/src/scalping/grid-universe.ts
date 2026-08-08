@@ -34,8 +34,11 @@ export const MIN_UNIVERSE_24H_VOLUME_USDT = 1_000_000;
  * never runs on candidates these screens already reject.
  */
 export const STAGE2_MIN_ADX = 15;
-export const STAGE2_MIN_ATR_PCT = 0.02;
-export const STAGE2_MAX_ATR_PCT = 10;
+// ATR% floors/caps are FRACTIONS (atr14Pct returns 0.003 for 0.3%): 0.0005
+// (0.05%) filters truly dead symbols while keeping BTC/ETH/SOL/XRP-class
+// volatility (measured 0.29-1.11%); 0.1 (10%) caps moon-shots.
+export const STAGE2_MIN_ATR_PCT = 0.0005;
+export const STAGE2_MAX_ATR_PCT = 0.1;
 
 /**
  * Default account capital (USDT) for scaling the fills/day selection target.
@@ -56,6 +59,11 @@ export const DEFAULT_PER_SYMBOL_FILL_CAP = 10;
 export function passesStage2Screen(
   stats: Pick<SymbolStatistics, "adx14" | "atr14Pct">,
 ): boolean {
+  // NaN/undefined stats (e.g. flat series -> division by zero) must FAIL
+  // closed: NaN comparisons are all false and would let chop through.
+  if (!Number.isFinite(stats.adx14) || !Number.isFinite(stats.atr14Pct)) {
+    return false;
+  }
   return (
     stats.adx14 >= STAGE2_MIN_ADX &&
     stats.atr14Pct >= STAGE2_MIN_ATR_PCT &&
