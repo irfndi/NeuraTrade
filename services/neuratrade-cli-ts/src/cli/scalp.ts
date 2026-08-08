@@ -104,6 +104,9 @@ import {
   type GridUniverseEntry,
   type GridUniverseOptions,
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  DEFAULT_PER_SYMBOL_FILL_CAP,
+  accountScaledTargetFillsPerDay,
+  selectUniversePortfolio,
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
@@ -5544,6 +5547,22 @@ const gridUniverseMinFillFrequencyOption = Options.float(
     "Reject survivors whose grid step touches < this % of candles (0 = disabled)",
   ),
 );
+
+const gridUniverseTargetFillsPerDayOption = Options.float(
+  "target-fills-per-day",
+).pipe(
+  Options.optional,
+  Options.withDescription(
+    "Portfolio fills/day target for survivor selection (default: account-scaled 5-50)",
+  ),
+);
+
+const gridUniverseAccountCapitalOption = Options.float("account-capital").pipe(
+  Options.withDefault(1000),
+  Options.withDescription(
+    "Account capital USDT scaling the fills/day target when --target-fills-per-day is unset (default 1000)",
+  ),
+);
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5569,6 +5588,8 @@ export const gridUniverseScanCommand = Command.make(
     watch: gridUniverseWatchOption,
     interval: gridUniverseIntervalOption,
     minFillFrequencyPct: gridUniverseMinFillFrequencyOption,
+    targetFillsPerDay: gridUniverseTargetFillsPerDayOption,
+    accountCapital: gridUniverseAccountCapitalOption,
     market: gridUniverseMarketOption,
   },
   (args) =>
@@ -5607,6 +5628,10 @@ export const gridUniverseScanCommand = Command.make(
         searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
       };
 
+      const targetFillsPerDay = Option.isSome(args.targetFillsPerDay)
+        ? args.targetFillsPerDay.value
+        : accountScaledTargetFillsPerDay(args.accountCapital);
+
       const persistSurvivors = (result: {
         readonly survivors: readonly GridUniverseEntry[];
       }) =>
@@ -5622,7 +5647,26 @@ export const gridUniverseScanCommand = Command.make(
           const survivors = result.survivors.filter(
             (entry) => !cohortSymbols.has(entry.symbol),
           );
-          const entries: DbWatchlistEntry[] = survivors.map((e) => ({
+
+          // Frequency-targeted selection (runs AFTER the tradeability probe
+          // upstream, so only tradeable symbols are considered): rank by
+          // edge/trade and take the top-K whose capped fills/day reach the
+          // target. Only the selected entries reach the watchlist.
+          const selected = selectUniversePortfolio(
+            survivors,
+            targetFillsPerDay,
+            DEFAULT_PER_SYMBOL_FILL_CAP,
+          );
+          const projectedFills = selected.reduce(
+            (sum, e) =>
+              sum + Math.min(e.fillsPerDay ?? 0, DEFAULT_PER_SYMBOL_FILL_CAP),
+            0,
+          );
+          yield* Console.log(
+            `🎯 Portfolio selection: ${selected.length}/${survivors.length} survivors selected, ~${Math.round(projectedFills)} fills/day projected (target ${targetFillsPerDay})`,
+          );
+
+          const entries: DbWatchlistEntry[] = selected.map((e) => ({
             // Persist under the resolved futures-market key so scan-write
             // and paper-trade read always agree, even when the scan was run
             // with a raw exchange name that resolves differently (e.g.
@@ -5636,11 +5680,19 @@ export const gridUniverseScanCommand = Command.make(
             gridStepPct: e.bestParams.gridStepPct,
             gridMaxGrids: e.bestParams.gridMaxGrids,
             gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+            // Gate-scored validation (stage 4) fills these; default until then.
+            targetRatio: 1,
+            chopGateAdx: 0,
+            oosTrades: e.oosTrades ?? 0,
+            fillsPerDay: e.fillsPerDay ?? 0,
+            edgePerTradePct: e.edgePerTradePct ?? 0,
+            volatility: e.volatility ?? 0,
+            allocatedWeight: 0,
             updatedAt: new Date(),
           }));
           if (entries.length === 0) {
             yield* Console.log(
-              `💾 No survivors this cycle — keeping existing watchlist unchanged`,
+              `💾 No survivors selected this cycle — keeping existing watchlist unchanged`,
             );
           } else {
             yield* paperRepo.replaceWatchlist(

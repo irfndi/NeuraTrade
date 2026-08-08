@@ -29,6 +29,13 @@ export interface WatchlistEntry {
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
+  readonly targetRatio: number;
+  readonly chopGateAdx: number;
+  readonly oosTrades: number;
+  readonly fillsPerDay: number;
+  readonly edgePerTradePct: number;
+  readonly volatility: number;
+  readonly allocatedWeight: number;
   readonly updatedAt: Date;
 }
 
@@ -323,6 +330,13 @@ CREATE TABLE IF NOT EXISTS watchlist (
   grid_step_pct REAL NOT NULL,
   grid_max_grids INTEGER NOT NULL,
   grid_pause_after_loss_bars INTEGER NOT NULL,
+  target_ratio REAL NOT NULL DEFAULT 1,
+  chop_gate_adx REAL NOT NULL DEFAULT 0,
+  oos_trades INTEGER NOT NULL DEFAULT 0,
+  fills_per_day REAL NOT NULL DEFAULT 0,
+  edge_per_trade_pct REAL NOT NULL DEFAULT 0,
+  volatility REAL NOT NULL DEFAULT 0,
+  allocated_weight REAL NOT NULL DEFAULT 0,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (exchange, symbol, timeframe)
 );
@@ -437,6 +451,34 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         ]) {
           const [table, column, type] = tableColumn.split(" ");
           addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+        }
+
+        // The CREATE TABLE IF NOT EXISTS above cannot add columns to a
+        // watchlist table created by an older schema, so check pragma and
+        // ALTER in any contract column that is still missing. Guarded per
+        // column and re-runnable: only missing columns are touched.
+        const watchlistContractColumns: Record<string, string> = {
+          target_ratio: "REAL NOT NULL DEFAULT 1",
+          chop_gate_adx: "REAL NOT NULL DEFAULT 0",
+          oos_trades: "INTEGER NOT NULL DEFAULT 0",
+          fills_per_day: "REAL NOT NULL DEFAULT 0",
+          edge_per_trade_pct: "REAL NOT NULL DEFAULT 0",
+          volatility: "REAL NOT NULL DEFAULT 0",
+          allocated_weight: "REAL NOT NULL DEFAULT 0",
+        };
+        const existingWatchlistColumns = new Set(
+          (
+            this.db.query("PRAGMA table_info(watchlist)").all() as Array<{
+              name: string;
+            }>
+          ).map((c) => c.name),
+        );
+        for (const [column, type] of Object.entries(
+          watchlistContractColumns,
+        )) {
+          if (!existingWatchlistColumns.has(column)) {
+            addColumn(`ALTER TABLE watchlist ADD COLUMN ${column} ${type}`);
+          }
         }
       },
       catch: (err) =>
@@ -1414,7 +1456,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             `SELECT exchange, symbol, timeframe, return_pct,
                     profitable_windows_pct, aggregate_return_pct,
                     grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
-                    updated_at
+                    target_ratio, chop_gate_adx, oos_trades,
+                    fills_per_day, edge_per_trade_pct, volatility,
+                    allocated_weight, updated_at
              FROM watchlist
              WHERE exchange = ? AND timeframe = ?
              ORDER BY aggregate_return_pct DESC`,
@@ -1429,6 +1473,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
+          target_ratio: number | null;
+          chop_gate_adx: number | null;
+          oos_trades: number | null;
+          fills_per_day: number | null;
+          edge_per_trade_pct: number | null;
+          volatility: number | null;
+          allocated_weight: number | null;
           updated_at: string;
         }>;
 
@@ -1442,6 +1493,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           gridStepPct: r.grid_step_pct,
           gridMaxGrids: r.grid_max_grids,
           gridPauseAfterLossBars: r.grid_pause_after_loss_bars,
+          targetRatio: r.target_ratio ?? 1,
+          chopGateAdx: r.chop_gate_adx ?? 0,
+          oosTrades: r.oos_trades ?? 0,
+          fillsPerDay: r.fills_per_day ?? 0,
+          edgePerTradePct: r.edge_per_trade_pct ?? 0,
+          volatility: r.volatility ?? 0,
+          allocatedWeight: r.allocated_weight ?? 0,
           updatedAt: new Date(r.updated_at),
         }));
       },
@@ -1458,8 +1516,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       `INSERT INTO watchlist
        (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
         aggregate_return_pct, grid_step_pct, grid_max_grids,
-        grid_pause_after_loss_bars, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        grid_pause_after_loss_bars, target_ratio, chop_gate_adx, oos_trades,
+        fills_per_day, edge_per_trade_pct, volatility, allocated_weight,
+        updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
          return_pct = excluded.return_pct,
          profitable_windows_pct = excluded.profitable_windows_pct,
@@ -1467,6 +1527,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
          grid_step_pct = excluded.grid_step_pct,
          grid_max_grids = excluded.grid_max_grids,
          grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+         target_ratio = excluded.target_ratio,
+         chop_gate_adx = excluded.chop_gate_adx,
+         oos_trades = excluded.oos_trades,
+         fills_per_day = excluded.fills_per_day,
+         edge_per_trade_pct = excluded.edge_per_trade_pct,
+         volatility = excluded.volatility,
+         allocated_weight = excluded.allocated_weight,
          updated_at = excluded.updated_at`,
     );
     for (const e of entries) {
@@ -1480,6 +1547,13 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         e.gridStepPct,
         e.gridMaxGrids,
         e.gridPauseAfterLossBars,
+        e.targetRatio,
+        e.chopGateAdx,
+        e.oosTrades,
+        e.fillsPerDay,
+        e.edgePerTradePct,
+        e.volatility,
+        e.allocatedWeight,
         e.updatedAt.toISOString(),
       );
     }

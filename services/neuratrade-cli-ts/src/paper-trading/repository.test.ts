@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { money } from "../utils/money.js";
 import { PaperTradingRepositorySQLite } from "./repository.js";
+import type { WatchlistEntry } from "./repository.js";
 import type { GridPaperTrade, PaperPosition } from "./types.js";
 
 describe("PaperTradingRepositorySQLite", () => {
@@ -244,6 +245,13 @@ describe("PaperTradingRepositorySQLite", () => {
       gridStepPct: 1,
       gridMaxGrids: 2,
       gridPauseAfterLossBars: 0,
+      targetRatio: 1,
+      chopGateAdx: 0,
+      oosTrades: 0,
+      fillsPerDay: 0,
+      edgePerTradePct: 0,
+      volatility: 0,
+      allocatedWeight: 0,
       updatedAt: legacyUpdatedAt,
     };
 
@@ -273,6 +281,138 @@ describe("PaperTradingRepositorySQLite", () => {
     db.close();
   });
 
+  it("migrates the watchlist contract columns onto a legacy watchlist table", async () => {
+    // Simulate a DB created before the universe-funnel design: the
+    // watchlist table exists but lacks the contract columns. CREATE TABLE
+    // IF NOT EXISTS cannot add them, so ensureTables must ALTER TABLE, and
+    // the migration must be safe to re-run.
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE watchlist (
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        return_pct REAL NOT NULL,
+        profitable_windows_pct REAL NOT NULL,
+        aggregate_return_pct REAL NOT NULL,
+        grid_step_pct REAL NOT NULL,
+        grid_max_grids INTEGER NOT NULL,
+        grid_pause_after_loss_bars INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (exchange, symbol, timeframe)
+      );
+      INSERT INTO watchlist
+        (exchange, symbol, timeframe, return_pct, profitable_windows_pct,
+         aggregate_return_pct, grid_step_pct, grid_max_grids,
+         grid_pause_after_loss_bars, updated_at)
+      VALUES
+        ('bitget-futures', 'BTC/USDT:USDT', '15m', 10, 70, 3, 1, 2, 0,
+         '2026-07-01T00:00:00.000Z');
+    `);
+    const repository = new PaperTradingRepositorySQLite(db);
+
+    await Effect.runPromise(repository.ensureTables());
+    // Must be re-runnable without error (pragma-guided, only missing
+    // columns are altered).
+    await Effect.runPromise(repository.ensureTables());
+
+    const columns = (
+      db.query("PRAGMA table_info(watchlist)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        "target_ratio",
+        "chop_gate_adx",
+        "oos_trades",
+        "fills_per_day",
+        "edge_per_trade_pct",
+        "volatility",
+        "allocated_weight",
+      ]),
+    );
+
+    const targetRatio = db
+      .query(
+        `SELECT type, "notnull", dflt_value
+         FROM pragma_table_info('watchlist') WHERE name = 'target_ratio'`,
+      )
+      .get() as {
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    };
+    expect(targetRatio.type).toBe("REAL");
+    expect(targetRatio.notnull).toBe(1);
+    expect(targetRatio.dflt_value).toBe("1");
+
+    // A pre-existing legacy row reads back with the contract defaults.
+    const legacy = await Effect.runPromise(
+      repository.listWatchlist("bitget-futures", "15m"),
+    );
+    expect(legacy[0]?.targetRatio).toBe(1);
+    expect(legacy[0]?.chopGateAdx).toBe(0);
+    expect(legacy[0]?.oosTrades).toBe(0);
+    expect(legacy[0]?.fillsPerDay).toBe(0);
+    expect(legacy[0]?.edgePerTradePct).toBe(0);
+    expect(legacy[0]?.volatility).toBe(0);
+    expect(legacy[0]?.allocatedWeight).toBe(0);
+    db.close();
+  });
+
+  it("round-trips the funnel contract fields through upsert/list", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const entry: WatchlistEntry = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      returnPct: 12.5,
+      profitableWindowsPct: 80,
+      aggregateReturnPct: 5.2,
+      gridStepPct: 1,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      targetRatio: 0.5,
+      chopGateAdx: 14,
+      oosTrades: 120,
+      fillsPerDay: 3.75,
+      edgePerTradePct: 0.21,
+      volatility: 2.4,
+      allocatedWeight: 0.08,
+      updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+    };
+    await Effect.runPromise(repository.upsertWatchlist([entry]));
+    const loaded = await Effect.runPromise(
+      repository.listWatchlist(entry.exchange, entry.timeframe),
+    );
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.targetRatio).toBe(0.5);
+    expect(loaded[0]?.chopGateAdx).toBe(14);
+    expect(loaded[0]?.oosTrades).toBe(120);
+    expect(loaded[0]?.fillsPerDay).toBe(3.75);
+    expect(loaded[0]?.edgePerTradePct).toBe(0.21);
+    expect(loaded[0]?.volatility).toBe(2.4);
+    expect(loaded[0]?.allocatedWeight).toBe(0.08);
+
+    // Re-upsert must update the contract fields in place, not duplicate.
+    await Effect.runPromise(
+      repository.upsertWatchlist([
+        { ...entry, targetRatio: 0.75, chopGateAdx: 20 },
+      ]),
+    );
+    const updated = await Effect.runPromise(
+      repository.listWatchlist(entry.exchange, entry.timeframe),
+    );
+    expect(updated).toHaveLength(1);
+    expect(updated[0]?.targetRatio).toBe(0.75);
+    expect(updated[0]?.chopGateAdx).toBe(20);
+    db.close();
+  });
+
   it("replaceWatchlist atomically swaps only the matching exchange/timeframe", async () => {
     const db = new Database(":memory:");
     const repository = new PaperTradingRepositorySQLite(db);
@@ -289,6 +429,13 @@ describe("PaperTradingRepositorySQLite", () => {
       gridStepPct: 1,
       gridMaxGrids: 2,
       gridPauseAfterLossBars: 0,
+      targetRatio: 1,
+      chopGateAdx: 0,
+      oosTrades: 0,
+      fillsPerDay: 0,
+      edgePerTradePct: 0,
+      volatility: 0,
+      allocatedWeight: 0,
       updatedAt: now,
     });
 
