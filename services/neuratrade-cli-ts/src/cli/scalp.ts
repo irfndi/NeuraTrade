@@ -100,6 +100,7 @@ import {
 } from "../scalping/grid-candidate.js";
 import {
   runGridUniverseScan,
+  runMarketUniverseScan,
   type GridUniverseEntry,
   type GridUniverseOptions,
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
@@ -3176,32 +3177,32 @@ export const paperTradeCommand = Command.make(
           mergedArgs.noWatchlist
             ? Effect.succeed([] as readonly WatchlistEntry[])
             : Effect.gen(function* () {
-            const paperRepo = yield* PaperTradingRepository;
-            yield* paperRepo.ensureTables();
-            const dbExchange = resolveFuturesMarketExchange(
-              mergedArgs.exchange,
-              mergedArgs.futures,
-            );
-            const dbEntries = yield* paperRepo.listWatchlist(
-              dbExchange,
-              mergedArgs.timeframe,
-            );
-            if (dbEntries.length === 0) {
-              yield* Console.warn(
-                `⚠️ DB watchlist is empty for ${dbExchange}:${mergedArgs.timeframe} — paper-trade will run with zero symbols; run grid-universe-scan with a matching --exchange first`,
-              );
-            }
-            return dbEntries.map((e): WatchlistEntry => ({
-              symbol: e.symbol,
-              exchange: e.exchange,
-              returnPct: e.returnPct,
-              gridParams: {
-                gridStepPct: e.gridStepPct,
-                gridMaxGrids: e.gridMaxGrids,
-                gridPauseAfterLossBars: e.gridPauseAfterLossBars,
-              },
-            }));
-          }).pipe(Effect.provide(paperRepoLayer)),
+                const paperRepo = yield* PaperTradingRepository;
+                yield* paperRepo.ensureTables();
+                const dbExchange = resolveFuturesMarketExchange(
+                  mergedArgs.exchange,
+                  mergedArgs.futures,
+                );
+                const dbEntries = yield* paperRepo.listWatchlist(
+                  dbExchange,
+                  mergedArgs.timeframe,
+                );
+                if (dbEntries.length === 0) {
+                  yield* Console.warn(
+                    `⚠️ DB watchlist is empty for ${dbExchange}:${mergedArgs.timeframe} — paper-trade will run with zero symbols; run grid-universe-scan with a matching --exchange first`,
+                  );
+                }
+                return dbEntries.map((e): WatchlistEntry => ({
+                  symbol: e.symbol,
+                  exchange: e.exchange,
+                  returnPct: e.returnPct,
+                  gridParams: {
+                    gridStepPct: e.gridStepPct,
+                    gridMaxGrids: e.gridMaxGrids,
+                    gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+                  },
+                }));
+              }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
       });
 
@@ -5507,6 +5508,13 @@ const gridUniverseTrendFilterOption = Options.integer(
   Options.withDescription("SMA trend filter period for the grid backtests"),
 );
 
+const gridUniverseMarketOption = Options.boolean("market").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Discover symbols from the exchange contract list (24h-volume filtered) instead of the stored candle set",
+  ),
+);
+
 const gridUniverseOutputOption = Options.text("output").pipe(
   Options.optional,
   Options.withDescription(
@@ -5561,6 +5569,7 @@ export const gridUniverseScanCommand = Command.make(
     watch: gridUniverseWatchOption,
     interval: gridUniverseIntervalOption,
     minFillFrequencyPct: gridUniverseMinFillFrequencyOption,
+    market: gridUniverseMarketOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -5702,9 +5711,13 @@ export const gridUniverseScanCommand = Command.make(
           // Scan errors are NOT swallowed here: they propagate so a failed
           // scan never persists (DB watchlist kept, whitelist file untouched)
           // and the one-shot command exits non-zero.
-          const rawResult = yield* runGridUniverseScan(options).pipe(
-            Effect.provide(repoLayer),
-          );
+          const rawResult = args.market
+            ? yield* runMarketUniverseScan(options).pipe(
+                Effect.provide(repoLayer),
+              )
+            : yield* runGridUniverseScan(options).pipe(
+                Effect.provide(repoLayer),
+              );
 
           let survivors =
             rawResult.survivors.length > 0 && futuresSet.size > 0
