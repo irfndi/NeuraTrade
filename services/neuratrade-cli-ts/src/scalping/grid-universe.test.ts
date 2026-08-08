@@ -17,6 +17,9 @@ import {
   accountScaledTargetFillsPerDay,
   barsPerDayForTimeframe,
   computeFillFrequencyPct,
+  gateScoredEligibility,
+  MAX_POSITION_FRACTION,
+  MIN_ORDER_NOTIONAL_USDT,
   passesStage2Screen,
   selectUniversePortfolio,
   STAGE2_MAX_ATR_PCT,
@@ -24,6 +27,7 @@ import {
   STAGE2_MIN_ATR_PCT,
   type GridUniverseEntry,
 } from "./grid-universe.js";
+import { runGridWalkForward } from "./grid.js";
 
 const candle = (open: number, high: number, low: number) => ({
   open,
@@ -235,12 +239,174 @@ describe("selectUniversePortfolio", () => {
   it("selects nothing for a zero target", () => {
     expect(selectUniversePortfolio([entry("A", 0.9, 10)], 0)).toEqual([]);
   });
+
+  it("caps the portfolio at floor(A × MAX_POSITION_FRACTION / MIN_ORDER_NOTIONAL_USDT) symbols", () => {
+    const many = Array.from({ length: 20 }, (_, i) =>
+      entry(`CAP${i}`, 1 - i * 0.01, 10),
+    );
+    const capFor = (accountCapital: number) =>
+      Math.floor(
+        (accountCapital * MAX_POSITION_FRACTION) / MIN_ORDER_NOTIONAL_USDT,
+      );
+    // Default capital $1000 -> cap 50: never binds on 20 candidates.
+    expect(selectUniversePortfolio(many, 1000, 10)).toHaveLength(20);
+    // $100 -> floor(100 × 0.5 / 10) = 5 concurrent positions.
+    expect(selectUniversePortfolio(many, 1000, 10, 100)).toHaveLength(
+      capFor(100),
+    );
+    expect(selectUniversePortfolio(many, 1000, 10, 150)).toHaveLength(
+      capFor(150),
+    );
+  });
+
+  it("keeps the highest-edge symbols under a binding capital cap", () => {
+    const a = entry("A", 0.9, 10);
+    const b = entry("B", 0.5, 10);
+    const c = entry("C", 0.1, 10);
+    // $20 account -> floor(20 × 0.5 / 10) = 1 symbol: only A fits.
+    expect(
+      selectUniversePortfolio([a, b, c], 1000, 10, 20).map((e) => e.symbol),
+    ).toEqual(["A"]);
+  });
+});
+
+
+describe("gateScoredEligibility (stage-4)", () => {
+  const BAR_MS = 15 * 60 * 1000;
+  // Default gate windowing (trainBars 11520 / testBars 4320 / minWindows 10)
+  // needs >= 11520 + 10 × 4320 candles; generate exactly that.
+  const GATE_CANDLES = 54720;
+
+  const GATE_OPTIONS: GridUniverseOptions = {
+    exchange: "bitget-futures",
+    timeframe: "15m",
+    initialCapital: 10000,
+    minCandles: GATE_CANDLES,
+    trainWindow: 100,
+    testWindow: 200,
+    minProfitableWindowsPct: 60,
+    minAggregateReturnPct: 0,
+    minFillFrequencyPct: 0,
+    feePct: 0.06,
+    slippageBps: 2,
+    trendFilterPeriod: 0,
+    searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  };
+
+  /**
+   * 54720 exact-15m-spaced candles ending ~1 bar before the test run.
+   * `wick` = doji flats alternating with balanced both-wick bars at price
+   * 100 (upMove == downMove exactly → ADX stays 0, so the chop gate never
+   * blocks; every round trip wins) — the gate-clearing fixture. `trend` =
+   * steady uptrend with V-dips (walk-forward profits on the dips, but the
+   * strong trend keeps ADX ≥ 24 so the chop gate blocks every entry) — the
+   * gate-failing fixture. Both pass walk-forward.
+   */
+  function gateCandles(wick: boolean): Candle[] {
+    const end = Date.now() - BAR_MS;
+    const rows: Candle[] = [];
+    let price = 100;
+    for (let index = 0; index < GATE_CANDLES; index += 1) {
+      const base = {
+        exchange: "bitget-futures",
+        symbol: wick ? "WICK/USDT:USDT" : "TREND/USDT:USDT",
+        timeframe: "15m",
+        volume: 10,
+        timestamp: new Date(end - (GATE_CANDLES - 1 - index) * BAR_MS),
+      };
+      if (wick) {
+        const wickBar = index % 60 === 0 && index > 10;
+        rows.push(
+          wickBar
+            ? { ...base, open: 100, high: 100.5, low: 99.5, close: 100 }
+            : { ...base, open: 100, high: 100, low: 100, close: 100 },
+        );
+      } else {
+        const open = price;
+        const dip = index % 90 === 0 && index > 10;
+        const close = dip ? open * (1 - 0.5 / 100) : open * (1 + 0.02 / 100);
+        rows.push(
+          dip
+            ? { ...base, open, high: open * (1 + 0.05 / 100), low: close, close }
+            : { ...base, open, high: close, low: open, close },
+        );
+        price = close;
+      }
+    }
+    return rows;
+  }
+
+  /** Mirrors evaluateUniverseSymbol's survivor path: run the walk-forward
+   * over the full series and derive bestParams + passed from it. */
+  function walkForwardEntry(
+    symbol: string,
+    candles: Candle[],
+  ): GridUniverseEntry {
+    const walkForward = runGridWalkForward(candles, {
+      trainWindow: GATE_OPTIONS.trainWindow,
+      testWindow: GATE_OPTIONS.testWindow,
+      initialCapital: GATE_OPTIONS.initialCapital,
+      searchSpace: GATE_OPTIONS.searchSpace,
+      baseOptions: {
+        feePct: GATE_OPTIONS.feePct,
+        slippageBps: GATE_OPTIONS.slippageBps,
+        trendFilterPeriod: GATE_OPTIONS.trendFilterPeriod,
+        leverage: 1,
+      },
+    });
+    const lastWindow = walkForward.windows[walkForward.windows.length - 1];
+    const bestParams = lastWindow?.params ?? {
+      gridStepPct: GATE_OPTIONS.searchSpace.gridStepPct[0] ?? 1,
+      gridMaxGrids: GATE_OPTIONS.searchSpace.gridMaxGrids[0] ?? 2,
+      gridPauseAfterLossBars:
+        GATE_OPTIONS.searchSpace.gridPauseAfterLossBars[0] ?? 0,
+    };
+    return {
+      symbol,
+      candles: candles.length,
+      bestParams: {
+        gridStepPct: bestParams.gridStepPct,
+        gridMaxGrids: bestParams.gridMaxGrids,
+        gridPauseAfterLossBars: bestParams.gridPauseAfterLossBars,
+      },
+      walkForward,
+      passed:
+        walkForward.profitableWindowsPct >=
+          GATE_OPTIONS.minProfitableWindowsPct &&
+        walkForward.aggregateReturnPct >= GATE_OPTIONS.minAggregateReturnPct,
+    };
+  }
+
+  it("keeps a survivor when a target×ADX combo clears every gate, picking the best return", () => {
+    const candles = gateCandles(true);
+    const entry = walkForwardEntry("WICK/USDT:USDT", candles);
+    expect(entry.passed).toBe(true);
+
+    const gated = gateScoredEligibility(entry, candles, GATE_OPTIONS);
+    expect(gated).not.toBeNull();
+    if (gated === null) return;
+    // Both ADX gates pass at target 1 with identical compounded return; the
+    // sweep keeps the first best combo → target 1, ADX 24.
+    expect(gated.validatedTargetRatio).toBe(1);
+    expect(gated.validatedChopGateAdx).toBe(24);
+  });
+
+  it("drops a walk-forward survivor when no target×ADX combo clears the gates", () => {
+    const candles = gateCandles(false);
+    const entry = walkForwardEntry("TREND/USDT:USDT", candles);
+    expect(entry.passed).toBe(true);
+
+    expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
+  });
 });
 
 
 describe("runMarketUniverseScan (market-sourced batch)", () => {
   const SCAN_OPTIONS: GridUniverseOptions = {
     exchange: "bitget-futures",
+    // Tiny deep-fetch budget so the pacing (250ms/request) keeps tests fast;
+    // production defaults to 300 requests/cycle.
+    deepFetchBudgetPerCycle: 5,
     timeframe: "15m",
     initialCapital: 10000,
     minCandles: 500,
@@ -455,8 +621,9 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
 
     await runScan(gateway, { repo, candlesByKey });
 
-    // Warm cache: one tail request per symbol — no history pagination.
-    expect(fetchCalls.get("ALPHA/USDT:USDT")).toBe(1);
+    // Warm cache: 1 tail request + the deep-fetch budget (5) for the
+    // walk-forward passer = 6 — no full-history pagination (~275 requests).
+    expect(fetchCalls.get("ALPHA/USDT:USDT")).toBe(6);
     expect(candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
   });
 

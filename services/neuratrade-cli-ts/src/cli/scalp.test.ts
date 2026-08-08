@@ -27,6 +27,7 @@ import {
   validateLiveExecutionMarket,
   validateLiveExecutionStrategy,
   resolveFuturesMarketExchange,
+  gridOverridesFromWatchlistRow,
   validateLiveGridConfiguration,
   validateLiveGridWatchlist,
   validateLiveSoakExecution,
@@ -217,7 +218,82 @@ describe("live execution market guard", () => {
     ).toBeUndefined();
   });
 });
-import { Effect, Layer } from "effect";
+
+describe("watchlist grid overrides (soak reproduction)", () => {
+  const baseArgs = {
+    targetRatio: 1,
+    chopGateAdx: 0,
+    maxPositionSizePct: Option.some(50),
+  };
+
+  it("reproduces the row's validated targetRatio and chopGateAdx", () => {
+    const overrides = gridOverridesFromWatchlistRow(
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        targetRatio: 1.5,
+        chopGateAdx: 25,
+        allocatedWeight: 0.5,
+      },
+      baseArgs,
+    );
+    expect(overrides.targetRatio).toBe(1.5);
+    expect(overrides.chopGateAdxThreshold).toBe(25);
+  });
+
+  it("falls back to CLI defaults when the row has no validated config", () => {
+    const overrides = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6 },
+      baseArgs,
+    );
+    expect(overrides.targetRatio).toBe(1);
+    expect(overrides.chopGateAdxThreshold).toBe(0);
+  });
+
+  it("sizes maxPositionPct from allocatedWeight and the CLI base fraction", () => {
+    // basePositionFraction = 50/100 = 0.5; weight 0.4 -> fraction 0.2 -> 20%
+    const overrides = gridOverridesFromWatchlistRow(
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        allocatedWeight: 0.4,
+      },
+      baseArgs,
+    );
+    expect(overrides.maxPositionPct).toBeCloseTo(20, 6);
+  });
+
+  it("clamps allocatedWeight to [0.01, 1]", () => {
+    const zero = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0 },
+      baseArgs,
+    );
+    expect(zero.maxPositionPct).toBeCloseTo(0.5, 6); // 0.01 * 0.5 * 100
+
+    const over = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 3 },
+      baseArgs,
+    );
+    expect(over.maxPositionPct).toBe(50); // 1 * 0.5 * 100
+
+    const missing = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6 },
+      baseArgs,
+    );
+    expect(missing.maxPositionPct).toBe(50); // 1 * 0.5 * 100
+  });
+
+  it("keeps the CLI base position when maxPositionSizePct is unset", () => {
+    const overrides = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0.4 },
+      { targetRatio: 1, chopGateAdx: 0, maxPositionSizePct: Option.none() },
+    );
+    expect(overrides.maxPositionPct).toBeCloseTo(40, 6); // 0.4 * 1.0 * 100
+  });
+});
+import { Effect, Layer, Option } from "effect";
 import { BunServices } from "@effect/platform-bun";
 import { PathLive } from "../services/path.js";
 import { Database } from "bun:sqlite";

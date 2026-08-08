@@ -2908,6 +2908,55 @@ export interface WatchlistEntry {
     readonly gridStepPct: number;
     readonly gridMaxGrids: number;
     readonly gridPauseAfterLossBars: number;
+    /**
+     * Validated config reproduced from a DB watchlist row (gate-scored by the
+     * universe scan). Absent on file-based watchlists, where the CLI defaults
+     * apply.
+     */
+    readonly targetRatio?: number;
+    readonly chopGateAdx?: number;
+    /**
+     * Portfolio-selected allocation weight for this symbol. Comes from the
+     * scan's portfolio selection (equal weights today). Absent on file-based
+     * watchlists, where the full base position applies.
+     */
+    readonly allocatedWeight?: number;
+  };
+}
+
+/**
+ * Per-row grid overrides reproduced from a DB watchlist entry: the row's
+ * VALIDATED targetRatio/chopGateAdx replace the CLI defaults so the soak
+ * trades the exact grid the universe scan gate-scored. Position sizing scales
+ * the CLI base position fraction by the row's portfolio allocation weight:
+ * positionFraction = clamp(allocatedWeight, 0.01, 1) * basePositionFraction,
+ * where basePositionFraction = maxPositionSizePct/100 (--max-position-size-pct,
+ * 50 in the demo soak). allocatedWeight comes from the scan's portfolio
+ * selection (equal weights today). Rows missing the fields (file-based
+ * watchlists) fall back to the CLI values unchanged.
+ */
+export function gridOverridesFromWatchlistRow(
+  gridParams: WatchlistEntry["gridParams"],
+  args: {
+    readonly targetRatio?: number;
+    readonly chopGateAdx?: number;
+    readonly maxPositionSizePct: Option.Option<number>;
+  },
+): {
+  readonly targetRatio: number;
+  readonly chopGateAdxThreshold: number;
+  readonly maxPositionPct: number;
+} {
+  const basePositionFraction =
+    Option.getOrElse(args.maxPositionSizePct, () => 100) / 100;
+  const allocatedWeight = Math.min(
+    1,
+    Math.max(0.01, gridParams?.allocatedWeight ?? 1),
+  );
+  return {
+    targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
+    chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
+    maxPositionPct: allocatedWeight * basePositionFraction * 100,
   };
 }
 
@@ -3203,6 +3252,12 @@ export const paperTradeCommand = Command.make(
                     gridStepPct: e.gridStepPct,
                     gridMaxGrids: e.gridMaxGrids,
                     gridPauseAfterLossBars: e.gridPauseAfterLossBars,
+                    // Reproduce the row's VALIDATED config (gate-scored by the
+                    // universe scan) so the soak trades the same grid the
+                    // backtest validated, not the CLI defaults.
+                    targetRatio: e.targetRatio,
+                    chopGateAdx: e.chopGateAdx,
+                    allocatedWeight: e.allocatedWeight,
                   },
                 }));
               }).pipe(Effect.provide(paperRepoLayer)),
@@ -3633,31 +3688,36 @@ function paperTradeProgram(args: PaperTradeArgs) {
       symbol: string,
       exchange: string,
       gridParams?: WatchlistEntry["gridParams"],
-    ): GridPaperTradingOptions => ({
-      exchange: resolveFuturesMarketExchange(exchange, true),
-      symbol,
-      timeframe: args.timeframe,
-      gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
-      gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
-      gridPauseAfterLossBars:
-        gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
-      feePct: args.fee,
-      slippageBps: args.slippageBps,
-      trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
-      initialCapital: args.capital,
-      maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
-      maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
-      leverage: args.leverage,
-      onlyWithTrend: args.onlyWithTrend,
-      targetRatio: args.targetRatio,
-      chopGateAdxThreshold: args.chopGateAdx,
-      replayBars: args.replayBars > 0 ? args.replayBars : undefined,
-      isLive: args.live,
-      executionEnvironment:
-        args.live && !useSandbox ? "bitget-live" : "bitget-demo",
-      productType,
-      marginMode,
-    });
+    ): GridPaperTradingOptions => {
+      const rowOverrides = gridOverridesFromWatchlistRow(gridParams, args);
+      return {
+        exchange: resolveFuturesMarketExchange(exchange, true),
+        symbol,
+        timeframe: args.timeframe,
+        gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
+        gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
+        gridPauseAfterLossBars:
+          gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
+        feePct: args.fee,
+        slippageBps: args.slippageBps,
+        trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
+        initialCapital: args.capital,
+        // Per-row: validated targetRatio/chopGateAdx from the watchlist row,
+        // position sized by the row's allocatedWeight (see helper).
+        maxPositionPct: rowOverrides.maxPositionPct,
+        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+        leverage: args.leverage,
+        onlyWithTrend: args.onlyWithTrend,
+        targetRatio: rowOverrides.targetRatio,
+        chopGateAdxThreshold: rowOverrides.chopGateAdxThreshold,
+        replayBars: args.replayBars > 0 ? args.replayBars : undefined,
+        isLive: args.live,
+        executionEnvironment:
+          args.live && !useSandbox ? "bitget-live" : "bitget-demo",
+        productType,
+        marginMode,
+      };
+    };
 
     const spotAdapterLayer = args.live
       ? BinanceLiveExchangeAdapterLive({
@@ -5633,7 +5693,9 @@ export const gridUniverseScanCommand = Command.make(
         : accountScaledTargetFillsPerDay(args.accountCapital);
 
       const persistSurvivors = (result: {
+        readonly entries: readonly GridUniverseEntry[];
         readonly survivors: readonly GridUniverseEntry[];
+        readonly gateDropped?: number;
       }) =>
         Effect.gen(function* () {
           const paperRepo = yield* PaperTradingRepository;
@@ -5651,11 +5713,24 @@ export const gridUniverseScanCommand = Command.make(
           // Frequency-targeted selection (runs AFTER the tradeability probe
           // upstream, so only tradeable symbols are considered): rank by
           // edge/trade and take the top-K whose capped fills/day reach the
-          // target. Only the selected entries reach the watchlist.
+          // target, bounded by how many positions the account capital fits
+          // (floor(A × 0.5 / 10) symbols). Only the selected entries reach
+          // the watchlist.
           const selected = selectUniversePortfolio(
             survivors,
             targetFillsPerDay,
             DEFAULT_PER_SYMBOL_FILL_CAP,
+            args.accountCapital,
+          );
+          // Stage-4 funnel summary: walk-forward survivors → gate-eligible →
+          // selected. Entries keep walk-forward failures AND gate-dropped
+          // survivors (flagged), so eligibility = passed && !gatedDropped.
+          const eligibleCount = result.entries.filter(
+            (e) => e.passed && !e.gatedDropped,
+          ).length;
+          const gateDroppedCount = result.gateDropped ?? 0;
+          yield* Console.log(
+            `🎯 Gate-scored funnel: ${eligibleCount + gateDroppedCount} walk-forward survivors → ${eligibleCount} gate-eligible (${gateDroppedCount} dropped by stage-4 gates) → ${selected.length} selected`,
           );
           const projectedFills = selected.reduce(
             (sum, e) =>
@@ -5680,14 +5755,18 @@ export const gridUniverseScanCommand = Command.make(
             gridStepPct: e.bestParams.gridStepPct,
             gridMaxGrids: e.bestParams.gridMaxGrids,
             gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
-            // Gate-scored validation (stage 4) fills these; default until then.
-            targetRatio: 1,
-            chopGateAdx: 0,
+            // Stage-4 gate-scored validation fills these; walk-forward-only
+            // (DB-sourced) scans default to target 1 / no chop gate.
+            targetRatio: e.validatedTargetRatio ?? 1,
+            chopGateAdx: e.validatedChopGateAdx ?? 0,
             oosTrades: e.oosTrades ?? 0,
             fillsPerDay: e.fillsPerDay ?? 0,
             edgePerTradePct: e.edgePerTradePct ?? 0,
             volatility: e.volatility ?? 0,
-            allocatedWeight: 0,
+            // ponytail: equal weight per selected symbol — simple, spreads
+            // risk; upgrade to edge-proportional (edgePerTradePct / sum)
+            // once the soak measures per-symbol edge live.
+            allocatedWeight: selected.length > 0 ? 1 / selected.length : 0,
             updatedAt: new Date(),
           }));
           if (entries.length === 0) {
@@ -5827,7 +5906,11 @@ export const gridUniverseScanCommand = Command.make(
             }
             survivors = tradeable;
           }
-          const result = { entries: rawResult.entries, survivors };
+          const result = {
+            entries: rawResult.entries,
+            survivors,
+            gateDropped: rawResult.gateDropped ?? 0,
+          };
 
           yield* Console.log(
             `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
@@ -5839,7 +5922,7 @@ export const gridUniverseScanCommand = Command.make(
             "------------------------------------------------------------------",
           );
           for (const e of result.entries) {
-            const mark = e.passed ? " ✔" : "";
+            const mark = e.gatedDropped ? " ✘" : e.passed ? " ✔" : "";
             yield* Console.log(
               `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
                 `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +

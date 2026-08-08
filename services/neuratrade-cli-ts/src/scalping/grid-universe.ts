@@ -17,7 +17,15 @@ import {
   type MarketDataRepositoryService,
 } from "../market-data/repository.js";
 import type { Candle } from "../market-data/types.js";
-import { runGridWalkForward, type GridWalkForwardResult } from "./grid.js";
+import {
+  runGridWalkForward,
+  type GridOptions,
+  type GridWalkForwardResult,
+} from "./grid.js";
+import {
+  validateGridEvidence,
+  type GridValidationOk,
+} from "./grid-validation.js";
 import { computeSymbolStats, type SymbolStatistics } from "./symbol-stats.js";
 
 /**
@@ -50,6 +58,47 @@ export const DEFAULT_ACCOUNT_CAPITAL = 1_000;
  * a single high-edge symbol.
  */
 export const DEFAULT_PER_SYMBOL_FILL_CAP = 10;
+
+/**
+ * Stage-4 gate-scored eligibility sweep: target_ratio dials validated per
+ * survivor (the walk-forward fixes step/grids/pause; the gate re-checks the
+ * target/ADX dials around them).
+ */
+export const GATE_TARGETS = [1, 3] as const;
+
+/**
+ * Stage-4 gate-scored eligibility sweep: chop-gate ADX dials validated per
+ * survivor (matches the manifest sweep in
+ * scripts/gate-scored-grid-search-2026-08-06.ts).
+ */
+export const GATE_ADX_GATES = [24, 28] as const;
+
+/**
+ * Deep-history target for gate-scored candidates: ~55k 15m bars (~2 years)
+ * support 10+ rolling validation windows at the readiness default sizes.
+ */
+export const DEEP_HISTORY_TARGET = 55_000;
+
+/**
+ * Per-cycle deep-fetch request budget shared across gate candidates: the
+ * cache grows backward over cycles until a survivor has enough history to
+ * be gate-validated (~55k bars = ~275 requests at the 200-bar cap).
+ */
+export const DEEP_FETCH_REQUESTS_PER_CYCLE = 300;
+// ~300 requests x ~1s (pacing + latency) ≈ 5 min of scan time per cycle;
+// at 200 bars/request that deepens one survivor by ~60k bars per cycle.
+
+/**
+ * Max fraction of account capital allocated per grid position — mirrors the
+ * sweep manifest's positionFraction 0.5.
+ */
+export const MAX_POSITION_FRACTION = 0.5;
+
+/**
+ * Minimum order notional (USDT) per position; bounds how many symbols an
+ * account can hold: floor(A × MAX_POSITION_FRACTION / MIN_ORDER_NOTIONAL_USDT).
+ */
+export const MIN_ORDER_NOTIONAL_USDT = 10;
 
 /**
  * Stage-2 cheap-stats gate: true when the candidate survives the ADX/ATR
@@ -104,6 +153,8 @@ export interface GridUniverseOptions {
     readonly gridMaxGrids: readonly number[];
     readonly gridPauseAfterLossBars: readonly number[];
   };
+  /** Per-cycle deep-history fetch request budget (shared across gate candidates). */
+  readonly deepFetchBudgetPerCycle?: number;
 }
 
 export interface GridUniverseEntry {
@@ -135,11 +186,32 @@ export interface GridUniverseEntry {
    * per-trade expectation, not a per-trade win-rate edge.
    */
   readonly edgePerTradePct?: number;
+  /**
+   * Stage-4 gate-scored eligibility: target_ratio of the passing gate combo
+   * with the highest compounded return (unset until validated).
+   */
+  readonly validatedTargetRatio?: number;
+  /**
+   * Stage-4 gate-scored eligibility: chop-gate ADX threshold of the passing
+   * gate combo with the highest compounded return (unset until validated).
+   */
+  readonly validatedChopGateAdx?: number;
+  /**
+   * Market scan only: the entry passed walk-forward but NO target×ADX combo
+   * cleared the stage-4 gate — kept in `entries` for the report, excluded
+   * from `survivors`/selection.
+   */
+  readonly gatedDropped?: boolean;
 }
 
 export interface GridUniverseResult {
   readonly entries: readonly GridUniverseEntry[];
   readonly survivors: readonly GridUniverseEntry[];
+  /**
+   * Stage-4 gate-scored eligibility drop count (market scan only; the
+   * DB-sourced path predates the gate and omits this).
+   */
+  readonly gateDropped?: number;
 }
 
 /**
@@ -192,12 +264,15 @@ export function accountScaledTargetFillsPerDay(
  * Frequency-targeted portfolio selection (degenerate knapsack): greedy
  * top-K by edge/trade descending, taking each candidate's fills/day capped
  * at `perSymbolCap`, until the cumulative fills/day reaches the target.
- * Entries without a computed edge or fills/day are never selected.
+ * A capital-aware bound (floor(A × MAX_POSITION_FRACTION /
+ * MIN_ORDER_NOTIONAL_USDT) symbols) is applied as the final cap. Entries
+ * without a computed edge or fills/day are never selected.
  */
 export function selectUniversePortfolio(
   entries: readonly GridUniverseEntry[],
   targetFillsPerDay: number,
   perSymbolCap = DEFAULT_PER_SYMBOL_FILL_CAP,
+  accountCapital = DEFAULT_ACCOUNT_CAPITAL,
 ): readonly GridUniverseEntry[] {
   const ranked = [...entries].sort(
     (a, b) => (b.edgePerTradePct ?? 0) - (a.edgePerTradePct ?? 0),
@@ -211,7 +286,117 @@ export function selectUniversePortfolio(
     selected.push(entry);
     projectedFills += fills;
   }
-  return selected;
+  // Capital-aware bound (final): the account can hold at most
+  // floor(A × fraction / notional) concurrent grid positions; greedy order
+  // already ranks by edge, so slicing keeps the best. $1000 -> 50 symbols.
+  const maxSymbols = Math.max(
+    0,
+    Math.floor(
+      (accountCapital * MAX_POSITION_FRACTION) / MIN_ORDER_NOTIONAL_USDT,
+    ),
+  );
+  return selected.slice(0, maxSymbols);
+}
+
+/**
+ * Minutes per bar for a timeframe ("15m" → 15, "5m" → 5) — the candle
+ * spacing the stage-4 gate validates against.
+ */
+function timeframeMinutesFor(timeframe: string): number {
+  return 1440 / barsPerDayForTimeframe(timeframe);
+}
+
+/**
+ * Stage-4 gate criteria — EXACTLY the manifest sweep gates from
+ * scripts/gate-scored-grid-search-2026-08-06.ts: every gate must clear.
+ */
+function passesGateCriteria(result: GridValidationOk): boolean {
+  return (
+    result.historical.profitableWindowPct > 50 &&
+    result.historical.compoundedReturnPct >= 0 &&
+    result.historical.maximumDrawdownPct <= 15 &&
+    result.fixedOos.totalTrades >= 30 &&
+    result.confidence.lowerBoundPct >= 0 &&
+    result.stress.worstReturnPct >= 0 &&
+    result.stress.pooledLowerBoundPct >= 0
+  );
+}
+
+/**
+ * Stage-4 gate-scored eligibility: sweep the target_ratio × chop-gate-ADX
+ * dials (GATE_TARGETS × GATE_ADX_GATES) around the entry's walk-forward
+ * bestParams through validateGridEvidence, applying the manifest gate
+ * criteria. Returns the entry annotated with the passing combo with the
+ * highest compounded return, or null when no combo clears every gate.
+ * Per-entry (not batch) because the scan holds candles only transiently per
+ * symbol.
+ */
+export function gateScoredEligibility(
+  entry: GridUniverseEntry,
+  candles: readonly Candle[],
+  options: GridUniverseOptions,
+): GridUniverseEntry | null {
+  let best: {
+    targetRatio: number;
+    chopGateAdx: number;
+    compoundedReturnPct: number;
+  } | null = null;
+  for (const targetRatio of GATE_TARGETS) {
+    for (const chopGateAdx of GATE_ADX_GATES) {
+      const grid: GridOptions = {
+        gridStepPct: entry.bestParams.gridStepPct,
+        gridMaxGrids: entry.bestParams.gridMaxGrids,
+        gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
+        feePct: options.feePct,
+        slippageBps: options.slippageBps,
+        initialCapital: options.initialCapital,
+        trendFilterPeriod: options.trendFilterPeriod,
+        leverage: 1,
+        positionFraction: MAX_POSITION_FRACTION,
+        chopGateAdxThreshold: chopGateAdx,
+        targetRatio,
+        onlyWithTrend: false,
+      };
+      // Scale the validator's rolling windows to the available history: the
+      // readiness defaults (11520/4320/10 windows) need ~55k candles, which
+      // young symbols lack. Windows shrink with the data; the fixed-OOS
+      // >=30 trades and LB gates still bind regardless of history depth.
+      const n = candles.length;
+      const trainBars = Math.min(11520, Math.max(200, Math.floor(n * 0.6)));
+      const testBars = Math.min(4320, Math.max(50, Math.floor(n * 0.2)));
+      const minimumWindows = Math.max(
+        1,
+        Math.floor((n - trainBars - testBars) / testBars),
+      );
+      const result = validateGridEvidence(candles, {
+        now: new Date(),
+        timeframeMinutes: timeframeMinutesFor(options.timeframe),
+        trainBars,
+        testBars,
+        minimumWindows,
+        grid,
+        executionParityPassed: true,
+      });
+      // Invalid evidence fails closed; valid evidence must clear EVERY gate.
+      if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
+      if (
+        best === null ||
+        result.historical.compoundedReturnPct > best.compoundedReturnPct
+      ) {
+        best = {
+          targetRatio,
+          chopGateAdx,
+          compoundedReturnPct: result.historical.compoundedReturnPct,
+        };
+      }
+    }
+  }
+  if (best === null) return null;
+  return {
+    ...entry,
+    validatedTargetRatio: best.targetRatio,
+    validatedChopGateAdx: best.chopGateAdx,
+  };
 }
 
 function evaluateUniverseSymbol(
@@ -494,8 +679,63 @@ export function runMarketUniverseScan(
         });
       });
 
+    const deepBudget = yield* Ref.make(
+      options.deepFetchBudgetPerCycle ?? DEEP_FETCH_REQUESTS_PER_CYCLE,
+    );
+
+    // Top up a gate candidate's cache backward toward DEEP_HISTORY_TARGET,
+    // bounded by the shared per-cycle request budget. Returns the deep
+    // history for gate validation (persisted so later cycles resume).
+    const deepFetch = (symbol: string, existingCount: number) =>
+      Effect.gen(function* () {
+        if (existingCount >= DEEP_HISTORY_TARGET) {
+          return yield* repo.getCandles({
+            exchange: options.exchange,
+            symbol,
+            timeframe: options.timeframe,
+            limit: DEEP_HISTORY_TARGET,
+          });
+        }
+        const byTimestamp = new Map<number, Candle>();
+        const existing = yield* repo.getCandles({
+          exchange: options.exchange,
+          symbol,
+          timeframe: options.timeframe,
+          limit: DEEP_HISTORY_TARGET,
+        });
+        for (const candle of existing) {
+          byTimestamp.set(candle.timestamp.getTime(), candle);
+        }
+        const fetched: Candle[] = [];
+        let startTime: Date | undefined;
+        let oldest = [...byTimestamp.keys()].sort((a, b) => a - b)[0];
+        if (oldest !== undefined) startTime = new Date(oldest - timeframeMillis);
+        while (byTimestamp.size < DEEP_HISTORY_TARGET) {
+          const budget = yield* Ref.get(deepBudget);
+          if (budget <= 0) break;
+          yield* Ref.update(deepBudget, (b) => b - 1);
+          const batch = yield* withRetry(symbol, () =>
+            fetchBatch(symbol, startTime),
+          );
+          if (batch.length === 0) break;
+          for (const candle of batch) {
+            byTimestamp.set(candle.timestamp.getTime(), candle);
+            fetched.push(candle);
+          }
+          oldest = [...byTimestamp.keys()].sort((a, b) => a - b)[0];
+          startTime = new Date(oldest - timeframeMillis);
+        }
+        if (fetched.length > 0) yield* repo.saveCandles(fetched);
+        return [...byTimestamp.values()]
+          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+          .slice(-DEEP_HISTORY_TARGET);
+      });
+
     const entries: GridUniverseEntry[] = [];
     const scanned = yield* Ref.make(0);
+    // Stage-4 gate drop counter (walk-forward survivors that cleared no
+    // target×ADX combo) — surfaced in GridUniverseResult.gateDropped.
+    const gateDropped = yield* Ref.make(0);
 
     const scanSymbol = (symbol: string) =>
       Effect.gen(function* () {
@@ -516,15 +756,36 @@ export function runMarketUniverseScan(
         const stats = computeSymbolStats(candles, options.timeframe);
         if (!passesStage2Screen(stats)) return;
 
-        entries.push(evaluateUniverseSymbol(symbol, candles, options));
+        const entry = evaluateUniverseSymbol(symbol, candles, options);
+        // Stage-4 gate-scored eligibility (walk-forward survivors only):
+        // sweep target_ratio × chop-gate-ADX dials around the walk-forward's
+        // bestParams through validateGridEvidence. A survivor clearing no
+        // combo is dropped from selection (counted for the funnel summary,
+        // flagged in the report table, kept out of `survivors`).
+        if (entry.passed) {
+          // Gate candidates need deep history (~55k bars for 10+ windows):
+          // top up the cache backward under a shared per-cycle request
+          // budget; the cache grows over cycles until eligible.
+          const deep = yield* deepFetch(symbol, candles.length);
+          const gated = gateScoredEligibility(entry, deep, options);
+          if (gated === null) {
+            yield* Ref.update(gateDropped, (n) => n + 1);
+            entries.push({ ...entry, gatedDropped: true });
+            return;
+          }
+          entries.push(gated);
+          return;
+        }
+        entries.push(entry);
       });
 
     yield* Effect.forEach(candidates, scanSymbol, {
       concurrency: TAIL_CONCURRENCY,
     });
 
-    const survivors = entries.filter((e) => e.passed);
+    const dropped = yield* Ref.get(gateDropped);
+    const survivors = entries.filter((e) => e.passed && !e.gatedDropped);
 
-    return { entries, survivors };
+    return { entries, survivors, gateDropped: dropped };
   });
 }
