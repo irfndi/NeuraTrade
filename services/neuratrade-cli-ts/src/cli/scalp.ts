@@ -3813,7 +3813,14 @@ function paperTradeProgram(args: PaperTradeArgs) {
     // iterations=0 means run forever.
     while (args.iterations === 0 || remaining !== 0) {
       if (entries) {
+        // Cohort symbols are owned by their candidate soaks: the universe
+        // soak must never trade them (wrong fingerprint -> kill switch
+        // storms; regression 2026-08-08: repeated phantom SOL positions).
+        const cohortSymbols = new Set<string>(
+          READINESS_COHORT_CANDIDATES.map((candidate) => candidate.symbol),
+        );
         for (const entry of entries) {
+          if (cohortSymbols.has(entry.symbol)) continue;
           if (remaining === 0 && args.iterations !== 0) break;
           const entryExchange = entry.exchange ?? args.exchange;
           const result =
