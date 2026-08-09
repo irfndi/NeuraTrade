@@ -74,10 +74,15 @@ function makeOrderBook(price: number): OrderBook {
 }
 
 class InMemoryPaperRepository implements PaperTradingRepositoryService {
-  private capital = money(10_000);
-  private peakCapital = money(10_000);
+  private capital: Decimal;
+  private peakCapital: Decimal;
   private position: PaperPosition | null = null;
   private trades: PaperTrade[] = [];
+
+  constructor(initialCapital: number = 10_000) {
+    this.capital = money(initialCapital);
+    this.peakCapital = money(initialCapital);
+  }
 
   ensureTables() {
     return Effect.void;
@@ -431,6 +436,134 @@ describe("runFuturesPaperTradingIteration", () => {
     expect(result.position?.side).toBe("long");
     expect(result.note).toContain("leverage=10x");
     expect(result.capital).toBeLessThan(10_000);
+  });
+
+  it("caps risk per trade by the daily-loss bound", async () => {
+    // capital 100, 5% risk/trade at a 1.5% stop would size 333.33 notional;
+    // the 2% daily cap / 1 concurrent trade allows at most 2% risk per trade,
+    // so the notional is capped at 2 / 0.015 = 133.33.
+    const repo = new InMemoryPaperRepository(100);
+    const gateway = makeGateway(100);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 100,
+        riskPerTradePct: 5,
+        maxPositionSizePct: 300,
+        maxDailyLossPct: 2,
+        maxConcurrentTrades: 1,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    // size = 133.33 notional / 100 entry = 1.3333 (uncapped would be 3.0).
+    expect(result.position?.size.toNumber()).toBeCloseTo(1.3333, 2);
+  });
+
+  it("raises a sub-floor notional to the minimum order size", async () => {
+    // capital 10, 0.1% risk at a 1.5% stop sizes 0.67 notional, below the
+    // 5 USDT exchange floor; the order is raised to the floor (margin
+    // capacity 10 * 1x leverage allows it).
+    const repo = new InMemoryPaperRepository(10);
+    const gateway = makeGateway(100);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 10,
+        riskPerTradePct: 0.1,
+        maxPositionSizePct: 100,
+        leverage: 1,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    // size = 5 floor notional / 100 entry = 0.05.
+    expect(result.position?.size.toNumber()).toBeCloseTo(0.05, 4);
+    expect(result.note).toContain("leverage=1x");
+  });
+
+  it("raises leverage so a tiny account can afford the floor", async () => {
+    // capital 3 with 10x max leverage: a floor-sized 5 USDT order needs
+    // ceil(5/3) = 2x leverage for its margin (2.5) to fit the account.
+    const repo = new InMemoryPaperRepository(3);
+    const gateway = makeGateway(100);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 3,
+        riskPerTradePct: 0.1,
+        maxPositionSizePct: 100,
+        leverage: 10,
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    // ceil(5/3) = 2x leverage, order raised to the 5 USDT floor.
+    expect(result.position?.size.toNumber()).toBeCloseTo(0.05, 4);
+    expect(result.note).toContain("leverage=2x");
   });
 
   it("blocks entry when the risk guard rejects the trade", async () => {

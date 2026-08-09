@@ -15,11 +15,10 @@ import {
 } from "./grid-universe.js";
 import {
   accountScaledTargetFillsPerDay,
+  accountSymbolCap,
   barsPerDayForTimeframe,
   computeFillFrequencyPct,
   gateScoredEligibility,
-  MAX_POSITION_FRACTION,
-  MIN_ORDER_NOTIONAL_USDT,
   passesStage2Screen,
   selectUniversePortfolio,
   STAGE2_MAX_ATR_PCT,
@@ -240,23 +239,39 @@ describe("selectUniversePortfolio", () => {
     expect(selectUniversePortfolio([entry("A", 0.9, 10)], 0)).toEqual([]);
   });
 
-  it("caps the portfolio at floor(A × MAX_POSITION_FRACTION / MIN_ORDER_NOTIONAL_USDT) symbols", () => {
+  it("caps the portfolio at accountSymbolCap symbols", () => {
     const many = Array.from({ length: 20 }, (_, i) =>
       entry(`CAP${i}`, 1 - i * 0.01, 10),
     );
-    const capFor = (accountCapital: number) =>
-      Math.floor(
-        (accountCapital * MAX_POSITION_FRACTION) / MIN_ORDER_NOTIONAL_USDT,
-      );
     // Default capital $1000 -> cap 50: never binds on 20 candidates.
     expect(selectUniversePortfolio(many, 1000, 10)).toHaveLength(20);
-    // $100 -> floor(100 × 0.5 / 10) = 5 concurrent positions.
+    // $100 -> max(1, floor(100 × 0.5 / 10)) = 5 concurrent positions.
     expect(selectUniversePortfolio(many, 1000, 10, 100)).toHaveLength(
-      capFor(100),
+      accountSymbolCap(100),
     );
     expect(selectUniversePortfolio(many, 1000, 10, 150)).toHaveLength(
-      capFor(150),
+      accountSymbolCap(150),
     );
+  });
+
+  it("keeps at least 1 symbol for tiny accounts (concentrated mode)", () => {
+    const many = Array.from({ length: 20 }, (_, i) =>
+      entry(`CAP${i}`, 1 - i * 0.01, 10),
+    );
+    // Raw floor(A × 0.5 / 10) is 0 for A < 20; max(1, …) must kick in.
+    expect(accountSymbolCap(1)).toBe(1);
+    expect(accountSymbolCap(10)).toBe(1);
+    expect(accountSymbolCap(19)).toBe(1);
+    expect(accountSymbolCap(20)).toBe(1);
+    expect(accountSymbolCap(39)).toBe(1);
+    // Crosses to 2 at A = 40: floor(40 × 0.5 / 10) = 2.
+    expect(accountSymbolCap(40)).toBe(2);
+    // Selection honors the floor: tiny accounts pick exactly 1 symbol.
+    expect(selectUniversePortfolio(many, 1000, 10, 10)).toHaveLength(1);
+    expect(selectUniversePortfolio(many, 1000, 10, 19)).toHaveLength(1);
+    // Non-tiny accounts unchanged.
+    expect(selectUniversePortfolio(many, 1000, 10, 40)).toHaveLength(2);
+    expect(accountSymbolCap(1000)).toBe(50);
   });
 
   it("keeps the highest-edge symbols under a binding capital cap", () => {

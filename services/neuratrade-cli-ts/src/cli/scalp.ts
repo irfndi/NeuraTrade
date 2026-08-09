@@ -106,6 +106,7 @@ import {
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
   DEFAULT_PER_SYMBOL_FILL_CAP,
   accountScaledTargetFillsPerDay,
+  accountSymbolCap,
   selectUniversePortfolio,
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
@@ -3699,6 +3700,12 @@ function paperTradeProgram(args: PaperTradeArgs) {
       marginMode,
       productType,
       volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
+      // Account-scaled sizing bounds (RefactorSizing 2026-08-09): cap
+      // per-trade risk by the daily loss limit and raise leverage for the
+      // notional floor on tiny accounts.
+      maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2),
+      maxConcurrentTrades: 1,
+      notionalFloor: 5,
     });
 
     const makeGridOptions = (
@@ -5738,8 +5745,15 @@ export const gridUniverseScanCommand = Command.make(
           // upstream, so only tradeable symbols are considered): rank by
           // edge/trade and take the top-K whose capped fills/day reach the
           // target, bounded by how many positions the account capital fits
-          // (floor(A × 0.5 / 10) symbols). Only the selected entries reach
-          // the watchlist.
+          // (accountSymbolCap: max(1, floor(A × 0.5 / 10)) symbols; tiny
+          // accounts get concentrated mode). Only the selected entries
+          // reach the watchlist.
+          const symbolCap = accountSymbolCap(args.accountCapital);
+          if (symbolCap === 1) {
+            yield* Console.log(
+              `⚠️ Tiny account ($${args.accountCapital}): concentrated mode — portfolio capped at 1 symbol`,
+            );
+          }
           const selected = selectUniversePortfolio(
             survivors,
             targetFillsPerDay,

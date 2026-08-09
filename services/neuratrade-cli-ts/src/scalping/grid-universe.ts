@@ -252,7 +252,8 @@ export function barsPerDayForTimeframe(timeframe: string): number {
 /**
  * Account-scaled fills/day target: clamp(5, 50 × A/1000, 50). A $1000
  * account targets the 5/day floor; capital above $1000 scales up to the
- * 50/day ceiling.
+ * 50/day ceiling. The floor is a ceiling, not a promise: a $10 account
+ * cannot hit 5 fills/day pool-wise — the target just stops scaling down.
  */
 export function accountScaledTargetFillsPerDay(
   accountCapital = DEFAULT_ACCOUNT_CAPITAL,
@@ -261,12 +262,31 @@ export function accountScaledTargetFillsPerDay(
 }
 
 /**
+ * Capital-aware symbol cap: max(1, floor(A × MAX_POSITION_FRACTION /
+ * MIN_ORDER_NOTIONAL_USDT)). The max(1, …) keeps tiny accounts (A < 20,
+ * where the raw floor is 0) in concentrated mode — at least 1 symbol is
+ * always selectable.
+ */
+export function accountSymbolCap(
+  accountCapital = DEFAULT_ACCOUNT_CAPITAL,
+): number {
+  return Math.max(
+    1,
+    Math.floor(
+      (accountCapital * MAX_POSITION_FRACTION) / MIN_ORDER_NOTIONAL_USDT,
+    ),
+  );
+}
+
+/**
  * Frequency-targeted portfolio selection (degenerate knapsack): greedy
  * top-K by edge/trade descending, taking each candidate's fills/day capped
  * at `perSymbolCap`, until the cumulative fills/day reaches the target.
- * A capital-aware bound (floor(A × MAX_POSITION_FRACTION /
- * MIN_ORDER_NOTIONAL_USDT) symbols) is applied as the final cap. Entries
- * without a computed edge or fills/day are never selected.
+ * A capital-aware bound (accountSymbolCap: max(1, floor(A ×
+ * MAX_POSITION_FRACTION / MIN_ORDER_NOTIONAL_USDT)) symbols) is applied as
+ * the final cap; tiny accounts (A < 20) still select 1 symbol
+ * (concentrated mode). Entries without a computed edge or fills/day are
+ * never selected.
  */
 export function selectUniversePortfolio(
   entries: readonly GridUniverseEntry[],
@@ -287,15 +307,10 @@ export function selectUniversePortfolio(
     projectedFills += fills;
   }
   // Capital-aware bound (final): the account can hold at most
-  // floor(A × fraction / notional) concurrent grid positions; greedy order
-  // already ranks by edge, so slicing keeps the best. $1000 -> 50 symbols.
-  const maxSymbols = Math.max(
-    0,
-    Math.floor(
-      (accountCapital * MAX_POSITION_FRACTION) / MIN_ORDER_NOTIONAL_USDT,
-    ),
-  );
-  return selected.slice(0, maxSymbols);
+  // max(1, floor(A × fraction / notional)) concurrent grid positions;
+  // greedy order already ranks by edge, so slicing keeps the best.
+  // $1000 -> 50 symbols; $10 -> 1 (concentrated mode, never 0).
+  return selected.slice(0, accountSymbolCap(accountCapital));
 }
 
 /**

@@ -69,6 +69,19 @@ export interface FuturesPaperTradingOptions {
   readonly leverage: number;
   readonly marginMode: FuturesMarginMode;
   readonly productType: FuturesProductType;
+  /** Hard stop on realized daily loss as % of capital (e.g. 2 = 2%). When
+   *  set, per-trade risk is additionally capped at maxDailyLossPct divided by
+   *  maxConcurrentTrades so a full stop-out of every position cannot breach
+   *  the daily stop. Undefined disables the bound (preserves prior sizing). */
+  readonly maxDailyLossPct?: number;
+  /** Number of positions the portfolio may hold concurrently; divides the
+   *  daily-loss bound into a per-trade risk cap. Defaults to 1. */
+  readonly maxConcurrentTrades?: number;
+  /** Minimum notional (quote units) the exchange accepts for a futures order
+   *  (Bitget observes ~5 USDT). When the risk-sized notional falls below this
+   *  floor, the notional is raised to the floor, bounded by margin capacity
+   *  capital * leverage. Defaults to 5. */
+  readonly notionalFloor?: number;
 }
 
 export interface FuturesPaperTradingIterationResult {
@@ -84,24 +97,38 @@ function calculateFuturesNotionalValue(
   stopDistancePct: number,
   currentVolatility: number,
   options: FuturesPaperTradingOptions,
-): Decimal {
+): { notional: Decimal; leverage: number } {
   // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
   const maxNotionalByRiskCap = capital.times(
     (options.maxPositionSizePct ?? 100) / 100,
   );
 
   let baseNotional: Decimal;
+  let leverage = options.leverage;
   if (
     options.riskPerTradePct &&
     options.riskPerTradePct > 0 &&
     stopDistancePct > 0
   ) {
-    const riskAmount = capital.times(options.riskPerTradePct / 100);
+    let riskAmount = capital.times(options.riskPerTradePct / 100);
+    // Daily-cap bound: never risk more than maxDailyLossPct divided by the
+    // number of concurrent positions in a single trade, so a simultaneous
+    // stop-out of every position cannot breach the hard daily stop.
+    if (options.maxDailyLossPct !== undefined && options.maxDailyLossPct > 0) {
+      const maxConcurrentTrades = Math.max(
+        1,
+        options.maxConcurrentTrades ?? 1,
+      );
+      const perTradeRiskCap = capital.times(
+        options.maxDailyLossPct / 100 / maxConcurrentTrades,
+      );
+      riskAmount = Decimal.min(riskAmount, perTradeRiskCap);
+    }
     baseNotional = riskAmount.div(stopDistancePct);
   } else {
     // Fallback to legacy margin allocation.
     const allocatedMargin = capital.times(options.positionSizePct / 100);
-    const marginPerContract = entryPrice.div(options.leverage);
+    const marginPerContract = entryPrice.div(leverage);
     const feePerContract = entryPrice.times(options.feePct / 100);
     const size = allocatedMargin.div(marginPerContract.plus(feePerContract));
     baseNotional = size.times(entryPrice);
@@ -117,16 +144,47 @@ function calculateFuturesNotionalValue(
     );
   }
 
-  const maxNotionalByMargin = capital.times(options.leverage);
-  return Decimal.min(baseNotional, maxNotionalByRiskCap, maxNotionalByMargin);
+  const maxNotionalByMargin = capital.times(leverage);
+  let notional = Decimal.min(
+    baseNotional,
+    maxNotionalByRiskCap,
+    maxNotionalByMargin,
+  );
+
+  // Exchange minimum-notional floor (Bitget observes ~5 USDT). A risk-sized
+  // position below the floor is not placeable, so raise it to the floor and
+  // use leverage to make the required margin fit the account. Bounded by
+  // margin capacity capital * leverage: an account that cannot afford the
+  // floor even at max leverage trades at its full capacity instead.
+  const notionalFloor = options.notionalFloor ?? 5;
+  if (notional.lessThan(notionalFloor)) {
+    const capitalNum = toNumber(capital);
+    if (capitalNum > 0) {
+      leverage = Math.min(
+        options.leverage,
+        Math.max(1, Math.ceil(notionalFloor / capitalNum)),
+      );
+      notional = Decimal.min(
+        Decimal.max(notional, notionalFloor),
+        capital.times(leverage),
+      );
+    }
+  }
+
+  return { notional, leverage };
 }
 
 /**
  * Run a single futures paper-trading iteration.
  *
- * Sizing uses margin (capital * positionSizePct / 100) multiplied by leverage
- * to determine the notional position. The adapter enforces reduce-only closes
- * so the position cannot be accidentally doubled on exit.
+ * Sizing is account-scaled: with riskPerTradePct set, the notional is
+ * (capital * riskPerTradePct/100) / stopDistancePct, capped by
+ * maxPositionSizePct, the per-trade daily-loss bound (maxDailyLossPct /
+ * maxConcurrentTrades) and margin capacity; sub-floor notionals are raised to
+ * notionalFloor with leverage lifted to fit the account. Without
+ * riskPerTradePct it falls back to margin allocation
+ * (capital * positionSizePct/100 * leverage). The adapter enforces
+ * reduce-only closes so the position cannot be accidentally doubled on exit.
  */
 export function runFuturesPaperTradingIteration(
   options: FuturesPaperTradingOptions,
@@ -359,13 +417,14 @@ export function runFuturesPaperTradingIteration(
         }
       }
 
-      const notionalValue = calculateFuturesNotionalValue(
-        capital,
-        entryPrice,
-        stopDistancePct,
-        currentVolatility,
-        options,
-      );
+      const { notional: notionalValue, leverage: orderLeverage } =
+        calculateFuturesNotionalValue(
+          capital,
+          entryPrice,
+          stopDistancePct,
+          currentVolatility,
+          options,
+        );
       const size = notionalValue.div(entryPrice);
 
       if (yield* killSwitch.isEngaged()) {
@@ -401,7 +460,7 @@ export function runFuturesPaperTradingIteration(
           positionValue: toNumber(notionalValue),
           symbol: options.symbol,
           side: signal.direction as "buy" | "sell",
-          leverage: options.leverage,
+          leverage: orderLeverage,
           productType: options.productType,
         })
         .pipe(Effect.result);
@@ -420,7 +479,7 @@ export function runFuturesPaperTradingIteration(
         options.symbol,
         options.productType,
         options.marginMode,
-        options.leverage,
+        orderLeverage,
       );
       yield* adapter.setMarginMode(
         options.symbol,
@@ -435,7 +494,7 @@ export function runFuturesPaperTradingIteration(
         size,
         productType: options.productType,
         marginMode: options.marginMode,
-        leverage: options.leverage,
+        leverage: orderLeverage,
         price: money(currentCandle.close),
       });
 
@@ -495,7 +554,7 @@ export function runFuturesPaperTradingIteration(
         action: "opened" as const,
         position: newPosition,
         capital: toNumber(capital),
-        note: `${side} ${fill.filledPrice.toFixed(2)} size=${fill.filledQty.toFixed(6)} leverage=${options.leverage}x SL=${newPosition.stopLoss.toFixed(2)} TP=${newPosition.takeProfit.toFixed(2)}`,
+        note: `${side} ${fill.filledPrice.toFixed(2)} size=${fill.filledQty.toFixed(6)} leverage=${orderLeverage}x SL=${newPosition.stopLoss.toFixed(2)} TP=${newPosition.takeProfit.toFixed(2)}`,
       };
     }
 
