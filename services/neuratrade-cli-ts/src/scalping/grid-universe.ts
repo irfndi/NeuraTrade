@@ -18,6 +18,7 @@ import {
 } from "../market-data/repository.js";
 import type { Candle } from "../market-data/types.js";
 import {
+  runGridBacktest,
   runGridWalkForward,
   type GridOptions,
   type GridWalkForwardResult,
@@ -338,6 +339,38 @@ function passesGateCriteria(result: GridValidationOk): boolean {
 }
 
 /**
+ * Strict time-split honesty check: the readiness gates are trade/window
+ * based and cannot see regime concentration (validated 2026-08-09: BTC 15m
+ * passed every gate while its edge lived entirely in the last 20% of data,
+ * IS -20.99% / OOS +34.06%). A config must also be profitable on a held-out
+ * last-20% slice it never trained on.
+ */
+export function passesTimeSplitGate(
+  candles: readonly Candle[],
+  grid: GridOptions,
+  splitPct = 0.2,
+): boolean {
+  const split = Math.floor(candles.length * (1 - splitPct));
+  const isSlice = runGridBacktest(candles.slice(0, split), {
+    ...grid,
+    initialCapital: grid.initialCapital,
+  });
+  const oosSlice = runGridBacktest(candles.slice(split), {
+    ...grid,
+    initialCapital: grid.initialCapital,
+  });
+  // BOTH halves must be profitable AND actually trade: the BTC-15m family
+  // passed every window gate with IS -21% / OOS +34% (edge entirely recent);
+  // a half with zero trades is regime-dead and must fail closed.
+  return (
+    isSlice.totalTrades >= 1 &&
+    oosSlice.totalTrades >= 1 &&
+    isSlice.totalReturnPct >= 0 &&
+    oosSlice.totalReturnPct >= 0
+  );
+}
+
+/**
  * Stage-4 gate-scored eligibility: sweep the target_ratio × chop-gate-ADX
  * dials (GATE_TARGETS × GATE_ADX_GATES) around the entry's walk-forward
  * bestParams through validateGridEvidence, applying the manifest gate
@@ -392,8 +425,10 @@ export function gateScoredEligibility(
         grid,
         executionParityPassed: true,
       });
-      // Invalid evidence fails closed; valid evidence must clear EVERY gate.
+      // Invalid evidence fails closed; valid evidence must clear EVERY gate
+      // AND survive the strict time-split (regime-concentration guard).
       if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
+      if (!passesTimeSplitGate(candles, grid)) continue;
       if (
         best === null ||
         result.historical.compoundedReturnPct > best.compoundedReturnPct

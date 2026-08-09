@@ -10,9 +10,11 @@ import type { Candle, Tick } from "../market-data/types.js";
 import {
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
   MIN_UNIVERSE_24H_VOLUME_USDT,
+  passesTimeSplitGate,
   runMarketUniverseScan,
   type GridUniverseOptions,
 } from "./grid-universe.js";
+import { runGridBacktest, type GridOptions } from "./grid.js";
 import {
   accountScaledTargetFillsPerDay,
   accountSymbolCap,
@@ -415,6 +417,80 @@ describe("gateScoredEligibility (stage-4)", () => {
   });
 });
 
+
+describe("passesTimeSplitGate (regime-concentration guard)", () => {
+  const BAR_MS = 15 * 60 * 1000;
+  const grid: GridOptions = {
+    gridStepPct: 1,
+    gridMaxGrids: 1.5,
+    gridPauseAfterLossBars: 0,
+    feePct: 0.02,
+    slippageBps: 1,
+    initialCapital: 100,
+    trendFilterPeriod: 0,
+    leverage: 1,
+    positionFraction: 0.5,
+    chopGateAdxThreshold: 0,
+    targetRatio: 1,
+    onlyWithTrend: false,
+  };
+
+  // Wick bars at price 100 with ±1.1% wicks: every bar touches the 1% grid
+  // levels (99 buy / 101 sell) -> each cycle wins ~2% minus fees.
+  function wickCandle(symbol: string, ts: number): Candle {
+    return {
+      exchange: "bitget-futures",
+      symbol,
+      timeframe: "15m",
+      open: 100,
+      high: 101.1,
+      low: 98.9,
+      close: 100,
+      volume: 10,
+      timestamp: new Date(ts),
+    };
+  }
+
+  // Steady decline: the grid buys the dips but the market never recovers to
+  // target -> open positions bleed to the end.
+  function declineCandle(symbol: string, ts: number, i: number): Candle {
+    const open = 100 - i * 0.05;
+    return {
+      exchange: "bitget-futures",
+      symbol,
+      timeframe: "15m",
+      open,
+      high: open + 0.1,
+      low: open - 0.1,
+      close: open - 0.05,
+      volume: 10,
+      timestamp: new Date(ts),
+    };
+  }
+
+  it("rejects a series whose edge lives only in one half (BTC-15m case)", () => {
+    const candles: Candle[] = [];
+    const end = Date.now() - BAR_MS;
+    for (let i = 0; i < 400; i += 1) {
+      candles.push(wickCandle("T/USDT:USDT", end - (499 - i) * BAR_MS));
+    }
+    // Last 20%: steady decline (grid long positions bleed).
+    for (let i = 400; i < 500; i += 1) {
+      candles.push(declineCandle("T/USDT:USDT", end - (499 - i) * BAR_MS, i - 400));
+    }
+    // First half (wicks) is clearly positive; the split must FAIL.
+    expect(passesTimeSplitGate(candles, grid)).toBe(false);
+  });
+
+  it("accepts a series profitable across both halves", () => {
+    const candles: Candle[] = [];
+    const end = Date.now() - BAR_MS;
+    for (let i = 0; i < 500; i += 1) {
+      candles.push(wickCandle("T/USDT:USDT", end - (499 - i) * BAR_MS));
+    }
+    expect(passesTimeSplitGate(candles, grid)).toBe(true);
+  });
+});
 
 describe("runMarketUniverseScan (market-sourced batch)", () => {
   const SCAN_OPTIONS: GridUniverseOptions = {
