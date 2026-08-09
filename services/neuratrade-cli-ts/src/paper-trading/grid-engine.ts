@@ -365,10 +365,16 @@ export function runGridPaperTradingIteration(
     }
 
     const replayBars = options.replayBars ?? 0;
+    // The live chop gate computes causal ADX(14) from the fetched candles;
+    // with trendFilterPeriod 0 the engine used to fetch just 2 candles ->
+    // ADX was always 0 and the validated ADX gate never fired live. Fetch
+    // an ADX warmup (14*2+2 bars) whenever the chop gate is enabled.
+    const adxWarmup =
+      (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
     const requiredCandles =
       replayBars > 0
         ? replayBars + options.trendFilterPeriod + 5
-        : Math.max(options.trendFilterPeriod + 1, 2);
+        : Math.max(options.trendFilterPeriod + 1, 2, adxWarmup);
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
       options.symbol,

@@ -3017,9 +3017,14 @@ export function gridOverridesFromWatchlistRow(
 } {
   const basePositionFraction =
     Option.getOrElse(args.maxPositionSizePct, () => 100) / 100;
+  // Legacy watchlist rows (written before the allocated_weight column
+  // existed) load 0 — treat 0 as UNSET -> full allocation. Without this the
+  // universe pool's positions collapsed to $0.25 (0.01 x base) and every
+  // order was guard-rejected (regression 2026-08-09: ADA starved at 0.5%).
+  const rawWeight = gridParams?.allocatedWeight ?? 1;
   const allocatedWeight = Math.min(
     1,
-    Math.max(0.01, gridParams?.allocatedWeight ?? 1),
+    Math.max(0.01, rawWeight === 0 ? 1 : rawWeight),
   );
   return {
     targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,

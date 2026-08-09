@@ -270,12 +270,20 @@ describe("watchlist grid overrides (soak reproduction)", () => {
     expect(overrides.maxPositionPct).toBeCloseTo(20, 6);
   });
 
-  it("clamps allocatedWeight to [0.01, 1]", () => {
+  it("clamps allocatedWeight to [0.01, 1] with legacy 0 as full allocation", () => {
     const zero = gridOverridesFromWatchlistRow(
       { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0 },
       baseArgs,
     );
-    expect(zero.maxPositionPct).toBeCloseTo(0.5, 6); // 0.01 * 0.5 * 100
+    // Legacy rows (pre-allocated_weight) load 0 = UNSET -> full allocation:
+    // without this, positions collapsed to 0.01 x base and were rejected.
+    expect(zero.maxPositionPct).toBe(50); // 1 * 0.5 * 100
+
+    const tiny = gridOverridesFromWatchlistRow(
+      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0.01 },
+      baseArgs,
+    );
+    expect(tiny.maxPositionPct).toBeCloseTo(0.5, 6); // 0.01 * 0.5 * 100
 
     const over = gridOverridesFromWatchlistRow(
       { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 3 },
