@@ -305,7 +305,7 @@ import {
   MarketDataRepositorySQLiteLive,
 } from "../market-data/repository.js";
 import { BacktestEngine } from "../scalping/services.js";
-import { backtestProgram } from "./scalp.js";
+import { backtestProgram, buildBacktestComposerConfig } from "./scalp.js";
 import type { Candle } from "../market-data/types.js";
 
 function makeOptimizeArgs(overrides: Partial<OptimizeArgs> = {}): OptimizeArgs {
@@ -1375,6 +1375,142 @@ describe("backtestProgram fill-model option forwarding", () => {
       entryOnClose: true,
     });
     db.close();
+  });
+});
+
+describe("backtestProgram funding-rate wiring", () => {
+  const makeCandles = (): Candle[] =>
+    Array.from({ length: 150 }, (_, i) => {
+      const close = 100 + i * 0.5;
+      return {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: close - 0.2,
+        high: close + 0.5,
+        low: close - 0.5,
+        close,
+        volume: 10,
+        timestamp: new Date(Date.now() + i * 3600_000),
+      };
+    });
+
+  function makeEngine(
+    captured: { fundingRates: unknown },
+  ): Layer.Layer<BacktestEngine> {
+    return Layer.succeed(BacktestEngine, {
+      runBacktest: (options) => {
+        captured.fundingRates = options.fundingRates;
+        return Effect.succeed(makeResult());
+      },
+      runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+    });
+  }
+
+  it("forwards funding rates fetched from the repo to runBacktest", async () => {
+    const db = new Database(":memory:");
+    const candles = makeCandles();
+    const fundingRates = candles
+      .filter((_, i) => i % 10 === 0)
+      .map((c) => ({
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        fundingRate: 0.0003,
+        timestamp: c.timestamp,
+      }));
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(candles);
+        yield* repo.saveFundingRates(
+          "binance",
+          "BTC/USDT",
+          fundingRates,
+        );
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    const captured: { fundingRates: unknown } = { fundingRates: undefined };
+    await Effect.runPromise(
+      backtestProgram(
+        makeOptimizeArgs() as unknown as Parameters<typeof backtestProgram>[0],
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            makeEngine(captured),
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    expect(captured.fundingRates).toEqual(fundingRates);
+    db.close();
+  });
+
+  it("passes an empty funding array when no funding rows exist", async () => {
+    const db = new Database(":memory:");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(makeCandles());
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    const captured: { fundingRates: unknown } = { fundingRates: undefined };
+    await Effect.runPromise(
+      backtestProgram(
+        makeOptimizeArgs() as unknown as Parameters<typeof backtestProgram>[0],
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            makeEngine(captured),
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    expect(captured.fundingRates).toEqual([]);
+    db.close();
+  });
+});
+
+describe("buildBacktestComposerConfig breakout lookback", () => {
+  it("threads a non-default breakoutLookback into thresholds", () => {
+    const config = buildBacktestComposerConfig(
+      false,
+      false,
+      false,
+      "trend",
+      0,
+      20,
+      0,
+      false,
+      0,
+      0,
+      55,
+    );
+    expect(config.thresholds.breakoutLookback).toBe(55);
+  });
+
+  it("keeps the default breakoutLookback when not overridden", () => {
+    const config = buildBacktestComposerConfig(false, false, false);
+    expect(config.thresholds.breakoutLookback).toBe(20);
   });
 });
 

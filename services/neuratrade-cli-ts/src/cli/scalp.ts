@@ -37,6 +37,7 @@ import {
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { MarketDataGateway } from "../market-data/gateway.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
+import type { FundingRate } from "../market-data/types.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
@@ -1209,6 +1210,7 @@ export function buildBacktestComposerConfig(
   entryCandleConfirm = false,
   momentumConfirmBars = 0,
   adxMin = 0,
+  breakoutLookback = 0,
 ): ComposerConfig {
   if (
     !priceOnly &&
@@ -1219,7 +1221,9 @@ export function buildBacktestComposerConfig(
     minConfluence <= 0 &&
     !entryCandleConfirm &&
     momentumConfirmBars <= 0 &&
-    adxMin <= 0
+    adxMin <= 0 &&
+    (breakoutLookback <= 0 ||
+      breakoutLookback === defaultComposerConfig.thresholds.breakoutLookback)
   ) {
     return defaultComposerConfig;
   }
@@ -1265,6 +1269,7 @@ export function buildBacktestComposerConfig(
       entryCandleConfirm,
       momentumConfirmBars,
       adxMin,
+      ...(breakoutLookback > 0 ? { breakoutLookback } : {}),
     },
   };
 }
@@ -1298,6 +1303,38 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
       );
     }
 
+    // Historical funding rates power the funding-bias component. Missing
+    // rows leave the component inert (buildFundingComponent returns null);
+    // a fetch failure must not fail the backtest.
+    const fundingRates = yield* repo
+      .getFundingRates(
+        args.exchange,
+        args.symbol,
+        candles[0]?.timestamp,
+        candles[candles.length - 1]?.timestamp,
+      )
+      .pipe(
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            yield* Effect.logWarning(
+              `failed to load funding rates: ${
+                err instanceof Error ? err.message : String(err)
+              } — funding component inert`,
+            );
+            return [] as readonly FundingRate[];
+          }),
+        ),
+      );
+    if (fundingRates.length === 0) {
+      yield* Effect.logWarning(
+        "funding rates absent — funding component inert",
+      );
+    } else {
+      yield* Effect.log(
+        `loaded ${fundingRates.length} funding rates — funding component active`,
+      );
+    }
+
     let composerConfig = buildBacktestComposerConfig(
       args.priceOnly,
       args.noRsi,
@@ -1309,6 +1346,7 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
       args.entryCandleConfirm,
       args.momentumConfirmBars,
       args.adxMin,
+      args.breakoutLookback,
     );
 
     // --template applies the strategy template's signal weights/thresholds
@@ -1408,6 +1446,7 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
             holdUntilStop: args.holdUntilStop,
             isFutures: args.futures,
             fundingRatePct: args.fundingRatePct,
+            fundingRates,
             slippageBps: args.slippageBps,
             makerFeePct: args.makerFeePct,
             entryOrderType: args.entryOrderType,
