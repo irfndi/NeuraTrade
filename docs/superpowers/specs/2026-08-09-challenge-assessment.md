@@ -74,3 +74,18 @@ Also found: the breakout dial is inert in the backtest command
 4. Floor-capital reality: at $10 the 5 USDT floor forces stops ≤1.34%
    (15m noise territory) or ~35% cap-breach days at 2% risk — a $10 account
    is a stress test, not a compounding vehicle; $100+ is the realistic start.
+
+## 5. Guard-path verification (2026-08-09, advisory-driven)
+
+Probed `makeRiskGuard` with the actual limit sets:
+
+| path | effective limits | $10 account result |
+|---|---|---|
+| demo paper-trade (soaks) | CLI overrides: pos 50%, **minCapital 50**, daily 2%, dd 5% | floor 5 = 50% passes the position check; **rejected only by minCapital 50** — config knob, not a code gap |
+| demo @ $50 (current) | same | PASS (grid 25 = 50%) |
+| live real-money (inactive) | defaults: pos 10%, minCapital 100 | rejected on both — conservative by design |
+
+"Tiny->large accounts handled" holds down to the CONFIGURED minCapital. A
+true $10 account needs `--min-capital 10 --max-position-size-pct 50`; the
+new `neuratrade-challenge-10` pm2 app ships exactly that (stopped by
+default). The sizing floor-raise is guard-consistent at the 50% cap.
