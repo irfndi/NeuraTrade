@@ -5808,6 +5808,13 @@ const gridUniverseAccountCapitalOption = Options.float("account-capital").pipe(
     "Account capital USDT scaling the fills/day target when --target-fills-per-day is unset (default 1000)",
   ),
 );
+
+const gridUniverseTierOption = Options.text("tier").pipe(
+  Options.withDefault("readiness"),
+  Options.withDescription(
+    "Eligibility tier: 'readiness' (full stage-4 gate board) or 'fast' (light: strict time-split + walk-forward profitability + fills/day floor)",
+  ),
+);
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5835,10 +5842,18 @@ export const gridUniverseScanCommand = Command.make(
     minFillFrequencyPct: gridUniverseMinFillFrequencyOption,
     targetFillsPerDay: gridUniverseTargetFillsPerDayOption,
     accountCapital: gridUniverseAccountCapitalOption,
+    tier: gridUniverseTierOption,
     market: gridUniverseMarketOption,
   },
   (args) =>
     Effect.gen(function* () {
+      if (args.tier !== "readiness" && args.tier !== "fast") {
+        return yield* Effect.fail(
+          new Error(
+            `invalid --tier '${args.tier}': expected 'readiness' or 'fast'`,
+          ),
+        );
+      }
       const path = yield* Path;
       const sqlite = yield* SqliteClient;
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
@@ -5871,6 +5886,7 @@ export const gridUniverseScanCommand = Command.make(
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.trendFilterPeriod,
         searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+        tier: args.tier,
       };
 
       const targetFillsPerDay = Option.isSome(args.targetFillsPerDay)
@@ -6072,9 +6088,16 @@ export const gridUniverseScanCommand = Command.make(
                 // Only a probe error that proves the instrument is unsupported
                 // (40034 with a missing-symbol/contract message) drops the
                 // survivor; auth, rate-limit, transport, and other parameter
-                // defects must NOT drop survivors.
+                // defects must NOT drop survivors. Log the exact API evidence
+                // so a drop is auditable (verified 2026-08-09: the demo
+                // returns 40034 "Parameter CYSUSDT does not exist" for
+                // contracts its subset does not list).
+                const dropEvidence =
+                  probe.failure instanceof BitgetApiError
+                    ? `Bitget ${probe.failure.code ?? "?"}: ${probe.failure.body.slice(0, 140)}`
+                    : "demo subset does not list this contract";
                 yield* Console.log(
-                  `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo`,
+                  `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo (${dropEvidence})`,
                 );
               } else {
                 const reason =
@@ -6105,7 +6128,7 @@ export const gridUniverseScanCommand = Command.make(
           };
 
           yield* Console.log(
-            `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors`,
+            `\n🎯 Grid universe scan: ${result.entries.length} symbols, ${result.survivors.length} survivors (tier=${args.tier})`,
           );
           yield* Console.log(
             "Symbol        Candles  Step%  Grids  Pause  ProfitWin%  Aggregate%",
@@ -6149,7 +6172,7 @@ export const gridUniverseScanCommand = Command.make(
           ),
         );
         yield* Console.log(
-          `👁 Watching universe ${args.exchange}:${args.timeframe}, re-scan every ${args.interval}s...`,
+          `👁 Watching universe ${args.exchange}:${args.timeframe} (tier=${args.tier}), re-scan every ${args.interval}s...`,
         );
         // Repeat until interrupted: Effect.repeat + Schedule.spaced runs the
         // scan, spaces iterations by the interval, and cancels cleanly on

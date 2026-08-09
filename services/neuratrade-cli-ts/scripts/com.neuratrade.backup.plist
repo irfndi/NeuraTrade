@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Daily WAL-safe SQLite backup of ~/.neuratrade/data/neuratrade.db.
+  Runs backup-db.sh (keep-last-7, WAL-safe .backup API) every day at 03:17.
+  If the Mac is asleep at 03:17 launchd runs the job on next wake.
+
+  Install:
+    cp com.neuratrade.backup.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.neuratrade.backup.plist
+  Uninstall:
+    launchctl unload -w ~/Library/LaunchAgents/com.neuratrade.backup.plist
+  Logs: ~/.neuratrade/logs/backup-launchd.{out,err}.log
+  Retention (KEEP=7) is handled inside backup-db.sh.
+-->
+<dict>
+    <key>Label</key>
+    <string>com.neuratrade.backup</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>/Users/irfandi/Coding/2025/NeuraTrade/services/neuratrade-cli-ts/scripts/backup-db.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/irfandi/.neuratrade/logs/backup-launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/irfandi/.neuratrade/logs/backup-launchd.err.log</string>
+</dict>
+</plist>

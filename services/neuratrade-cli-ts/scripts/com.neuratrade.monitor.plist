@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Ops health + first-fill alert monitor. Runs demo-soak-monitor.sh every 5
+  minutes; the script writes ~/.neuratrade/state/fills-since.txt and alerts
+  (stderr + exit code) whenever the cumulative fill total increases — the
+  first-fill detection hook. Health failures (offline pm2 apps, engaged kill
+  switch, stale funnel data) exit 2; new fills exit 1; healthy exit 0.
+
+  Alert visibility: tail -f ~/.neuratrade/logs/neuratrade-monitor-launchd.err.log
+
+  NOTE: an older job (com.neuratrade.demo-soak-monitor, 4x/day) runs the same
+  script. The script is idempotent, so both can coexist, but to avoid
+  duplicate runs unload the old one:
+    launchctl unload -w ~/Library/LaunchAgents/com.neuratrade.demo-soak-monitor.plist
+
+  Install:
+    cp com.neuratrade.monitor.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.neuratrade.monitor.plist
+  Uninstall:
+    launchctl unload -w ~/Library/LaunchAgents/com.neuratrade.monitor.plist
+  Logs: ~/.neuratrade/logs/neuratrade-monitor-launchd.{out,err}.log
+-->
+<dict>
+    <key>Label</key>
+    <string>com.neuratrade.monitor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/irfandi/Coding/2025/NeuraTrade/services/neuratrade-cli-ts/scripts/demo-soak-monitor.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/irfandi/.neuratrade/logs/neuratrade-monitor-launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/irfandi/.neuratrade/logs/neuratrade-monitor-launchd.err.log</string>
+</dict>
+</plist>

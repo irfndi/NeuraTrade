@@ -20,6 +20,7 @@ import {
   accountSymbolCap,
   barsPerDayForTimeframe,
   computeFillFrequencyPct,
+  FAST_TIER_MIN_FILL_FREQUENCY_PCT,
   gateScoredEligibility,
   passesStage2Screen,
   selectUniversePortfolio,
@@ -194,6 +195,13 @@ describe("accountScaledTargetFillsPerDay", () => {
     expect(accountScaledTargetFillsPerDay(10)).toBe(5);
   });
 
+  it("targets the 5/day floor for the $50 universe-soak account", () => {
+    // The universe-watch app runs with --account-capital 50: the honest
+    // target is clamp(5, 50×50/1000, 50) = 5, not the $1000 default's 50/day
+    // ceiling (50×1000/1000 = 50).
+    expect(accountScaledTargetFillsPerDay(50)).toBe(5);
+  });
+
   it("scales linearly in between", () => {
     expect(accountScaledTargetFillsPerDay(200)).toBe(10);
     expect(accountScaledTargetFillsPerDay(500)).toBe(25);
@@ -353,6 +361,45 @@ describe("gateScoredEligibility (stage-4)", () => {
     return rows;
   }
 
+  /**
+   * Fast-tier fixture: strong uptrend (+0.2%/bar) with a -1.0% lower-wick
+   * dip every 12 bars (close back at the open, so the trend resumes from the
+   * same level). ADX stays ≥ 28 (every target×ADX combo is chop-gate-blocked
+   * → the readiness board drops it), while 1/12 ≈ 8.3% of candles reach a
+   * grid step (the fast-tier fill floor) and both time-split halves stay
+   * profitable. Verified empirically 2026-08-09: readiness null, fast keeps.
+   */
+  function fastCandles(): Candle[] {
+    const end = Date.now() - BAR_MS;
+    const rows: Candle[] = [];
+    let price = 100;
+    for (let index = 0; index < GATE_CANDLES; index += 1) {
+      const base = {
+        exchange: "bitget-futures",
+        symbol: "FAST/USDT:USDT",
+        timeframe: "15m",
+        volume: 10,
+        timestamp: new Date(end - (GATE_CANDLES - 1 - index) * BAR_MS),
+      };
+      const open = price;
+      const dip = index % 12 === 0 && index > 10;
+      const close = dip ? open : open * (1 + 0.2 / 100);
+      rows.push(
+        dip
+          ? {
+              ...base,
+              open,
+              high: open * (1 + 0.05 / 100),
+              low: open * (1 - 1.0 / 100),
+              close,
+            }
+          : { ...base, open, high: close, low: open, close },
+      );
+      price = close;
+    }
+    return rows;
+  }
+
   /** Mirrors evaluateUniverseSymbol's survivor path: run the walk-forward
    * over the full series and derive bestParams + passed from it. */
   function walkForwardEntry(
@@ -415,6 +462,46 @@ describe("gateScoredEligibility (stage-4)", () => {
 
     expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
   });
+
+  it(
+    "fast tier: a walk-forward survivor failing the readiness board becomes eligible on the light criteria",
+    // Two full 4-combo gate sweeps over 54,720 candles (readiness + fast)
+    // run ~3s each; the 5s default is too tight.
+    () => {
+    const candles = fastCandles();
+    const entry = walkForwardEntry("FAST/USDT:USDT", candles);
+    expect(entry.passed).toBe(true);
+    // Fixture precondition: the sweep's grid step must meet the fast-tier
+    // touch floor, or the light criteria could not accept it.
+    expect(
+      computeFillFrequencyPct(
+        candles,
+        entry.bestParams.gridStepPct,
+        FAST_TIER_MIN_FILL_FREQUENCY_PCT,
+      ),
+    ).toBeGreaterThanOrEqual(FAST_TIER_MIN_FILL_FREQUENCY_PCT);
+
+    // Same series, same sweep: the full readiness board (default tier)
+    // still drops it...
+    expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
+
+    // ...but tier=fast accepts it via strict time-split + walk-forward +
+    // the fills/day floor, and the row still carries the swept config
+    // (target/ADX from the 4-combo GATE sweep).
+    const gated = gateScoredEligibility(entry, candles, {
+      ...GATE_OPTIONS,
+      tier: "fast",
+    });
+    expect(gated).not.toBeNull();
+    if (gated === null) return;
+    const { validatedTargetRatio, validatedChopGateAdx } = gated;
+    expect(validatedTargetRatio).toBeDefined();
+    expect(validatedChopGateAdx).toBeDefined();
+    if (validatedTargetRatio === undefined || validatedChopGateAdx === undefined)
+      return;
+    expect([1, 3]).toContain(validatedTargetRatio);
+    expect([24, 28]).toContain(validatedChopGateAdx);
+  }, 30_000);
 });
 
 
@@ -496,7 +583,7 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
   const SCAN_OPTIONS: GridUniverseOptions = {
     exchange: "bitget-futures",
     // Tiny deep-fetch budget so the pacing (250ms/request) keeps tests fast;
-    // production defaults to 300 requests/cycle.
+    // production defaults to 900 requests/cycle (~15 min pacing).
     deepFetchBudgetPerCycle: 5,
     timeframe: "15m",
     initialCapital: 10000,

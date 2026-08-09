@@ -85,9 +85,32 @@ export const DEEP_HISTORY_TARGET = 55_000;
  * cache grows backward over cycles until a survivor has enough history to
  * be gate-validated (~55k bars = ~275 requests at the 200-bar cap).
  */
-export const DEEP_FETCH_REQUESTS_PER_CYCLE = 300;
-// ~300 requests x ~1s (pacing + latency) ≈ 5 min of scan time per cycle;
-// at 200 bars/request that deepens one survivor by ~60k bars per cycle.
+export const DEEP_FETCH_REQUESTS_PER_CYCLE = 900;
+// ~900 requests x ~1s (pacing + latency) ≈ 15 min of scan time per cycle;
+// at 200 bars/request that deepens ~3 survivors (~55k bars each) per cycle.
+// The 300 default starved the gate: the funnel fetched fast but had few
+// deep-history candidates per cycle (FunnelAccelerate research 2026-08-09).
+
+/**
+ * Universe eligibility tier. 'readiness' (default) applies the FULL stage-4
+ * readiness board — profitable-window share > 50%, fixed-OOS >= 30 trades,
+ * drawdown/LB/stress gates, AND the strict time-split honesty check. 'fast'
+ * is the high-throughput light tier for symbols that pass walk-forward +
+ * time-split but fail the readiness board (windows>50%, OOS>=30, stress
+ * LBs): it keeps only the strict time-split + walk-forward profitability +
+ * a fills/day floor, dropping the readiness window/OOS/stress requirements
+ * so high-frequency candidates become selectable immediately instead of
+ * waiting on deep-history readiness validation.
+ */
+export type UniverseTier = "readiness" | "fast";
+
+/**
+ * Fast-tier fills/day floor: minimum % of candles (0-100) whose range
+ * reaches a grid step from the open (computeFillFrequencyPct) — 5% on 15m
+ * ≈ 4.8 fills/day, the high-frequency pool's touch profile. Below this the
+ * grid is too wide to fill live regardless of backtest edge.
+ */
+export const FAST_TIER_MIN_FILL_FREQUENCY_PCT = 5;
 
 /**
  * Max fraction of account capital allocated per grid position — mirrors the
@@ -156,6 +179,13 @@ export interface GridUniverseOptions {
   };
   /** Per-cycle deep-history fetch request budget (shared across gate candidates). */
   readonly deepFetchBudgetPerCycle?: number;
+  /**
+   * Eligibility tier: 'readiness' (default) applies the full stage-4
+   * readiness board; 'fast' uses the light high-throughput criteria (strict
+   * time-split + walk-forward profitability + fills/day floor) while still
+   * sweeping the target×ADX dials so watchlist rows carry the full config.
+   */
+  readonly tier?: UniverseTier;
 }
 
 export interface GridUniverseEntry {
@@ -384,6 +414,22 @@ export function gateScoredEligibility(
   candles: readonly Candle[],
   options: GridUniverseOptions,
 ): GridUniverseEntry | null {
+  const tier = options.tier ?? "readiness";
+  // Fast-tier acceptance (light): walk-forward profitability (the entry's
+  // `passed` flag) + a fills/day floor from computeFillFrequencyPct (5%
+  // touch on the sweep's grid step) + the strict time-split honesty check.
+  // The readiness window/OOS>=30/stress-LB requirements are dropped. The
+  // floor is checked here (not just via options.minFillFrequencyPct) so the
+  // touch rate is measured honestly even when that option is disabled.
+  const fastEligible =
+    tier === "fast" &&
+    entry.passed &&
+    computeFillFrequencyPct(
+      candles,
+      entry.bestParams.gridStepPct,
+      FAST_TIER_MIN_FILL_FREQUENCY_PCT,
+    ) >= FAST_TIER_MIN_FILL_FREQUENCY_PCT;
+
   let best: {
     targetRatio: number;
     chopGateAdx: number;
@@ -425,10 +471,30 @@ export function gateScoredEligibility(
         grid,
         executionParityPassed: true,
       });
-      // Invalid evidence fails closed; valid evidence must clear EVERY gate
-      // AND survive the strict time-split (regime-concentration guard).
-      if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
-      if (!passesTimeSplitGate(candles, grid)) continue;
+      if (tier === "readiness") {
+        // Full readiness board: valid evidence must clear EVERY gate AND
+        // survive the strict time-split (regime-concentration guard);
+        // invalid evidence fails closed.
+        if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
+        if (!passesTimeSplitGate(candles, grid)) continue;
+      } else {
+        // Fast tier: the light criteria are the ONLY acceptance — evidence
+        // is used just to rank the sweep combos (young symbols may lack the
+        // deep history valid evidence needs; that alone must not drop them).
+        if (!fastEligible) continue;
+        if (!passesTimeSplitGate(candles, grid)) continue;
+        if (result.kind !== "ok") {
+          // Invalid evidence cannot rank; keep the first passing combo.
+          if (best === null) {
+            best = {
+              targetRatio,
+              chopGateAdx,
+              compoundedReturnPct: -Infinity,
+            };
+          }
+          continue;
+        }
+      }
       if (
         best === null ||
         result.historical.compoundedReturnPct > best.compoundedReturnPct
@@ -529,6 +595,13 @@ export function runGridUniverseScan(
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
 
+    const tier = options.tier ?? "readiness";
+    yield* Effect.log(
+      tier === "fast"
+        ? "universe scan: tier=fast (light: time-split + walk-forward + fills/day floor)"
+        : "universe scan: tier=readiness (full gate board)",
+    );
+
     const symbolsWithCount = yield* repo.listSymbolsByCandleCount(
       options.exchange,
       options.timeframe,
@@ -593,6 +666,13 @@ export function runMarketUniverseScan(
   return Effect.gen(function* () {
     const gateway = yield* MarketDataGateway;
     const repo = yield* MarketDataRepository;
+
+    const tier = options.tier ?? "readiness";
+    yield* Effect.log(
+      tier === "fast"
+        ? "market scan: tier=fast (light: time-split + walk-forward + fills/day floor)"
+        : "market scan: tier=readiness (full gate board)",
+    );
 
     const [marketSymbols, volumes] = yield* Effect.all([
       gateway.fetchSymbols(options.exchange),

@@ -6,6 +6,8 @@
 //   / grid-whitelist.json) against the Bitget demo matching engine (PAPTRADING=1)
 //   at a 15-minute cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
 //   The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
+// Log rotation: every app uses pm2's built-in rotation (max_size 50M, retain 5) on
+// its out_file/error_file — prevents unbounded log growth (a crash era wrote ~400KB/hr).
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -109,6 +111,8 @@ module.exports = {
       restart_delay: 30_000,
       out_file: path.join(neuratradeHome, "logs", "btc-candidate.out.log"),
       error_file: path.join(neuratradeHome, "logs", "btc-candidate.err.log"),
+      max_size: "50M",
+      retain: 5,
       merge_logs: true,
       time: true,
     },
@@ -187,6 +191,8 @@ module.exports = {
       restart_delay: 30_000,
       out_file: path.join(neuratradeHome, "logs", "challenge-10.out.log"),
       error_file: path.join(neuratradeHome, "logs", "challenge-10.err.log"),
+      max_size: "50M",
+      retain: 5,
       merge_logs: true,
       time: true,
     },
@@ -253,6 +259,8 @@ module.exports = {
       restart_delay: 30_000,
       out_file: path.join(neuratradeHome, "logs", "sol-candidate.out.log"),
       error_file: path.join(neuratradeHome, "logs", "sol-candidate.err.log"),
+      max_size: "50M",
+      retain: 5,
       merge_logs: true,
       time: true,
     },
@@ -272,7 +280,14 @@ module.exports = {
         "500",
         "--min-fill-frequency-pct",
         "10",
+        // The universe soak trades a $50 demo account: scale the selection
+        // target to the real capital (target = clamp(5, 50*50/1000, 50) =
+        // 5 fills/day) instead of the $1000 default's 50/day ceiling.
+        "--account-capital",
+        "50",
         "--market",
+        "--tier",
+        "fast",
         "--watch",
         "--interval",
         "21600",
@@ -288,6 +303,8 @@ module.exports = {
       restart_delay: 30_000,
       out_file: path.join(neuratradeHome, "logs", "universe-watch.out.log"),
       error_file: path.join(neuratradeHome, "logs", "universe-watch.err.log"),
+      max_size: "50M",
+      retain: 5,
       merge_logs: true,
       time: true,
     },
@@ -341,6 +358,8 @@ module.exports = {
       restart_delay: 30_000,
       out_file: path.join(neuratradeHome, "logs", "demo-soak.out.log"),
       error_file: path.join(neuratradeHome, "logs", "demo-soak.err.log"),
+      max_size: "50M",
+      retain: 5,
       merge_logs: true,
       time: true,
     },
