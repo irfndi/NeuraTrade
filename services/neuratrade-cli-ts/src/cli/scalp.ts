@@ -1314,7 +1314,7 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
     // (e.g. microScalp RSI(2)) and its execution overrides on top of the
     // CLI-derived config. Previously the template flags were parsed but
     // never wired — backtests silently ran the default composer.
-    if (args.template !== "") {
+    if (args.template !== undefined && args.template !== "") {
       const template = args.template as StrategyTemplateName;
       composerConfig = buildComposerConfigFromTemplate(template, composerConfig);
       args = buildBacktestArgsFromTemplate(template, args);
