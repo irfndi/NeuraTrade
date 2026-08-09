@@ -274,13 +274,23 @@ export function runGridPaperTradingIteration(
     }
 
     if (state.killed) {
-      return {
-        action: "hold" as const,
-        side: state.side,
-        capital: toNumber(state.capital),
-        peakCapital: toNumber(state.peakCapital),
-        note: "kill switch active",
-      };
+      // A stale kill flag on a FLAT state (no open position) must not hold
+      // the soak forever after a transient mismatch (e.g. a phantom
+      // exchange position that has since closed). The account-level kill
+      // switch still gates regardless. Regression 2026-08-09: the SOL
+      // candidate was stranded by a sticky flag with a clean state.
+      if (state.side === null && !(yield* killSwitch.isEngaged())) {
+        state = { ...state, killed: false, updatedAt: new Date() };
+        yield* repo.saveGridState(state);
+      } else {
+        return {
+          action: "hold" as const,
+          side: state.side,
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          note: "kill switch active",
+        };
+      }
     }
 
     const replayBars = options.replayBars ?? 0;
@@ -759,11 +769,7 @@ export function runGridPaperTradingIteration(
       const liq = liquidationPrice("long", state.entryPrice, state.leverage);
 
       if (liq.greaterThan(0) && money(current.low).lessThanOrEqualTo(liq)) {
-        const close = yield* closeGridPosition(
-          "long",
-          "liquidation",
-          liq,
-        );
+        const close = yield* closeGridPosition("long", "liquidation", liq);
         state = {
           ...state,
           side: null,
@@ -777,11 +783,7 @@ export function runGridPaperTradingIteration(
         };
         note = `liquidated long @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
       } else if (money(current.high).greaterThanOrEqualTo(target)) {
-        const close = yield* closeGridPosition(
-          "long",
-          "target",
-          target,
-        );
+        const close = yield* closeGridPosition("long", "target", target);
         state = {
           ...state,
           side: null,
@@ -794,11 +796,7 @@ export function runGridPaperTradingIteration(
         };
         note = `${isLive ? "[LIVE] " : ""}closed long target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
       } else if (money(current.low).lessThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition(
-          "long",
-          "stop",
-          stop,
-        );
+        const close = yield* closeGridPosition("long", "stop", stop);
         state = {
           ...state,
           side: null,
@@ -817,11 +815,7 @@ export function runGridPaperTradingIteration(
       const liq = liquidationPrice("short", state.entryPrice, state.leverage);
 
       if (liq.greaterThan(0) && money(current.high).greaterThanOrEqualTo(liq)) {
-        const close = yield* closeGridPosition(
-          "short",
-          "liquidation",
-          liq,
-        );
+        const close = yield* closeGridPosition("short", "liquidation", liq);
         state = {
           ...state,
           side: null,
@@ -835,11 +829,7 @@ export function runGridPaperTradingIteration(
         };
         note = `liquidated short @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
       } else if (money(current.low).lessThanOrEqualTo(target)) {
-        const close = yield* closeGridPosition(
-          "short",
-          "target",
-          target,
-        );
+        const close = yield* closeGridPosition("short", "target", target);
         state = {
           ...state,
           side: null,
@@ -852,11 +842,7 @@ export function runGridPaperTradingIteration(
         };
         note = `${isLive ? "[LIVE] " : ""}closed short target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
       } else if (money(current.high).greaterThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition(
-          "short",
-          "stop",
-          stop,
-        );
+        const close = yield* closeGridPosition("short", "stop", stop);
         state = {
           ...state,
           side: null,

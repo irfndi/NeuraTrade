@@ -802,6 +802,66 @@ describe("grid paper engine", () => {
     );
   });
 
+  it("clears a stale killed flag once the reconciliation matches (transient mismatch)", async () => {
+    // Regression 2026-08-09: a phantom exchange position set killed=true;
+    // after the exchange position vanished, the sticky flag held the soak
+    // forever ("kill switch active") with a clean state.
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        entryOrderId: undefined,
+        entryFilledQty: undefined,
+        entryFee: undefined,
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: true,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const { adapter } = makeTrackingFuturesAdapter();
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(""),
+      engage: () => Effect.void,
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true, gridPauseAfterLossBars: 0 }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    // A clean reconciliation (no local side, no exchange position) clears
+    // the stale kill flag instead of holding forever.
+    expect(result.note).not.toContain("kill switch active");
+    expect(result.note).not.toContain("MISMATCH");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.killed).toBe(false);
+  });
+
   it("does not clear a live position when the close has no exchange fill", async () => {
     const repo = new InMemoryPaperRepository();
     const { adapter, closes } = makeTrackingFuturesAdapter(false);
