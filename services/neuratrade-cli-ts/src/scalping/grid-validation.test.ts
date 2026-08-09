@@ -285,9 +285,28 @@ describe("deterministic grid validation", () => {
     expect(() =>
       bootstrapBlockConfidence(["1", "2", "3", "4", "5", "6"], 0, 5, 10),
     ).toThrow("invalid block-bootstrap input");
-    expect(() => bootstrapBlockConfidence(["1", "2"], 20260802, 5, 10)).toThrow(
-      "invalid block-bootstrap input",
-    );
+    expect(() => bootstrapBlockConfidence(["1", "2"], 20260802, 5, 10)).not.toThrow();
+    // Fewer samples than one block is no longer an error: the stress path
+    // needs degenerate evidence instead of a crash (2026-08-09).
+    expect(
+      bootstrapBlockConfidence(["1", "2"], 20260802, 5, 10).resamples,
+    ).toBe(0);
+  });
+
+  it("returns a degenerate zero-width confidence for fewer than one block of samples", () => {
+    const result = bootstrapBlockConfidence(["1", "2", "3"], 20260802, 5, 10);
+    expect(result.sampleCount).toBe(3);
+    expect(result.resamples).toBe(0);
+    expect(result.lowerBoundPct).toBe(result.upperBoundPct);
+    expect(result.lowerBoundPct).toBeCloseTo(2, 10); // mean(1, 2, 3)
+  });
+
+  it("returns a degenerate confidence for an empty sample without throwing", () => {
+    const result = bootstrapBlockConfidence([], 20260802, 5, 10);
+    expect(result.sampleCount).toBe(0);
+    expect(result.resamples).toBe(0);
+    expect(result.lowerBoundPct).toBe(0);
+    expect(result.upperBoundPct).toBe(0);
   });
 
   it("rejects candles with negative volume, invalid timestamps, and bad OHLC structure", () => {

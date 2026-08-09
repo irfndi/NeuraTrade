@@ -156,4 +156,48 @@ describe("makeRiskGuard", () => {
     );
     expect(error.violations.some((v) => v.includes("product type"))).toBe(true);
   });
+
+  it("blocks when the minimum orderable position exceeds the cap even at leverage", async () => {
+    // Fail-closed at the guard level: an unorderable minimum (e.g. 0.0001 BTC
+    // = $6.48 at $64,795) whose margin cannot fit the 10% live cap should be
+    // blocked locally (RISK BLOCKED) instead of reaching the exchange.
+    const guard = makeRiskGuard(defaultRiskLimits(true));
+    const error = await Effect.runPromise(
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            minOrderableNotional: 15_000,
+            leverage: 10,
+          }),
+        )
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("minimum orderable position"))).toBe(true);
+  });
+
+  it("allows a minimum orderable position that fits the cap at leverage", async () => {
+    // 5,000 USDT floor at 10x = 500 USDT margin = 5% of capital <= 10% cap.
+    const guard = makeRiskGuard(defaultRiskLimits(true));
+    const result = await Effect.runPromise(
+      guard.check(
+        baseContext({ isLive: true, minOrderableNotional: 5_000, leverage: 10 }),
+      ),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("caps the position by margin (positionValue / leverage), not raw notional", async () => {
+    // A $10k notional position on $10k capital at 10x = $1k margin = 10% of
+    // capital, exactly at the 10% live cap -> allowed. Pre-leverage semantics
+    // compared raw notional (100%) and would have blocked every leveraged
+    // trade; the $10 challenge account relies on the margin semantics.
+    const guard = makeRiskGuard(defaultRiskLimits(true));
+    const result = await Effect.runPromise(
+      guard.check(
+        baseContext({ isLive: true, positionValue: 10_000, leverage: 10 }),
+      ),
+    );
+    expect(result).toBeUndefined();
+  });
 });

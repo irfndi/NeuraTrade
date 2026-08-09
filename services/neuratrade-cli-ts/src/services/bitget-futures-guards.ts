@@ -200,6 +200,36 @@ export function validateFuturesOrder(
       );
     }
 
+    // Quantity-level fail-closed (USDT/USDC-margined): the notional floor
+    // above does not catch a size below minTradeNum or off the quantity step.
+    // Example: 0.000077 BTC at $64,795 passes the 5 USDT notional floor but
+    // is below the 0.0001 minTradeNum — the exchange would reject it. Block
+    // locally so the paper/live loop gets a clean rejection instead of
+    // repeated exchange errors.
+    if (
+      isUsdtMargined &&
+      compare(ctx.order.size, ctx.contract.minTradeNum) < 0
+    ) {
+      return yield* Effect.fail(
+        new BitgetFuturesGuardError({
+          reason: `order size ${ctx.order.size} below min trade number ${ctx.contract.minTradeNum} for ${ctx.contract.symbol}`,
+        }),
+      );
+    }
+    const qtyPrecision = Number(ctx.contract.quantityPrecision);
+    if (
+      isUsdtMargined &&
+      Number.isInteger(qtyPrecision) &&
+      qtyPrecision > 0 &&
+      countDecimals(ctx.order.size) > qtyPrecision
+    ) {
+      return yield* Effect.fail(
+        new BitgetFuturesGuardError({
+          reason: `order size ${ctx.order.size} is not a multiple of the quantity step 1e-${qtyPrecision} for ${ctx.contract.symbol}`,
+        }),
+      );
+    }
+
     // Margin required (notional / leverage)
     const marginRequired = divide(notional, lev);
 

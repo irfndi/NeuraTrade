@@ -170,6 +170,68 @@ describe("backtest futures realism", () => {
     }
   });
 
+  it("accrues funding from historical rates (mean over window) instead of the constant", () => {
+    const candles = makeCandles(120, 100, "up");
+    const fundingRates: FundingRate[] = candles.map((c) => ({
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      fundingRate: 0.0005,
+      timestamp: c.timestamp,
+    }));
+    const viaRates = runBacktest({
+      ...baseOpts,
+      isFutures: true,
+      fundingRatePct: 0,
+      fundingIntervalHours: 1 / 60,
+      fundingRates,
+    });
+    const viaConstant = runBacktest({
+      ...baseOpts,
+      isFutures: true,
+      fundingRatePct: 0.05,
+      fundingIntervalHours: 1 / 60,
+    });
+    expect(viaRates.totalTrades).toBeGreaterThan(0);
+    // Rates drive funding even when the flat constant is zero.
+    expect(viaRates.totalFundingCost).toBeGreaterThan(0);
+    // Identical trade sequence (rates feed only the signal when useFunding is
+    // on): the mean in-window rate 0.0005 decimal = 0.05 pct-units, so the
+    // rate-driven accrual matches the equivalent constant run exactly.
+    expect(viaRates.totalFundingCost).toBeCloseTo(
+      viaConstant.totalFundingCost,
+      6,
+    );
+  });
+
+  it("falls back to the flat constant when no rates fall inside the funding window", () => {
+    const candles = makeCandles(120, 100, "up");
+    const staleRates: FundingRate[] = [
+      {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        fundingRate: 0.0005,
+        timestamp: new Date(candles[0].timestamp.getTime() - 3_600_000),
+      },
+    ];
+    const withStaleRates = runBacktest({
+      ...baseOpts,
+      isFutures: true,
+      fundingRatePct: 0.01,
+      fundingIntervalHours: 1 / 60,
+      fundingRates: staleRates,
+    });
+    const withoutRates = runBacktest({
+      ...baseOpts,
+      isFutures: true,
+      fundingRatePct: 0.01,
+      fundingIntervalHours: 1 / 60,
+    });
+    expect(withStaleRates.totalFundingCost).toBeCloseTo(
+      withoutRates.totalFundingCost,
+      6,
+    );
+  });
+
   it("enabled funding-bias component with a live series stays finite (bd clever-cabin-u1u)", () => {
     const candles = makeCandles(120, 100, "up");
     const fundingRates: FundingRate[] = candles.map((c) => ({

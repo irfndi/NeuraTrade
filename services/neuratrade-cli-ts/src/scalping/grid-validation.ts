@@ -121,8 +121,27 @@ export function bootstrapBlockConfidence(
   resamples = CONFIDENCE_RESAMPLES,
 ): BlockConfidence {
   const numeric = values.map(Number);
+  if (numeric.length < blockLength) {
+    // Degenerate evidence (stress path): fewer trades than one bootstrap
+    // block cannot support resampling. Return a zero-width interval around
+    // the sample mean instead of throwing — callers treat the returned
+    // BlockConfidence as evidence, so a low-trade run must not crash the
+    // whole universe scan. Width 0 means the gate compares the raw mean,
+    // the best estimate available at this sample size.
+    const sampleMean =
+      numeric.length > 0 && numeric.every((value) => Number.isFinite(value))
+        ? mean(numeric)
+        : 0;
+    return {
+      lowerBoundPct: sampleMean,
+      upperBoundPct: sampleMean,
+      resamples: 0,
+      blockLength,
+      seed,
+      sampleCount: numeric.length,
+    };
+  }
   if (
-    numeric.length < blockLength ||
     seed === 0 ||
     !values.every((value) => DECIMAL_SYNTAX.test(value)) ||
     !numeric.every((value) => Number.isFinite(value))

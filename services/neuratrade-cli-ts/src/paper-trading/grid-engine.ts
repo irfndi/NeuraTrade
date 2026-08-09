@@ -40,10 +40,12 @@ import {
   type PaperTradingRepositoryService,
 } from "./repository.js";
 import type {
+  ContractSizeSpec,
   GridPaperPositionSide,
   GridPaperState,
   GridPaperTrade,
 } from "./types.js";
+import { orderableQty } from "./types.js";
 import { reconcileLivePosition } from "./live-position-reconciliation.js";
 import {
   DEFAULT_STRATEGY_MANIFEST,
@@ -92,6 +94,15 @@ export interface GridPaperTradingOptions {
   /** Futures margin mode required for live orders. */
   readonly marginMode?: FuturesMarginMode;
   readonly executionEnvironment?: "bitget-demo" | "bitget-live";
+  /** Exchange contract size constraints (minQty, qtyStep, minTradeUSDT) for
+   *  this symbol, populated by the CLI from BitgetClient.getContracts on the
+   *  live path and by tests directly. When set, entry sizing rounds the order
+   *  qty UP to the size step, raises a sub-minimum qty to minQty, lifts
+   *  leverage so the minimum orderable margin fits the allocation cap, and
+   *  SKIPS the entry (never placing an unorderable or over-cap order) when
+   *  the margin cannot fit even at max leverage. Absent => legacy sizing
+   *  (no step rounding). */
+  readonly contractSpecs?: ContractSizeSpec;
 }
 
 export interface GridPaperTradingIterationResult {
@@ -117,14 +128,70 @@ function makeId(): string {
   return `grid-paper-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+interface GridOrderSizing {
+  readonly size: Decimal;
+  readonly leverage: number;
+  /** Set when the minimum orderable position cannot fit the allocation cap;
+   *  the caller must skip the entry (never place an unorderable order). */
+  readonly skipReason?: string;
+}
+
 function orderSizeContracts(
   capital: Decimal,
   maxPositionPct: number,
   entryPrice: Decimal,
-): Decimal {
-  if (entryPrice.lessThanOrEqualTo(0)) return money(0);
+  options?: { readonly leverage: number; readonly contractSpecs?: ContractSizeSpec },
+): GridOrderSizing {
+  if (entryPrice.lessThanOrEqualTo(0)) {
+    return { size: money(0), leverage: options?.leverage ?? 1 };
+  }
   const allocation = capital.times(maxPositionPct / 100);
-  return Decimal.max(0, allocation.div(entryPrice));
+  const leverage = options?.leverage ?? 1;
+  const spec = options?.contractSpecs;
+  if (spec === undefined) {
+    // Legacy sizing: allocation / price, no step rounding.
+    return { size: Decimal.max(0, allocation.div(entryPrice)), leverage };
+  }
+
+  // Contract-aware orderability (live path): round the qty UP to the exchange
+  // size step (0.000077 BTC at $64,795 would be unorderable; 0.0001 is not),
+  // raise a sub-minimum qty to minQty, and lift leverage so the minimum
+  // orderable margin fits the allocation cap, bounded by max leverage.
+  const effectiveFloor = Decimal.max(
+    money(spec.minTradeUSDT),
+    money(spec.minQty).times(entryPrice),
+  );
+  const qty = orderableQty(
+    allocation.div(entryPrice),
+    spec,
+    entryPrice,
+    allocation,
+  );
+  const notional = qty.times(entryPrice);
+
+  let raisedLeverage = leverage;
+  if (notional.lessThan(effectiveFloor)) {
+    const allocNum = toNumber(allocation);
+    if (allocNum > 0) {
+      raisedLeverage = Math.min(
+        leverage,
+        Math.max(1, Math.ceil(toNumber(effectiveFloor) / allocNum)),
+      );
+    }
+  }
+
+  // Never attempt an unorderable or over-cap order: if the minimum orderable
+  // margin cannot fit the allocation cap even after the leverage raise, skip
+  // the entry instead of sending an order the exchange will reject.
+  const margin = notional.div(raisedLeverage);
+  if (margin.greaterThan(allocation)) {
+    return {
+      size: money(0),
+      leverage: raisedLeverage,
+      skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${raisedLeverage}x, exceeding the ${toNumber(allocation).toFixed(2)} USDT position cap`,
+    };
+  }
+  return { size: qty, leverage: raisedLeverage };
 }
 
 function liquidationPrice(
@@ -156,6 +223,7 @@ function strategyManifestFor(
     slippageBps: options.slippageBps.toString(),
     trendFilterPeriod: options.trendFilterPeriod.toString(),
     adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
+    capital: String(options.initialCapital),
   };
 }
 
@@ -164,6 +232,7 @@ function freshGridState(options: GridPaperTradingOptions): GridPaperState {
     exchange: options.exchange,
     symbol: options.symbol,
     timeframe: options.timeframe,
+    initialCapital: options.initialCapital,
     capital: money(options.initialCapital),
     peakCapital: money(options.initialCapital),
     paused: 0,
@@ -189,6 +258,8 @@ function stateConfigMatchesOptions(
   options: GridPaperTradingOptions,
 ): boolean {
   return (
+    (state.initialCapital === undefined ||
+      state.initialCapital === options.initialCapital) &&
     state.gridStepPct === options.gridStepPct &&
     state.gridMaxGrids === options.gridMaxGrids &&
     state.gridPauseAfterLossBars === options.gridPauseAfterLossBars &&
@@ -537,11 +608,14 @@ export function runGridPaperTradingIteration(
         let exitPrice = theoreticalExitPrice;
         let exitFill: FuturesOrderFill | null = null;
         if (isLive) {
+          // Close sizing keeps the legacy allocation/price size: no contract
+          // specs are passed, so closing the position never applies the entry
+          // orderability floor/step (the position already exists on the book).
           const size = orderSizeContracts(
             s.capital,
             s.maxPositionPct,
             s.entryPrice,
-          );
+          ).size;
           const closeSize =
             s.entryFillSource === "live" &&
             s.entryFilledQty?.greaterThan(0) === true
@@ -679,24 +753,47 @@ export function runGridPaperTradingIteration(
               side: entrySide === "long" ? "buy" : "sell",
               leverage: state.leverage,
               productType,
+              // Fail closed locally for the minimum orderable position: the
+              // guard blocks (RISK BLOCKED) instead of the exchange rejecting
+              // an unorderable qty, when the floor cannot fit the cap even at
+              // the configured leverage.
+              minOrderableNotional:
+                options.contractSpecs === undefined
+                  ? undefined
+                  : Math.max(
+                      options.contractSpecs.minTradeUSDT,
+                      options.contractSpecs.minQty *
+                        toNumber(theoreticalEntryPrice),
+                    ),
             })
             .pipe(Effect.result);
           if (riskCheck._tag === "Failure") {
             note = `RISK BLOCKED ${entrySide}: ${riskCheck.failure.violations.join("; ")}`;
           } else {
-            const size = orderSizeContracts(
+            const sized = orderSizeContracts(
               state.capital,
               state.maxPositionPct,
               theoreticalEntryPrice,
+              {
+                leverage: state.leverage,
+                contractSpecs: options.contractSpecs,
+              },
             );
-            if (size.lessThanOrEqualTo(0)) {
+            const size = sized.size;
+            const orderLeverage = sized.leverage;
+            if (sized.skipReason !== undefined) {
+              // Never attempt an unorderable or over-cap order: the minimum
+              // orderable position cannot fit the allocation cap, so skip
+              // instead of sending an order the exchange would reject.
+              note = `RISK BLOCKED ${entrySide} (orderability): ${sized.skipReason}`;
+            } else if (size.lessThanOrEqualTo(0)) {
               note = `RISK BLOCKED ${entrySide}: computed size zero`;
             } else {
               yield* adapter.setLeverage(
                 options.symbol,
                 productType,
                 marginMode,
-                state.leverage,
+                orderLeverage,
               );
               yield* adapter.setMarginMode(
                 options.symbol,
@@ -714,7 +811,7 @@ export function runGridPaperTradingIteration(
                 size,
                 productType,
                 marginMode,
-                leverage: state.leverage,
+                leverage: orderLeverage,
                 price: entryLevelPrice,
               });
               state = {
@@ -726,6 +823,7 @@ export function runGridPaperTradingIteration(
                 entryFilledQty: fill.filledQty,
                 entryFee: fill.fee,
                 entryFillSource: "live",
+                leverage: orderLeverage,
                 strategyConfigFingerprint: strategyFingerprint,
                 cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
                 candidateLockAt: current.timestamp,
@@ -735,32 +833,41 @@ export function runGridPaperTradingIteration(
                 updatedAt: new Date(),
                 lastTimestamp: current.timestamp,
               };
-              note = `[LIVE] opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${state.leverage}x)`;
+              note = `[LIVE] opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${orderLeverage}x)`;
             }
           }
         } else {
-          const size = orderSizeContracts(
+          const sized = orderSizeContracts(
             state.capital,
             state.maxPositionPct,
             theoreticalEntryPrice,
+            {
+              leverage: state.leverage,
+              contractSpecs: options.contractSpecs,
+            },
           );
-          state = {
-            ...state,
-            side: entrySide,
-            entryPrice: theoreticalEntryPrice,
-            entryFilledQty: size,
-            entryFee: money(0),
-            entryFillSource: "simulated",
-            strategyConfigFingerprint: strategyFingerprint,
-            cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
-            candidateLockAt: current.timestamp,
-            datasetCutoffAt: current.timestamp,
-            entryOpenedAt: current.timestamp,
-            executionEnvironment,
-            updatedAt: new Date(),
-            lastTimestamp: current.timestamp,
-          };
-          note = `opened ${entrySide} @ ${state.entryPrice.toFixed(2)} (leverage=${state.leverage}x)`;
+          if (sized.skipReason !== undefined) {
+            note = `RISK BLOCKED ${entrySide} (orderability): ${sized.skipReason}`;
+          } else {
+            state = {
+              ...state,
+              side: entrySide,
+              entryPrice: theoreticalEntryPrice,
+              entryFilledQty: sized.size,
+              entryFee: money(0),
+              entryFillSource: "simulated",
+              leverage: sized.leverage,
+              strategyConfigFingerprint: strategyFingerprint,
+              cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+              candidateLockAt: current.timestamp,
+              datasetCutoffAt: current.timestamp,
+              entryOpenedAt: current.timestamp,
+              executionEnvironment,
+              updatedAt: new Date(),
+              lastTimestamp: current.timestamp,
+            };
+            note = `opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${sized.size.toFixed(6)} (leverage=${sized.leverage}x)`;
+          }
         }
       }
     } else if (state.side === "long") {

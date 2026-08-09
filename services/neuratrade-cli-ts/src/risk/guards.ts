@@ -43,6 +43,12 @@ export interface RiskContext {
   readonly side: "buy" | "sell";
   readonly leverage?: number;
   readonly productType?: string;
+  /** Minimum orderable notional for the symbol (max(minTradeUSDT,
+   *  minQty * price) from the exchange contract specs). When set, the guard
+   *  also blocks when that floor cannot fit the position cap even at the
+   *  requested leverage — a clean local RISK BLOCKED instead of an exchange
+   *  rejection of an unorderable order. */
+  readonly minOrderableNotional?: number;
 }
 
 /**
@@ -129,14 +135,43 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
           );
         }
 
+        // Position-size cap. The cap binds on the collateral at risk (margin
+        // = positionValue / leverage) so leveraged accounts can size above
+        // the notional cap as long as the margin fits — e.g. a $10 account at
+        // 2x can hold a $6.48 BTC min-orderable position on 32% of capital.
+        // At 1x (or without a leverage field) margin == notional, preserving
+        // the legacy check exactly.
+        const positionLeverage = Math.max(1, context.leverage ?? 1);
         const positionSizePct =
           context.capital > 0
-            ? (context.positionValue / context.capital) * 100
+            ? (context.positionValue / positionLeverage / context.capital) *
+              100
             : 0;
         if (positionSizePct > limits.maxPositionSizePct) {
           violations.push(
             `position size ${positionSizePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
           );
+        }
+
+        // Min-orderable fail-closed: when the exchange contract's minimum
+        // orderable notional cannot fit the position cap even at the
+        // requested leverage, block locally (RISK BLOCKED) instead of letting
+        // an unorderable order reach the exchange and get rejected.
+        if (
+          context.minOrderableNotional !== undefined &&
+          context.minOrderableNotional > 0 &&
+          context.capital > 0
+        ) {
+          const minOrderablePct =
+            (context.minOrderableNotional /
+              positionLeverage /
+              context.capital) *
+            100;
+          if (minOrderablePct > limits.maxPositionSizePct) {
+            violations.push(
+              `minimum orderable position ${minOrderablePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
+            );
+          }
         }
 
         if (

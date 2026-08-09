@@ -293,4 +293,35 @@ describe("BitgetFuturesGuards", () => {
     if (result.ok) return;
     expect(result.error.reason).toContain("min trade amount");
   });
+
+  it("rejects a size below the minimum trade number", async () => {
+    // 0.000077 * 65000 = 5.005 USDT passes the notional floor but is below
+    // the 0.0001 minTradeNum — the exchange would reject it. The guard must
+    // fail closed locally (the $10 challenge failure mode).
+    const result = await run({
+      symbol: "BTC/USDT:USDT",
+      productType: "USDT-FUTURES",
+      side: "buy",
+      orderType: "market",
+      size: "0.000077",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("below min trade number");
+  });
+
+  it("rejects a size off the quantity step", async () => {
+    // 0.00015 BTC = 9.75 USDT passes both floors but has 5 decimals while
+    // the contract quantityPrecision is 3 (step 1e-3) — not orderable.
+    const result = await run({
+      symbol: "BTC/USDT:USDT",
+      productType: "USDT-FUTURES",
+      side: "buy",
+      orderType: "market",
+      size: "0.00015",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.reason).toContain("not a multiple of the quantity step");
+  });
 });

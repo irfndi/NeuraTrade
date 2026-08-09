@@ -119,9 +119,12 @@ module.exports = {
     // the 15m candidate logs.
     {
       // $10 challenge starter (STOPPED BY DEFAULT): the user's $10 -> $1M goal.
-      // minCapital 10 + maxPositionSizePct 50 let the account-scaled sizing
-      // raise a sub-floor notional to the 5 USDT minimum (50% of capital at
-      // 1x) — the default soak's minCapital 50 would reject a $10 account.
+      // Orderability: with contract specs wired from Bitget (live path), the
+      // effective floor is max(minTradeUSDT 5, minQty x price). BTC min qty
+      // 0.0001 at ~$64,795 = ~$6.48 notional, which exceeds 50% of $10 at 1x
+      // (64.8% > 50% cap -> RISK BLOCKED). At 2x leverage the required margin
+      // is $3.24 = 32% of $10, within the 50% cap, so --leverage 2 makes the
+      // BTC min orderable position fit the account.
       name: "neuratrade-challenge-10",
       script: "bun",
       args: [
@@ -146,7 +149,7 @@ module.exports = {
         "--slippage-bps",
         "1",
         "--leverage",
-        "1",
+        "2",
         "--capital",
         "10",
         "--min-capital",

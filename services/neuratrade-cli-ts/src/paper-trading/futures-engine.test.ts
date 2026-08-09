@@ -6,6 +6,7 @@ import {
 } from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
+import type { FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import { ExchangeError } from "../exchange/adapter.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
@@ -26,6 +27,7 @@ import type {
 } from "./types.js";
 import {
   runFuturesPaperTradingIteration,
+  type FuturesPaperTradingIterationResult,
   type FuturesPaperTradingOptions,
 } from "./futures-engine.js";
 import { defaultComposerConfig } from "../scalping/composer.js";
@@ -426,7 +428,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -471,7 +473,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -513,7 +515,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -555,7 +557,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -589,7 +591,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -624,7 +626,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -659,7 +661,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -693,7 +695,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -736,7 +738,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
           Effect.provide(scalpingServiceLayers),
         ) as Effect.Effect<
-          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          FuturesPaperTradingIterationResult,
           never
         >,
       );
@@ -781,7 +783,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
           Effect.provide(scalpingServiceLayers),
         ) as Effect.Effect<
-          import("./futures-engine.js").FuturesPaperTradingIterationResult,
+          FuturesPaperTradingIterationResult,
           never
         >,
       );
@@ -829,7 +831,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, circuitBreaker),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -871,7 +873,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
       ) as Effect.Effect<
-        import("./futures-engine.js").FuturesPaperTradingIterationResult,
+        FuturesPaperTradingIterationResult,
         never
       >,
     );
@@ -935,7 +937,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.result,
         ) as Effect.Effect<
           Result.Result<
-            import("./futures-engine.js").FuturesPaperTradingIterationResult,
+            FuturesPaperTradingIterationResult,
             unknown
           >,
           never
@@ -947,5 +949,252 @@ describe("runFuturesPaperTradingIteration", () => {
         expect(outcome.success.capital).toBeGreaterThanOrEqual(0);
       }
     }
+  });
+
+  it("rounds the order qty UP to the contract size step", async () => {
+    // capital 10000, 0.05% risk at a 1.5% stop sizes 333.33 notional
+    // (3.33333 BTC at $100); the 0.0001 step rounds the qty up to 3.3334.
+    const repo = new InMemoryPaperRepository(10_000);
+    const gateway = makeGateway(100);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        riskPerTradePct: 0.05,
+        contractSpecs: {
+          minQty: 0.0001,
+          qtyStep: 0.0001,
+          minTradeUSDT: 5,
+        },
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    expect(result.position?.size.toNumber()).toBeCloseTo(3.3334, 3);
+  });
+
+  it("raises a sub-minimum qty to minQty, above the old 5 USDT floor", async () => {
+    // capital 10, 0.01% risk at a 1.5% stop sizes 0.0667 notional = 1.03e-6
+    // BTC at $64,795 — below both the 5 USDT floor and the 0.0001 minQty.
+    // The contract floor is max(5, 0.0001 x 64795) = $6.48, so the order is
+    // raised to 0.0001 BTC (notional $6.48 > the old flat $5 floor).
+    const repo = new InMemoryPaperRepository(10);
+    const gateway = makeGateway(64795);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 10,
+        riskPerTradePct: 0.01,
+        maxPositionSizePct: 100,
+        leverage: 1,
+        contractSpecs: {
+          minQty: 0.0001,
+          qtyStep: 0.0001,
+          minTradeUSDT: 5,
+        },
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    // 0.0001 BTC x $64,795 = $6.48, above the legacy $5 flat floor.
+    expect(result.position?.size.toNumber()).toBeCloseTo(0.0001, 6);
+    expect(result.position?.entryPrice.times(result.position.size).toNumber()).toBeGreaterThan(5);
+  });
+
+  it("skips the trade (no order) when the min orderable margin exceeds the cap", async () => {
+    // $10 account, 50% position cap, 1x: the minimum orderable 0.0001 BTC
+    // ($6.48) needs $6.48 of margin = 64.8% of capital > 50% -> skip with a
+    // note, never place an unorderable order.
+    const repo = new InMemoryPaperRepository(10);
+    const gateway = makeGateway(64795);
+    const adapter = makeFuturesAdapter();
+    let orderCount = 0;
+    const trackingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      placeOrder: (req) => {
+        orderCount += 1;
+        return adapter.placeOrder(req);
+      },
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 50,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 10,
+        riskPerTradePct: 0.01,
+        maxPositionSizePct: 50,
+        leverage: 1,
+        contractSpecs: {
+          minQty: 0.0001,
+          qtyStep: 0.0001,
+          minTradeUSDT: 5,
+        },
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, trackingAdapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("RISK BLOCKED (orderability)");
+    expect(result.position).toBeNull();
+    expect(orderCount).toBe(0);
+  });
+
+  it("raises leverage so a tiny account's min orderable position fits the cap", async () => {
+    // $10 account, 50% position cap, 2x max: 0.0001 BTC ($6.48) needs margin
+    // $3.24 = 32% of capital <= 50% -> opens at 2x leverage.
+    const repo = new InMemoryPaperRepository(10);
+    const gateway = makeGateway(64795);
+    const adapter = makeFuturesAdapter();
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 50,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 10,
+        riskPerTradePct: 0.01,
+        maxPositionSizePct: 50,
+        leverage: 2,
+        contractSpecs: {
+          minQty: 0.0001,
+          qtyStep: 0.0001,
+          minTradeUSDT: 5,
+        },
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("opened");
+    expect(result.position?.size.toNumber()).toBeCloseTo(0.0001, 6);
+    expect(result.note).toContain("leverage=2x");
+  });
+
+  it("skips when the min orderable position cannot fit at any leverage", async () => {
+    // $10 account, 50% cap, 2x max: a contract whose minQty 0.01 x $64,795 =
+    // $647.95 floor needs $323.98 margin at 2x — far beyond the $5 cap.
+    const repo = new InMemoryPaperRepository(10);
+    const gateway = makeGateway(64795);
+    const adapter = makeFuturesAdapter();
+    let orderCount = 0;
+    const trackingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      placeOrder: (req) => {
+        orderCount += 1;
+        return adapter.placeOrder(req);
+      },
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: false,
+      maxPositionSizePct: 50,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    const result = await Effect.runPromise(
+      runFuturesPaperTradingIteration({
+        ...makeOptions(),
+        initialCapital: 10,
+        riskPerTradePct: 0.01,
+        maxPositionSizePct: 50,
+        leverage: 2,
+        contractSpecs: {
+          minQty: 0.01,
+          qtyStep: 0.01,
+          minTradeUSDT: 5,
+        },
+      }).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(FuturesExchangeAdapter, trackingAdapter),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+        Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+        Effect.provide(scalpingServiceLayers),
+      ) as Effect.Effect<
+        FuturesPaperTradingIterationResult,
+        never
+      >,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("RISK BLOCKED (orderability)");
+    expect(orderCount).toBe(0);
   });
 });

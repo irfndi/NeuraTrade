@@ -691,6 +691,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
           fundingRatePct,
           fundingIntervalMs,
           isFutures,
+          options.fundingRates,
         );
         const pnlPct = ((pnl - exitFee) / notional) * 100;
         capital += pnl - exitFee - funding.funding;
@@ -749,6 +750,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
           fundingRatePct,
           fundingIntervalMs,
           isFutures,
+          options.fundingRates,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -870,6 +872,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
           fundingRatePct,
           fundingIntervalMs,
           isFutures,
+          options.fundingRates,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -934,6 +937,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
           fundingRatePct,
           fundingIntervalMs,
           isFutures,
+          options.fundingRates,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -994,6 +998,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
           fundingRatePct,
           fundingIntervalMs,
           isFutures,
+          options.fundingRates,
         );
         const pnlPct =
           ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -1250,6 +1255,7 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
       fundingRatePct,
       fundingIntervalMs,
       isFutures,
+      options.fundingRates,
     );
     const pnlPct =
       ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
@@ -1665,7 +1671,6 @@ function passesAutoRegimeFilter(
   const closes = candles.map((c) => c.close);
   const emaSeries = calculateEMA(closes, 20);
   const ema = emaSeries[emaSeries.length - 1];
-  const price = candles[candles.length - 1].close;
 
   if (adx >= adxThreshold) {
     // Trending regime: only enter in the direction of the EMA slope.
@@ -1750,8 +1755,9 @@ function chargeFunding(
   fundingRatePct: number,
   fundingIntervalMs: number,
   isFutures: boolean,
+  fundingRates?: readonly FundingRate[],
 ): { funding: number; newLastFundingTime: Date } {
-  if (!isFutures || fundingRatePct === 0) {
+  if (!isFutures) {
     return { funding: 0, newLastFundingTime: lastFundingTime };
   }
   const elapsed = now.getTime() - lastFundingTime.getTime();
@@ -1760,8 +1766,31 @@ function chargeFunding(
   }
   const intervals = Math.floor(elapsed / fundingIntervalMs);
   const notional = position.entryPrice * position.size;
-  const effectiveRate =
-    position.side === "long" ? fundingRatePct : -fundingRatePct;
+  // When historical rates are supplied, accrue the REAL per-interval rates:
+  // the mean of the rates whose timestamps fall inside the charged window
+  // (lastFundingTime, now], applied at each funding interval. FundingRate is
+  // a decimal (0.0001 = 0.01%/8h) — multiply by 100 to match the pct units
+  // of fundingRatePct (0.01 = 0.01%). Falls back to the flat constant when
+  // no rates are supplied or none fall inside the window.
+  let ratePct = fundingRatePct;
+  if (fundingRates && fundingRates.length > 0) {
+    const from = lastFundingTime.getTime();
+    const to = now.getTime();
+    let sum = 0;
+    let count = 0;
+    for (const rate of fundingRates) {
+      const rateTime = rate.timestamp.getTime();
+      if (rateTime > from && rateTime <= to) {
+        sum += rate.fundingRate * 100;
+        count += 1;
+      }
+    }
+    if (count > 0) ratePct = sum / count;
+  }
+  if (ratePct === 0) {
+    return { funding: 0, newLastFundingTime: lastFundingTime };
+  }
+  const effectiveRate = position.side === "long" ? ratePct : -ratePct;
   const funding = notional * (effectiveRate / 100) * intervals;
   const newLastFundingTime = new Date(
     lastFundingTime.getTime() + intervals * fundingIntervalMs,

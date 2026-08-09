@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS grid_paper_state (
   exchange TEXT NOT NULL,
   symbol TEXT NOT NULL,
   timeframe TEXT NOT NULL,
+  initial_capital REAL,
   capital REAL NOT NULL,
   peak_capital REAL NOT NULL,
   capital_decimal TEXT,
@@ -399,6 +400,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "grid_paper_state dataset_cutoff_at DATETIME",
           "grid_paper_state entry_opened_at DATETIME",
           "grid_paper_state execution_environment TEXT",
+          "grid_paper_state initial_capital REAL",
           "grid_paper_trades fill_source TEXT",
           "grid_paper_trades entry_order_id TEXT",
           "grid_paper_trades entry_client_oid TEXT",
@@ -1020,7 +1022,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         const row = this.db
           .query(
-            `SELECT exchange, symbol, timeframe,
+            `SELECT exchange, symbol, timeframe, initial_capital,
                     COALESCE(capital_decimal, CAST(capital AS TEXT)) AS capital_value,
                     COALESCE(peak_capital_decimal, CAST(peak_capital AS TEXT)) AS peak_capital_value,
                     paused, side,
@@ -1041,6 +1043,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           exchange: string;
           symbol: string;
           timeframe: string;
+          initial_capital: number | null;
           capital_value: string;
           peak_capital_value: string;
           paused: number;
@@ -1077,6 +1080,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           exchange: row.exchange,
           symbol: row.symbol,
           timeframe: row.timeframe,
+          initialCapital: row.initial_capital ?? undefined,
           capital: new Decimal(row.capital_value),
           peakCapital: new Decimal(row.peak_capital_value),
           paused: row.paused,
@@ -1136,7 +1140,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db
           .query(
             `INSERT INTO grid_paper_state
-             (exchange, symbol, timeframe, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
+             (exchange, symbol, timeframe, initial_capital, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
               entry_price, entry_price_decimal, entry_order_id, entry_client_oid, entry_filled_qty,
               entry_filled_qty_decimal, entry_fee, entry_fee_decimal, entry_fill_source,
               strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
@@ -1144,10 +1148,11 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
               grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
               fee_pct, slippage_bps, trend_filter_period, max_position_pct,
               max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+               initial_capital = excluded.initial_capital,
                capital = excluded.capital,
                peak_capital = excluded.peak_capital,
                capital_decimal = excluded.capital_decimal,
@@ -1186,6 +1191,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             state.exchange,
             state.symbol,
             state.timeframe,
+            state.initialCapital ?? null,
             toNumber(state.capital),
             toNumber(state.peakCapital),
             state.capital.toString(),

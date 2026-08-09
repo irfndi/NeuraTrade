@@ -6,7 +6,7 @@ import {
   buildStrategyProfileFromArgs,
   type ResolvedBacktestArgs,
 } from "../scalping/strategy-profile.js";
-import type { CandleLike } from "../scalping/types.js";
+import type { CandleLike, ComposerConfig } from "../scalping/types.js";
 import { Command } from "./kit/kit.ts";
 import {
   buildCandidate,
@@ -1395,12 +1395,14 @@ describe("backtestProgram funding-rate wiring", () => {
       };
     });
 
-  function makeEngine(
-    captured: { fundingRates: unknown },
-  ): Layer.Layer<BacktestEngine> {
+  function makeEngine(captured: {
+    fundingRates?: unknown;
+    composerConfig?: unknown;
+  }): Layer.Layer<BacktestEngine> {
     return Layer.succeed(BacktestEngine, {
       runBacktest: (options) => {
         captured.fundingRates = options.fundingRates;
+        captured.composerConfig = options.composerConfig;
         return Effect.succeed(makeResult());
       },
       runGridBacktest: () =>
@@ -1487,6 +1489,69 @@ describe("backtestProgram funding-rate wiring", () => {
 
     expect(captured.fundingRates).toEqual([]);
     db.close();
+  });
+
+  it("wires --use-funding and --funding-bias-threshold into the composer config", async () => {
+    const db = new Database(":memory:");
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(makeCandles());
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    const captured: { fundingRates?: unknown; composerConfig?: unknown } = {};
+    await Effect.runPromise(
+      backtestProgram(
+        makeOptimizeArgs({
+          useFunding: true,
+          fundingBiasThreshold: 0.00005,
+        }) as unknown as Parameters<typeof backtestProgram>[0],
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            makeEngine(captured),
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    const config = captured.composerConfig as ComposerConfig;
+    expect(config.thresholds.useFunding).toBe(true);
+    expect(config.thresholds.fundingBiasThreshold).toBe(0.00005);
+    db.close();
+  });
+});
+
+describe("buildBacktestComposerConfig funding wiring", () => {
+  it("threads non-default funding threshold and useFunding into thresholds", () => {
+    const config = buildBacktestComposerConfig(
+      false,
+      false,
+      false,
+      "trend",
+      0,
+      20,
+      0,
+      false,
+      0,
+      0,
+      20,
+      0.00005,
+      true,
+    );
+    expect(config.thresholds.fundingBiasThreshold).toBe(0.00005);
+    expect(config.thresholds.useFunding).toBe(true);
+  });
+
+  it("keeps the default funding threshold and useFunding when not overridden", () => {
+    const config = buildBacktestComposerConfig(false, false, false);
+    expect(config.thresholds.fundingBiasThreshold).toBe(0.0001);
+    expect(config.thresholds.useFunding).toBe(false);
   });
 });
 

@@ -48,8 +48,10 @@ import {
   BitgetApiError,
   isBitgetUnsupportedInstrumentError,
   toBitgetFuturesSymbol,
+  type BitgetContract,
 } from "../services/bitget-client.js";
 import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
+import { RateLimiterLive } from "../services/rate-limiter.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
@@ -68,6 +70,7 @@ import {
   type GridPaperTradingOptions,
   type GridPaperTradingIterationResult,
 } from "../paper-trading/grid-engine.js";
+import type { ContractSizeSpec } from "../paper-trading/types.js";
 import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
@@ -1211,6 +1214,8 @@ export function buildBacktestComposerConfig(
   momentumConfirmBars = 0,
   adxMin = 0,
   breakoutLookback = 0,
+  fundingBiasThreshold?: number,
+  useFunding?: boolean,
 ): ComposerConfig {
   if (
     !priceOnly &&
@@ -1223,7 +1228,9 @@ export function buildBacktestComposerConfig(
     momentumConfirmBars <= 0 &&
     adxMin <= 0 &&
     (breakoutLookback <= 0 ||
-      breakoutLookback === defaultComposerConfig.thresholds.breakoutLookback)
+      breakoutLookback === defaultComposerConfig.thresholds.breakoutLookback) &&
+    fundingBiasThreshold === undefined &&
+    useFunding === undefined
   ) {
     return defaultComposerConfig;
   }
@@ -1270,6 +1277,8 @@ export function buildBacktestComposerConfig(
       momentumConfirmBars,
       adxMin,
       ...(breakoutLookback > 0 ? { breakoutLookback } : {}),
+      ...(fundingBiasThreshold !== undefined ? { fundingBiasThreshold } : {}),
+      ...(useFunding !== undefined ? { useFunding } : {}),
     },
   };
 }
@@ -1347,6 +1356,8 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
       args.momentumConfirmBars,
       args.adxMin,
       args.breakoutLookback,
+      args.fundingBiasThreshold,
+      args.useFunding,
     );
 
     // --template applies the strategy template's signal weights/thresholds
@@ -3542,6 +3553,62 @@ function parseProductType(value: string): BitgetProductType {
   );
 }
 
+/**
+ * Fetch the Bitget futures contract table for a product type. Self-contained
+ * layer wiring (client + config + rate limiter) so callers inside command
+ * programs do not need BitgetClient in their context. Only used on the live
+ * path; the simulated path has no exchange contract table.
+ */
+function fetchBitgetContracts(
+  productType: BitgetProductType,
+): Effect.Effect<ReadonlyArray<BitgetContract>, Error> {
+  const bitgetClientLayer = BitgetClientLiveConfig.pipe(
+    Layer.provide(RateLimiterLive()),
+    Layer.provide(BitgetConfigLive),
+  );
+  return Effect.gen(function* () {
+    const client = yield* BitgetClient;
+    return yield* client.getContracts(productType);
+  }).pipe(
+    Effect.provide(bitgetClientLayer),
+    Effect.mapError((err: unknown) => {
+      const detail =
+        typeof err === "object" && err !== null && "body" in err
+          ? String((err as { body?: unknown }).body ?? "")
+          : String(err);
+      return new Error(
+        `failed to fetch Bitget contracts: ${detail.length > 0 ? detail : String(err)}`,
+      );
+    }),
+  );
+}
+
+/**
+ * Resolve a symbol's contract size constraints from the fetched contract
+ * table: minTradeNum -> minQty, quantityPrecision -> qtyStep (10^-precision),
+ * minTradeUSDT as-is. Undefined when the contract is not found — the engine
+ * then falls back to legacy sizing and the adapter-level guard still
+ * fail-closes on qty/step violations.
+ */
+function bitgetContractSpecs(
+  contracts: ReadonlyArray<BitgetContract>,
+  symbol: string,
+  productType: BitgetProductType,
+): ContractSizeSpec | undefined {
+  const { symbol: bsymbol } = toBitgetFuturesSymbol(symbol, productType);
+  const contract = contracts.find(
+    (c) => c.symbol.toUpperCase() === bsymbol.toUpperCase(),
+  );
+  if (contract === undefined) return undefined;
+  const precision = Number(contract.quantityPrecision);
+  return {
+    minQty: Number(contract.minTradeNum),
+    qtyStep:
+      Number.isFinite(precision) && precision > 0 ? 10 ** -precision : 0,
+    minTradeUSDT: Number(contract.minTradeUSDT),
+  };
+}
+
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
     const strategyType = args.strategyType ?? "signal";
@@ -3696,13 +3763,29 @@ function paperTradeProgram(args: PaperTradeArgs) {
       volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
     });
 
+    // Live futures orders must respect the exchange's contract size step and
+    // minimums (a 5 USDT BTC order is 0.000077 BTC, below the 0.0001 step);
+    // fetch the contract table once per command run and resolve specs per
+    // symbol into the engine options. Simulated runs have no exchange
+    // contract table — specs come only from tests/options.
+    const contracts =
+      args.live && (args.futures || strategyType === "grid")
+        ? yield* fetchBitgetContracts(productType)
+        : undefined;
+    const contractSpecsFor = (symbol: string): ContractSizeSpec | undefined =>
+      contracts === undefined
+        ? undefined
+        : bitgetContractSpecs(contracts, symbol, productType);
+
     // Futures data and execution both live on Bitget in this port; default the
     // market-data exchange to bitget-futures unless the operator overrides it.
     const makeFuturesOptions = (
       symbol: string,
       exchangeOverride: string,
       overrides?: Partial<FuturesPaperTradingOptions>,
-    ): FuturesPaperTradingOptions => ({
+    ): FuturesPaperTradingOptions => {
+      const contractSpecs = contractSpecsFor(symbol);
+      return {
       exchange: resolveFuturesMarketExchange(exchangeOverride, true),
       symbol,
       timeframe: args.timeframe,
@@ -3745,13 +3828,16 @@ function paperTradeProgram(args: PaperTradeArgs) {
       maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2),
       maxConcurrentTrades: 1,
       notionalFloor: 5,
-    });
+      ...(contractSpecs !== undefined ? { contractSpecs } : {}),
+      };
+    };
 
     const makeGridOptions = (
       symbol: string,
       exchange: string,
       gridParams?: WatchlistEntry["gridParams"],
     ): GridPaperTradingOptions => {
+      const contractSpecs = contractSpecsFor(symbol);
       const rowOverrides = gridOverridesFromWatchlistRow(gridParams, args);
       return {
         exchange: resolveFuturesMarketExchange(exchange, true),
@@ -3779,6 +3865,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
           args.live && !useSandbox ? "bitget-live" : "bitget-demo",
         productType,
         marginMode,
+        ...(contractSpecs !== undefined ? { contractSpecs } : {}),
       };
     };
 
@@ -4238,6 +4325,16 @@ export const soakCommand = Command.make(
         bestParams: e.bestParams,
       }));
 
+      // Live futures orders must respect the exchange's contract size step
+      // and minimums; fetch the contract table once per soak run and resolve
+      // specs per symbol into the engine options.
+      const contracts =
+        mergedArgs.live &&
+        (mergedArgs.futures ||
+          watchlistEntries.some((e) => e.productType !== undefined))
+          ? yield* fetchBitgetContracts(productTypeParsed)
+          : undefined;
+
       const runner = (
         symbol: string,
         exchange: string,
@@ -4288,6 +4385,15 @@ export const soakCommand = Command.make(
             marginMode: entry?.marginMode ?? marginModeParsed,
             productType: entry?.productType ?? productTypeParsed,
             volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
+            ...(contracts !== undefined
+              ? {
+                  contractSpecs: bitgetContractSpecs(
+                    contracts,
+                    symbol,
+                    entry?.productType ?? productTypeParsed,
+                  ),
+                }
+              : {}),
           };
           return runFuturesPaperTradingIteration(opts).pipe(
             Effect.provide(futuresAdapterLayer),

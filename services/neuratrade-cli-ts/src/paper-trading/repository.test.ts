@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import { money } from "../utils/money.js";
 import { PaperTradingRepositorySQLite } from "./repository.js";
 import type { WatchlistEntry } from "./repository.js";
-import type { GridPaperTrade, PaperPosition } from "./types.js";
+import type { GridPaperState, GridPaperTrade, PaperPosition } from "./types.js";
 
 describe("PaperTradingRepositorySQLite", () => {
   it("round-trips monetary values without SQLite REAL precision loss", async () => {
@@ -19,6 +19,45 @@ describe("PaperTradingRepositorySQLite", () => {
 
     expect(portfolio.capital.toString()).toBe(capital.toString());
     expect(portfolio.peakCapital.toString()).toBe(peakCapital.toString());
+    db.close();
+  });
+
+  it("round-trips grid state including the persisted initial capital", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    const state: GridPaperState = {
+      exchange: "binance",
+      symbol: "ETH/USDT",
+      timeframe: "15m",
+      initialCapital: 50,
+      capital: money(333),
+      peakCapital: money(400),
+      paused: 0,
+      side: null,
+      entryPrice: money(0),
+      gridStepPct: 1,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.2,
+      slippageBps: 5,
+      trendFilterPeriod: 10,
+      maxPositionPct: 100,
+      maxDrawdownPct: 100,
+      leverage: 1,
+      killed: false,
+      lastTimestamp: null,
+      updatedAt: new Date("2026-08-01T00:00:00.000Z"),
+    };
+
+    await Effect.runPromise(repository.ensureTables());
+    await Effect.runPromise(repository.saveGridState(state));
+    const loaded = await Effect.runPromise(
+      repository.getGridState("binance", "ETH/USDT", "15m"),
+    );
+
+    expect(loaded?.initialCapital).toBe(50);
+    expect(loaded?.capital.toString()).toBe(state.capital.toString());
+    expect(loaded?.gridStepPct).toBe(1);
     db.close();
   });
 

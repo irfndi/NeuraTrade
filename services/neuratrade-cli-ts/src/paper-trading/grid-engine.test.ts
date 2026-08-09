@@ -371,6 +371,7 @@ function liveTestFingerprint(options: GridPaperTradingOptions): string {
     slippageBps: options.slippageBps.toString(),
     trendFilterPeriod: options.trendFilterPeriod.toString(),
     adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
+    capital: options.initialCapital.toString(),
   });
 }
 
@@ -605,6 +606,130 @@ describe("grid paper engine", () => {
     );
     expect(state?.capital.toNumber()).toBe(333);
     expect(state?.maxPositionPct).toBe(100);
+  });
+
+  it("re-seeds a flat state whose persisted initial capital differs (capital is config)", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        initialCapital: 10,
+        capital: money(10),
+        peakCapital: money(10),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    await runWithRepo(
+      makeOptions({ initialCapital: 50 }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.initialCapital).toBe(50);
+    expect(state?.capital.toNumber()).toBe(50);
+  });
+
+  it("keeps a flat state whose persisted initial capital matches despite balance drift", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        initialCapital: 20,
+        capital: money(333),
+        peakCapital: money(400),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    await runWithRepo(makeOptions(), repo, makeCandles(20, 1000, "oscillate"));
+
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.initialCapital).toBe(20);
+    expect(state?.capital.toNumber()).toBe(333);
+  });
+
+  it("refuses to resume an open position whose fingerprint was minted under a different capital", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.02"),
+        entryFee: money(0),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true, initialCapital: 50 }),
+        ),
+        cohortId: "test-capital-50-cohort",
+        candidateLockAt: new Date("2026-01-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-01-01T00:00:00.000Z"),
+        entryOpenedAt: new Date("2026-01-01T00:15:00.000Z"),
+        executionEnvironment: "bitget-live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const result = await runWithRepo(
+      makeOptions({ isLive: true, initialCapital: 10 }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
   });
 
   it("records both live order fills when a live grid trade closes", async () => {
@@ -1034,5 +1159,90 @@ describe("grid paper engine", () => {
     );
     const secondTs = second!.lastTimestamp?.getTime() ?? 0;
     expect(secondTs).toBeGreaterThan(firstTs);
+  });
+
+  it("rounds a live grid entry qty UP to the contract step and passes the raised leverage", async () => {
+    // $10 account, 50% allocation cap, 2x: the raw qty 5/1001 = 0.004995 BTC
+    // is below the 0.005 minQty/step, so the entry is raised to 0.005 BTC
+    // (notional $5.01, margin $2.50 at 2x <= $5 cap) and ordered at 2x.
+    const repo = new InMemoryPaperRepository();
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const leverages: number[] = [];
+    const trackingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      setLeverage: (_symbol, _productType, _marginMode, leverage) =>
+        Effect.sync(() => {
+          leverages.push(leverage);
+        }),
+    };
+    const candles = makeCandles(20, 1000, "oscillate");
+
+    const result = await runWithRepo(
+      makeOptions({
+        isLive: true,
+        symbol: "BTC/USDT:USDT",
+        initialCapital: 10,
+        maxPositionPct: 50,
+        leverage: 2,
+        contractSpecs: { minQty: 0.005, qtyStep: 0.005, minTradeUSDT: 5 },
+      }),
+      repo,
+      candles,
+      trackingAdapter,
+    );
+
+    expect(result.action).toBe("opened");
+    expect(orders[0]?.size).toBeCloseTo(0.005, 4);
+    expect(leverages).toContain(2);
+  });
+
+  it("skips a live grid entry (no order) when the min orderable margin exceeds the cap", async () => {
+    // Same $10/50% account at 1x: the 0.01 BTC minimum needs $9.90 of margin
+    // = 99% of capital > 50% cap -> RISK BLOCKED (orderability), no order.
+    const repo = new InMemoryPaperRepository();
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    const candles = makeCandles(20, 1000, "oscillate");
+
+    const result = await runWithRepo(
+      makeOptions({
+        isLive: true,
+        symbol: "BTC/USDT:USDT",
+        initialCapital: 10,
+        maxPositionPct: 50,
+        leverage: 1,
+        contractSpecs: { minQty: 0.01, qtyStep: 0.01, minTradeUSDT: 5 },
+      }),
+      repo,
+      candles,
+      adapter,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("orderability");
+    expect(orders).toHaveLength(0);
+  });
+
+  it("skips a simulated grid entry when the min orderable margin exceeds the cap", async () => {
+    // The simulated adapter fills any positive size, masking exchange
+    // rejections — the engine must skip with a note instead of "opening" an
+    // unorderable position. Same account as the live skip case above.
+    const repo = new InMemoryPaperRepository();
+    const candles = makeCandles(20, 1000, "oscillate");
+
+    const result = await runWithRepo(
+      makeOptions({
+        symbol: "BTC/USDT:USDT",
+        initialCapital: 10,
+        maxPositionPct: 50,
+        leverage: 1,
+        contractSpecs: { minQty: 0.01, qtyStep: 0.01, minTradeUSDT: 5 },
+      }),
+      repo,
+      candles,
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("orderability");
+    expect(result.side).toBeNull();
   });
 });

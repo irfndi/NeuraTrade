@@ -36,7 +36,8 @@ import {
   PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
 } from "./repository.js";
-import type { PaperPosition } from "./types.js";
+import type { ContractSizeSpec, PaperPosition } from "./types.js";
+import { orderableQty } from "./types.js";
 
 export interface FuturesPaperTradingOptions {
   readonly exchange: string;
@@ -80,8 +81,18 @@ export interface FuturesPaperTradingOptions {
   /** Minimum notional (quote units) the exchange accepts for a futures order
    *  (Bitget observes ~5 USDT). When the risk-sized notional falls below this
    *  floor, the notional is raised to the floor, bounded by margin capacity
-   *  capital * leverage. Defaults to 5. */
+   *  capital * leverage. Defaults to 5. Ignored when contractSpecs is set. */
   readonly notionalFloor?: number;
+  /** Exchange contract size constraints (minQty, qtyStep, minTradeUSDT) for
+   *  this symbol, populated by the CLI from BitgetClient.getContracts on the
+   *  live path and by tests directly. When set, sizing rounds the order qty
+   *  UP to the size step, raises a sub-minimum qty to minQty, computes the
+   *  effective orderability floor as max(minTradeUSDT, minQty * price), lifts
+   *  leverage so the floor's margin fits the position cap, and SKIPS the
+   *  trade (never placing an unorderable or over-cap order) when the margin
+   *  still cannot fit. Absent => legacy sizing (flat notionalFloor, no step
+   *  rounding). */
+  readonly contractSpecs?: ContractSizeSpec;
 }
 
 export interface FuturesPaperTradingIterationResult {
@@ -97,11 +108,23 @@ function calculateFuturesNotionalValue(
   stopDistancePct: number,
   currentVolatility: number,
   options: FuturesPaperTradingOptions,
-): { notional: Decimal; leverage: number } {
+): {
+  notional: Decimal;
+  size: Decimal;
+  leverage: number;
+  /** Set when the minimum orderable position cannot fit the position cap;
+   *  the caller must skip the trade (never place an unorderable order). */
+  skipReason?: string;
+  /** Effective orderability floor (max(minTradeUSDT, minQty * price)) when
+   *  contract specs are present; passed to the risk guard so it can fail
+   *  closed locally for paths that bypass this sizing. */
+  minOrderableNotional?: number;
+} {
   // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
   const maxNotionalByRiskCap = capital.times(
     (options.maxPositionSizePct ?? 100) / 100,
   );
+  const spec = options.contractSpecs;
 
   let baseNotional: Decimal;
   let leverage = options.leverage;
@@ -151,11 +174,73 @@ function calculateFuturesNotionalValue(
     maxNotionalByMargin,
   );
 
-  // Exchange minimum-notional floor (Bitget observes ~5 USDT). A risk-sized
-  // position below the floor is not placeable, so raise it to the floor and
-  // use leverage to make the required margin fit the account. Bounded by
-  // margin capacity capital * leverage: an account that cannot afford the
-  // floor even at max leverage trades at its full capacity instead.
+  if (spec !== undefined) {
+    // Contract-aware orderability (live path). Effective floor comes from the
+    // contract itself: max(minTradeUSDT, minQty x price). A 5 USDT BTC order
+    // at $64,795 is 0.000077 BTC — below the 0.0001 minTradeNum; rounding the
+    // qty UP to the size step yields 0.0001 (~$6.48), which is orderable.
+    const effectiveFloor = Decimal.max(
+      money(spec.minTradeUSDT),
+      money(spec.minQty).times(entryPrice),
+    );
+    const allocation = capital.times(
+      (options.maxPositionSizePct ?? 100) / 100,
+    );
+
+    notional = orderableQty(
+      notional.div(entryPrice),
+      spec,
+      entryPrice,
+      maxNotionalByRiskCap,
+    ).times(entryPrice);
+
+    // Sub-floor notional: raise to the effective floor and lift leverage so
+    // the floor's margin (notional / leverage) fits the position cap, bounded
+    // by the configured max leverage.
+    if (notional.lessThan(effectiveFloor)) {
+      const allocNum = toNumber(allocation);
+      if (allocNum > 0) {
+        leverage = Math.min(
+          options.leverage,
+          Math.max(1, Math.ceil(toNumber(effectiveFloor) / allocNum)),
+        );
+        notional = orderableQty(
+          effectiveFloor.div(entryPrice),
+          spec,
+          entryPrice,
+          maxNotionalByRiskCap,
+        ).times(entryPrice);
+      }
+    }
+
+    // Never attempt an unorderable or over-cap order: if the required margin
+    // (notional / leverage) cannot fit within the position cap even after the
+    // leverage raise, skip the trade instead of sending an order the exchange
+    // will reject (or that breaches the account's risk budget).
+    const margin = notional.div(leverage);
+    if (margin.greaterThan(maxNotionalByRiskCap)) {
+      return {
+        notional,
+        size: money(0),
+        leverage,
+        skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${leverage}x, exceeding the ${toNumber(maxNotionalByRiskCap).toFixed(2)} USDT position cap`,
+        minOrderableNotional: toNumber(effectiveFloor),
+      };
+    }
+
+    return {
+      notional,
+      size: notional.div(entryPrice),
+      leverage,
+      minOrderableNotional: toNumber(effectiveFloor),
+    };
+  }
+
+  // Legacy exchange minimum-notional floor (Bitget observes ~5 USDT). A
+  // risk-sized position below the floor is not placeable, so raise it to the
+  // floor and use leverage to make the required margin fit the account.
+  // Bounded by margin capacity capital * leverage: an account that cannot
+  // afford the floor even at max leverage trades at its full capacity instead.
   const notionalFloor = options.notionalFloor ?? 5;
   if (notional.lessThan(notionalFloor)) {
     const capitalNum = toNumber(capital);
@@ -171,7 +256,7 @@ function calculateFuturesNotionalValue(
     }
   }
 
-  return { notional, leverage };
+  return { notional, size: notional.div(entryPrice), leverage };
 }
 
 /**
@@ -183,8 +268,12 @@ function calculateFuturesNotionalValue(
  * maxConcurrentTrades) and margin capacity; sub-floor notionals are raised to
  * notionalFloor with leverage lifted to fit the account. Without
  * riskPerTradePct it falls back to margin allocation
- * (capital * positionSizePct/100 * leverage). The adapter enforces
- * reduce-only closes so the position cannot be accidentally doubled on exit.
+ * (capital * positionSizePct/100 * leverage). When contractSpecs is set, the
+ * qty is rounded to the exchange size step, the effective floor becomes
+ * max(minTradeUSDT, minQty * price), and the trade is skipped (never placed)
+ * when the minimum orderable margin cannot fit the position cap even at max
+ * leverage. The adapter enforces reduce-only closes so the position cannot be
+ * accidentally doubled on exit.
  */
 export function runFuturesPaperTradingIteration(
   options: FuturesPaperTradingOptions,
@@ -417,15 +506,28 @@ export function runFuturesPaperTradingIteration(
         }
       }
 
-      const { notional: notionalValue, leverage: orderLeverage } =
-        calculateFuturesNotionalValue(
-          capital,
-          entryPrice,
-          stopDistancePct,
-          currentVolatility,
-          options,
-        );
-      const size = notionalValue.div(entryPrice);
+      const sized = calculateFuturesNotionalValue(
+        capital,
+        entryPrice,
+        stopDistancePct,
+        currentVolatility,
+        options,
+      );
+      const notionalValue = sized.notional;
+      const orderLeverage = sized.leverage;
+      const size = sized.size;
+
+      if (sized.skipReason !== undefined) {
+        // Never attempt an unorderable or over-cap order: sizing determined
+        // the minimum orderable position cannot fit the position cap, so
+        // hold instead of sending an order the exchange would reject.
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: `RISK BLOCKED (orderability): ${sized.skipReason}`,
+        };
+      }
 
       if (yield* killSwitch.isEngaged()) {
         const reason = yield* killSwitch.getReason();
@@ -462,6 +564,7 @@ export function runFuturesPaperTradingIteration(
           side: signal.direction as "buy" | "sell",
           leverage: orderLeverage,
           productType: options.productType,
+          minOrderableNotional: sized.minOrderableNotional,
         })
         .pipe(Effect.result);
 

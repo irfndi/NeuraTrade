@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import {
-  BitgetClient,
   type BitgetClientImpl,
   type BitgetFuturesOrderRequest,
   type BitgetFuturesPosition,
@@ -344,7 +343,9 @@ describe("BitgetFuturesExchangeAdapter", () => {
     const client = makeStubClient({
       pricePrecisionOverride: "4",
       placeHook: (order: { orderType?: string; price?: string }) => {
-        calls.push(JSON.stringify({ orderType: order.orderType, price: order.price }));
+        calls.push(
+          JSON.stringify({ orderType: order.orderType, price: order.price }),
+        );
       },
     });
     const adapter = makeBitgetFuturesAdapter(client);
@@ -386,6 +387,43 @@ describe("BitgetFuturesExchangeAdapter", () => {
       }).pipe(Effect.provide(layer)),
     );
     expect(calls.at(-1)).toContain('"price":"0.1905"');
+  });
+
+  it("rounds the close price to the instrument tick (45115 regression)", async () => {
+    // Exit prices must be tick-normalized exactly like entries: the grid
+    // engine passes theoretical exit prices (entry +/- step*targetRatio) that
+    // are off-tick (BTC long target 66055.303 vs tick 0.1). Bitget rejects
+    // off-tick prices with 45115; without normalization live closes fail with
+    // "close returned no fill" and grid positions get stuck until drawdown.
+    const calls: string[] = [];
+    const client = makeStubClient({
+      placeHook: (order: { price?: string; reduceOnly?: boolean }) => {
+        calls.push(
+          JSON.stringify({ price: order.price, reduceOnly: order.reduceOnly }),
+        );
+      },
+    });
+    const adapter = makeBitgetFuturesAdapter(client);
+    const layer = Layer.succeed(FuturesExchangeAdapter, adapter);
+
+    const fill = await Effect.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* FuturesExchangeAdapter;
+        return yield* svc.closePosition({
+          symbol: "BTC/USDT:USDT",
+          side: "sell",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+          size: money(0.5),
+          price: money(66055.303),
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(fill).not.toBeNull();
+    expect(calls.at(-1)).toContain('"price":"66055.3"');
+    expect(calls.at(-1)).toContain('"reduceOnly":true');
   });
 
   it("configures leverage, margin mode and position mode", async () => {

@@ -84,6 +84,13 @@ export interface StrategyManifest {
   readonly triggerTiming: string;
   readonly engineVersion: string;
   readonly protocolVersion: string;
+  /**
+   * Account capital the strategy runs under (e.g. "50" btc-candidate vs
+   * "10" challenge-10). Optional: candidate-provenance manifests omit it;
+   * grid-engine execution manifests set it so distinct-capital soaks get
+   * distinct fingerprints and never share a state row.
+   */
+  readonly capital?: string;
 }
 
 export function strategyManifestFor(
@@ -117,8 +124,9 @@ export function strategyManifestFor(
   } as const satisfies StrategyManifest;
 }
 
-export const DEFAULT_STRATEGY_MANIFEST: StrategyManifest =
-  strategyManifestFor(VALIDATED_BTC_GRID_CANDIDATE);
+export const DEFAULT_STRATEGY_MANIFEST: StrategyManifest = strategyManifestFor(
+  VALIDATED_BTC_GRID_CANDIDATE,
+);
 
 export interface ProspectiveEvidence {
   readonly completeTradeCount: number;
