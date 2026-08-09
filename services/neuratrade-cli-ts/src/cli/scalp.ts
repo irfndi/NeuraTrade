@@ -110,6 +110,7 @@ import {
 } from "../scalping/grid-universe.js";
 import { applyPreset } from "../scalping/presets.js";
 import {
+  buildBacktestArgsFromTemplate,
   buildComposerConfigFromTemplate,
   type StrategyTemplateName,
 } from "../scalping/strategy-library.js";
@@ -1035,6 +1036,12 @@ const backtestOptions = {
   exchange: exchangeOption,
   symbol: symbolOption,
   timeframe: timeframeOption,
+  template: Options.text("template").pipe(
+    Options.withDefault(""),
+    Options.withDescription(
+      "Apply a strategy template's signal logic + execution overrides (e.g. microScalp, connorsRsi2)",
+    ),
+  ),
   capital: capitalOption,
   positionSize: positionSizeOption,
   riskPerTrade: riskPerTradeOption,
@@ -1290,7 +1297,7 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
       );
     }
 
-    const composerConfig = buildBacktestComposerConfig(
+    let composerConfig = buildBacktestComposerConfig(
       args.priceOnly,
       args.noRsi,
       args.noTrend,
@@ -1302,6 +1309,16 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
       args.momentumConfirmBars,
       args.adxMin,
     );
+
+    // --template applies the strategy template's signal weights/thresholds
+    // (e.g. microScalp RSI(2)) and its execution overrides on top of the
+    // CLI-derived config. Previously the template flags were parsed but
+    // never wired — backtests silently ran the default composer.
+    if (args.template !== "") {
+      const template = args.template as StrategyTemplateName;
+      composerConfig = buildComposerConfigFromTemplate(template, composerConfig);
+      args = buildBacktestArgsFromTemplate(template, args);
+    }
 
     const result: BacktestResult =
       args.strategyType === "grid"

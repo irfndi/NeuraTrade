@@ -467,6 +467,8 @@ export interface ResolvedBacktestArgs {
   readonly strictRealism: boolean;
   readonly realisticSlippageBps: number;
   readonly strategyType?: "signal" | "grid";
+  /** Strategy template applied by the backtest/readiness CLI (e.g. microScalp). */
+  readonly template?: string;
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
