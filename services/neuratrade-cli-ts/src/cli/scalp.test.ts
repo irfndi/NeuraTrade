@@ -142,7 +142,6 @@ describe("live execution market guard", () => {
       { onlyWithTrend: true },
       { targetRatio: 1 },
       { chopGateAdx: 20 },
-      { leverage: 2 },
     ];
 
     for (const drift of drifts) {
@@ -150,6 +149,12 @@ describe("live execution market guard", () => {
         "validated readiness cohort",
       );
     }
+
+    // Leverage may exceed the candidate (sizing floor-raise for tiny
+    // accounts); the risk engine caps it. Strategy params cannot drift.
+    expect(
+      validateLiveGridConfiguration({ ...config, leverage: 2 }),
+    ).toBeUndefined();
 
     expect(
       validateLiveGridConfiguration(

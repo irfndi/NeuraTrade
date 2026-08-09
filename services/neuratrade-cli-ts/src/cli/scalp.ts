@@ -3478,7 +3478,11 @@ export function validateLiveGridConfiguration(
     config.onlyWithTrend === candidate.onlyWithTrend &&
     config.targetRatio === candidate.targetRatio &&
     config.chopGateAdx === candidate.chopGateAdx &&
-    config.leverage === candidate.leverage;
+    // Leverage may EXCEED the validated candidate value: it scales
+    // PnL/variance, not the strategy, and tiny accounts need the sizing's
+    // floor-raise (e.g. $10/BTC at 2x = 32% margin vs 65% at 1x). The risk
+    // engine's maxLeverage cap still bounds it.
+    config.leverage >= candidate.leverage;
   if (!validatedCandidate && !sandbox) {
     return "live grid must use a validated readiness cohort candidate";
   }
