@@ -147,7 +147,13 @@ export function fetchOHLCV(
 ): Effect.Effect<readonly Candle[], MarketDataError, never> {
   const bSymbol = toBybitSymbol(symbol);
   const interval = bybitInterval(timeframe);
-  const startParam = startTime ? `&start=${startTime.getTime()}` : "";
+  // `startTime` is a BACKWARD cursor: Bybit v5 kline's `start` param is the
+  // window START (ascending), so passing it there returns the same newest
+  // window every call. Paging older requires `end` = cursor − 1ms
+  // (verified 2026-08-10: without this every page returned the identical
+  // newest 1000 bars). The funnel's deep-history deepening shares this
+  // gateway — the old behavior capped the cache at ~1 window.
+  const endParam = startTime ? `&end=${startTime.getTime()}` : "";
 
   return Effect.gen(function* () {
     const data = yield* getJSON<{
@@ -155,7 +161,7 @@ export function fetchOHLCV(
         readonly [string, string, string, string, string, string, string]
       >;
     }>(
-      `/v5/market/kline?category=linear&symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`,
+      `/v5/market/kline?category=linear&symbol=${bSymbol}&interval=${interval}&limit=${limit}${endParam}`,
       baseUrl,
     );
 

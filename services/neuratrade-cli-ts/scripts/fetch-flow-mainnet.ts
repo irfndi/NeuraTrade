@@ -24,6 +24,9 @@ const REQUEST_DELAY_MS = 250;
 const PAGE = 1000;
 
 const db = new Database(`${HOME}/data/neuratrade.db`);
+db.exec("PRAGMA journal_mode = WAL;");
+db.exec("PRAGMA busy_timeout = 30000;");
+db.exec("PRAGMA synchronous = NORMAL;");
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -125,11 +128,14 @@ async function fetchOi(symbol: string, startMs: number, endMs: number): Promise<
       run(Bybit.fetchOpenInterest(symbol, "5m", MAINNET, wStart, Math.min(wStart + windowMs, endMs))),
     );
     if (rows === undefined || rows.length === 0) continue;
-    db.transaction(() => {
-      for (const r of rows) {
-        insOi.run("bybit-futures", symbol, "5m", r.timestamp, r.oi, r.oiValue);
-      }
-    })();
+    for (let i = 0; i < rows.length; i += 500) {
+      const chunk = rows.slice(i, i + 500);
+      db.transaction(() => {
+        for (const r of chunk) {
+          insOi.run("bybit-futures", symbol, "5m", r.timestamp, r.oi, r.oiValue);
+        }
+      })();
+    }
     got += rows.length;
   }
   return got;
@@ -143,6 +149,7 @@ async function fetchFunding(symbol: string, startMs: number): Promise<number> {
   if (rows === undefined || rows.length === 0) return 0;
   db.transaction(() => {
     for (const r of rows) {
+      if (!(r.timestamp instanceof Date) || Number.isNaN(r.timestamp.getTime())) continue;
       insFunding.run("bybit-futures", symbol, r.fundingRate, r.timestamp.toISOString());
     }
   })();
@@ -175,14 +182,19 @@ async function main() {
     const symbol = canonicalSymbol(rawSymbol);
     const bSym = toBitgetSymbol(rawSymbol);
     console.log(`\n== ${bSym} ==`);
-    totalCandles += await fetchCandles(symbol, startMs);
-    console.log(`  klines saved: ${totalCandles}`);
-    const oi = await fetchOi(symbol, startMs, now);
-    totalOi += oi;
-    console.log(`  OI saved: ${oi}`);
-    const f = await fetchFunding(symbol, startMs);
-    totalFunding += f;
-    console.log(`  funding saved: ${f}`);
+    try {
+      const c = await fetchCandles(symbol, startMs);
+      totalCandles += c;
+      console.log(`  klines saved: ${c}`);
+      const oi = await fetchOi(symbol, startMs, now);
+      totalOi += oi;
+      console.log(`  OI saved: ${oi}`);
+      const f = await fetchFunding(symbol, startMs);
+      totalFunding += f;
+      console.log(`  funding saved: ${f}`);
+    } catch (err) {
+      console.warn(`⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`);
+    }
   }
 
   console.log(`\nDONE: ${symbols.length} symbols, ${totalCandles} candles, ${totalOi} OI rows, ${totalFunding} funding rows`);
