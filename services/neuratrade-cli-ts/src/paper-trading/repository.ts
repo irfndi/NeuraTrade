@@ -171,6 +171,44 @@ export interface PaperTradingRepositoryService {
 export const PaperTradingRepository =
   Context.Service<PaperTradingRepositoryService>("PaperTradingRepository");
 
+/**
+ * Flow Ignition persistence tables. Kept in their own script so
+ * `ensureFlowTables()` can create just these without the full paper-trading
+ * schema, while `ensureTablesSQL` embeds the same script for callers that
+ * initialize everything at once.
+ */
+const flowTablesSQL = `
+CREATE TABLE IF NOT EXISTS open_interest_history (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  oi REAL NOT NULL,
+  oi_value REAL NOT NULL,
+  UNIQUE (exchange, symbol, timeframe, ts)
+);
+
+CREATE TABLE IF NOT EXISTS flow_ofi_1m (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  buy_vol REAL NOT NULL,
+  sell_vol REAL NOT NULL,
+  trades INTEGER NOT NULL,
+  UNIQUE (exchange, symbol, ts)
+);
+
+CREATE TABLE IF NOT EXISTS flow_liquidations (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  side TEXT NOT NULL,
+  size REAL NOT NULL,
+  price REAL NOT NULL,
+  bankruptcy_price REAL
+);
+`;
+
 const ensureTablesSQL = `
 CREATE TABLE IF NOT EXISTS paper_portfolio (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -357,7 +395,52 @@ WHERE rowid NOT IN (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_positions_exchange_symbol
   ON paper_positions(exchange, symbol);
+${flowTablesSQL}
 `;
+
+/**
+ * One open-interest history row: ms epoch `ts`, base-contract `oi`, and
+ * quote-currency `oiValue`.
+ */
+export interface OpenInterestRow {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly ts: number;
+  readonly oi: number;
+  readonly oiValue: number;
+}
+
+/** One 1-minute order-flow imbalance bucket (ts = minute-start ms epoch). */
+export interface FlowOfiRow {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly ts: number;
+  readonly buyVol: number;
+  readonly sellVol: number;
+  readonly trades: number;
+}
+
+/** One liquidation event print. */
+export interface LiquidationRow {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly ts: number;
+  readonly side: string;
+  readonly size: number;
+  readonly price: number;
+  readonly bankruptcyPrice?: number | null;
+}
+
+/** An open-interest history row as read back from the database. */
+export interface OpenInterestHistoryRow {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly ts: number;
+  readonly oi: number;
+  readonly oiValue: number;
+}
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
   constructor(private readonly db: Database) {}
@@ -1812,6 +1895,166 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to list all grid trades: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Flow Ignition persistence. Class-only by design: the flow recorder and
+  // backtest construct `PaperTradingRepositorySQLite` directly, so the
+  // Context.Service interface (and its in-memory test doubles) stay
+  // untouched.
+  // -------------------------------------------------------------------------
+
+  ensureFlowTables(): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.exec(flowTablesSQL);
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to create flow tables: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveOpenInterest(
+    rows: readonly OpenInterestRow[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const insert = this.db.query(
+          `INSERT OR IGNORE INTO open_interest_history
+             (exchange, symbol, timeframe, ts, oi, oi_value)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of rows) {
+          insert.run(
+            row.exchange,
+            row.symbol,
+            row.timeframe,
+            row.ts,
+            row.oi,
+            row.oiValue,
+          );
+        }
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to save open-interest rows: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveFlowOfi(
+    rows: readonly FlowOfiRow[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        // OR REPLACE: the recorder re-flushes the same minute bucket on its
+        // rollover/close passes, and the last flush must win.
+        const insert = this.db.query(
+          `INSERT OR REPLACE INTO flow_ofi_1m
+             (exchange, symbol, ts, buy_vol, sell_vol, trades)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of rows) {
+          insert.run(
+            row.exchange,
+            row.symbol,
+            row.ts,
+            row.buyVol,
+            row.sellVol,
+            row.trades,
+          );
+        }
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to save flow OFI rows: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveLiquidations(
+    rows: readonly LiquidationRow[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const insert = this.db.query(
+          `INSERT OR IGNORE INTO flow_liquidations
+             (exchange, symbol, ts, side, size, price, bankruptcy_price)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const row of rows) {
+          insert.run(
+            row.exchange,
+            row.symbol,
+            row.ts,
+            row.side,
+            row.size,
+            row.price,
+            row.bankruptcyPrice ?? null,
+          );
+        }
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to save liquidation rows: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  getOpenInterest(
+    symbol: string,
+    timeframe: string,
+    since?: number,
+    until?: number,
+  ): Effect.Effect<
+    readonly OpenInterestHistoryRow[],
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        let sql = `SELECT exchange, symbol, timeframe, ts, oi, oi_value
+                   FROM open_interest_history
+                   WHERE symbol = ? AND timeframe = ?`;
+        const params: Array<string | number> = [symbol, timeframe];
+        if (since !== undefined) {
+          sql += " AND ts >= ?";
+          params.push(since);
+        }
+        if (until !== undefined) {
+          sql += " AND ts <= ?";
+          params.push(until);
+        }
+        sql += " ORDER BY ts ASC";
+        const rows = this.db.query(sql).all(...params) as Array<{
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          ts: number;
+          oi: number;
+          oi_value: number;
+        }>;
+        return rows.map((r) => ({
+          exchange: r.exchange,
+          symbol: r.symbol,
+          timeframe: r.timeframe,
+          ts: r.ts,
+          oi: r.oi,
+          oiValue: r.oi_value,
+        }));
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to read open-interest history: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

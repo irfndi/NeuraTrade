@@ -1185,3 +1185,75 @@ export const watchlistListTimeframeOption = Options.text("timeframe").pipe(
   Options.withDescription("Timeframe to list watchlist for"),
 );
 
+// ---------------------------------------------------------------------------
+// Flow Ignition (flow-v1) options
+// ---------------------------------------------------------------------------
+
+export const flowSymbolsOption = Options.text("symbols").pipe(
+  Options.withDefault("BTCUSDT"),
+  Options.withDescription(
+    "Comma-separated Bybit wire symbols to backtest, e.g. BTCUSDT,ETHUSDT",
+  ),
+);
+
+export const flowStartOption = Options.text("start").pipe(
+  Options.withDefault(""),
+  Options.withDescription(
+    "Inclusive start date (YYYY-MM-DD). Default: 180 days ago",
+  ),
+);
+
+export const flowEndOption = Options.text("end").pipe(
+  Options.withDefault(""),
+  Options.withDescription(
+    "Inclusive end date (YYYY-MM-DD). Default: now",
+  ),
+);
+
+export const flowTimeframeOption = Options.choice("timeframe", [
+  "5m",
+  "1m",
+] as const).pipe(
+  Options.withDefault("5m"),
+  Options.withDescription("Candle timeframe for the flow backtest"),
+);
+
+export const flowThresholdOption = Options.float("threshold").pipe(
+  Options.withDefault(1.0),
+  Options.withDescription(
+    "Entry score threshold in z-units (default 1.0)",
+  ),
+);
+
+export const flowHoldTimesOption = Options.text("hold-times").pipe(
+  Options.withDefault("0.5,1,2,4,8"),
+  Options.withDescription(
+    "Comma-separated hold-time grid in hours; every entry is reported",
+  ),
+);
+
+export const flowFeeOption = Options.float("fee").pipe(
+  Options.withDefault(0.055),
+  Options.withDescription("Taker fee percent per side (default 0.055)"),
+);
+
+export const flowSpreadBpsOption = Options.float("spread-bps").pipe(
+  Options.withDefault(2),
+  Options.withDescription(
+    "Spread in basis points charged on BOTH entry and exit legs",
+  ),
+);
+
+export const flowLimitOption = Options.integer("limit").pipe(
+  Options.withDefault(40),
+  Options.withDescription("Maximum ranked rows to print"),
+);
+
+export const flowMinTurnoverOption = Options.float("min-turnover").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Minimum 24h quote turnover (USDT) for a symbol to appear (0 = off)",
+  ),
+);
+
+

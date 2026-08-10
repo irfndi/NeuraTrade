@@ -402,4 +402,224 @@ describe("Bybit gateway", () => {
     expect(requests[0]).toContain("/v5/market/instruments-info");
     expect(requests[1]).toContain("cursor=page2");
   });
+
+  it("fetchOpenInterest parses rows and paginates with cursor", async () => {
+    const requests: string[] = [];
+    const pages: Record<string, unknown> = {
+      first: {
+        retCode: 0,
+        retMsg: "OK",
+        result: {
+          category: "linear",
+          list: [
+            {
+              symbol: "BTCUSDT",
+              timestamp: "1704067200000",
+              openInterest: "100000",
+            },
+          ],
+          nextPageCursor: "page2",
+        },
+      },
+      page2: {
+        retCode: 0,
+        retMsg: "OK",
+        result: {
+          category: "linear",
+          list: [
+            {
+              symbol: "BTCUSDT",
+              timestamp: "1704063600000",
+              openInterest: "99000",
+            },
+          ],
+          nextPageCursor: undefined,
+        },
+      },
+    };
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      requests.push(u);
+      const body = u.includes("cursor=page2") ? pages.page2 : pages.first;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rows = await Effect.runPromise(
+      Bybit.fetchOpenInterest("BTC/USDT:USDT"),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(rows).toEqual([
+      { timestamp: 1704067200000, oi: 100000, oiValue: 0 },
+      { timestamp: 1704063600000, oi: 99000, oiValue: 0 },
+    ]);
+    expect(requests[0]).toContain("/v5/market/open-interest");
+    expect(requests[0]).toContain("intervalTime=5min");
+    expect(requests[0]).toContain("limit=1000");
+    expect(requests[1]).toContain("cursor=page2");
+  });
+
+  it("fetchOpenInterest defaults to testnet base URL and 5m interval", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          retCode: 0,
+          retMsg: "OK",
+          result: {
+            category: "linear",
+            list: [],
+            nextPageCursor: undefined,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(Bybit.fetchOpenInterest("BTCUSDT"));
+
+    expect(requestedUrl).toContain("https://api-testnet.bybit.com");
+    expect(requestedUrl).toContain("intervalTime=5min");
+    expect(requestedUrl).toContain("symbol=BTCUSDT");
+  });
+
+  it("fetchOpenInterest hits mainnet when baseUrl is passed", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          retCode: 0,
+          retMsg: "OK",
+          result: {
+            category: "linear",
+            list: [],
+            nextPageCursor: undefined,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(
+      Bybit.fetchOpenInterest("BTCUSDT", "1h", "https://api.bybit.com"),
+    );
+
+    expect(requestedUrl).toContain("https://api.bybit.com");
+    expect(requestedUrl).toContain("intervalTime=1h");
+  });
+
+  it("fetchRecentTrades parses trade rows", async () => {
+    mockFetch({
+      retCode: 0,
+      retMsg: "OK",
+      result: {
+        category: "linear",
+        list: [
+          {
+            symbol: "BTCUSDT",
+            time: "1704067200000",
+            side: "Buy",
+            size: "0.5",
+            price: "67000",
+          },
+          {
+            symbol: "BTCUSDT",
+            time: "1704067160000",
+            side: "Sell",
+            size: "1.2",
+            price: "66990",
+          },
+        ],
+      },
+    });
+
+    const trades = await Effect.runPromise(Bybit.fetchRecentTrades("BTC/USDT"));
+
+    expect(trades).toEqual([
+      { time: 1704067200000, side: "Buy", size: 0.5, price: 67000 },
+      { time: 1704067160000, side: "Sell", size: 1.2, price: 66990 },
+    ]);
+  });
+
+  it("fetchRecentTrades honors baseUrl and limit", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(
+        JSON.stringify({
+          retCode: 0,
+          retMsg: "OK",
+          result: { category: "linear", list: [] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(
+      Bybit.fetchRecentTrades("BTCUSDT", "https://api.bybit.com", 100),
+    );
+
+    expect(requestedUrl).toContain("https://api.bybit.com");
+    expect(requestedUrl).toContain("limit=100");
+    expect(requestedUrl).toContain("symbol=BTCUSDT");
+  });
+
+  it("fetchInstruments maps listedTime and top-of-book quotes", async () => {
+    mockFetch({
+      retCode: 0,
+      retMsg: "OK",
+      result: {
+        category: "linear",
+        list: [
+          {
+            symbol: "BTCUSDT",
+            status: "Trading",
+            launchTime: "1600000000000",
+            bid1Price: "67000",
+            ask1Price: "67010",
+          },
+          {
+            symbol: "NEWUSDT",
+            status: "PreLaunch",
+            launchTime: "1700000000000",
+            bid1Price: "",
+            ask1Price: "",
+          },
+        ],
+        nextPageCursor: undefined,
+      },
+    });
+
+    const instruments = await Effect.runPromise(Bybit.fetchInstruments());
+
+    expect(instruments[0]).toEqual({
+      symbol: "BTCUSDT",
+      status: "Trading",
+      listedTime: 1600000000000,
+      bid1Price: 67000,
+      ask1Price: 67010,
+    });
+    expect(instruments[1].bid1Price).toBeUndefined();
+    expect(instruments[1].ask1Price).toBeUndefined();
+  });
+
+  it("fetchTickers keeps turnover and top-of-book quotes", async () => {
+    mockFetch(tickersFixture);
+
+    const tickers = await Effect.runPromise(Bybit.fetchTickers());
+
+    expect(tickers).toEqual([
+      {
+        symbol: "BTCUSDT",
+        turnover24h: 67000000,
+        bid1Price: 66990,
+        ask1Price: 67010,
+      },
+    ]);
+  });
 });

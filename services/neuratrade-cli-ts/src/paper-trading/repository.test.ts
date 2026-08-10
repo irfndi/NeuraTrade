@@ -789,4 +789,128 @@ describe("PaperTradingRepositorySQLite", () => {
     expect(loaded?.scaledOut).toBe(true);
     db.close();
   });
+
+  it("creates flow tables and round-trips open interest", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+
+    await Effect.runPromise(repository.ensureFlowTables());
+
+    const tables = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('open_interest_history', 'flow_ofi_1m', 'flow_liquidations')",
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name).sort()).toEqual([
+      "flow_liquidations",
+      "flow_ofi_1m",
+      "open_interest_history",
+    ]);
+
+    const rows = [
+      {
+        exchange: "bybit-futures",
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        ts: 1704067200000,
+        oi: 100000,
+        oiValue: 6700000000,
+      },
+      {
+        exchange: "bybit-futures",
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        ts: 1704063600000,
+        oi: 99000,
+        oiValue: 6600000000,
+      },
+      {
+        exchange: "bybit-futures",
+        symbol: "BTCUSDT",
+        timeframe: "15m",
+        ts: 1704067200000,
+        oi: 95000,
+        oiValue: 6300000000,
+      },
+    ];
+    await Effect.runPromise(repository.saveOpenInterest(rows));
+    // Re-saving the same (exchange, symbol, timeframe, ts) is ignored.
+    await Effect.runPromise(repository.saveOpenInterest(rows.slice(0, 1)));
+
+    const loaded = await Effect.runPromise(
+      repository.getOpenInterest("BTCUSDT", "5m"),
+    );
+    expect(loaded).toEqual([
+      {
+        exchange: "bybit-futures",
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        ts: 1704063600000,
+        oi: 99000,
+        oiValue: 6600000000,
+      },
+      {
+        exchange: "bybit-futures",
+        symbol: "BTCUSDT",
+        timeframe: "5m",
+        ts: 1704067200000,
+        oi: 100000,
+        oiValue: 6700000000,
+      },
+    ]);
+
+    const windowed = await Effect.runPromise(
+      repository.getOpenInterest("BTCUSDT", "5m", 1704067000000, 1704067300000),
+    );
+    expect(windowed.map((r) => r.ts)).toEqual([1704067200000]);
+    db.close();
+  });
+
+  it("upserts flow OFI buckets and appends liquidations", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+
+    await Effect.runPromise(repository.ensureFlowTables());
+
+    const bucket = {
+      exchange: "bybit-futures",
+      symbol: "BTCUSDT",
+      ts: 1704067200000,
+      buyVol: 10,
+      sellVol: 5,
+      trades: 50,
+    };
+    await Effect.runPromise(repository.saveFlowOfi([bucket]));
+    // Recorder re-flush of the same minute bucket must overwrite.
+    await Effect.runPromise(
+      repository.saveFlowOfi([{ ...bucket, buyVol: 15, trades: 60 }]),
+    );
+
+    const ofiRows = db
+      .query("SELECT buy_vol, sell_vol, trades FROM flow_ofi_1m")
+      .all() as Array<{ buy_vol: number; sell_vol: number; trades: number }>;
+    expect(ofiRows).toHaveLength(1);
+    expect(ofiRows[0]).toEqual({ buy_vol: 15, sell_vol: 5, trades: 60 });
+
+    await Effect.runPromise(
+      repository.saveLiquidations([
+        {
+          exchange: "bybit-futures",
+          symbol: "BTCUSDT",
+          ts: 1704067200000,
+          side: "Sell",
+          size: 2.5,
+          price: 66000,
+          bankruptcyPrice: 65500,
+        },
+      ]),
+    );
+    const liqRows = db
+      .query("SELECT side, size, bankruptcy_price FROM flow_liquidations")
+      .all() as Array<{ side: string; size: number; bankruptcy_price: number }>;
+    expect(liqRows).toHaveLength(1);
+    expect(liqRows[0].side).toBe("Sell");
+    expect(liqRows[0].bankruptcy_price).toBe(65500);
+    db.close();
+  });
 });

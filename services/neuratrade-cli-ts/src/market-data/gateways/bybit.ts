@@ -16,6 +16,7 @@ const EXCHANGE = "bybit-futures";
 
 function getJSON<T>(
   path: string,
+  baseUrl = BASE_URL,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   extraHeaders: Record<string, string> = {},
 ): Effect.Effect<T, MarketDataError, never> {
@@ -25,7 +26,7 @@ function getJSON<T>(
 
     const response = yield* Effect.tryPromise({
       try: () =>
-        fetch(`${BASE_URL}${path}`, {
+        fetch(`${baseUrl}${path}`, {
           method: "GET",
           signal: controller.signal,
           headers: { Accept: "application/json", ...extraHeaders },
@@ -98,11 +99,13 @@ interface BybitTicker {
 
 export function fetchTick(
   symbol: string,
+  baseUrl = BASE_URL,
 ): Effect.Effect<Tick, MarketDataError, never> {
   const bSymbol = toBybitSymbol(symbol);
   return Effect.gen(function* () {
     const data = yield* getJSON<{ readonly list: readonly BybitTicker[] }>(
       `/v5/market/tickers?category=linear&symbol=${bSymbol}`,
+      baseUrl,
     );
     const ticker = data.list[0];
     if (!ticker) {
@@ -140,6 +143,7 @@ export function fetchOHLCV(
   timeframe: string,
   limit: number,
   startTime: Date | undefined,
+  baseUrl = BASE_URL,
 ): Effect.Effect<readonly Candle[], MarketDataError, never> {
   const bSymbol = toBybitSymbol(symbol);
   const interval = bybitInterval(timeframe);
@@ -152,6 +156,7 @@ export function fetchOHLCV(
       >;
     }>(
       `/v5/market/kline?category=linear&symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`,
+      baseUrl,
     );
 
     return data.list.map((c): Candle => ({
@@ -177,11 +182,13 @@ interface BybitOrderBook {
 export function fetchOrderBook(
   symbol: string,
   limit: number,
+  baseUrl = BASE_URL,
 ): Effect.Effect<OrderBook, MarketDataError, never> {
   const bSymbol = toBybitSymbol(symbol);
   return Effect.gen(function* () {
     const data = yield* getJSON<BybitOrderBook>(
       `/v5/market/orderbook?category=linear&symbol=${bSymbol}&limit=${limit}`,
+      baseUrl,
     );
 
     return {
@@ -210,7 +217,9 @@ interface BybitSymbolInfo {
 const SYMBOLS_PAGE_SIZE = 1000;
 const SYMBOLS_MAX_PAGES = 20;
 
-export function fetchSymbols(): Effect.Effect<
+export function fetchSymbols(
+  baseUrl = BASE_URL,
+): Effect.Effect<
   readonly string[],
   MarketDataError,
   never
@@ -225,6 +234,7 @@ export function fetchSymbols(): Effect.Effect<
         readonly nextPageCursor?: string;
       }>(
         `/v5/market/instruments-info?category=linear&limit=${SYMBOLS_PAGE_SIZE}${cursorParam}`,
+        baseUrl,
       );
       for (const s of data.list) {
         // Bybit instruments-info: "Trading" is the online status
@@ -247,15 +257,19 @@ export function fetchSymbols(): Effect.Effect<
  * path, so the demo universe is the full testnet list (~200+ USDT-perp
  * contracts, vs Bitget demo's ~25). The market funnel scans this set.
  */
-export function fetchDemoSymbols(): Effect.Effect<
+export function fetchDemoSymbols(
+  baseUrl = BASE_URL,
+): Effect.Effect<
   readonly string[],
   MarketDataError,
   never
 > {
-  return fetchSymbols();
+  return fetchSymbols(baseUrl);
 }
 
-export function fetch24hrVolumes(): Effect.Effect<
+export function fetch24hrVolumes(
+  baseUrl = BASE_URL,
+): Effect.Effect<
   Readonly<Record<string, number>>,
   MarketDataError,
   never
@@ -263,6 +277,7 @@ export function fetch24hrVolumes(): Effect.Effect<
   return Effect.gen(function* () {
     const data = yield* getJSON<{ readonly list: readonly BybitTicker[] }>(
       "/v5/market/tickers?category=linear",
+      baseUrl,
     );
 
     const volumes: Record<string, number> = {};
@@ -272,6 +287,46 @@ export function fetch24hrVolumes(): Effect.Effect<
       );
     }
     return volumes;
+  });
+}
+
+/**
+ * A ticker row with the top-of-book spread kept: 24h quote turnover plus the
+ * best bid/ask. `fetch24hrVolumes` drops the quotes; flow-universe builders
+ * need them to rank by spread.
+ */
+export interface TickerInfo {
+  readonly symbol: string;
+  readonly turnover24h: number;
+  readonly bid1Price?: number;
+  readonly ask1Price?: number;
+}
+
+/** Fetch every linear ticker with turnover and top-of-book bid/ask. */
+export function fetchTickers(
+  baseUrl = BASE_URL,
+): Effect.Effect<readonly TickerInfo[], MarketDataError, never> {
+  return Effect.gen(function* () {
+    const data = yield* getJSON<{ readonly list: readonly BybitTicker[] }>(
+      "/v5/market/tickers?category=linear",
+      baseUrl,
+    );
+    const tickers: TickerInfo[] = [];
+    for (const ticker of data.list) {
+      const bid = ticker.bid1Price;
+      const ask = ticker.ask1Price;
+      tickers.push({
+        symbol: ticker.symbol,
+        turnover24h: asNumber(
+          ticker.quoteVol ?? ticker.quoteVolume ?? ticker.turnover24h,
+        ),
+        bid1Price:
+          bid !== undefined && bid !== "" ? asNumber(bid) : undefined,
+        ask1Price:
+          ask !== undefined && ask !== "" ? asNumber(ask) : undefined,
+      });
+    }
+    return tickers;
   });
 }
 
@@ -294,6 +349,7 @@ export function fetchFundingRates(
   startTime?: Date,
   endTime?: Date,
   limit = FUNDING_PAGE_SIZE * FUNDING_MAX_PAGES,
+  baseUrl = BASE_URL,
 ): Effect.Effect<readonly FundingRate[], MarketDataError, never> {
   const bSymbol = toBybitSymbol(symbol);
   const startMs = startTime?.getTime();
@@ -311,6 +367,7 @@ export function fetchFundingRates(
         readonly nextPageCursor?: string;
       }>(
         `/v5/market/funding/history?category=linear&symbol=${bSymbol}&limit=${FUNDING_PAGE_SIZE}${startParam}${endParam}${cursorParam}`,
+        baseUrl,
       );
       if (data.list.length === 0) break;
 
@@ -338,6 +395,196 @@ export function fetchFundingRates(
       cursor = next;
     }
     return results;
+  });
+}
+
+interface BybitOpenInterestRow {
+  readonly symbol: string;
+  readonly timestamp: string;
+  /** Mainnet v5 uses `openInterest`; testnet historically used `oi`. */
+  readonly openInterest?: string;
+  readonly oi?: string;
+  /** Not present on mainnet v5; kept for testnet compatibility. */
+  readonly oiValue?: string;
+}
+
+/**
+ * A single open-interest history point (ms epoch, base-contract OI and
+ * quote-currency OI value).
+ */
+export interface OpenInterestRow {
+  readonly timestamp: number;
+  readonly oi: number;
+  readonly oiValue: number;
+}
+
+const OI_PAGE_SIZE = 1000;
+const OI_MAX_PAGES = 50;
+
+/**
+ * Map a timeframe to the open-interest endpoint's intervalTime. Bybit only
+ * exposes 5min/15min/30min/1h/4h/1d buckets; anything else falls back to
+ * 5min.
+ */
+function oiInterval(timeframe: string): string {
+  const map: Record<string, string> = {
+    "5m": "5min",
+    "15m": "15min",
+    "30m": "30min",
+    "1h": "1h",
+    "4h": "4h",
+    "1d": "1d",
+  };
+  return map[timeframe] ?? "5min";
+}
+
+/**
+ * Fetch open-interest history for a USDT-perp. Rows are newest-first;
+ * pagination stops on an empty page or at OI_MAX_PAGES.
+ */
+export function fetchOpenInterest(
+  symbol: string,
+  timeframe = "5m",
+  baseUrl = BASE_URL,
+  startTime?: number,
+  endTime?: number,
+): Effect.Effect<readonly OpenInterestRow[], MarketDataError, never> {
+  const bSymbol = toBybitSymbol(symbol);
+  const interval = oiInterval(timeframe);
+  return Effect.gen(function* () {
+    const rows: OpenInterestRow[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < OI_MAX_PAGES; page++) {
+      const cursorParam = cursor ? `&cursor=${cursor}` : "";
+      const startParam =
+        startTime !== undefined ? `&startTime=${startTime}` : "";
+      const endParam = endTime !== undefined ? `&endTime=${endTime}` : "";
+      const data = yield* getJSON<{
+        readonly list: readonly BybitOpenInterestRow[];
+        readonly nextPageCursor?: string;
+      }>(
+        `/v5/market/open-interest?category=linear&symbol=${bSymbol}&intervalTime=${interval}&limit=${OI_PAGE_SIZE}${cursorParam}${startParam}${endParam}`,
+        baseUrl,
+      );
+      if (data.list.length === 0) break;
+      for (const r of data.list) {
+        rows.push({
+          timestamp: Number(r.timestamp),
+          oi: asNumber(r.openInterest ?? r.oi),
+          oiValue: asNumber(r.oiValue),
+        });
+      }
+      const next = data.nextPageCursor;
+      if (!next) break;
+      cursor = next;
+    }
+    return rows;
+  });
+}
+
+/**
+ * A single recent public trade print (ms epoch, taker side, base-contract
+ * size, price).
+ */
+export interface RecentTrade {
+  readonly time: number;
+  readonly side: "Buy" | "Sell";
+  readonly size: number;
+  readonly price: number;
+}
+
+interface BybitRecentTrade {
+  readonly time: string;
+  readonly side: "Buy" | "Sell";
+  readonly size: string;
+  readonly price: string;
+}
+
+/** Fetch the most recent public trades (max 1000 per call). */
+export function fetchRecentTrades(
+  symbol: string,
+  baseUrl = BASE_URL,
+  limit = 500,
+): Effect.Effect<readonly RecentTrade[], MarketDataError, never> {
+  const bSymbol = toBybitSymbol(symbol);
+  return Effect.gen(function* () {
+    const data = yield* getJSON<{ readonly list: readonly BybitRecentTrade[] }>(
+      `/v5/market/recent-trade?category=linear&symbol=${bSymbol}&limit=${limit}`,
+      baseUrl,
+    );
+    return data.list.map((t) => ({
+      time: Number(t.time),
+      side: t.side,
+      size: asNumber(t.size),
+      price: asNumber(t.price),
+    }));
+  });
+}
+
+/**
+ * A single instrument-info row: trading status, listing time (ms epoch),
+ * and the current top-of-book bid/ask (empty string when no quote exists).
+ */
+export interface InstrumentInfo {
+  readonly symbol: string;
+  readonly status?: string;
+  readonly listedTime?: number;
+  readonly bid1Price?: number;
+  readonly ask1Price?: number;
+}
+
+interface BybitInstrumentInfo {
+  readonly symbol: string;
+  readonly status?: string;
+  /** Mainnet v5 names the listing time `launchTime`. */
+  readonly launchTime?: string;
+  readonly listedTime?: string;
+  readonly bid1Price?: string;
+  readonly ask1Price?: string;
+}
+
+/**
+ * Fetch the full linear instruments-info list (all statuses, not just
+ * Trading) so callers can rank a universe by spread and contract age.
+ */
+export function fetchInstruments(
+  baseUrl = BASE_URL,
+): Effect.Effect<readonly InstrumentInfo[], MarketDataError, never> {
+  return Effect.gen(function* () {
+    const instruments: InstrumentInfo[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < SYMBOLS_MAX_PAGES; page++) {
+      const cursorParam = cursor ? `&cursor=${cursor}` : "";
+      const data = yield* getJSON<{
+        readonly list: readonly BybitInstrumentInfo[];
+        readonly nextPageCursor?: string;
+      }>(
+        `/v5/market/instruments-info?category=linear&limit=${SYMBOLS_PAGE_SIZE}${cursorParam}`,
+        baseUrl,
+      );
+      if (data.list.length === 0) break;
+      for (const s of data.list) {
+        const listedTimeRaw = s.launchTime ?? s.listedTime;
+        instruments.push({
+          symbol: s.symbol,
+          status: s.status,
+          listedTime:
+            listedTimeRaw !== undefined ? Number(listedTimeRaw) : undefined,
+          bid1Price:
+            s.bid1Price !== undefined && s.bid1Price !== ""
+              ? asNumber(s.bid1Price)
+              : undefined,
+          ask1Price:
+            s.ask1Price !== undefined && s.ask1Price !== ""
+              ? asNumber(s.ask1Price)
+              : undefined,
+        });
+      }
+      const next = data.nextPageCursor;
+      if (!next) break;
+      cursor = next;
+    }
+    return instruments;
   });
 }
 

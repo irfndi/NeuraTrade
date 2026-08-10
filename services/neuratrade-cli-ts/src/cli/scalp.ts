@@ -1,6 +1,6 @@
 import { Command, Options } from "./kit/kit.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Console, Effect, FileSystem, Layer, Option, Schedule } from "effect";
+import { Console, Duration, Effect, FileSystem, Layer, Option, Schedule } from "effect";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
 import { ConfigLive } from "../services/config.js";
@@ -81,6 +81,7 @@ import type { ContractSizeSpec } from "../paper-trading/types.js";
 import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
+  PaperTradingRepositorySQLite,
   PaperTradingRepositorySQLiteLive,
   type WatchlistEntry as DbWatchlistEntry,
 } from "../paper-trading/repository.js";
@@ -127,6 +128,28 @@ import {
   type StrategyTemplateName,
 } from "../scalping/strategy-library.js";
 import { runWalkForward } from "../scalping/walk-forward.js";
+import {
+  runFlowRecorder,
+  resolveFlowSymbols,
+  type FlowRecorderRepository,
+} from "../scalping/flow-recorder.js";
+import {
+  runFlowBacktest,
+  defaultFlowBacktestOptions,
+  type FlowBacktestData,
+  type FlowBacktestOptions,
+  type FlowBacktestReport,
+  type FlowSymbolSeries,
+} from "../scalping/flow-backtest.js";
+import {
+  selectFlowUniverse,
+  type FlowUniverseEntry,
+} from "../scalping/flow-universe.js";
+import {
+  fetch24hrVolumes,
+  fetchInstruments,
+} from "../market-data/gateways/bybit.js";
+import { MarketDataError } from "../market-data/gateway.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
 import { makeParityReplayCommand } from "./parity-replay.js";
 import {
@@ -330,6 +353,16 @@ import {
   gridUniverseTierOption,
   watchlistListExchangeOption,
   watchlistListTimeframeOption,
+  flowSymbolsOption,
+  flowStartOption,
+  flowEndOption,
+  flowTimeframeOption,
+  flowThresholdOption,
+  flowHoldTimesOption,
+  flowFeeOption,
+  flowSpreadBpsOption,
+  flowLimitOption,
+  flowMinTurnoverOption,
 } from "./scalp-options.js";
 
 
@@ -5465,9 +5498,330 @@ export const parityReplayCommand = makeParityReplayCommand(
   process.env.NEURATRADE_HOME,
 );
 
+// ---------------------------------------------------------------------------
+// Flow Ignition (flow-v1): backtest + universe
+// ---------------------------------------------------------------------------
+
+/** Wire symbol → canonical candle form: "BTCUSDT" → "BTC/USDT". */
+function wireToCanonicalSymbol(symbol: string): string {
+  return symbol.endsWith("USDT") && !symbol.includes("/")
+    ? `${symbol.slice(0, -4)}/${symbol.slice(-4)}`
+    : symbol;
+}
+
+function signedPct(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(3)}%`;
+}
+
+function formatFlowBacktestReport(report: FlowBacktestReport): string {
+  const lines: string[] = [];
+  lines.push("Flow-v1 backtest report");
+  lines.push(
+    `  windows (train ${report.options.trainDays}d / test ${report.options.testDays}d / steps ${report.windows.length}):`,
+  );
+  for (const w of report.windows) {
+    lines.push(
+      `    #${w.index} test ${new Date(w.testStart).toISOString().slice(0, 16)}..${new Date(w.testEnd).toISOString().slice(0, 16)}: ${w.signals} signals (${w.purged} purged at boundary)`,
+    );
+  }
+  lines.push("  hold-time | trades | win %  | avg edge/trade | max DD  | expectancy");
+  for (const h of report.byHoldTime) {
+    lines.push(
+      `  ${String(h.holdTimeHours).padStart(4)}h    | ${String(h.totalTrades).padStart(6)} | ${(h.winRate * 100).toFixed(1).padStart(5)}% | ${signedPct(h.avgEdgePerTradePct).padStart(15)} | ${h.maxDrawdownPct.toFixed(2).padStart(6)}% | ${signedPct(h.expectancyPct).padStart(9)}`,
+    );
+  }
+  const p = report.portfolio;
+  lines.push(
+    `  portfolio (hold ${p.holdTimeHours}h): ${p.totalTrades} trades, ${(p.winRate * 100).toFixed(1)}% win, ${signedPct(p.avgEdgePerTradePct)} avg edge/trade, ${p.maxDrawdownPct.toFixed(2)}% max DD, expectancy ${signedPct(p.expectancyPct)}`,
+  );
+  lines.push("  per-symbol:");
+  for (const s of p.bySymbol) {
+    lines.push(
+      `    ${s.symbol.padEnd(12)} ${String(s.trades).padStart(4)} trades  ${(s.winRate * 100).toFixed(1).padStart(5)}% win  ${signedPct(s.avgEdgePct)} avg edge`,
+    );
+  }
+  return lines.join("\n");
+}
+
+function formatFlowUniverse(entries: readonly FlowUniverseEntry[]): string {
+  const lines: string[] = [];
+  lines.push("rank  symbol       turnover24h(USDT)  spreadBps  ageDays");
+  for (const e of entries) {
+    lines.push(
+      `${String(e.rank).padStart(4)}  ${e.symbol.padEnd(12)} ${Math.round(e.turnover24h).toLocaleString("en-US").padStart(17)} ${String(e.spreadBps).padStart(9)} ${e.ageDays.toFixed(0).padStart(7)}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+export const flowBacktestCommand = Command.make(
+  "flow-backtest",
+  {
+    symbols: flowSymbolsOption,
+    start: flowStartOption,
+    end: flowEndOption,
+    timeframe: flowTimeframeOption,
+    threshold: flowThresholdOption,
+    holdTimes: flowHoldTimesOption,
+    fee: flowFeeOption,
+    spreadBps: flowSpreadBpsOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const sqlite = yield* SqliteClient;
+      const symbols = args.symbols
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      const holdTimes = args.holdTimes
+        .split(",")
+        .map((s) => Number.parseFloat(s.trim()))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (holdTimes.length === 0) {
+        return yield* Effect.fail(
+          new MarketDataRepositoryError(
+            `Invalid --hold-times '${args.holdTimes}': expected comma-separated hours > 0`,
+          ),
+        );
+      }
+      const end = args.end.length > 0 ? new Date(args.end) : new Date();
+      const start =
+        args.start.length > 0
+          ? new Date(args.start)
+          : new Date(end.getTime() - 180 * 86_400_000);
+
+      const options: FlowBacktestOptions = {
+        fees: {
+          taker: args.fee / 100,
+          maker: defaultFlowBacktestOptions.fees.maker,
+        },
+        spreadBps: args.spreadBps,
+        thresholds: {
+          ...defaultFlowBacktestOptions.thresholds,
+          entry: args.threshold,
+        },
+        holdTimes,
+        trainDays: defaultFlowBacktestOptions.trainDays,
+        testDays: defaultFlowBacktestOptions.testDays,
+        walkForwardSteps: defaultFlowBacktestOptions.walkForwardSteps,
+      };
+
+      const series: FlowSymbolSeries[] = [];
+      let totalCandles = 0;
+      // Flow tables are created by the flow data layer at runtime; guard so
+      // a not-yet-fetched universe degrades to empty series, not a crash.
+      const hasOiTable =
+        (yield* sqlite.queryOne<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'open_interest_history'",
+        )) !== null;
+      const hasFundingTable =
+        (yield* sqlite.queryOne<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'funding_rates'",
+        )) !== null;
+      for (const symbol of symbols) {
+        const canonical = wireToCanonicalSymbol(symbol);
+        const candleRows = yield* sqlite.queryAll<{
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+          volume: number;
+          timestamp: string;
+        }>(
+          `SELECT c.open_price AS open, c.high_price AS high, c.low_price AS low,
+                  c.close_price AS close, c.volume, c.timestamp
+           FROM ohlcv_data c
+           JOIN trading_pairs tp ON tp.id = c.trading_pair_id
+           WHERE (tp.symbol = ? OR tp.symbol = ?) AND c.timeframe = ?
+             AND c.timestamp >= ? AND c.timestamp <= ?
+           ORDER BY c.timestamp ASC`,
+          [canonical, symbol, args.timeframe, start.toISOString(), end.toISOString()],
+        );
+        const oiRows = hasOiTable
+          ? yield* sqlite.queryAll<{
+              ts: number;
+              oi: number;
+              oiValue: number | null;
+            }>(
+              `SELECT ts, oi, oi_value AS oiValue FROM open_interest_history
+               WHERE exchange = 'bybit' AND symbol = ? AND ts BETWEEN ? AND ?
+               ORDER BY ts ASC`,
+              [symbol, start.getTime(), end.getTime()],
+            )
+          : [];
+        const fundingRows = hasFundingTable
+          ? yield* sqlite.queryAll<{
+              fundingRate: number;
+              timestamp: string;
+            }>(
+              `SELECT funding_rate AS fundingRate, timestamp FROM funding_rates
+               WHERE exchange = 'bybit' AND symbol = ? AND timestamp >= ? AND timestamp <= ?
+               ORDER BY timestamp ASC`,
+              [symbol, start.toISOString(), end.toISOString()],
+            )
+          : [];
+        totalCandles += candleRows.length;
+        series.push({
+          symbol,
+          exchange: "bybit",
+          timeframe: args.timeframe,
+          candles: candleRows.map((r) => ({
+            open: r.open,
+            high: r.high,
+            low: r.low,
+            close: r.close,
+            volume: r.volume,
+            timestamp: new Date(r.timestamp),
+          })),
+          oi: oiRows.map((r) => ({
+            ts: r.ts,
+            oi: r.oi,
+            oiValue: r.oiValue ?? undefined,
+          })),
+          funding: fundingRows.map((r) => ({
+            ts: new Date(r.timestamp).getTime(),
+            fundingRate: r.fundingRate,
+          })),
+        });
+      }
+      if (totalCandles === 0) {
+        return yield* Effect.fail(
+          new MarketDataRepositoryError(
+            `No candles found for ${symbols.join(",")} at ${args.timeframe} between ${start.toISOString()} and ${end.toISOString()} (exchange=bybit). Run the flow data fetch first.`,
+          ),
+        );
+      }
+      const data: FlowBacktestData = { series, options };
+      return runFlowBacktest(data);
+    }).pipe(
+      Effect.tap((report) => Console.log(formatFlowBacktestReport(report))),
+      Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME)),
+    ),
+).pipe(
+  Command.withDescription(
+    "Run the flow-v1 walk-forward backtest on DB candles/OI/funding",
+  ),
+);
+
+export const flowUniverseCommand = Command.make(
+  "flow-universe",
+  {
+    limit: flowLimitOption,
+    minTurnover: flowMinTurnoverOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      // Mainnet Bybit public market data (no auth needed).
+      const baseUrl = "https://api.bybit.com";
+      const volumes = yield* fetch24hrVolumes(baseUrl);
+      const instruments = yield* fetchInstruments(baseUrl);
+      const ranked = selectFlowUniverse(volumes, instruments, undefined, {
+        topN: args.limit,
+      });
+      return args.minTurnover > 0
+        ? ranked.filter((e) => e.turnover24h >= args.minTurnover)
+        : ranked;
+    }).pipe(
+      Effect.tap((entries) => Console.log(formatFlowUniverse(entries))),
+      Effect.catch((err) =>
+        Effect.gen(function* () {
+          const msg =
+            err instanceof Error
+              ? err.message
+              : (err as { reason?: string }).reason ?? String(err);
+          yield* Console.error(`flow-universe failed: ${msg}`);
+          return [] as readonly FlowUniverseEntry[];
+        }),
+      ),
+      Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME)),
+    ),
+).pipe(
+  Command.withDescription(
+    "Rank the liquid USDT-perp universe by 24h turnover (mainnet Bybit)",
+  ),
+);
+
+export const flowRecordCommand = Command.make(
+  "flow-record",
+  {
+    symbols: Options.text("symbols").pipe(
+      Options.withDefault(""),
+      Options.withDescription(
+        "Comma-separated Bybit linear symbols (default: flow universe top-40 or fallback set)",
+      ),
+    ),
+    duration: Options.integer("duration").pipe(
+      Options.withDefault(0),
+      Options.withDescription(
+        "Minutes to record before exiting (0 = until Ctrl-C)",
+      ),
+    ),
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const sqlite = yield* SqliteClient;
+      const paperRepo = new PaperTradingRepositorySQLite(sqlite.database);
+      const flowRepo: FlowRecorderRepository = paperRepo;
+
+      const symbols = yield* Effect.promise(() =>
+        resolveFlowSymbols(
+          args.symbols.length > 0
+            ? args.symbols
+                .split(",")
+                .map((s) => s.trim())
+                .filter((s) => s.length > 0)
+            : undefined,
+        ),
+      );
+
+      yield* Console.log(
+        `Recording live flow (trades/liquidations) for ${symbols.length} symbols ` +
+          "from Bybit mainnet public WS; Ctrl-C to stop.",
+      );
+
+      const record = runFlowRecorder(flowRepo, {
+        symbols,
+        onFlush: (rows) => {
+          for (const row of rows) {
+            console.log(
+              `[flow] ${new Date(row.ts).toISOString()} ${row.symbol} ` +
+                `buy=${row.buyVol} sell=${row.sellVol} trades=${row.trades}`,
+            );
+          }
+        },
+        onAggregate: (rows, prices) => {
+          for (const row of rows) {
+            const last = prices.get(row.symbol);
+            console.log(
+              `[flow] ${new Date(row.ts).toISOString()} ${row.symbol} ` +
+                `buy=${row.buyVol} sell=${row.sellVol} trades=${row.trades}` +
+                (last !== undefined ? ` last=${last}` : ""),
+            );
+          }
+        },
+        onWarn: (message) => console.warn(`[flow] ${message}`),
+      });
+
+      if (args.duration > 0) {
+        // Whichever finishes first wins; the loser is interrupted, which runs
+        // the recorder's close finalizer (flush + clean WS shutdown).
+        yield* Effect.race(
+          record,
+          Effect.sleep(Duration.minutes(args.duration)),
+        );
+      } else {
+        yield* record;
+      }
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Record live Bybit order-flow (trades -> 1m OFI, liquidations) into the DB",
+  ),
+);
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay|flow-backtest|flow-universe|flow-record --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -5485,5 +5839,8 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     parityReplayCommand,
     gridUniverseScanCommand,
     watchlistCommand,
+    flowBacktestCommand,
+    flowUniverseCommand,
+    flowRecordCommand,
   ]),
 );

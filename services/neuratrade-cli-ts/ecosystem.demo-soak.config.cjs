@@ -426,5 +426,29 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      // Flow Ignition live recorder: streams Bybit mainnet public trades
+      // (publicTrade.*) into 1-minute flow_ofi_1m buckets and liquidation
+      // prints into flow_liquidations. Interval-less (runs until the WS
+      // fails after reconnect retries; pm2 autorestart brings it back).
+      name: "neuratrade-flow-recorder",
+      script: "bun",
+      args: ["run", "index.ts", "scalp", "flow-record"],
+      cwd: cliTsDir,
+      env: {
+        ...rootEnv,
+        NEURATRADE_HOME: neuratradeHome,
+        NODE_ENV: "production",
+      },
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 30_000,
+      out_file: path.join(neuratradeHome, "logs", "flow-recorder.out.log"),
+      error_file: path.join(neuratradeHome, "logs", "flow-recorder.err.log"),
+      max_size: "50M",
+      retain: 5,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };
