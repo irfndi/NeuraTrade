@@ -274,6 +274,95 @@ describe("Bybit gateway", () => {
     expect(result._tag).toBe("Failure");
   });
 
+  it("fetchTick rejects zero-price tickers", async () => {
+    mockFetch({
+      retCode: 0,
+      retMsg: "OK",
+      result: {
+        category: "linear",
+        list: [{ symbol: "BTCUSDT", lastPrice: "" }],
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Bybit.fetchTick("BTC/USDT").pipe(
+        Effect.match({
+          onFailure: (err) => ({ ok: false, reason: err.reason }),
+          onSuccess: () => ({ ok: true, reason: "" }),
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("invalid price");
+  });
+
+  it("fetchFundingRates stops once a page predates startTime", async () => {
+    const requests: string[] = [];
+    const start = new Date("2023-12-31T08:00:00Z"); // 1704009600000
+    const pages: Record<string, unknown> = {
+      first: {
+        retCode: 0,
+        retMsg: "OK",
+        result: {
+          category: "linear",
+          list: [
+            {
+              symbol: "BTCUSDT",
+              fundingRate: "0.0001",
+              fundingTime: "1704067200000",
+            },
+            {
+              symbol: "BTCUSDT",
+              fundingRate: "0.00009",
+              fundingTime: "1704038400000",
+            },
+          ],
+          nextPageCursor: "page2",
+        },
+      },
+      page2: {
+        retCode: 0,
+        retMsg: "OK",
+        result: {
+          category: "linear",
+          list: [
+            {
+              symbol: "BTCUSDT",
+              fundingRate: "0.00008",
+              fundingTime: "1704009600000",
+            },
+            {
+              symbol: "BTCUSDT",
+              fundingRate: "0.00007",
+              fundingTime: "1703980800000",
+            },
+          ],
+          nextPageCursor: "page3",
+        },
+      },
+    };
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      requests.push(u);
+      const body = u.includes("cursor=page2") ? pages.page2 : pages.first;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Bybit.fetchFundingRates("BTC/USDT:USDT", start),
+    );
+
+    // Page 2's oldest row (1703980800000) predates startTime; page3 exists
+    // in the fixture but must never be fetched.
+    expect(requests).toHaveLength(2);
+    expect(rates.map((r) => r.fundingRate)).toEqual([0.0001, 0.00009, 0.00008]);
+    expect(requests.some((u) => u.includes("cursor=page3"))).toBe(false);
+  });
+
   it("paginates instruments-info with cursor", async () => {
     const requests: string[] = [];
     const pages: Record<string, unknown> = {

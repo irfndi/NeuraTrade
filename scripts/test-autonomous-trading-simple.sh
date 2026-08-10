@@ -6,7 +6,8 @@
 # Usage: bash scripts/test-autonomous-trading-simple.sh
 #
 
-source "$(dirname "$0")/lib/test-lib.sh"
+# shellcheck source=lib/test-lib.sh
+source "$(dirname "$0")/lib/test-lib.sh" || { echo "missing test-lib.sh" >&2; exit 1; }
 
 nt_init "NeuraTrade Autonomous Trading Test Suite"
 
@@ -88,7 +89,7 @@ nt_header "4. CCXT Market Data (Auth vs Non-Auth)"
 nt_info "IMPORTANT: CCXT provides PUBLIC market data WITHOUT authentication"
 nt_info "Authentication is ONLY required for: trading, balances, orders"
 
-if curl -s --connect-timeout 3 http://localhost:3001/health >/dev/null 2>&1; then
+if curl -fsS --connect-timeout 3 --max-time 5 http://localhost:3001/health >/dev/null 2>&1; then
   # Test public endpoints
   nt_info "Testing PUBLIC endpoints (no API keys needed)..."
 
@@ -110,14 +111,21 @@ if curl -s --connect-timeout 3 http://localhost:3001/health >/dev/null 2>&1; the
 
   # Test protected endpoint
   nt_info "Testing PROTECTED endpoint (API keys required)..."
-  BALANCE=$(curl -s --connect-timeout 5 "http://localhost:3001/api/balance/binance" 2>/dev/null)
-  if echo "$BALANCE" | grep -qi "error.*auth\|error.*key\|error.*API"; then
-    nt_test_result "GET /api/balance/binance" "pass" "correctly requires auth"
-  elif [ -n "$BALANCE" ]; then
-    nt_test_result "GET /api/balance/binance" "pass" "returns data (API keys configured)"
-  else
-    nt_test_result "GET /api/balance/binance" "skip" "service issue"
-  fi
+  BALANCE_TMP=$(mktemp)
+  BALANCE_CODE=$(curl -s --max-time 5 -o "$BALANCE_TMP" -w '%{http_code}' "http://localhost:3001/api/balance/binance" || true)
+  BALANCE=$(cat "$BALANCE_TMP")
+  rm -f "$BALANCE_TMP"
+  case "$BALANCE_CODE" in
+    2*)
+      nt_test_result "GET /api/balance/binance" "pass" "returns data (API keys configured)"
+      ;;
+    401|403)
+      nt_test_result "GET /api/balance/binance" "pass" "correctly requires auth"
+      ;;
+    *)
+      nt_test_result "GET /api/balance/binance" "skip" "service issue (HTTP $balance_code)"
+      ;;
+  esac
 else
   nt_test_result "CCXT market data tests" "skip" "service not running"
 fi
@@ -135,31 +143,48 @@ nt_check_bot_reachable "$(nt_get_bot_token)" || true
 # ============================================================================
 nt_header "5A. Autonomous API Endpoints"
 
-if curl -s --connect-timeout 3 http://localhost:8080/health >/dev/null 2>&1; then
+if curl -fsS --connect-timeout 3 --max-time 5 http://localhost:8080/health >/dev/null 2>&1; then
   # Test Portfolio safety
-  PORTFOLIO=$(curl -s --connect-timeout 5 "http://localhost:8080/api/v1/telegram/internal/portfolio?chat_id=test_chat_123" 2>/dev/null)
-  if nt_validate_json_field "$PORTFOLIO" "safety_status"; then
-    nt_test_result "GET /api/v1/telegram/internal/portfolio" "pass" "contains safety status"
-  else
-    # might fail if no auth, since it requires auth but we just check if it's reachable or gives auth error
-    if echo "$PORTFOLIO" | grep -qi "unauthorized\|error"; then
+  PORTFOLIO_TMP=$(mktemp)
+  PORTFOLIO_CODE=$(curl -s --max-time 5 -o "$PORTFOLIO_TMP" -w '%{http_code}' "http://localhost:8080/api/v1/telegram/internal/portfolio?chat_id=test_chat_123" || true)
+  PORTFOLIO=$(cat "$PORTFOLIO_TMP")
+  rm -f "$PORTFOLIO_TMP"
+  case "$PORTFOLIO_CODE" in
+    2*)
+      if nt_validate_json_field "$PORTFOLIO" "safety_status"; then
+        nt_test_result "GET /api/v1/telegram/internal/portfolio" "pass" "contains safety status"
+      else
+        nt_test_result "GET /api/v1/telegram/internal/portfolio" "fail" "no valid response"
+      fi
+      ;;
+    401|403)
       nt_test_result "GET /api/v1/telegram/internal/portfolio" "pass" "correctly rejects unauthorized"
-    else
-      nt_test_result "GET /api/v1/telegram/internal/portfolio" "fail" "no valid response"
-    fi
-  fi
+      ;;
+    *)
+      nt_test_result "GET /api/v1/telegram/internal/portfolio" "skip" "HTTP $PORTFOLIO_CODE"
+      ;;
+  esac
 
   # Test Doctor Check
-  DOCTOR=$(curl -s --connect-timeout 5 "http://localhost:8080/internal/telegram/doctor?chat_id=test_chat_123" 2>/dev/null)
-  if nt_validate_json_field "$DOCTOR" "checks"; then
-    nt_test_result "GET /internal/telegram/doctor" "pass" "contains doctor checks"
-  else
-    if echo "$DOCTOR" | grep -qi "unauthorized\|error"; then
+  DOCTOR_TMP=$(mktemp)
+  DOCTOR_CODE=$(curl -s --max-time 5 -o "$DOCTOR_TMP" -w '%{http_code}' "http://localhost:8080/internal/telegram/doctor?chat_id=test_chat_123" || true)
+  DOCTOR=$(cat "$DOCTOR_TMP")
+  rm -f "$DOCTOR_TMP"
+  case "$DOCTOR_CODE" in
+    2*)
+      if nt_validate_json_field "$DOCTOR" "checks"; then
+        nt_test_result "GET /internal/telegram/doctor" "pass" "contains doctor checks"
+      else
+        nt_test_result "GET /internal/telegram/doctor" "fail" "no valid response"
+      fi
+      ;;
+    401|403)
       nt_test_result "GET /internal/telegram/doctor" "pass" "correctly rejects unauthorized"
-    else
-      nt_test_result "GET /internal/telegram/doctor" "fail" "no valid response"
-    fi
-  fi
+      ;;
+    *)
+      nt_test_result "GET /internal/telegram/doctor" "skip" "HTTP $DOCTOR_CODE"
+      ;;
+  esac
 else
   nt_test_result "Autonomous API Endpoints" "skip" "backend not running"
 fi

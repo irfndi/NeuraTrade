@@ -30,6 +30,11 @@ var (
 	ErrInvalidRequest     = errors.New("invalid order request")
 	ErrExecutionRejected  = errors.New("order execution rejected")
 	ErrRiskNotApproved    = errors.New("risk approval required")
+	// ErrIntentConflict is returned when an intent ID is reused with order
+	// parameters that conflict with the original placement (exchange,
+	// symbol, side, type, amount, or price differ). Callers should surface
+	// this as a 409 Conflict instead of silently returning the old status.
+	ErrIntentConflict = errors.New("duplicate intent: conflicting order parameters")
 )
 
 // Message types for ExecutionActor
@@ -120,6 +125,11 @@ type ExecutionActor struct {
 	idempotencyStore IdempotencyStore
 	auditLog         AuditLogger
 	liveGuard        *liveguard.Guard
+
+	// killSwitch is re-validated immediately before gateway.PlaceOrder so a
+	// kill switch engaged after risk evaluation still blocks placement
+	// (closes the evaluate-then-place TOCTOU window).
+	killSwitch interface{ IsEngaged() bool }
 
 	chatLiveChecker func(ctx context.Context, chatID string) bool
 
@@ -219,6 +229,17 @@ func (a *ExecutionActor) WithLiveGuard(guard *liveguard.Guard) *ExecutionActor {
 	return a
 }
 
+// WithKillSwitch installs the shared kill switch so the actor re-validates
+// engagement immediately before placement. Returns the actor for chaining;
+// pass nil to remove the check.
+func (a *ExecutionActor) WithKillSwitch(ks interface{ IsEngaged() bool }) *ExecutionActor {
+	if a == nil {
+		return a
+	}
+	a.killSwitch = ks
+	return a
+}
+
 func (a *ExecutionActor) WithChatLiveChecker(fn func(ctx context.Context, chatID string) bool) *ExecutionActor {
 	if a == nil {
 		return a
@@ -284,6 +305,12 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		return fmt.Errorf("load intent %s: %w", msg.IntentID, err)
 	}
 	if existing != nil {
+		// Intent already exists - this is a retry. If the request parameters
+		// conflict with the original placement, reject with a conflict error
+		// instead of silently returning the old intent's status.
+		if orderRequestFingerprint(existing.Request) != orderRequestFingerprint(msg.Request) {
+			return fmt.Errorf("%w: intent %s was placed with different order parameters", ErrIntentConflict, msg.IntentID)
+		}
 		// Intent already exists - this is a retry
 		if existing.IsTerminal() {
 			// Order already in terminal state, return success without re-executing.
@@ -401,12 +428,62 @@ func (a *ExecutionActor) handlePlaceOrder(ctx context.Context, msg PlaceOrderMsg
 		return ErrRiskNotApproved
 	}
 
+	// Re-validate the kill switch at placement time: the kill switch may
+	// have engaged between risk evaluation and here (TOCTOU), and a caller
+	// must not be able to bypass it by setting RiskApproved.
+	if a.killSwitch != nil && a.killSwitch.IsEngaged() {
+		intent.Status = ports.OrderStatusRejected
+		intent.RejectReason = "kill switch engaged at placement time"
+		intent.UpdatedAt = time.Now()
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		updateErr := a.idempotencyStore.UpdateIntent(updateCtx, intent)
+		updateCancel()
+
+		a.logAuditEvent(ctx, msg.IntentID, "rejected", msg.Request.Exchange, msg.Request.Symbol, "kill switch engaged at placement time", nil)
+		a.publishEvent(ctx, ports.EventTypeOrderRejected, intent)
+		metrics.ExecutionOrdersTotal.WithLabelValues(
+			msg.Request.Exchange, msg.Request.Symbol, string(msg.Request.Side), "rejected",
+		).Inc()
+		a.updatePendingGauge()
+		if updateErr != nil {
+			return errors.Join(
+				fmt.Errorf("%w: kill switch engaged", ErrExecutionRejected),
+				fmt.Errorf("persist kill-switch rejected intent: %w", updateErr),
+			)
+		}
+		return fmt.Errorf("%w: kill switch engaged at placement time", ErrExecutionRejected)
+	}
+
 	// Execute order via gateway
 	req := msg.Request
 	req.ClientID = clientOrderID
 
 	result, err := a.gateway.PlaceOrder(ctx, req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// The gateway call was interrupted (client disconnect or
+			// server-side deadline). The exchange may still have accepted
+			// the order, so the outcome is UNKNOWN, not rejected: mark the
+			// intent open so callers reconcile with the exchange instead of
+			// treating it as a definitive rejection.
+			intent.Status = ports.OrderStatusOpen
+			intent.RejectReason = "placement outcome unknown: gateway call interrupted"
+			intent.UpdatedAt = time.Now()
+			updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			updateErr := a.idempotencyStore.UpdateIntent(updateCtx, intent)
+			updateCancel()
+
+			a.logAuditEvent(ctx, msg.IntentID, "outcome_unknown", req.Exchange, req.Symbol, "gateway call interrupted; reconcile with exchange", nil)
+			a.publishEvent(ctx, ports.EventTypeOrderPlaced, intent)
+			a.updatePendingGauge()
+			if updateErr != nil {
+				return errors.Join(
+					fmt.Errorf("%w: gateway call interrupted, order status unknown", ErrExecutionTimeout),
+					fmt.Errorf("persist unknown-outcome intent: %w", updateErr),
+				)
+			}
+			return fmt.Errorf("%w: gateway call interrupted, order status unknown", ErrExecutionTimeout)
+		}
 		reason := sanitizeExternalError(err)
 		intent.Status = ports.OrderStatusRejected
 		intent.RejectReason = reason
@@ -817,6 +894,21 @@ func generateClientOrderID(intentID string, attempt int) string {
 	hash := sha256.Sum256([]byte(data))
 	// Use first 16 chars of hex for exchange compatibility
 	return "NT" + hex.EncodeToString(hash[:])[:16]
+}
+
+// orderRequestFingerprint canonicalizes the order parameters that identify a
+// placement. It is used to detect conflicting reuse of an intent ID: two
+// placements with the same intent ID but a different fingerprint are a
+// contract violation, not an idempotent retry.
+func orderRequestFingerprint(req ports.OrderRequest) string {
+	return strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(req.Exchange)),
+		strings.TrimSpace(req.Symbol),
+		string(req.Side),
+		string(req.Type),
+		req.Amount.String(),
+		req.Price.String(),
+	}, "|")
 }
 
 // generateEventID creates a unique event ID

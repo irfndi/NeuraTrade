@@ -571,10 +571,52 @@ function parseCommandOptions(
 // Dispatch
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Index of every option name/alias across the whole command tree, used to
+ * decide a flag's arity (does it consume a value?) during the token walk,
+ * before the flag has been attributed to the command that defines it.
+ * Root-first, depth-first; first registration wins.
+ */
+function collectTreeFlags(
+  command: AnyCommand,
+  acc: Map<string, AnyOptionSpec>,
+): void {
+  for (const [, spec] of command.options) {
+    if (!acc.has(spec.name)) acc.set(spec.name, spec);
+    if (spec.alias !== undefined && !acc.has(spec.alias)) {
+      acc.set(spec.alias, spec);
+    }
+  }
+  for (const sub of command.subcommands) collectTreeFlags(sub, acc);
+}
+
+/** First command on the resolved path that defines the flag (name or alias). */
+function flagOwner(
+  path: ReadonlyArray<AnyCommand>,
+  bare: string,
+  isAlias: boolean,
+): AnyCommand | undefined {
+  for (const command of path) {
+    const { byName, byAlias } = flagLookup(command);
+    if (isAlias ? byAlias.has(bare) : byName.has(bare)) return command;
+  }
+  return undefined;
+}
+
 /**
  * Pure evaluation of argv against a command tree. Descends subcommands,
  * parses options at every level, and returns a discriminated outcome.
  * The handler is captured in a closure — nothing is executed here.
+ *
+ * Flags parse regardless of position relative to the subcommand:
+ * `cmd --bars 5 replay` and `cmd replay --bars 5` are equivalent. Each flag
+ * is attributed to the first command on the resolved path that defines it,
+ * so a flag that precedes the subcommand still reaches the command it
+ * belongs to instead of being rejected as unknown at the parent level.
  */
 export function evaluate(
   root: AnyCommand,
@@ -585,31 +627,105 @@ export function evaluate(
     return { _tag: "version", text: config.version };
   }
 
-  // Descend the subcommand tree, collecting the remaining tokens per level.
+  const treeFlags = new Map<string, AnyOptionSpec>();
+  collectTreeFlags(root, treeFlags);
+
+  // Descend the subcommand tree, collecting flags wherever they appear.
+  // Non-boolean flags consume the next token as their value even if it
+  // looks like a flag (e.g. `--fee -1.5`), so values never become
+  // positional tokens and never collide with subcommand names.
   const path: AnyCommand[] = [root];
-  const buckets = new Map<AnyCommand, string[]>([[root, []]]);
   let current = root;
   let helpRequested = false;
-
-  for (const token of argv) {
+  const flags: Array<{
+    readonly bare: string;
+    readonly isAlias: boolean;
+    readonly token: string;
+    readonly valueToken?: string;
+  }> = [];
+  let firstBadPositional: { readonly token: string; readonly at: AnyCommand } | undefined;
+  let i = 0;
+  while (i < argv.length) {
+    const token = argv[i];
     if (token === "--help" || token === "-h") {
       helpRequested = true;
+      i += 1;
       continue;
     }
+    if (token.startsWith("--") || (token.startsWith("-") && token.length > 1)) {
+      const body = token.slice(token.startsWith("--") ? 2 : 1);
+      const eq = body.indexOf("=");
+      const bare = eq >= 0 ? body.slice(0, eq) : body;
+      const isAlias = !token.startsWith("--");
+      const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
+      const spec = treeFlags.get(bare);
+      // Unknown flags still consume a following non-dash token so it is not
+      // mistaken for a subcommand/positional; they error at attribution below.
+      const takesValue =
+        inline === undefined &&
+        (spec === undefined
+          ? i + 1 < argv.length && !argv[i + 1].startsWith("-")
+          : spec.kind !== "boolean");
+      const valueToken =
+        takesValue && i + 1 < argv.length ? argv[i + 1] : undefined;
+      flags.push({ bare, isAlias, token, valueToken });
+      i += valueToken !== undefined ? 2 : 1;
+      continue;
+    }
+    // Positional token: a subcommand name descends; anything else is a
+    // stray argument (recorded, reported only when no --help was given).
     if (current.subcommands.length > 0) {
       const sub = current.subcommands.find((s) => s.name === token);
       if (sub !== undefined) {
         path.push(sub);
-        buckets.set(sub, []);
         current = sub;
+        i += 1;
         continue;
       }
     }
-    buckets.get(current)?.push(token);
+    if (firstBadPositional === undefined) {
+      firstBadPositional = { token, at: current };
+    }
+    i += 1;
   }
 
   if (helpRequested) {
     return { _tag: "help", text: helpText(current, path, config) };
+  }
+
+  if (firstBadPositional !== undefined) {
+    const { token, at } = firstBadPositional;
+    const message =
+      at.subcommands.length > 0
+        ? `Invalid subcommand '${token}' for ${at.name} - use one of ${at.subcommands
+            .map((s) => `'${s.name}'`)
+            .join(", ")}`
+        : `Received unknown argument: '${token}'`;
+    const help = helpText(at, path.slice(0, path.indexOf(at) + 1), config);
+    return { _tag: "error", message: `${message}\n\n${help}` };
+  }
+
+  // Attribute each flag to the first command on the path that defines it,
+  // rebuilding that command's token stream in original order so
+  // parseCommandOptions sees exactly what it saw when the flag followed
+  // the subcommand.
+  const buckets = new Map<AnyCommand, string[]>();
+  for (const flag of flags) {
+    const owner = flagOwner(path, flag.bare, flag.isAlias);
+    if (owner === undefined) {
+      const help = helpText(current, path, config);
+      return {
+        _tag: "error",
+        message: `Unknown option '--${flag.bare}' for command '${current.name}'\n\n${help}`,
+      };
+    }
+    let bucket = buckets.get(owner);
+    if (bucket === undefined) {
+      bucket = [];
+      buckets.set(owner, bucket);
+    }
+    bucket.push(flag.token);
+    if (flag.valueToken !== undefined) bucket.push(flag.valueToken);
   }
 
   // Parse options from the root down so parent-level errors surface first.

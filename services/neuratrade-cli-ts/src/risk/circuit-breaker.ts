@@ -1,6 +1,5 @@
 import { Context, Effect, Layer } from "effect";
 import type { Database } from "bun:sqlite";
-import { Decimal } from "../utils/money.js";
 
 export class CircuitBreakerError {
   readonly _tag = "CircuitBreakerError" as const;
@@ -38,6 +37,12 @@ CREATE TABLE IF NOT EXISTS risk_circuit_breaker (
 );
 `;
 
+/** UTC calendar day key. This deliberately matches the trading loop's day
+ *  definition: paper-trading/repository.ts keys start-of-day capital by
+ *  `date.toISOString().slice(0, 10)` and realized PnL by SQLite
+ *  `date('now')` (both UTC), so breaker resets stay aligned with
+ *  startOfDayCapital resets. Change together if a local/UTC+8 boundary is
+ *  ever adopted. */
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -50,18 +55,53 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
     this.db.exec(ensureTableSQL);
   }
 
-  private upsertRow(dailyPnl: number, open: boolean, reason: string): void {
+  /** Single-statement UPSERT: accumulates daily_pnl and re-evaluates the
+   *  open latch atomically inside SQLite's ON CONFLICT clause, so
+   *  concurrent recordTradeResult calls cannot lose updates (no
+   *  read-then-write window). Params: ?1 date key, ?2 per-trade pnl %,
+   *  ?3 max daily loss % (reused). */
+  private accumulateSQL = `
+INSERT INTO risk_circuit_breaker (date, daily_pnl, open, reason, updated_at)
+VALUES (
+  ?1,
+  ?2,
+  CASE WHEN ?2 <= -?3 THEN 1 ELSE 0 END,
+  CASE WHEN ?2 <= -?3 THEN
+    printf('Daily loss %.2f%% reached threshold %.2f%%', ABS(?2), ?3)
+    ELSE '' END,
+  datetime('now')
+)
+ON CONFLICT(date) DO UPDATE SET
+  daily_pnl = daily_pnl + excluded.daily_pnl,
+  open = CASE
+    WHEN risk_circuit_breaker.open = 1 THEN 1
+    WHEN risk_circuit_breaker.daily_pnl + excluded.daily_pnl <= -?3 THEN 1
+    ELSE 0
+  END,
+  reason = CASE
+    WHEN risk_circuit_breaker.open = 1 THEN risk_circuit_breaker.reason
+    WHEN risk_circuit_breaker.daily_pnl + excluded.daily_pnl <= -?3 THEN
+      printf('Daily loss %.2f%% reached threshold %.2f%%',
+             ABS(risk_circuit_breaker.daily_pnl + excluded.daily_pnl), ?3)
+    ELSE ''
+  END,
+  updated_at = excluded.updated_at
+`;
+
+  private openBreaker(reason: string): void {
+    // Preserves the accumulated daily_pnl while forcing the breaker open.
     this.db
       .query(
         `INSERT INTO risk_circuit_breaker (date, daily_pnl, open, reason, updated_at)
-         VALUES (?, ?, ?, ?, datetime('now'))
+         VALUES (?, 0, 1, ?, datetime('now'))
          ON CONFLICT(date) DO UPDATE SET
-           daily_pnl = excluded.daily_pnl,
-           open = excluded.open,
-           reason = excluded.reason,
+           open = 1,
+           reason = CASE
+             WHEN risk_circuit_breaker.open = 1 THEN risk_circuit_breaker.reason
+             ELSE excluded.reason END,
            updated_at = excluded.updated_at`,
       )
-      .run(todayKey(), dailyPnl, open ? 1 : 0, reason);
+      .run(todayKey(), reason);
   }
 
   private readRow(): {
@@ -92,25 +132,17 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
   ): Effect.Effect<void, CircuitBreakerError, never> {
     return Effect.try({
       try: () => {
-        const existing = this.readRow();
-        const prevPnl = existing?.dailyPnl ?? 0;
-        const pnlPct =
-          startOfDayCapital > 0 ? (realizedPnl / startOfDayCapital) * 100 : 0;
-        const newPnl = new Decimal(prevPnl).plus(pnlPct).toNumber();
-        const shouldOpen = newPnl <= -this.maxDailyLossPct;
-        const wasOpen = existing?.open ?? false;
-
-        if (shouldOpen && !wasOpen) {
-          this.upsertRow(
-            newPnl,
-            true,
-            `Daily loss ${Math.abs(newPnl).toFixed(2)}% reached threshold ${this.maxDailyLossPct}%`,
+        if (startOfDayCapital <= 0) {
+          // Zero/negative start-of-day capital means the daily loss limit
+          // cannot be expressed as a percentage — fail closed instead of
+          // recording 0% (which would let losses through unmeasured).
+          this.openBreaker(
+            `Start-of-day capital ${startOfDayCapital} is not positive; trading halted`,
           );
-        } else if (wasOpen) {
-          this.upsertRow(newPnl, true, existing!.reason);
-        } else {
-          this.upsertRow(newPnl, false, "");
+          return;
         }
+        const pnlPct = (realizedPnl / startOfDayCapital) * 100;
+        this.db.query(this.accumulateSQL).run(todayKey(), pnlPct, this.maxDailyLossPct);
       },
       catch: (err) =>
         new CircuitBreakerError(

@@ -5,6 +5,7 @@ package ccxt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -145,10 +146,17 @@ func (a *Adapter) IsHealthy(ctx context.Context) bool {
 // ============================================================
 
 // PlaceOrder places a new order.
+//
+// The wrapped ccxt.CCXTService does not expose an order-placement method
+// (only cancel/fetch), so a real placement cannot be delegated here. Callers
+// that depend on this method MUST treat an error as a fail-loud condition
+// (e.g. engage the kill switch on the max-loss close path) rather than
+// assuming the order was placed.
 func (a *Adapter) PlaceOrder(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error) {
-	// Note: The existing CCXT service may not have a PlaceOrder method.
-	// This is a placeholder that should be implemented when trading is enabled.
-	return ports.OrderResult{}, errors.New("PlaceOrder not implemented: trading not enabled")
+	return ports.OrderResult{}, fmt.Errorf(
+		"PlaceOrder not implemented: ccxt service exposes no order placement capability (exchange=%s symbol=%s side=%s type=%s)",
+		req.Exchange, req.Symbol, req.Side, req.Type,
+	)
 }
 
 // CancelOrder cancels an existing order.

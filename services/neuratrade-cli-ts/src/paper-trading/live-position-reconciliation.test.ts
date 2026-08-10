@@ -140,4 +140,159 @@ describe("reconcileLivePosition", () => {
       reason: "local position lacks complete live entry evidence",
     });
   });
+
+  it("rejects an exchange position without local state", () => {
+    const result = reconcileLivePosition(
+      {
+        side: null,
+        entryFillSource: undefined,
+        entryFilledQty: undefined,
+        entryOrderId: undefined,
+        entryFee: undefined,
+      },
+      makePosition("long", money("0.01")),
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "exchange position exists without local state (long 0.01)",
+    });
+  });
+
+  it("rejects local state without an exchange position", () => {
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: money("0.01"),
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      null,
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason: "local state exists without exchange position",
+    });
+  });
+
+  it("rejects a side mismatch", () => {
+    const quantity = money("0.01");
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      makePosition("short", quantity),
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "local long position differs from exchange short position",
+    });
+  });
+
+  it("rejects a margin mode mismatch", () => {
+    const quantity = money("0.01");
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      makePosition("long", quantity),
+      {
+        productType: "USDT-FUTURES",
+        marginMode: "crossed",
+        leverage: 1,
+        entryPrice: money("70000"),
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "exchange margin mode isolated differs from expected crossed",
+    });
+  });
+
+  it("rejects a leverage mismatch", () => {
+    const quantity = money("0.01");
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      makePosition("long", quantity),
+      {
+        productType: "USDT-FUTURES",
+        marginMode: "isolated",
+        leverage: 5,
+        entryPrice: money("70000"),
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason: "exchange leverage 1 differs from expected 5",
+    });
+  });
+
+  it("rejects an entry price mismatch", () => {
+    const quantity = money("0.01");
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      makePosition("long", quantity),
+      {
+        productType: "USDT-FUTURES",
+        marginMode: "isolated",
+        leverage: 1,
+        entryPrice: money("71000"),
+      },
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "exchange entry price 70000 differs from expected 71000",
+    });
+  });
+
+  it("rejects an available != quantity position", () => {
+    const quantity = money("0.01");
+    const position = makePosition("long", quantity);
+    const result = reconcileLivePosition(
+      {
+        side: "long",
+        entryFillSource: "live",
+        entryFilledQty: quantity,
+        entryOrderId: "entry-1",
+        entryFee: money(0),
+      },
+      { ...position, available: money("0.005") },
+    );
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      reason:
+        "exchange available quantity 0.005 differs from total quantity 0.01",
+    });
+  });
 });

@@ -816,7 +816,9 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 			sharedKillSwitch.SetStore(store)
 			reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
-				zaplogrus.Warnf("kill switch reconcile: %v", err)
+				// Reconcile fails closed (kill switch engaged in memory);
+				// log loudly so the operator knows trading is blocked.
+				zaplogrus.Errorf("kill switch reconcile failed; trading is BLOCKED (fail-closed) until resolved: %v", err)
 			}
 			reconcileCancel()
 		}
@@ -1491,7 +1493,8 @@ func SetupRoutes(ctx context.Context, router *gin.Engine, db routeDB, redis *dat
 		data := v1.Group("/data")
 		{
 			data.GET("/stats", cleanupHandler.GetDataStats)
-			data.POST("/cleanup", cleanupHandler.TriggerCleanup)
+			// Cleanup is destructive (deletes data), so it requires admin auth.
+			data.POST("/cleanup", adminMiddleware.RequireAdminAuth(), cleanupHandler.TriggerCleanup)
 		}
 
 		// Risk management

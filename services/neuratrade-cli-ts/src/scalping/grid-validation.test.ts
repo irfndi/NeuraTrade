@@ -262,15 +262,21 @@ describe("deterministic grid validation", () => {
     expect(result.seed).toBe(20260802);
   });
 
-  it("rejects exponent-form values at the bootstrap boundary", () => {
-    expect(() =>
-      bootstrapBlockConfidence(
-        ["1e-3", "2", "3", "4", "5", "6"],
-        20260802,
-        5,
-        10,
-      ),
-    ).toThrow("invalid block-bootstrap input");
+  it("accepts exponent-form values at the bootstrap boundary (valid finite pnlPct)", () => {
+    // pnlPct.toString() legitimately serializes tiny values in exponential
+    // notation (e.g. "1e-7"); rejecting them crashed the whole universe
+    // scan on valid evidence (2026-08-10). Exponent-form strings are finite
+    // numbers and must bootstrap like any other evidence.
+    const result = bootstrapBlockConfidence(
+      ["1e-3", "2", "3", "4", "5", "6"],
+      20260802,
+      5,
+      10,
+    );
+    expect(Number.isFinite(result.lowerBoundPct)).toBe(true);
+    expect(Number.isFinite(result.upperBoundPct)).toBe(true);
+    expect(result.sampleCount).toBe(6);
+    expect(result.resamples).toBe(10);
   });
 
   it("rejects non-finite bootstrap input and a zero seed", () => {

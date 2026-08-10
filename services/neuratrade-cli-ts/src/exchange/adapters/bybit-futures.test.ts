@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import type { MarketDataGatewayService } from "../../market-data/gateway.js";
 import {
+  BybitApiError,
+  bybitPositionIdx,
   type BybitClientImpl,
   type BybitOrderRequest,
   makeBybitFuturesAdapter,
@@ -16,10 +18,14 @@ const GATEWAY_PRICE = 40000;
 
 let calls: string[] = [];
 let lastOrder: BybitOrderRequest | undefined;
+let orderStatus = "Filled";
+let cancelError: string | undefined;
 
 function makeStubClient(): BybitClientImpl {
   calls = [];
   lastOrder = undefined;
+  orderStatus = "Filled";
+  cancelError = undefined;
   return {
     getContract: () =>
       Effect.succeed({
@@ -70,13 +76,26 @@ function makeStubClient(): BybitClientImpl {
         symbol: lastOrder?.symbol ?? "BTCUSDT",
         side: lastOrder?.side ?? "Buy",
         orderType: lastOrder?.orderType ?? "Market",
-        orderStatus: "Filled",
+        orderStatus,
         qty: lastOrder?.qty ?? "0",
         price: lastOrder?.price ?? "0",
-        avgPrice: lastOrder?.price ?? String(GATEWAY_PRICE),
-        cumExecQty: lastOrder?.qty ?? "0",
-        cumExecFee: "0.5",
+        avgPrice:
+          orderStatus === "Filled" ? lastOrder?.price ?? String(GATEWAY_PRICE) : "0",
+        cumExecQty: orderStatus === "Filled" ? lastOrder?.qty ?? "0" : "0",
+        cumExecFee: orderStatus === "Filled" ? "0.5" : "0",
       }),
+    cancelOrder: (args) =>
+      cancelError
+        ? Effect.fail(
+            new BybitApiError({
+              status: 400,
+              body: cancelError,
+              endpoint: "/v5/order/cancel",
+            }),
+          )
+        : Effect.sync(() => {
+            calls.push(`cancelOrder:${args.symbol}:${args.orderId}`);
+          }),
     setLeverage: (args) =>
       Effect.sync(() => {
         calls.push(`setLeverage:${args.symbol}:${args.buyLeverage}`);
@@ -273,5 +292,112 @@ describe("BybitFuturesExchangeAdapter", () => {
     expect(order).toContain("0.0001:no");
     // The price is embedded in the body via the fake's lastOrder.
     expect(lastOrder?.price).toBe("66055.3");
+  });
+
+  it("cancels a resting limit order that fails to fill before reporting the error", async () => {
+    orderStatus = "New";
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "limit",
+            size: money(0.0001),
+            price: money(66000),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 10,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain("not filled");
+      expect(outcome.reason).toContain("status=New");
+      expect(outcome.reason).toContain("resting order bybit-1 canceled");
+    }
+    expect(calls).toContain("cancelOrder:BTCUSDT:bybit-1");
+  });
+
+  it("does not attempt a cancel when the order was already rejected", async () => {
+    orderStatus = "Rejected";
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "limit",
+            size: money(0.0001),
+            price: money(66000),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 10,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain("status=Rejected");
+      expect(outcome.reason).toContain("final state Rejected");
+    }
+    expect(calls.join("\n")).not.toContain("cancelOrder");
+  });
+
+  it("warns that the order may still be resting when the cancel itself fails", async () => {
+    orderStatus = "New";
+    cancelError = "order already filled";
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "limit",
+            size: money(0.0001),
+            price: money(66000),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 10,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain("cancel failed");
+      expect(outcome.reason).toContain("may still be resting");
+    }
+  });
+
+  it("derives the hedge-mode position leg from side and reduceOnly", () => {
+    expect(bybitPositionIdx("Buy", false)).toBe(1); // open long
+    expect(bybitPositionIdx("Sell", false)).toBe(2); // open short
+    expect(bybitPositionIdx("Sell", true)).toBe(1); // reduce long
+    expect(bybitPositionIdx("Buy", true)).toBe(2); // reduce short
   });
 });

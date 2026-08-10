@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -519,6 +520,87 @@ func TestExecutionActor_PlaceOrder_Idempotency(t *testing.T) {
 	// Should only have 2 audit events (not 4)
 	if auditLog.EventsCount() != 2 {
 		t.Errorf("Expected 2 audit events (idempotent), got %d", auditLog.EventsCount())
+	}
+}
+
+// engagedKillSwitchStub reports the kill switch as engaged.
+type engagedKillSwitchStub struct{}
+
+func (engagedKillSwitchStub) IsEngaged() bool { return true }
+
+func TestExecutionActor_PlaceOrder_DuplicateIntentConflict(t *testing.T) {
+	ctx := context.Background()
+	gateway := NewMockTradingGateway()
+	eventBus := NewMockEventBus()
+	idempotencyStore := NewMockIdempotencyStore()
+	auditLog := NewMockAuditLogger()
+
+	execActor := NewExecutionActor("test-actor", gateway, eventBus, idempotencyStore, auditLog)
+
+	first := PlaceOrderMsg{
+		IntentID: "intent-conflict-001",
+		Request: ports.OrderRequest{
+			Exchange: "test-exchange",
+			Symbol:   "BTC/USDT",
+			Side:     ports.OrderSideBuy,
+			Type:     ports.OrderTypeMarket,
+			Amount:   decimal.NewFromFloat(1.0),
+		},
+		RiskApproved: true,
+	}
+	if err := execActor.Receive(ctx, actor.Envelope{Message: first}); err != nil {
+		t.Fatalf("First PlaceOrder failed: %v", err)
+	}
+
+	// Same intent ID but conflicting amount: must be a conflict, not a
+	// silent success that returns the old intent's status.
+	conflicting := first
+	conflicting.Request.Amount = decimal.NewFromFloat(2.0)
+	err := execActor.Receive(ctx, actor.Envelope{Message: conflicting})
+	if !errors.Is(err, ErrIntentConflict) {
+		t.Fatalf("expected ErrIntentConflict for conflicting parameters, got: %v", err)
+	}
+
+	// Identical retry must remain idempotent (no conflict).
+	if err := execActor.Receive(ctx, actor.Envelope{Message: first}); err != nil {
+		t.Fatalf("identical retry should be idempotent, got error: %v", err)
+	}
+}
+
+func TestExecutionActor_PlaceOrder_KillSwitchEngagedBlocksPlacement(t *testing.T) {
+	ctx := context.Background()
+	gateway := NewMockTradingGateway()
+	var placed atomic.Bool
+	gateway.SetPlaceOrderFunc(func(ctx context.Context, req ports.OrderRequest) (ports.OrderResult, error) {
+		placed.Store(true)
+		return ports.OrderResult{Exchange: req.Exchange, OrderID: "should-not-happen"}, nil
+	})
+	eventBus := NewMockEventBus()
+	idempotencyStore := NewMockIdempotencyStore()
+	auditLog := NewMockAuditLogger()
+
+	execActor := NewExecutionActor("test-actor", gateway, eventBus, idempotencyStore, auditLog).
+		WithKillSwitch(engagedKillSwitchStub{})
+
+	msg := PlaceOrderMsg{
+		IntentID: "intent-killswitch-001",
+		Request: ports.OrderRequest{
+			Exchange: "test-exchange",
+			Symbol:   "BTC/USDT",
+			Side:     ports.OrderSideBuy,
+			Type:     ports.OrderTypeMarket,
+			Amount:   decimal.NewFromFloat(1.0),
+		},
+		// RiskApproved is set by the caller, but the kill switch must still
+		// block placement (TOCTOU guard between evaluation and placement).
+		RiskApproved: true,
+	}
+	err := execActor.Receive(ctx, actor.Envelope{Message: msg})
+	if err == nil {
+		t.Fatalf("expected placement rejection when kill switch is engaged")
+	}
+	if placed.Load() {
+		t.Fatalf("gateway.PlaceOrder must not be called when kill switch is engaged")
 	}
 }
 

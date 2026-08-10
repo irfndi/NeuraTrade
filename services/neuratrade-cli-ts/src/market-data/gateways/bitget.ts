@@ -127,10 +127,17 @@ export function fetchTick(
       );
     }
 
+    const price = asNumber(ticker.lastPr ?? ticker.last);
+    if (!Number.isFinite(price) || price <= 0) {
+      return yield* Effect.fail(
+        new MarketDataError(`Bitget ticker has invalid price for ${symbol}`),
+      );
+    }
+
     return {
       exchange: bitgetExchange(marketType),
       symbol,
-      price: asNumber(ticker.lastPr ?? ticker.last),
+      price,
       volume: asNumber(ticker.baseVol ?? ticker.baseVolume),
       bid: asNumber(ticker.bidPr),
       ask: asNumber(ticker.askPr),

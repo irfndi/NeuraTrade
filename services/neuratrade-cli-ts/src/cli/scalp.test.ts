@@ -7,7 +7,15 @@ import {
   type ResolvedBacktestArgs,
 } from "../scalping/strategy-profile.js";
 import type { CandleLike, ComposerConfig } from "../scalping/types.js";
-import { Command } from "./kit/kit.ts";
+import { Command, evaluate } from "./kit/kit.ts";
+import {
+  SCALP_OPTION_DEFAULTS,
+  gridMaxGridsOption,
+  leverageOption,
+  positionSizeOption,
+  riskBasedMaxPositionSizeOption,
+  riskPerTradeOption,
+} from "./scalp-options.js";
 import {
   buildCandidate,
   buildPaperTradeComposerConfig,
@@ -21,6 +29,7 @@ import {
   loadSelectWatchlist,
   objectiveValue,
   runSelectBacktest,
+  scalpCommand,
   selectBestForSymbol,
   selectWinner,
   validateWatchlist,
@@ -42,6 +51,61 @@ import {
   type SelectWatchlistEntry,
   type ValidationRow,
 } from "./scalp.js";
+import { Effect, Layer, Option } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { PathLive } from "../services/path.js";
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLite,
+  MarketDataRepositorySQLiteLive,
+} from "../market-data/repository.js";
+import { BacktestEngine } from "../scalping/services.js";
+import type { Candle } from "../market-data/types.js";
+import { backtestProgram, buildBacktestComposerConfig } from "./scalp.js";
+
+describe("scalp CLI option surface", () => {
+  it("pins the load-bearing defaults on the option builders", () => {
+    expect(positionSizeOption.defaultValue).toBe(100);
+    expect(positionSizeOption.defaultValue).toBe(
+      SCALP_OPTION_DEFAULTS.positionSize,
+    );
+    expect(riskPerTradeOption.defaultValue).toBe(0);
+    expect(riskPerTradeOption.defaultValue).toBe(
+      SCALP_OPTION_DEFAULTS.riskPerTrade,
+    );
+    expect(leverageOption.defaultValue).toBe(3);
+    expect(leverageOption.defaultValue).toBe(SCALP_OPTION_DEFAULTS.leverage);
+    expect(riskBasedMaxPositionSizeOption.defaultValue).toBe(100);
+    expect(riskBasedMaxPositionSizeOption.defaultValue).toBe(
+      SCALP_OPTION_DEFAULTS.maxPositionSize,
+    );
+    expect(gridMaxGridsOption.kind).toBe("integer");
+    expect(gridMaxGridsOption.defaultValue).toBe(0);
+  });
+
+  it("rejects a fractional --grid-max-grids (grid-level count)", () => {
+    const outcome = evaluate(
+      scalpCommand,
+      ["backtest", "--grid-max-grids", "2.5"],
+      { name: "neuratrade", version: "test" },
+    );
+    expect(outcome._tag).toBe("error");
+    if (outcome._tag === "error") {
+      expect(outcome.message).toContain("expected an integer");
+    }
+  });
+
+  it("accepts an integral --grid-max-grids", () => {
+    const outcome = evaluate(scalpCommand, ["backtest", "--grid-max-grids", "4"], {
+      name: "neuratrade",
+      version: "test",
+    });
+    expect(outcome._tag).toBe("execute");
+  });
+});
 
 describe("live execution market guard", () => {
   it("rejects the un-gated spot live path", () => {
@@ -306,20 +370,6 @@ describe("watchlist grid overrides (soak reproduction)", () => {
     expect(overrides.maxPositionPct).toBeCloseTo(40, 6); // 0.4 * 1.0 * 100
   });
 });
-import { Effect, Layer, Option } from "effect";
-import { BunServices } from "@effect/platform-bun";
-import { PathLive } from "../services/path.js";
-import { Database } from "bun:sqlite";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { MarketDataRepositorySQLite } from "../market-data/repository.js";
-import {
-  MarketDataRepository,
-  MarketDataRepositorySQLiteLive,
-} from "../market-data/repository.js";
-import { BacktestEngine } from "../scalping/services.js";
-import { backtestProgram, buildBacktestComposerConfig } from "./scalp.js";
-import type { Candle } from "../market-data/types.js";
 
 function makeOptimizeArgs(overrides: Partial<OptimizeArgs> = {}): OptimizeArgs {
   return {

@@ -43,7 +43,12 @@ jobs:
         run: |
           set -euo pipefail
           cd services/backend-api
-          mapfile -t deep_packages < <(go list -f '{{.Dir}}' ./internal/services/... | grep -v '/internal/services$')
+          # Fail loudly on `go list` errors instead of silently scanning zero packages.
+          if ! go list -f '{{.Dir}}' ./internal/services/... > /tmp/deep_pkgs 2>&1; then
+            echo "go list failed; aborting deep taint scan" >&2
+            exit 1
+          fi
+          mapfile -t deep_packages < <(grep -v '/internal/services$' /tmp/deep_pkgs)
 
           if [ "${#deep_packages[@]}" -eq 0 ]; then
             echo "No decomposed internal/services subpackages available for bounded taint scan"
@@ -58,4 +63,12 @@ jobs:
             -exclude-dir=internal/testutil \
             -exclude-dir=internal/api/handlers/testmocks \
             -exclude-dir=pkg/pb \
+            -fmt sarif \
+            -out deep-gosec.sarif \
             "${deep_packages[@]}"
+
+      - name: Upload SARIF report
+        if: always() && hashFiles('deep-gosec.sarif') != ''
+        uses: github/codeql-action/upload-sarif@c3400c2f38909e0dcf3c3a41f2030a8217be5d3e # v3
+        with:
+          sarif_file: deep-gosec.sarif

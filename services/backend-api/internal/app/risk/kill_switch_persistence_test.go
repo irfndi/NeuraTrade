@@ -341,3 +341,106 @@ func TestSQLKillSwitchStore_SaveTableMissing(t *testing.T) {
 		t.Fatalf("expected ErrKillSwitchSchemaMissing, got %v", err)
 	}
 }
+
+// failingSaveStore is a KillSwitchStore whose Save always fails, used to
+// verify fail-closed behavior when persistence is broken.
+type failingSaveStore struct {
+	state *PersistedKillSwitchState
+}
+
+func (m *failingSaveStore) Load(_ context.Context) (PersistedKillSwitchState, bool, error) {
+	if m.state == nil {
+		return PersistedKillSwitchState{}, false, nil
+	}
+	return *m.state, true, nil
+}
+
+func (m *failingSaveStore) Save(_ context.Context, _ PersistedKillSwitchState) error {
+	return errors.New("simulated persistence failure")
+}
+
+// TestKillSwitchImpl_ReconcileFailsClosedOnLoadError verifies that a load
+// error during reconcile leaves the kill switch ENGAGED (trading blocked)
+// and returns the error instead of silently starting disengaged.
+func TestKillSwitchImpl_ReconcileFailsClosedOnLoadError(t *testing.T) {
+	db := &mockDB{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) database.Row {
+			return &mockRow{scanFn: func(_ ...any) error {
+				return errors.New("connection refused")
+			}}
+		},
+	}
+	store := NewSQLKillSwitchStore(db)
+	ks := NewKillSwitch()
+	ks.SetStore(store)
+
+	err := ks.Reconcile(context.Background())
+	if err == nil {
+		t.Fatalf("expected reconcile error, got nil")
+	}
+	if !ks.IsEngaged() {
+		t.Fatalf("expected kill switch to be ENGAGED (fail closed) after reconcile load error")
+	}
+}
+
+// TestKillSwitchImpl_EngagePersistErrorKeepsEngaged verifies that when the
+// synchronous persistence fails, Engage surfaces the error AND keeps the
+// kill switch engaged in memory (fail closed, never silently succeed).
+func TestKillSwitchImpl_EngagePersistErrorKeepsEngaged(t *testing.T) {
+	ks := NewKillSwitch()
+	ks.SetStore(&failingSaveStore{})
+
+	err := ks.Engage(context.Background(), "test")
+	if err == nil {
+		t.Fatalf("expected engage error when persistence fails")
+	}
+	if !ks.IsEngaged() {
+		t.Fatalf("expected kill switch to remain ENGAGED when persistence fails (fail closed)")
+	}
+}
+
+// TestKillSwitchImpl_DisengagePersistErrorRestoresEngaged verifies that a
+// failed disengage persistence rolls the state back to engaged (fail closed)
+// instead of leaving the kill switch silently disengaged.
+func TestKillSwitchImpl_DisengagePersistErrorRestoresEngaged(t *testing.T) {
+	ks := NewKillSwitch()
+	ks.SetStore(&failingSaveStore{})
+
+	if err := ks.Engage(context.Background(), "test"); err == nil {
+		t.Fatalf("expected engage error when persistence fails")
+	}
+	if !ks.IsEngaged() {
+		t.Fatalf("expected engaged after failed persist")
+	}
+
+	err := ks.Disengage(context.Background())
+	if err == nil {
+		t.Fatalf("expected disengage error when persistence fails")
+	}
+	if !ks.IsEngaged() {
+		t.Fatalf("expected kill switch to remain ENGAGED when disengage persistence fails (fail closed)")
+	}
+}
+
+// TestKillSwitchImpl_EngagePersistsSynchronously verifies that after Engage
+// returns, the persisted state is already available (no background goroutine,
+// so state ordering is deterministic).
+func TestKillSwitchImpl_EngagePersistsSynchronously(t *testing.T) {
+	store := NewMemoryKillSwitchStore()
+	ks := NewKillSwitch()
+	ks.SetStore(store)
+
+	if err := ks.Engage(context.Background(), "sync"); err != nil {
+		t.Fatalf("engage: %v", err)
+	}
+	got, found, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected state to be persisted immediately after Engage returned")
+	}
+	if !got.Engaged || got.Reason != "sync" {
+		t.Fatalf("unexpected persisted state: %+v", got)
+	}
+}

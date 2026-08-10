@@ -78,17 +78,33 @@ export interface AIModelsResponse {
   readonly models: ReadonlyArray<AIModel>;
 }
 
-export interface PortfolioAsset {
+/**
+ * Mirrors the Go `PortfolioResponse`/`PortfolioPosition` in
+ * services/backend-api/internal/api/handlers/autonomous.go. The endpoint
+ * REQUIRES chat_id and returns exactly these fields — no locked/currency,
+ * no assets array.
+ */
+export interface PortfolioPosition {
   readonly symbol: string;
-  readonly amount: string;
-  readonly value: string;
+  readonly side: string;
+  readonly size: string;
+  readonly entry_price?: string;
+  readonly mark_price?: string;
+  readonly unrealized_pnl?: string;
 }
 
 export interface PortfolioResponse {
-  readonly total_value: string;
-  readonly cash: string;
-  readonly assets: ReadonlyArray<PortfolioAsset>;
-  readonly pnl_24h: string;
+  readonly total_equity: string;
+  readonly available_balance?: string;
+  readonly exposure?: string;
+  readonly exposure_pct?: string;
+  readonly unrealized_pnl?: string;
+  readonly open_orders?: number;
+  readonly positions: ReadonlyArray<PortfolioPosition>;
+  readonly drift_detected: boolean;
+  readonly positions_source?: string;
+  readonly note?: string;
+  readonly updated_at?: string;
 }
 
 export interface BalanceResponse {
@@ -136,7 +152,9 @@ export interface ApiClientImpl {
   readonly getAIModels: (
     provider?: string,
   ) => Effect.Effect<AIModelsResponse, ApiClientError>;
-  readonly getPortfolio: () => Effect.Effect<PortfolioResponse, ApiClientError>;
+  readonly getPortfolio: (
+    chatId: string,
+  ) => Effect.Effect<PortfolioResponse, ApiClientError>;
   readonly getBalance: (
     chatId: string,
   ) => Effect.Effect<BalanceResponse, ApiClientError>;
@@ -283,34 +301,30 @@ export const ApiClientLive = (
       );
     },
 
-    getPortfolio: () =>
-      apiRequest(
-        baseUrl,
-        apiKey,
-        "GET",
-        "/api/v1/telegram/internal/portfolio",
-        timeoutMs,
-      ).pipe(
+    getPortfolio: (chatId: string) => {
+      const endpoint = `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`;
+      return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
         Effect.flatMap((res) =>
-          parseJson<PortfolioResponse>(
-            res,
-            "/api/v1/telegram/internal/portfolio",
-          ),
+          parseJson<PortfolioResponse>(res, endpoint),
         ),
-      ),
+      );
+    },
 
     getBalance: (chatId: string) => {
       const endpoint = `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`;
       return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
+        // Same endpoint and response schema as getPortfolio; this caller
+        // picks out the equity/available subset.
         Effect.flatMap((res) =>
-          parseJson<{ total_equity: string; available_balance: string }>(
-            res,
-            endpoint,
-          ),
+          parseJson<PortfolioResponse>(res, endpoint),
         ),
         Effect.map((payload) => ({
           total_balance: payload.total_equity,
-          available: payload.available_balance,
+          available: payload.available_balance ?? "0",
+          // Invariants, not parsed values: the backend portfolio response has
+          // no locked/currency fields (see autonomous.go PortfolioResponse),
+          // and this platform trades USDT only. locked is "0" because the
+          // backend does not report locked balances at all.
           locked: "0",
           currency: "USDT" as const,
         })),

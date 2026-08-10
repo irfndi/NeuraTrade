@@ -35,23 +35,14 @@ func (am *AdminMiddleware) APIKey() string {
 }
 
 // generateSecureKey generates a cryptographically secure random key.
-func generateSecureKey(length int) string {
+// It returns an error on failure so callers can fail closed instead of
+// falling back to a predictable key derived from public metadata.
+func generateSecureKey(length int) (string, error) {
 	bytes := make([]byte, length/2)
 	if _, err := rand.Read(bytes); err != nil {
-		// Fallback to a less secure but functional key in edge cases
-		zaplogrus.WithError(err).Warn("Failed to generate secure random key")
-		hostname := os.Getenv("HOSTNAME")
-		if hostname == "" {
-			hostname = "unknown-host"
-		}
-		encoded := hex.EncodeToString([]byte(hostname))
-		// Ensure we don't panic if hostname is too short
-		if len(encoded) < 20 {
-			return "fallback-key-" + encoded
-		}
-		return "fallback-key-" + encoded[:20]
+		return "", fmt.Errorf("generate secure random key: %w", err)
 	}
-	return hex.EncodeToString(bytes)
+	return hex.EncodeToString(bytes), nil
 }
 
 // isProductionEnvironment checks if we're running in production.
@@ -117,18 +108,29 @@ func NewAdminMiddleware() (*AdminMiddleware, error) {
 		if isProductionEnvironment() {
 			return nil, fmt.Errorf("ADMIN_API_KEY must be set in config.json or environment variable in production")
 		}
-		// Generate temporary key for non-production environments
-		apiKey = generateSecureKey(32)
+		// Generate temporary key for non-production environments. Fail
+		// startup (fail-closed) if secure randomness is unavailable rather
+		// than deriving a predictable key from hostname or other metadata.
+		generated, genErr := generateSecureKey(32)
+		if genErr != nil {
+			return nil, fmt.Errorf("generate temporary admin key: %w", genErr)
+		}
+		apiKey = generated
 		zaplogrus.Info("Generated temporary admin key for non-production environment")
 	}
 
-	// Prevent use of default/example keys in any environment
+	// Deny default/example keys in ANY environment: an operator who
+	// configures one of these well-known values must be stopped regardless
+	// of environment so the footgun cannot reach production unnoticed.
 	// #nosec G101 -- these are explicit denylisted example values, not embedded credentials
-	if apiKey == "admin-dev-key-change-in-production" || apiKey == "admin-secret-key-change-me" {
-		if isProductionEnvironment() {
-			return nil, fmt.Errorf("ADMIN_API_KEY cannot use default/example values in production")
+	for _, exampleKey := range []string{
+		"admin-dev-key-change-in-production",
+		"admin-secret-key-change-me",
+		"change-me-in-production",
+	} {
+		if strings.EqualFold(strings.TrimSpace(apiKey), exampleKey) {
+			return nil, fmt.Errorf("ADMIN_API_KEY cannot use the default/example value %q in any environment", exampleKey)
 		}
-		zaplogrus.Warn("Using example ADMIN_API_KEY in non-production environment")
 	}
 
 	// Ensure minimum security requirements
@@ -218,5 +220,10 @@ func (am *AdminMiddleware) RequireAdminAuth() gin.HandlerFunc {
 //
 //	bool: True if valid.
 func (am *AdminMiddleware) ValidateAdminKey(key string) bool {
-	return key == am.apiKey
+	if am == nil {
+		return false
+	}
+	// Constant-time comparison, matching the guarantee used by
+	// RequireAdminAuth, to avoid leaking key prefixes via timing.
+	return subtle.ConstantTimeCompare([]byte(key), []byte(am.apiKey)) == 1
 }

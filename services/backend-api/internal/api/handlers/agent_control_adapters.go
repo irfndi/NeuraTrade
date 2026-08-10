@@ -62,3 +62,9 @@ func (a *riskAdapter) EngageKillSwitch(ctx context.Context, reason string) error
 func (a *riskAdapter) DisengageKillSwitch(ctx context.Context) error {
 	return a.killSwitch.Disengage(ctx)
 }
+
+// ShouldCancelOrders reports whether the kill switch is engaged with order
+// cancellation enabled (see KillSwitchImpl.ShouldCancelOrders).
+func (a *riskAdapter) ShouldCancelOrders() bool {
+	return a.killSwitch.ShouldCancelOrders()
+}

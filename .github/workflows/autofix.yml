@@ -5,24 +5,31 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
+# Cancel superseded runs so two autofix jobs never race to commit/push
+# the same PR branch.
+concurrency:
+  group: autofix-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   autofix:
     name: Auto-fix code issues
     runs-on: ubuntu-latest
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    
+    # workflow_dispatch runs manually (no PR context); otherwise only
+    # autofix PRs from this repository, never forks.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.3.0
         with:
           go-version: '1.26.5'
           cache: true
@@ -35,7 +42,7 @@ jobs:
       - name: Install Go dependencies
         run: |
           cd services/backend-api && go mod download
-          go install golang.org/x/tools/cmd/goimports@latest
+          go install golang.org/x/tools/cmd/goimports@v0.48.0
 
       - name: Install Bun dependencies
         run: |
@@ -46,33 +53,40 @@ jobs:
       - name: Install golangci-lint
         run: |
           mkdir -p ./bin
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ./bin v2.10.1
+          # Pinned to the tagged install.sh for v2.10.1 instead of a mutable master fetch.
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.10.1/install.sh | sh -s -- -b ./bin v2.10.1
 
       - name: Install shfmt
         run: |
-          go install mvdan.cc/sh/v3/cmd/shfmt@latest
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
 
       - name: Run Go formatters
         run: |
           cd services/backend-api
           gofmt -s -w .
           goimports -w .
-          ../bin/golangci-lint run --fix || true
+          # Non-zero exit is expected when findings remain; surface it instead of swallowing.
+          ../bin/golangci-lint run --fix || echo "::warning::golangci-lint --fix reported findings (non-fatal)"
         working-directory: ${{ github.workspace }}
 
       - name: Run TypeScript/JS formatters
         run: |
           if [ -d "services/telegram-service" ]; then
             cd services/telegram-service
-            bunx oxfmt 2>/dev/null || true
-            bunx oxlint --fix . || true
+            bunx oxfmt@0.62.0 || echo "::warning::oxfmt exited non-zero (non-fatal)"
+            bunx oxlint --fix . || echo "::warning::oxlint --fix reported findings (non-fatal)"
           fi
 
       - name: Format shell scripts
         run: |
-          # Exclude .github/workflows to avoid permission issues
-          # Use find -exec to handle filenames with spaces correctly
-          find . -name "*.sh" -not -path "./node_modules/*" -not -path "./.git/*" -not -path "./.github/*" -not -path "./bin/*" -not -path "./build/*" -exec shfmt -w -i 2 -ci -bn {} + || true
+          # Scope matches the git-auto-commit file_pattern (services/**, scripts/**,
+          # protos/**, docs/**) so formatted files are actually committed.
+          # Exclude .github/workflows to avoid permission issues.
+          find services scripts protos docs -name "*.sh" \
+            -not -path "*/node_modules/*" \
+            -not -path "*/bin/*" \
+            -not -path "*/build/*" \
+            -exec shfmt -w -i 2 -ci -bn {} + || echo "::warning::shfmt exited non-zero (non-fatal)"
 
       - name: Restore workflow files
         run: |

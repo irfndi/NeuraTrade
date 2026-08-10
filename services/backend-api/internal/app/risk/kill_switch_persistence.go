@@ -131,7 +131,7 @@ func (s *SQLKillSwitchStore) Save(ctx context.Context, st PersistedKillSwitchSta
 	_, err := s.db.Exec(queryCtx, `
 		INSERT INTO risk_kill_switch_state
 			(singleton, engaged, engaged_at, engaged_by, reason, cancel_orders, last_updated_at)
-		VALUES (1, ?, ?, ?, ?, ?, ?)
+		VALUES (1, $1, $2, $3, $4, $5, $6)
 		ON CONFLICT(singleton) DO UPDATE SET
 			engaged = excluded.engaged,
 			engaged_at = excluded.engaged_at,

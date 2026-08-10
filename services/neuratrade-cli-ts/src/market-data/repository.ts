@@ -418,6 +418,21 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
       return Effect.succeed(0);
     }
 
+    const first = candles[0];
+    const mixed = candles.some(
+      (c) =>
+        c.exchange !== first.exchange ||
+        c.symbol !== first.symbol ||
+        c.timeframe !== first.timeframe,
+    );
+    if (mixed) {
+      return Effect.fail(
+        new MarketDataRepositoryError(
+          "saveCandles: all candles must share the same exchange, symbol, and timeframe",
+        ),
+      );
+    }
+
     const db = this.db;
     return Effect.gen(function* () {
       const exchangeId = yield* getOrCreateExchange(candles[0].exchange, db);
@@ -466,12 +481,10 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   ): Effect.Effect<readonly Candle[], MarketDataRepositoryError, never> {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(query.exchange, db);
-      const pairId = yield* getOrCreateTradingPair(
-        query.symbol,
-        exchangeId,
-        db,
-      );
+      const exchangeId = yield* findExchangeId(query.exchange, db);
+      if (exchangeId === null) return [];
+      const pairId = yield* findTradingPairId(query.symbol, exchangeId, db);
+      if (pairId === null) return [];
 
       const conditions: string[] = [
         "exchange_id = ?",
@@ -537,8 +550,10 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   ): Effect.Effect<Tick | null, MarketDataRepositoryError, never> {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
+      if (exchangeId === null) return null;
+      const pairId = yield* findTradingPairId(symbol, exchangeId, db);
+      if (pairId === null) return null;
 
       return yield* Effect.try({
         try: () => {
@@ -592,7 +607,8 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   ): Effect.Effect<readonly string[], MarketDataRepositoryError, never> {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
+      if (exchangeId === null) return [];
 
       return yield* Effect.try({
         try: () => {
@@ -633,7 +649,8 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   > {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
+      if (exchangeId === null) return [];
 
       return yield* Effect.try({
         try: () => {
@@ -670,8 +687,10 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   ): Effect.Effect<number, MarketDataRepositoryError, never> {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
+      if (exchangeId === null) return 0;
+      const pairId = yield* findTradingPairId(symbol, exchangeId, db);
+      if (pairId === null) return 0;
 
       return yield* Effect.try({
         try: () => {
@@ -703,8 +722,14 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   > {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
-      const pairId = yield* getOrCreateTradingPair(symbol, exchangeId, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
+      if (exchangeId === null) {
+        return { earliest: null, latest: null, count: 0 };
+      }
+      const pairId = yield* findTradingPairId(symbol, exchangeId, db);
+      if (pairId === null) {
+        return { earliest: null, latest: null, count: 0 };
+      }
 
       return yield* Effect.try({
         try: () => {
@@ -756,10 +781,27 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   > {
     const db = this.db;
     return Effect.gen(function* () {
-      const exchangeId = yield* getOrCreateExchange(exchange, db);
+      const exchangeId = yield* findExchangeId(exchange, db);
 
       if (symbols.length === 0) {
         return [];
+      }
+
+      if (exchangeId === null) {
+        const timeframeMs = timeframeToMs(timeframe);
+        const expected = Math.max(
+          0,
+          Math.floor((end.getTime() - start.getTime()) / timeframeMs) + 1,
+        );
+        return symbols.map((symbol) => ({
+          symbol,
+          count: 0,
+          earliest: null,
+          latest: null,
+          expected,
+          coveragePct: 0,
+          status: "missing" as const,
+        }));
       }
 
       const placeholders = symbols.map(() => "?").join(",");
@@ -858,42 +900,16 @@ function displayName(name: string): string {
     .join(" ");
 }
 
-function getOrCreateExchange(
+function findExchangeId(
   name: string,
   db: Database,
-): Effect.Effect<number, MarketDataRepositoryError, never> {
+): Effect.Effect<number | null, MarketDataRepositoryError, never> {
   return Effect.try({
     try: () => {
       const existing = db
         .query("SELECT id FROM exchanges WHERE name = ?")
         .get(name) as { id: number } | undefined;
-      if (existing) return existing.id;
-
-      // The shared Go backend schema requires display_name and ccxt_id
-      // (NOT NULL, ccxt_id UNIQUE); the slim CLI schema has neither. Adapt
-      // the insert to whichever schema is present.
-      const cols = tableColumns(db, "exchanges");
-      const names = ["name"];
-      const values: Array<string> = [name];
-      if (cols.has("display_name")) {
-        names.push("display_name");
-        values.push(displayName(name));
-      }
-      if (cols.has("ccxt_id")) {
-        names.push("ccxt_id");
-        values.push(name);
-      }
-      if (cols.has("api_url")) {
-        names.push("api_url");
-        values.push("");
-      }
-      const placeholders = names.map(() => "?").join(", ");
-      const result = db
-        .query(
-          `INSERT INTO exchanges (${names.join(", ")}) VALUES (${placeholders})`,
-        )
-        .run(...values);
-      return Number(result.lastInsertRowid);
+      return existing?.id ?? null;
     },
     catch: (err) =>
       new MarketDataRepositoryError(
@@ -903,15 +919,12 @@ function getOrCreateExchange(
   });
 }
 
-function getOrCreateTradingPair(
+function findTradingPairId(
   symbol: string,
   exchangeId: number,
   db: Database,
-): Effect.Effect<number, MarketDataRepositoryError, never> {
+): Effect.Effect<number | null, MarketDataRepositoryError, never> {
   return Effect.gen(function* () {
-    // The shared Go backend schema scopes pairs per exchange (exchange_id
-    // NOT NULL, UNIQUE(exchange_id, symbol)); the slim CLI schema keys on
-    // symbol alone. Adapt both lookup and insert to the schema present.
     const cols = yield* Effect.try({
       try: () => tableColumns(db, "trading_pairs"),
       catch: (err) =>
@@ -943,7 +956,63 @@ function getOrCreateTradingPair(
           err,
         ),
     });
-    if (existing) return existing.id;
+    return existing?.id ?? null;
+  });
+}
+
+function getOrCreateExchange(
+  name: string,
+  db: Database,
+): Effect.Effect<number, MarketDataRepositoryError, never> {
+  return Effect.gen(function* () {
+    const existingId = yield* findExchangeId(name, db);
+    if (existingId !== null) return existingId;
+
+    // The shared Go backend schema requires display_name and ccxt_id
+    // (NOT NULL, ccxt_id UNIQUE); the slim CLI schema has neither. Adapt
+    // the insert to whichever schema is present.
+    return yield* Effect.try({
+      try: () => {
+        const cols = tableColumns(db, "exchanges");
+        const names = ["name"];
+        const values: Array<string> = [name];
+        if (cols.has("display_name")) {
+          names.push("display_name");
+          values.push(displayName(name));
+        }
+        if (cols.has("ccxt_id")) {
+          names.push("ccxt_id");
+          values.push(name);
+        }
+        if (cols.has("api_url")) {
+          names.push("api_url");
+          values.push("");
+        }
+        const placeholders = names.map(() => "?").join(", ");
+        const result = db
+          .query(
+            `INSERT INTO exchanges (${names.join(", ")}) VALUES (${placeholders})`,
+          )
+          .run(...values);
+        return Number(result.lastInsertRowid);
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Exchange insert failed for ${name}: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  });
+}
+
+function getOrCreateTradingPair(
+  symbol: string,
+  exchangeId: number,
+  db: Database,
+): Effect.Effect<number, MarketDataRepositoryError, never> {
+  return Effect.gen(function* () {
+    const existingId = yield* findTradingPairId(symbol, exchangeId, db);
+    if (existingId !== null) return existingId;
 
     const parts = symbol.split("/");
     const base = parts[0] ?? symbol;
@@ -952,6 +1021,8 @@ function getOrCreateTradingPair(
 
     return yield* Effect.try({
       try: () => {
+        const cols = tableColumns(db, "trading_pairs");
+        const hasExchangeScope = cols.has("exchange_id");
         const result = hasExchangeScope
           ? db
               .query(

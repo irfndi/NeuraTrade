@@ -570,4 +570,112 @@ describe("MarketDataRepositorySQLite", () => {
     expect(latest).not.toBeNull();
     expect(latest!.fundingRate).toBe(0.0001);
   });
+
+  it("read paths do not create exchange or pair rows for unknown symbols", async () => {
+    await Effect.runPromise(repo.ensureTables());
+
+    const candles = await Effect.runPromise(
+      repo.getCandles({
+        exchange: "never-seen-exchange",
+        symbol: "SOL/USDT",
+        timeframe: "1h",
+      }),
+    );
+    expect(candles).toHaveLength(0);
+
+    const tick = await Effect.runPromise(
+      repo.getLatestTick("never-seen-exchange", "SOL/USDT"),
+    );
+    expect(tick).toBeNull();
+
+    const symbols = await Effect.runPromise(
+      repo.listSymbols("never-seen-exchange", "1h", 1),
+    );
+    expect(symbols).toHaveLength(0);
+
+    const ranked = await Effect.runPromise(
+      repo.listSymbolsByCandleCount("never-seen-exchange", "1h", 5),
+    );
+    expect(ranked).toHaveLength(0);
+
+    const deleted = await Effect.runPromise(
+      repo.deleteCandles("never-seen-exchange", "SOL/USDT", "1h"),
+    );
+    expect(deleted).toBe(0);
+
+    const range = await Effect.runPromise(
+      repo.getCandleRange("never-seen-exchange", "SOL/USDT", "1h"),
+    );
+    expect(range).toEqual({ earliest: null, latest: null, count: 0 });
+
+    const report = await Effect.runPromise(
+      repo.getCoverageReport(
+        "never-seen-exchange",
+        ["SOL/USDT"],
+        "1h",
+        new Date("2026-01-01T00:00:00Z"),
+        new Date("2026-01-01T02:00:00Z"),
+      ),
+    );
+    expect(report[0]?.status).toBe("missing");
+
+    // Nothing was written: both tables stay empty.
+    const exchangeCount = (
+      db.query("SELECT COUNT(*) AS n FROM exchanges").get() as { n: number }
+    ).n;
+    const pairCount = (
+      db.query("SELECT COUNT(*) AS n FROM trading_pairs").get() as { n: number }
+    ).n;
+    expect(exchangeCount).toBe(0);
+    expect(pairCount).toBe(0);
+  });
+
+  it("saveCandles rejects a batch mixing exchanges or symbols", async () => {
+    await Effect.runPromise(repo.ensureTables());
+
+    const mixed: Candle[] = [
+      {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: 1,
+        high: 1,
+        low: 1,
+        close: 1,
+        volume: 1,
+        timestamp: new Date("2026-01-01T00:00:00Z"),
+      },
+      {
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "1h",
+        open: 1,
+        high: 1,
+        low: 1,
+        close: 1,
+        volume: 1,
+        timestamp: new Date("2026-01-01T01:00:00Z"),
+      },
+    ];
+
+    const result = await Effect.runPromise(
+      repo.saveCandles(mixed).pipe(
+        Effect.match({
+          onFailure: (err) => ({ ok: false, reason: err.reason }),
+          onSuccess: () => ({ ok: true, reason: "" }),
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain(
+      "same exchange, symbol, and timeframe",
+    );
+
+    // Nothing persisted for the mixed batch.
+    const count = (
+      db.query("SELECT COUNT(*) AS n FROM ohlcv_data").get() as { n: number }
+    ).n;
+    expect(count).toBe(0);
+  });
 });

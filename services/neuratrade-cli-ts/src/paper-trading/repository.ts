@@ -344,6 +344,19 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
 CREATE INDEX IF NOT EXISTS idx_watchlist_scope
   ON watchlist(exchange, timeframe);
+
+-- Open-position uniqueness: (exchange, symbol) is the logical key for an
+-- open position (the engine reads by exchange+symbol). Dedupe any legacy
+-- duplicates (keep the latest row per key) before enforcing the invariant
+-- in the schema; the unique index then makes saveOpenPosition an upsert
+-- and getOpenPosition unambiguous.
+DELETE FROM paper_positions
+WHERE rowid NOT IN (
+  SELECT MAX(rowid) FROM paper_positions GROUP BY exchange, symbol
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_positions_exchange_symbol
+  ON paper_positions(exchange, symbol);
 `;
 
 export class PaperTradingRepositorySQLite implements PaperTradingRepositoryService {
@@ -482,6 +495,48 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             addColumn(`ALTER TABLE watchlist ADD COLUMN ${column} ${type}`);
           }
         }
+
+        // One-time precision backfill: pre-migration rows have NULL decimal
+        // columns and were previously read through the lossy REAL fallback.
+        // Copy the REAL values into the decimal columns (idempotent — only
+        // NULLs are touched) so every read stays exact. New writes always
+        // populate the decimal columns, so after this backfill the REAL
+        // columns are never the source of truth for money values.
+        for (const tableColumn of [
+          "paper_portfolio capital",
+          "paper_portfolio peak_capital",
+          "paper_positions entry_price",
+          "paper_positions size",
+          "paper_positions stop_loss",
+          "paper_positions take_profit",
+          "paper_positions scale_out_price",
+          "paper_trades entry_price",
+          "paper_trades exit_price",
+          "paper_trades size",
+          "paper_trades pnl",
+          "paper_trades pnl_pct",
+          "paper_start_of_day_capital start_capital",
+          "grid_paper_state capital",
+          "grid_paper_state peak_capital",
+          "grid_paper_state entry_price",
+          "grid_paper_state entry_filled_qty",
+          "grid_paper_state entry_fee",
+          "grid_paper_trades entry_price",
+          "grid_paper_trades exit_price",
+          "grid_paper_trades capital_before",
+          "grid_paper_trades capital_after",
+          "grid_paper_trades pnl_pct",
+          "grid_paper_trades entry_filled_qty",
+          "grid_paper_trades exit_filled_qty",
+          "grid_paper_trades entry_fee",
+          "grid_paper_trades exit_fee",
+          "grid_paper_trades realized_pnl_pct",
+        ]) {
+          const [table, column] = tableColumn.split(" ");
+          this.db.exec(
+            `UPDATE ${table} SET ${column}_decimal = CAST(${column} AS TEXT) WHERE ${column}_decimal IS NULL`,
+          );
+        }
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -558,11 +613,28 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       try: () => {
         this.db
           .query(
-            `INSERT OR REPLACE INTO paper_positions
+            `INSERT INTO paper_positions
             (id, exchange, symbol, timeframe, side, entry_price, size, stop_loss, take_profit,
              entry_price_decimal, size_decimal, stop_loss_decimal, take_profit_decimal,
              opened_at, signal_id, scaled_out, scale_out_price, scale_out_price_decimal)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(exchange, symbol) DO UPDATE SET
+               id = excluded.id,
+               timeframe = excluded.timeframe,
+               side = excluded.side,
+               entry_price = excluded.entry_price,
+               size = excluded.size,
+               stop_loss = excluded.stop_loss,
+               take_profit = excluded.take_profit,
+               entry_price_decimal = excluded.entry_price_decimal,
+               size_decimal = excluded.size_decimal,
+               stop_loss_decimal = excluded.stop_loss_decimal,
+               take_profit_decimal = excluded.take_profit_decimal,
+               opened_at = excluded.opened_at,
+               signal_id = excluded.signal_id,
+               scaled_out = excluded.scaled_out,
+               scale_out_price = excluded.scale_out_price,
+               scale_out_price_decimal = excluded.scale_out_price_decimal`,
           )
           .run(
             position.id,
@@ -794,12 +866,15 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           peak_capital_value: string;
         } | null;
 
+        // No row yet = fresh portfolio: report 0/0 so engines can seed
+        // initialCapital exactly once and distinguish a blown account
+        // (capital <= 0 with positive peak) that must stay terminal.
         return row
           ? {
               capital: new Decimal(row.capital_value),
               peakCapital: new Decimal(row.peak_capital_value),
             }
-          : { capital: new Decimal(10_000), peakCapital: new Decimal(10_000) };
+          : { capital: new Decimal(0), peakCapital: new Decimal(0) };
       },
       catch: (err) =>
         new PaperTradingRepositoryError(

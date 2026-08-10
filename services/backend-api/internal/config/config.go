@@ -88,6 +88,12 @@ type ServerConfig struct {
 	Port int `mapstructure:"port"`
 	// AllowedOrigins is a list of CORS allowed origins.
 	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	// TLSCertFile is the path to the TLS certificate (PEM) used for HTTPS.
+	// Both TLSCertFile and TLSKeyFile must be set to enable TLS; in
+	// production the server fails closed when TLS is not configured.
+	TLSCertFile string `mapstructure:"tls_cert_file"`
+	// TLSKeyFile is the path to the TLS private key (PEM) used for HTTPS.
+	TLSKeyFile string `mapstructure:"tls_key_file"`
 }
 
 // DatabaseConfig defines the PostgreSQL database connection settings.
@@ -548,9 +554,15 @@ func setDefaults() {
 	// Server
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.allowed_origins", []string{"http://localhost:3000"})
+	viper.SetDefault("server.tls_cert_file", "")
+	viper.SetDefault("server.tls_key_file", "")
 
 	// Bind PORT env to server.port
 	_ = viper.BindEnv("server.port", "PORT")
+
+	// Bind TLS certificate/key env vars
+	_ = viper.BindEnv("server.tls_cert_file", "TLS_CERT_FILE")
+	_ = viper.BindEnv("server.tls_key_file", "TLS_KEY_FILE")
 
 	// Set database defaults - SQLite by default
 	viper.SetDefault("database.driver", "sqlite")

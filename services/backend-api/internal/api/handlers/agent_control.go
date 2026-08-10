@@ -27,6 +27,10 @@ type RiskController interface {
 	DisableSafeMode(ctx context.Context) error
 	EngageKillSwitch(ctx context.Context, reason string) error
 	DisengageKillSwitch(ctx context.Context) error
+	// ShouldCancelOrders reports whether the kill switch is engaged with
+	// order cancellation enabled. Used to wire cancellation into the
+	// kill-switch engagement path.
+	ShouldCancelOrders() bool
 }
 
 type OrderController interface {
@@ -239,6 +243,19 @@ func (h *AgentControlHandler) EngageKillSwitch(c *gin.Context) {
 	var err error
 	if engageVal {
 		err = h.risk.EngageKillSwitch(c.Request.Context(), reason)
+		if err == nil && h.risk.ShouldCancelOrders() {
+			// The kill switch is configured to cancel open orders on
+			// engage. Cancel across all exchanges/symbols; a failure here
+			// must not mask the (successful) engagement, so it is logged
+			// loudly instead of returned as an engagement failure.
+			if h.orders == nil {
+				zaplogrus.Error("agent_control: kill switch engaged but order cancellation unavailable (orders controller is nil)")
+			} else if cancelErr := h.orders.CancelAllOrders(c.Request.Context(), "", ""); cancelErr != nil {
+				zaplogrus.WithError(cancelErr).Error("agent_control: kill switch engaged but order cancellation failed")
+			} else {
+				zaplogrus.Info("agent_control: kill switch engaged; open orders cancelled")
+			}
+		}
 	} else {
 		err = h.risk.DisengageKillSwitch(c.Request.Context())
 	}

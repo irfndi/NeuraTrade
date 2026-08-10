@@ -196,4 +196,92 @@ describe("MarketDataGatewayRepositoryLive", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toContain("No stored candles");
   });
+
+  it("fetch24hrVolumes sums stored candle volume per symbol", async () => {
+    const now = Date.now();
+    const hour = 60 * 60 * 1000;
+    const btcCandles: Candle[] = [
+      {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: 67_000,
+        high: 68_000,
+        low: 66_000,
+        close: 67_500,
+        volume: 100,
+        timestamp: new Date(now - hour),
+      },
+      {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: 67_500,
+        high: 69_000,
+        low: 67_000,
+        close: 68_000,
+        volume: 150,
+        timestamp: new Date(now - 2 * hour),
+      },
+    ];
+    const ethCandles: Candle[] = [
+      {
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "1h",
+        open: 3_000,
+        high: 3_100,
+        low: 2_900,
+        close: 3_050,
+        volume: 50,
+        timestamp: new Date(now - hour),
+      },
+    ];
+    await seedCandles(db, btcCandles);
+    await seedCandles(db, ethCandles);
+
+    const volumes = await Effect.runPromise(
+      Effect.gen(function* () {
+        const gateway = yield* MarketDataGateway;
+        return yield* gateway.fetch24hrVolumes("binance");
+      }).pipe(Effect.provide(makeGatewayLayer(db))),
+    );
+
+    expect(volumes["BTC/USDT"]).toBe(250);
+    expect(volumes["ETH/USDT"]).toBe(50);
+  });
+
+  it("fetchFundingRates returns stored funding rates", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureFundingRatesTable();
+        yield* repo.saveFundingRates("binance", "BTC/USDT", [
+          {
+            exchange: "binance",
+            symbol: "BTC/USDT",
+            fundingRate: 0.0001,
+            timestamp: new Date("2026-01-01T00:00:00Z"),
+          },
+          {
+            exchange: "binance",
+            symbol: "BTC/USDT",
+            fundingRate: -0.0002,
+            timestamp: new Date("2026-01-01T08:00:00Z"),
+          },
+        ]);
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    const rates = await Effect.runPromise(
+      Effect.gen(function* () {
+        const gateway = yield* MarketDataGateway;
+        return yield* gateway.fetchFundingRates("binance", "BTC/USDT");
+      }).pipe(Effect.provide(makeGatewayLayer(db))),
+    );
+
+    expect(rates).toHaveLength(2);
+    expect(rates[0]?.fundingRate).toBe(0.0001);
+    expect(rates[1]?.fundingRate).toBe(-0.0002);
+  });
 });

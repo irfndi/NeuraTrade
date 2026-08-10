@@ -342,6 +342,59 @@ describe("runGridBacktest", () => {
     expect(symmetric.totalTrades).toBeGreaterThan(0);
     expect(taker.totalReturnPct).toBeLessThan(symmetric.totalReturnPct);
   });
+
+  it("winning target exits do not suppress subsequent entries (pause is loss-only)", () => {
+    // makeOscillatingCandles alternates strictly up/down bars, so every round
+    // trip exits at the target (a win); the series ends with one open long
+    // closed by the mark-to-market block. With a pause configured, the OLD
+    // behavior paused after wins too, skipping bars and producing fewer
+    // trades; the loss-only contract must yield an identical trade list.
+    const candles = makeOscillatingCandles(600);
+    const base = {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 0,
+      leverage: 1,
+    };
+    const unpaused = runGridBacktest(candles, {
+      ...base,
+      gridPauseAfterLossBars: 0,
+    });
+    const pauseConfigured = runGridBacktest(candles, {
+      ...base,
+      gridPauseAfterLossBars: 8,
+    });
+    expect(unpaused.totalTrades).toBeGreaterThan(1);
+    expect(pauseConfigured.totalTrades).toBe(unpaused.totalTrades);
+  });
+
+  it("losing stop exits still pause subsequent entries", () => {
+    // Steady downtrend: long entries repeatedly hit their stops (losses), so
+    // the loss-pause must throttle the trade count relative to no pause.
+    const candles = makeTrendingDownCandles(400);
+    const base = {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 0,
+      leverage: 1,
+    };
+    const unpaused = runGridBacktest(candles, {
+      ...base,
+      gridPauseAfterLossBars: 0,
+    });
+    const paused = runGridBacktest(candles, {
+      ...base,
+      gridPauseAfterLossBars: 5,
+    });
+    expect(unpaused.totalTrades).toBeGreaterThan(1);
+    expect(paused.totalTrades).toBeLessThan(unpaused.totalTrades);
+  });
 });
 
 describe("findBestGridParams", () => {

@@ -144,7 +144,10 @@ export const fetchCandlesCommand = Command.make(
         ),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`fetch-candles failed: ${err.reason}`);
+            yield* Console.error(
+              `fetch-candles failed: ${failureMessage(err)}`,
+            );
+            process.exitCode = 1;
             return 0;
           }),
         ),
@@ -169,6 +172,26 @@ interface FetchCandlesArgs {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function failureMessage(err: unknown): string {
+  if (typeof err === "object" && err !== null) {
+    if (
+      "reason" in err &&
+      typeof err.reason === "string" &&
+      err.reason.length > 0
+    ) {
+      return err.reason;
+    }
+    if (
+      "message" in err &&
+      typeof err.message === "string" &&
+      err.message.length > 0
+    ) {
+      return err.message;
+    }
+  }
+  return String(err);
+}
 
 function parseDateOption(
   opt: Option.Option<string>,
@@ -361,7 +384,10 @@ export const fetchUniverseCommand = Command.make(
         ),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`fetch-universe failed: ${err.reason}`);
+            yield* Console.error(
+              `fetch-universe failed: ${failureMessage(err)}`,
+            );
+            process.exitCode = 1;
             return { symbols: [], totalCandles: 0 };
           }),
         ),
@@ -588,7 +614,10 @@ export const fetchFundingRatesCommand = Command.make(
         ),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`fetch-funding-rates failed: ${err.reason}`);
+            yield* Console.error(
+              `fetch-funding-rates failed: ${failureMessage(err)}`,
+            );
+            process.exitCode = 1;
             return { fetched: 0, saved: 0 };
           }),
         ),

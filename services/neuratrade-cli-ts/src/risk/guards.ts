@@ -119,14 +119,20 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
           );
         }
 
-        const dailyLossPct =
-          context.startOfDayCapital > 0
-            ? (-context.dailyRealizedPnl / context.startOfDayCapital) * 100
-            : 0;
-        if (dailyLossPct > limits.maxDailyLossPct) {
+        if (context.startOfDayCapital <= 0) {
+          // Cannot express the daily loss limit as a percentage against
+          // zero/negative capital — fail closed rather than recording 0%.
           violations.push(
-            `daily loss ${dailyLossPct.toFixed(2)}% exceeds max ${limits.maxDailyLossPct}%`,
+            `start-of-day capital ${context.startOfDayCapital.toFixed(2)} is not positive`,
           );
+        } else {
+          const dailyLossPct =
+            (-context.dailyRealizedPnl / context.startOfDayCapital) * 100;
+          if (dailyLossPct > limits.maxDailyLossPct) {
+            violations.push(
+              `daily loss ${dailyLossPct.toFixed(2)}% exceeds max ${limits.maxDailyLossPct}%`,
+            );
+          }
         }
 
         if (context.tradesTodayCount >= limits.maxTradesPerDay) {
@@ -186,11 +192,15 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
 
         if (
           limits.allowedProductTypes &&
-          limits.allowedProductTypes.length > 0 &&
-          context.productType &&
-          !limits.allowedProductTypes.includes(context.productType)
+          limits.allowedProductTypes.length > 0
         ) {
-          violations.push(`product type ${context.productType} is not allowed`);
+          // Fail closed: an allowlist is meaningless when the context does not
+          // say what product type it is trading — treat unknown as disallowed.
+          if (context.productType === undefined) {
+            violations.push("product type unknown is not allowed");
+          } else if (!limits.allowedProductTypes.includes(context.productType)) {
+            violations.push(`product type ${context.productType} is not allowed`);
+          }
         }
 
         if (

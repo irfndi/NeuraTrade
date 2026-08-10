@@ -5,6 +5,11 @@
 #
 # Usage: source scripts/lib/test-lib.sh
 #
+# NOTE: sourcing this library enables `set -euo pipefail` in the caller
+# (caller opt-in contract). Guard commands whose non-zero exit is expected
+# with `|| true` or an explicit if; helper functions return 1 for
+# fail/skip outcomes, so unguarded calls under `set -e` will abort.
+#
 
 # Exit on error, undefined variables, and pipe failures
 set -euo pipefail
@@ -120,7 +125,7 @@ nt_check_service_http() {
   local url="$2"
   local timeout="${3:-5}"
 
-  if curl -s --connect-timeout "$timeout" "$url" &>/dev/null; then
+  if curl -fsS --connect-timeout "$timeout" --max-time "$timeout" -o /dev/null "$url" &>/dev/null; then
     nt_test_result "$name HTTP" "pass"
     return 0
   else
@@ -170,7 +175,7 @@ nt_check_database_table() {
   local tables
   tables=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table';" 2>/dev/null || echo "")
 
-  if echo "$tables" | grep -q "^${table}$"; then
+  if grep -Fxq -- "$table" <<<"$tables"; then
     nt_test_result "Table '$table' exists" "pass"
     return 0
   else
@@ -222,12 +227,20 @@ nt_check_bot_reachable() {
     return 1
   fi
 
-  local bot_info
-  bot_info=$(curl -s "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo "")
+  # Pass the token via curl's stdin config file so it never appears in argv
+  # (visible to local processes via ps). -f makes HTTP error statuses fail.
+  local bot_info=""
+  if ! bot_info=$(printf 'url = "https://api.telegram.org/bot%s/getMe"\n' "$token" | curl -fsS --max-time 10 -K - 2>/dev/null); then
+    bot_info=""
+  fi
 
   if echo "$bot_info" | grep -q '"ok":true'; then
-    local bot_name
-    bot_name=$(echo "$bot_info" | jq -r '.result.username' 2>/dev/null || echo "unknown")
+    local bot_name=""
+    if command -v jq &>/dev/null; then
+      bot_name=$(echo "$bot_info" | jq -r '.result.username' 2>/dev/null || true)
+    else
+      bot_name=$(echo "$bot_info" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p')
+    fi
     nt_test_result "Telegram bot reachable" "pass" "@$bot_name"
     return 0
   else
@@ -243,20 +256,20 @@ nt_fetch_ccxt_ticker() {
   local exchange="${1:-binance}"
   local symbol="${2:-BTC/USDT}"
 
-  curl -s --connect-timeout 5 "$CCXT_URL/api/ticker/$exchange/$symbol" 2>/dev/null || echo ""
+  curl -fsS --connect-timeout 5 --max-time 10 "$CCXT_URL/api/ticker/$exchange/$symbol" 2>/dev/null || echo ""
 }
 
 nt_fetch_ccxt_orderbook() {
   local exchange="${1:-binance}"
   local symbol="${2:-BTC/USDT}"
 
-  curl -s --connect-timeout 5 "$CCXT_URL/api/orderbook/$exchange/$symbol" 2>/dev/null || echo ""
+  curl -fsS --connect-timeout 5 --max-time 10 "$CCXT_URL/api/orderbook/$exchange/$symbol" 2>/dev/null || echo ""
 }
 
 nt_fetch_ccxt_markets() {
   local exchange="${1:-binance}"
 
-  curl -s --connect-timeout 5 "$CCXT_URL/api/markets/$exchange" 2>/dev/null || echo ""
+  curl -fsS --connect-timeout 5 --max-time 10 "$CCXT_URL/api/markets/$exchange" 2>/dev/null || echo ""
 }
 
 nt_validate_json_field() {
@@ -269,9 +282,8 @@ nt_validate_json_field() {
   fi
 
   if ! command -v jq &>/dev/null; then
-    # Fallback to grep if jq not available
-    echo "$json" | grep -q "\"$field\""
-    return $?
+    # jq is required for typed field validation; do not approximate with grep.
+    return 1
   fi
 
   case "$expected_type" in

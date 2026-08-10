@@ -1,5 +1,5 @@
-import { Effect, Layer } from "effect";
-import { MarketDataGateway } from "../market-data/gateway.js";
+import { Effect, Layer, Option } from "effect";
+import { MarketDataError, MarketDataGateway } from "../market-data/gateway.js";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
@@ -34,7 +34,13 @@ export const CloudflareMarketDataRepositoryLive = (
         op: string,
       ): MarketDataRepositoryError =>
         new MarketDataRepositoryError(
-          `${op}: ${err instanceof Error ? err.message : String(err)}`,
+          `${op}: ${
+            err instanceof MarketDataError
+              ? err.reason
+              : err instanceof Error
+                ? err.message
+                : String(err)
+          }`,
         );
 
       const getCandles = (query: CandleQuery) =>
@@ -60,11 +66,15 @@ export const CloudflareMarketDataRepositoryLive = (
                 .fetchOHLCV(exchange, symbol, timeframe, limit)
                 .pipe(
                   Effect.map((candles) => ({ symbol, count: candles.length })),
+                  // Per-symbol tolerance: a delisted pair or a rate limit
+                  // must not abort the whole universe scan — failed symbols
+                  // are skipped and the rest still count.
+                  Effect.option,
                 ),
             { concurrency: 4 },
           ).pipe(
-            Effect.mapError((err) =>
-              toRepoError(err, "listSymbolsByCandleCount"),
+            Effect.map((results) =>
+              results.flatMap((r) => (Option.isSome(r) ? [r.value] : [])),
             ),
           ),
 
@@ -113,7 +123,12 @@ export const CloudflareMarketDataRepositoryLive = (
               "saveFundingRates: not implemented on Cloudflare worker",
             ),
           ),
-        getFundingRates: () => Effect.succeed([]),
+        getFundingRates: () =>
+          Effect.fail(
+            new MarketDataRepositoryError(
+              "getFundingRates: not implemented on Cloudflare worker",
+            ),
+          ),
         getLatestFundingRateBefore: () =>
           Effect.fail(
             new MarketDataRepositoryError(

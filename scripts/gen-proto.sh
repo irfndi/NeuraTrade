@@ -4,11 +4,13 @@ set -e
 # Ensure output directories exist
 mkdir -p services/backend-api/pkg/pb/ccxt
 mkdir -p services/backend-api/pkg/pb/telegram
-mkdir -p services/telegram-service/src/proto
-mkdir -p services/ccxt-service/src/proto
+mkdir -p services/telegram-service/proto
+mkdir -p services/ccxt-service/proto
 
-# Find ts-proto plugin
-PLUGIN_PATH=$(which protoc-gen-ts_proto)
+# Find ts-proto plugin (capture the lookup failure instead of aborting on it)
+if ! PLUGIN_PATH=$(command -v protoc-gen-ts_proto); then
+  PLUGIN_PATH=""
+fi
 if [ -z "$PLUGIN_PATH" ]; then
   # Fallback to common locations if not in PATH
   if [ -f "/usr/local/bin/protoc-gen-ts_proto" ]; then

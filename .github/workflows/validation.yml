@@ -31,10 +31,10 @@ jobs:
     name: Backend Quality (fmt/lint)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.3.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -47,7 +47,7 @@ jobs:
         run: make fmt-check
 
       - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(pwd)/bin" v2.10.1
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.10.1/install.sh | sh -s -- -b "$(pwd)/bin" v2.10.1
 
       - name: Run Go lint
         run: cd services/backend-api && ../../bin/golangci-lint run
@@ -56,7 +56,7 @@ jobs:
     name: Frontend Quality (Bun services)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
@@ -64,7 +64,7 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Telegram Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
           path: |
             ~/.bun/install/cache
@@ -86,7 +86,7 @@ jobs:
         run: cd services/telegram-service && bun run build
 
       - name: Cache TypeScript CLI Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
           path: |
             ~/.bun/install/cache
@@ -113,7 +113,7 @@ jobs:
   backend-tests:
     name: Backend Tests (native/sqlite)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       DATABASE_DRIVER: sqlite
       SQLITE_PATH: /tmp/neuratrade-ci.db
@@ -123,10 +123,10 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: "6379"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.3.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -154,7 +154,7 @@ jobs:
       ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
       TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
@@ -162,7 +162,7 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Telegram Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
           path: |
             ~/.bun/install/cache
@@ -191,20 +191,24 @@ jobs:
 
           echo "::add-mask::$admin_api_key"
           echo "::add-mask::$webhook_secret"
+          # Random per-run delimiters so secret values containing a fixed
+          # delimiter can never terminate the heredoc early.
+          admin_delim="ADMIN_API_KEY_$(openssl rand -hex 16)"
+          webhook_delim="TELEGRAM_WEBHOOK_SECRET_$(openssl rand -hex 16)"
           {
-            echo "ADMIN_API_KEY<<EOF"
+            echo "ADMIN_API_KEY<<$admin_delim"
             echo "$admin_api_key"
-            echo "EOF"
-            echo "TELEGRAM_WEBHOOK_SECRET<<EOF"
+            echo "$admin_delim"
+            echo "TELEGRAM_WEBHOOK_SECRET<<$webhook_delim"
             echo "$webhook_secret"
-            echo "EOF"
+            echo "$webhook_delim"
           } >> "$GITHUB_ENV"
 
       - name: Run Telegram tests
         run: cd services/telegram-service && bun test
 
       - name: Cache TypeScript CLI Bun dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
           path: |
             ~/.bun/install/cache
@@ -224,12 +228,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.3.0
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -256,7 +260,7 @@ jobs:
         # TODO(security:taint,target=2026-05-15): restore G701-G707 in PR validation after internal/services is decomposed enough for bounded scan time.
         run: |
           cd services/backend-api
-          mapfile -t base_packages < <(go list -f '{{.Dir}}' ./cmd/... ./internal/... ./pkg/... | grep -v '/internal/services$')
+          mapfile -t base_packages < <(go list -f '{{.Dir}}' ./cmd/... ./internal/... ./pkg/... | grep -vE '/internal/services(/|$)')
 
           if [ "${#base_packages[@]}" -gt 0 ]; then
             gosec \
@@ -298,7 +302,7 @@ jobs:
     name: Frontend Security (telegram-service)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2

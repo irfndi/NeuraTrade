@@ -111,10 +111,17 @@ export function fetchTick(
       );
     }
 
+    const price = asNumber(ticker.lastPrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      return yield* Effect.fail(
+        new MarketDataError(`Bybit ticker has invalid price for ${symbol}`),
+      );
+    }
+
     return {
       exchange: EXCHANGE,
       symbol,
-      price: asNumber(ticker.lastPrice),
+      price,
       volume: asNumber(ticker.volume24h),
       bid: asNumber(ticker.bid1Price),
       ask: asNumber(ticker.ask1Price),
@@ -307,8 +314,10 @@ export function fetchFundingRates(
       );
       if (data.list.length === 0) break;
 
+      let oldestOnPage = Number.POSITIVE_INFINITY;
       for (const r of data.list) {
         const time = Number(r.fundingTime);
+        if (time < oldestOnPage) oldestOnPage = time;
         if (startMs !== undefined && time < startMs) continue;
         if (endMs !== undefined && time > endMs) continue;
         results.push({
@@ -320,6 +329,10 @@ export function fetchFundingRates(
       }
 
       if (results.length >= limit) break;
+      // Rows are newest-first, so once the oldest row on a page predates
+      // startMs no later page can contain in-window rows (this also covers
+      // a fully-skipped page whose rows are all older than startMs).
+      if (startMs !== undefined && oldestOnPage < startMs) break;
       const next = data.nextPageCursor;
       if (!next) break;
       cursor = next;

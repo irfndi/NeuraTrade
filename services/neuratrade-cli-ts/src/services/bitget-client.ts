@@ -336,14 +336,23 @@ function sign(secret: string, payload: string): string {
   return crypto.createHmac("sha256", secret).update(payload).digest("base64");
 }
 
-function authHeaders(
+/**
+ * Build Bitget request auth headers.
+ *
+ * `isDemo` is REQUIRED (no default): Bitget demo trading uses the production
+ * host and differs only by the PAPTRADING header, so omitting the flag would
+ * silently route a "demo" request to the live matching engine. The demo
+ * decision must be made exactly once by the layer that owns the config flag
+ * and threaded through explicitly.
+ */
+export function authHeaders(
   credentials: BitgetCredentials,
   method: string,
   requestPath: string,
   body: string,
-  isDemo = false,
+  isDemo: boolean,
+  timestamp = String(Date.now()),
 ): Record<string, string> {
-  const timestamp = String(Date.now());
   const payload = `${timestamp}${method.toUpperCase()}${requestPath}${body}`;
   const signature = sign(credentials.apiSecret, payload);
   const headers: Record<string, string> = {
@@ -503,9 +512,22 @@ function fetchBitget<T>(
     });
 
     if (response.status === 429) {
-      const retryAfter = Number(response.headers.get("Retry-After") || "0");
+      // Retry-After is normally delta-seconds, but may be an HTTP-date on
+      // some proxies. Number() on an HTTP-date yields NaN; falling back to 0
+      // would busy-loop into another 429 immediately, so default to a sane
+      // constant backoff instead.
+      const rawRetryAfter = response.headers.get("Retry-After");
+      const retryAfter = Number(rawRetryAfter || "0");
+      const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 5000;
+      if (rawRetryAfter && !Number.isFinite(retryAfter)) {
+        console.warn(
+          `[bitget-client] unparseable Retry-After header ${JSON.stringify(rawRetryAfter)} on ${endpoint}; falling back to ${retryAfterMs}ms`,
+        );
+      }
       return yield* Effect.fail(
-        new BitgetRateLimitError({ retryAfterMs: retryAfter * 1000, endpoint }),
+        new BitgetRateLimitError({ retryAfterMs, endpoint }),
       );
     }
 
@@ -561,13 +583,100 @@ function fetchBitget<T>(
 // Response parsers
 // ---------------------------------------------------------------------------
 
+/**
+ * Run a response parser as a typed failure. Parsers below fail (throw) when a
+ * money-critical field is missing or mistyped instead of fabricating a default
+ * (side='buy', price='0'): an API shape drift must surface as a `BitgetApiError`
+ * so callers never trade on invented values. Cosmetic fields keep tolerant
+ * defaults.
+ */
+function strictParse<T>(
+  endpoint: string,
+  parse: () => T,
+): Effect.Effect<T, BitgetApiError> {
+  return Effect.suspend(() => {
+    try {
+      return Effect.succeed(parse());
+    } catch (error) {
+      return Effect.fail(
+        new BitgetApiError({
+          status: 0,
+          body: error instanceof Error ? error.message : String(error),
+          endpoint,
+          code: "PARSE_CONTRACT",
+        }),
+      );
+    }
+  });
+}
+
+/** Present-and-non-empty string field; throws on absent/empty/mistyped. */
+function requiredString(
+  data: Record<string, unknown>,
+  key: string,
+  endpoint: string,
+  aliases: readonly string[] = [],
+): string {
+  const raw = data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
+  if (raw === undefined || raw === null) {
+    throw new Error(
+      `response missing required field "${key}" (endpoint ${endpoint})`,
+    );
+  }
+  const value = String(raw);
+  if (value === "") {
+    throw new Error(
+      `response field "${key}" is empty (endpoint ${endpoint})`,
+    );
+  }
+  return value;
+}
+
+/** Enum-valued field; throws when absent or outside the allowed set. */
+function requiredEnum<K extends string>(
+  data: Record<string, unknown>,
+  key: string,
+  endpoint: string,
+  allowed: readonly K[],
+  aliases: readonly string[] = [],
+): K {
+  const raw = data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
+  if (raw === undefined || raw === null) {
+    throw new Error(
+      `response missing required field "${key}" (endpoint ${endpoint})`,
+    );
+  }
+  const value = String(raw);
+  if (!(allowed as readonly string[]).includes(value)) {
+    throw new Error(
+      `response field "${key}" has unexpected value ${JSON.stringify(value)} (endpoint ${endpoint})`,
+    );
+  }
+  return value as K;
+}
+
 function parseBalances(data: unknown): ReadonlyArray<BitgetBalance> {
   if (!Array.isArray(data)) return [];
-  return data.map((item) => ({
-    asset: String(item.coin ?? item.asset ?? ""),
-    available: String(item.available ?? "0"),
-    frozen: String(item.frozen ?? item.locked ?? "0"),
-  }));
+  return data.map((item) => {
+    const record = (item ?? {}) as Record<string, unknown>;
+    const asset = requiredString(record, "asset", "/api/v2/spot/account/assets", [
+      "coin",
+    ]);
+    const available = requiredString(
+      record,
+      "available",
+      "/api/v2/spot/account/assets",
+    );
+    // Spot balances report frozen or locked depending on the endpoint version;
+    // at least one must be present, but either spelling is tolerated.
+    const frozenRaw = record.frozen ?? record.locked;
+    if (frozenRaw === undefined || frozenRaw === null) {
+      throw new Error(
+        'response missing required field "frozen" (endpoint /api/v2/spot/account/assets)',
+      );
+    }
+    return { asset, available, frozen: String(frozenRaw) };
+  });
 }
 
 function parseTicker(data: Record<string, unknown>): BitgetTicker {
@@ -582,11 +691,56 @@ function parseTicker(data: Record<string, unknown>): BitgetTicker {
   };
 }
 
-function parseOrder(data: Record<string, unknown>): BitgetOrder {
+function parseOrder(
+  data: Record<string, unknown>,
+  endpoint: string,
+): BitgetOrder {
   return {
     orderId: String(data.orderId ?? data.id ?? ""),
     clientOid: String(data.clientOid ?? ""),
     symbol: String(data.symbol ?? ""),
+    side: requiredEnum(data, "side", endpoint, ["buy", "sell"] as const),
+    orderType: requiredEnum(data, "orderType", endpoint, [
+      "market",
+      "limit",
+    ] as const),
+    status: requiredString(data, "status", endpoint),
+    size: requiredString(data, "size", endpoint),
+    price: requiredString(data, "price", endpoint),
+    filledSize: String(data.accBaseVolume ?? data.filledSize ?? "0"),
+    filledAmount: String(data.accQuoteVolume ?? data.filledAmount ?? "0"),
+    fee: String(data.fee ?? "0"),
+  };
+}
+
+/**
+ * Parse a place-order acknowledgement. Bitget's place-order response is an
+ * acknowledgement: it carries only orderId/clientOid (orderId may even be
+ * null for auto-replaced reduce-only orders) and never the full order state.
+ * Failing unless at least one identifier is present catches a missing
+ * envelope. The remaining BitgetOrder fields keep the documented ack defaults
+ * — the API never returns them here, so they must not be treated as real
+ * order state; callers that need side/status/size/price must query getOrder.
+ */
+function parsePlacedOrder(
+  data: Record<string, unknown>,
+  endpoint: string,
+): BitgetOrder {
+  const orderIdRaw = data.orderId ?? data.id;
+  const clientOidRaw = data.clientOid;
+  const hasOrderId = orderIdRaw !== undefined && orderIdRaw !== null;
+  const hasClientOid = clientOidRaw !== undefined && clientOidRaw !== null;
+  if (!hasOrderId && !hasClientOid) {
+    throw new Error(
+      `place-order response carries neither orderId nor clientOid (endpoint ${endpoint})`,
+    );
+  }
+  return {
+    orderId: hasOrderId ? String(orderIdRaw) : "",
+    clientOid: hasClientOid ? String(clientOidRaw) : "",
+    symbol: String(data.symbol ?? ""),
+    // ponytail: the ack never carries these; filled with documented ack
+    // defaults for interface parity (the CLI prints them for display only).
     side: String(data.side ?? "buy") as BitgetOrderSide,
     orderType: String(data.orderType ?? "limit") as BitgetOrderType,
     status: String(data.status ?? ""),
@@ -595,6 +749,21 @@ function parseOrder(data: Record<string, unknown>): BitgetOrder {
     filledSize: String(data.accBaseVolume ?? data.filledSize ?? "0"),
     filledAmount: String(data.accQuoteVolume ?? data.filledAmount ?? "0"),
     fee: String(data.fee ?? "0"),
+  };
+}
+
+function parsePlacedFuturesOrder(
+  data: Record<string, unknown>,
+  endpoint: string,
+): BitgetFuturesOrder {
+  const base = parsePlacedOrder(data, endpoint);
+  return {
+    ...base,
+    productType: String(
+      data.productType ?? "USDT-FUTURES",
+    ) as BitgetProductType,
+    priceAvg: String(data.priceAvg ?? data.fillPrice ?? data.price ?? "0"),
+    marginMode: String(data.marginMode ?? "crossed") as BitgetMarginMode,
   };
 }
 
@@ -677,6 +846,7 @@ function parseFuturesBalance(
 
 function parseFuturesPosition(
   data: Record<string, unknown>,
+  endpoint: string,
 ): BitgetFuturesPosition {
   return {
     positionId: String(data.positionId ?? ""),
@@ -685,19 +855,26 @@ function parseFuturesPosition(
       data.productType ?? "USDT-FUTURES",
     ) as BitgetProductType,
     marginMode: String(data.marginMode ?? "crossed") as BitgetMarginMode,
-    holdSide: String(data.holdSide ?? "long") as "long" | "short",
-    openPrice: String(
-      data.openPrice ?? data.openPriceAvg ?? data.openAvgPrice ?? "0",
-    ),
-    total: String(data.total ?? "0"),
-    available: String(data.available ?? "0"),
-    leverage: String(data.leverage ?? "0"),
+    holdSide: requiredEnum(data, "holdSide", endpoint, [
+      "long",
+      "short",
+    ] as const),
+    openPrice: requiredString(data, "openPrice", endpoint, [
+      "openPriceAvg",
+      "openAvgPrice",
+    ]),
+    total: requiredString(data, "total", endpoint),
+    available: requiredString(data, "available", endpoint),
+    leverage: requiredString(data, "leverage", endpoint),
     unrealizedPL: String(data.unrealizedPL ?? data.unrealizedpl ?? "0"),
     liquidatedPrice: String(data.liquidatedPrice ?? "0"),
   };
 }
 
-function parseFuturesOrder(data: Record<string, unknown>): BitgetFuturesOrder {
+function parseFuturesOrder(
+  data: Record<string, unknown>,
+  endpoint: string,
+): BitgetFuturesOrder {
   return {
     orderId: String(data.orderId ?? data.id ?? ""),
     clientOid: String(data.clientOid ?? ""),
@@ -705,11 +882,14 @@ function parseFuturesOrder(data: Record<string, unknown>): BitgetFuturesOrder {
     productType: String(
       data.productType ?? "USDT-FUTURES",
     ) as BitgetProductType,
-    side: String(data.side ?? "buy") as BitgetOrderSide,
-    orderType: String(data.orderType ?? "limit") as BitgetOrderType,
-    status: String(data.state ?? data.status ?? ""),
-    size: String(data.size ?? "0"),
-    price: String(data.price ?? "0"),
+    side: requiredEnum(data, "side", endpoint, ["buy", "sell"] as const),
+    orderType: requiredEnum(data, "orderType", endpoint, [
+      "market",
+      "limit",
+    ] as const),
+    status: requiredString(data, "status", endpoint, ["state"]),
+    size: requiredString(data, "size", endpoint),
+    price: requiredString(data, "price", endpoint),
     priceAvg: String(data.priceAvg ?? data.fillPrice ?? data.price ?? "0"),
     filledSize: String(
       data.filledQty ??
@@ -733,6 +913,12 @@ function parseFuturesOrder(data: Record<string, unknown>): BitgetFuturesOrder {
 export interface BitgetClientConfig {
   readonly credentials: BitgetCredentials;
   readonly baseUrl?: string;
+  /**
+   * Demo mode. REQUIRED to be `true` for sandbox: Bitget demo trading shares
+   * the production host and is routed only by the PAPTRADING header, so
+   * omitting this flag (or passing false) sends requests to the LIVE matching
+   * engine. Set it explicitly whenever the client talks to demo credentials.
+   */
   readonly isDemo?: boolean;
 }
 
@@ -740,7 +926,7 @@ function makeBitgetClientImpl(
   credentials: BitgetCredentials,
   baseUrl: string,
   rateLimiter: RateLimiterLike,
-  isDemo = false,
+  isDemo: boolean,
 ): BitgetClientImpl {
   const getBalances = (): Effect.Effect<
     ReadonlyArray<BitgetBalance>,
@@ -753,7 +939,11 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseBalances(resp.data)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => parseBalances(resp.data)),
+      ),
+    );
   };
 
   const getInstruments = (): Effect.Effect<
@@ -766,7 +956,11 @@ function makeBitgetClientImpl(
       endpoint,
       {},
       rateLimiter,
-    ).pipe(Effect.map((resp) => resp.data.map(parseInstrument)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => resp.data.map(parseInstrument)),
+      ),
+    );
   };
 
   const getTicker = (
@@ -779,7 +973,11 @@ function makeBitgetClientImpl(
       endpoint,
       {},
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseTicker(resp.data[0] ?? {})));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => parseTicker(resp.data[0] ?? {})),
+      ),
+    );
   };
 
   const placeOrder = (
@@ -809,7 +1007,11 @@ function makeBitgetClientImpl(
       endpoint,
       { method: "POST", headers, body },
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseOrder(resp.data)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => parsePlacedOrder(resp.data, endpoint)),
+      ),
+    );
   };
 
   const getOrder = (args: {
@@ -828,7 +1030,11 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseOrder(resp.data)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => parseOrder(resp.data, endpoint)),
+      ),
+    );
   };
 
   const cancelOrder = (args: {
@@ -864,7 +1070,11 @@ function makeBitgetClientImpl(
       endpoint,
       {},
       rateLimiter,
-    ).pipe(Effect.map((resp) => resp.data.map(parseContract)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => resp.data.map(parseContract)),
+      ),
+    );
   };
 
   const getFuturesTicker = (
@@ -878,7 +1088,13 @@ function makeBitgetClientImpl(
       endpoint,
       {},
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseFuturesTicker(resp.data[0] ?? {})));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () =>
+          parseFuturesTicker(resp.data[0] ?? {}),
+        ),
+      ),
+    );
   };
 
   const getFuturesBalances = (
@@ -891,7 +1107,11 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => resp.data.map(parseFuturesBalance)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => resp.data.map(parseFuturesBalance)),
+      ),
+    );
   };
 
   const getFuturesPositions = (
@@ -929,7 +1149,11 @@ function makeBitgetClientImpl(
         }
         return Effect.fail(error);
       }),
-      Effect.map((resp) => resp.data.map(parseFuturesPosition)),
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () =>
+          resp.data.map((item) => parseFuturesPosition(item, endpoint)),
+        ),
+      ),
     );
   };
 
@@ -1100,7 +1324,13 @@ function makeBitgetClientImpl(
       endpoint,
       { method: "POST", headers, body },
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseFuturesOrder(resp.data)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () =>
+          parsePlacedFuturesOrder(resp.data, endpoint),
+        ),
+      ),
+    );
   };
 
   const getFuturesOrder = (args: {
@@ -1126,7 +1356,11 @@ function makeBitgetClientImpl(
       endpoint,
       { headers },
       rateLimiter,
-    ).pipe(Effect.map((resp) => parseFuturesOrder(resp.data)));
+    ).pipe(
+      Effect.flatMap((resp) =>
+        strictParse(endpoint, () => parseFuturesOrder(resp.data, endpoint)),
+      ),
+    );
   };
 
   const cancelFuturesOrder = (args: {
@@ -1185,12 +1419,13 @@ export const BitgetClientLive = (
     Effect.gen(function* () {
       const rateLimiter = yield* RateLimiter;
       const baseUrl = config.baseUrl ?? BITGET_BASE_URL;
-      return makeBitgetClientImpl(
-        config.credentials,
-        baseUrl,
-        rateLimiter,
-        config.isDemo,
-      );
+      // This is the single demo-routing decision point. `isDemo` is threaded
+      // explicitly (authHeaders and makeBitgetClientImpl take no default) so a
+      // caller cannot silently drop the PAPTRADING flag mid-path. Bitget demo
+      // trading shares the production host, so the PAPTRADING header IS the
+      // routing: a demo request without it would hit the live matching engine.
+      const isDemo = config.isDemo === true;
+      return makeBitgetClientImpl(config.credentials, baseUrl, rateLimiter, isDemo);
     }),
   );
 
@@ -1236,6 +1471,10 @@ export const BitgetClientLiveConfig: Layer.Layer<
   Effect.gen(function* () {
     const config = yield* BitgetConfig;
     const rateLimiter = yield* RateLimiter;
+    // BITGET_DEMO_URL equals BITGET_BASE_URL by design (Bitget demo trading
+    // shares the production host); demo routing is the PAPTRADING header,
+    // derived here from the single config flag and threaded explicitly into
+    // every signed request. useSandbox=false means live orders.
     const baseUrl = config.useSandbox ? BITGET_DEMO_URL : BITGET_BASE_URL;
     return makeBitgetClientImpl(
       config.credentials,

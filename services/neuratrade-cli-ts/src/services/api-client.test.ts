@@ -208,24 +208,29 @@ describe("ApiClient", () => {
   // -----------------------------------------------------------------------
 
   describe("getPortfolio", () => {
-    it("fetches portfolio data", async () => {
-      const mock = startMock(() =>
-        json({
-          total_value: "15000.00",
-          cash: "5000.00",
-          assets: [{ symbol: "BTC", amount: "0.1", value: "10000.00" }],
-          pnl_24h: "250.00",
-        }),
-      );
+    it("fetches portfolio data with chat_id", async () => {
+      let receivedUrl: string | undefined;
+      const mock = startMock((req) => {
+        receivedUrl = req.url;
+        return json({
+          total_equity: "15000.00",
+          available_balance: "5000.00",
+          exposure: "10000.00",
+          positions: [{ symbol: "BTCUSDT", side: "long", size: "0.1" }],
+          drift_detected: false,
+          positions_source: "portfolio_safety",
+        });
+      });
       try {
         const program = Effect.gen(function* () {
           const api = yield* ApiClient;
-          return yield* api.getPortfolio();
+          return yield* api.getPortfolio("chat-42");
         });
         const result = await runOk(program, mock.url);
-        expect(result.total_value).toBe("15000.00");
-        expect(result.assets).toHaveLength(1);
-        expect(result.assets[0].symbol).toBe("BTC");
+        expect(result.total_equity).toBe("15000.00");
+        expect(result.positions).toHaveLength(1);
+        expect(result.positions[0].symbol).toBe("BTCUSDT");
+        expect(receivedUrl).toContain("chat_id=chat-42");
       } finally {
         mock.stop();
       }
@@ -333,7 +338,7 @@ describe("ApiClient", () => {
       try {
         const program = Effect.gen(function* () {
           const api = yield* ApiClient;
-          return yield* api.getPortfolio();
+          return yield* api.getPortfolio("chat-42");
         });
         const err = await runFail(program, mock.url);
         expect(err).toBeInstanceOf(HttpError);

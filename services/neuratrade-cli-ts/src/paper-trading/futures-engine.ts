@@ -306,7 +306,14 @@ export function runFuturesPaperTradingIteration(
     yield* repo.ensureTables();
 
     const portfolio = yield* repo.getPortfolio();
-    let capital = portfolio.capital.lessThanOrEqualTo(0)
+    // Seed initial capital only for a FRESH portfolio (no row persisted yet:
+    // the repository reports capital 0/peak 0). A blown account — persisted
+    // capital <= 0 with a positive peak — is a terminal state and must NOT
+    // be silently resurrected, or soak/drawdown results are falsified.
+    const isFreshPortfolio =
+      portfolio.capital.lessThanOrEqualTo(0) &&
+      portfolio.peakCapital.lessThanOrEqualTo(0);
+    let capital = isFreshPortfolio
       ? money(options.initialCapital)
       : portfolio.capital;
     let peakCapital = Decimal.max(portfolio.peakCapital, capital);
@@ -334,6 +341,15 @@ export function runFuturesPaperTradingIteration(
         position,
         capital: toNumber(capital),
         note: "insufficient candles",
+      };
+    }
+
+    if (orderBook.bids.length === 0 && orderBook.asks.length === 0) {
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: "empty order book",
       };
     }
 
@@ -412,7 +428,10 @@ export function runFuturesPaperTradingIteration(
           side: position.side === "long" ? "sell" : "buy",
           productType: options.productType,
           marginMode: options.marginMode,
-          leverage: options.leverage,
+          // Reduce-only closes must use the leverage the position was
+          // actually opened at (sizing may lift it above the config value),
+          // or the adapter's pre-trade leverage-mismatch guard trips.
+          leverage: position.leverage ?? options.leverage,
           size: position.size,
           price: money(currentCandle.close),
         });
@@ -462,6 +481,17 @@ export function runFuturesPaperTradingIteration(
 
     // Open new position if signal is strong enough and no position.
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
+      if (capital.lessThanOrEqualTo(0)) {
+        // Blown paper account: capital is exhausted. Exits above may still
+        // recover it; entry is terminal until the position closes with a win.
+        return {
+          action: "hold" as const,
+          position,
+          capital: toNumber(capital),
+          note: "capital exhausted (blown paper account)",
+        };
+      }
+
       const side = signal.direction === "buy" ? "long" : "short";
 
       // Pre-compute ATR and estimate stop distance from orderbook mid so we
@@ -646,6 +676,7 @@ export function runFuturesPaperTradingIteration(
         takeProfit,
         openedAt: new Date(),
         signalId: signal.id,
+        leverage: orderLeverage,
         scaledOut: false,
         scaleOutPrice: money(scaleOutPrice ?? 0),
       };

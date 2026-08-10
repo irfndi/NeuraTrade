@@ -131,21 +131,40 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       fetchSymbols(exchange);
 
     const fetch24hrVolumes = (
-      _exchange: string,
+      exchange: string,
     ): Effect.Effect<
       Readonly<Record<string, number>>,
       MarketDataError,
       never
-    > => Effect.succeed({});
+    > =>
+      Effect.gen(function* () {
+        // Sum base-volume of stored candles over the last 24h per symbol.
+        const timeframe = yield* Ref.get(lastTimeframeRef);
+        const symbols = yield* repo
+          .listSymbols(exchange, timeframe, 1)
+          .pipe(Effect.mapError(toMarketDataError));
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const volumes: Record<string, number> = {};
+        for (const symbol of symbols) {
+          const candles = yield* repo
+            .getCandles({ exchange, symbol, timeframe, from: since })
+            .pipe(Effect.mapError(toMarketDataError));
+          volumes[symbol] = candles.reduce((sum, c) => sum + c.volume, 0);
+        }
+        return volumes;
+      });
 
     const fetchFundingRates = (
-      _exchange: string,
-      _symbol: string,
-      _startTime?: Date,
-      _endTime?: Date,
-      _limit?: number,
+      exchange: string,
+      symbol: string,
+      startTime?: Date,
+      endTime?: Date,
+      limit?: number,
     ): Effect.Effect<readonly FundingRate[], MarketDataError, never> =>
-      Effect.succeed([]);
+      repo
+        .getFundingRates(exchange, symbol, startTime, endTime)
+        .pipe(Effect.map((rates) => (limit ? rates.slice(-limit) : rates)))
+        .pipe(Effect.mapError(toMarketDataError));
 
     return {
       fetchTick,

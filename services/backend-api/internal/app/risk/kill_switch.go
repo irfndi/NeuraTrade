@@ -44,6 +44,9 @@ func (k *KillSwitchImpl) SetStore(store KillSwitchStore) {
 
 // Reconcile reads the persisted state (if any) and applies it to the
 // in-memory actor. If no state is stored, the in-memory defaults are kept.
+// On a load error the kill switch FAILS CLOSED: the state is treated as
+// engaged-unknown and the kill switch is engaged in memory so trading is
+// blocked until the error is resolved.
 func (k *KillSwitchImpl) Reconcile(ctx context.Context) error {
 	k.mu.Lock()
 	store := k.store
@@ -53,7 +56,13 @@ func (k *KillSwitchImpl) Reconcile(ctx context.Context) error {
 	}
 	state, found, err := store.Load(ctx)
 	if err != nil {
-		return err
+		k.mu.Lock()
+		k.engaged = true
+		k.engagedAt = time.Now()
+		k.engagedBy = "system"
+		k.reason = "kill switch state unknown (reconcile failed); engaged as fail-closed default"
+		k.mu.Unlock()
+		return fmt.Errorf("reconcile kill switch state: %w", err)
 	}
 	if !found {
 		return nil
@@ -68,10 +77,14 @@ func (k *KillSwitchImpl) Reconcile(ctx context.Context) error {
 	return nil
 }
 
-func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) {
+// persistLocked synchronously persists the kill switch state. It must be
+// called with k.mu held so that saves are serialized and the final
+// persisted state is deterministic (no out-of-order background writes).
+// The returned error is propagated to the caller instead of being swallowed.
+func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) error {
 	store := k.store
 	if store == nil {
-		return
+		return nil
 	}
 	persisted := PersistedKillSwitchState{
 		Engaged:      state.Enabled,
@@ -83,11 +96,12 @@ func (k *KillSwitchImpl) persistLocked(state ports.KillSwitchState) {
 	if !k.engagedAt.IsZero() {
 		persisted.EngagedAt = k.engagedAt
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = store.Save(ctx, persisted)
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.Save(ctx, persisted); err != nil {
+		return fmt.Errorf("persist kill switch state: %w", err)
+	}
+	return nil
 }
 
 // Engage engages the kill switch, blocking all trading.
@@ -105,7 +119,12 @@ func (k *KillSwitchImpl) Engage(ctx context.Context, reason string) error {
 	k.reason = reason
 
 	state := k.stateLocked()
-	k.persistLocked(state)
+	if err := k.persistLocked(state); err != nil {
+		// Fail closed: stay engaged in memory (trading blocked) and surface
+		// the persistence failure so the caller knows a restart will not
+		// restore this state.
+		return err
+	}
 
 	for _, listener := range k.listeners {
 		go listener(state)
@@ -123,13 +142,25 @@ func (k *KillSwitchImpl) Disengage(ctx context.Context) error {
 		return nil // Already disengaged
 	}
 
+	prevEngagedAt := k.engagedAt
+	prevEngagedBy := k.engagedBy
+	prevReason := k.reason
+
 	k.engaged = false
 	k.engagedAt = time.Time{}
 	k.engagedBy = ""
 	k.reason = ""
 
 	state := k.stateLocked()
-	k.persistLocked(state)
+	if err := k.persistLocked(state); err != nil {
+		// Fail closed: restore the engaged state so trading stays blocked
+		// when the disengagement cannot be durably recorded.
+		k.engaged = true
+		k.engagedAt = prevEngagedAt
+		k.engagedBy = prevEngagedBy
+		k.reason = prevReason
+		return err
+	}
 
 	for _, listener := range k.listeners {
 		go listener(state)

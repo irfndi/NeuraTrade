@@ -290,7 +290,12 @@ export function runGridBacktest(
         isLiquidation,
       });
       positionSize = 0;
-      paused = isLiquidation ? 0 : options.gridPauseAfterLossBars;
+      // Pause only after a losing non-liquidation exit ("losing stop-out"
+      // per the option contract); winning target exits and liquidations must
+      // not suppress subsequent entries, or the funnel evidence would
+      // conflate loss-pauses with a genuine edge.
+      paused =
+        isLiquidation || net >= 0 ? 0 : options.gridPauseAfterLossBars;
     };
 
     const targetRatio = options.targetRatio ?? 1;
@@ -332,9 +337,10 @@ export function runGridBacktest(
         ? (exitPrice - entryPrice) / entryPrice
         : (entryPrice - exitPrice) / entryPrice;
     const net = pricePnl - fee;
+    const capitalBefore = capital;
     const leveragedReturn = net * leverage;
     const equityReturn = positionFraction * leveragedReturn;
-    capital = Math.max(0, capital * (1 + equityReturn));
+    capital = Math.max(0, capitalBefore * (1 + equityReturn));
     peak = Math.max(peak, capital);
     const dd = peak > 0 ? (peak - capital) / peak : 0;
     if (dd > maxDrawdown) maxDrawdown = dd;
@@ -353,7 +359,7 @@ export function runGridBacktest(
       entryPrice,
       exitPrice,
       pnlPct: leveragedReturn,
-      pnlQuote: capital * equityReturn,
+      pnlQuote: capitalBefore * equityReturn,
       win,
       isLiquidation: false,
     });

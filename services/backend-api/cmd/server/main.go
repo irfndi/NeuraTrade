@@ -383,6 +383,25 @@ func run() error {
 
 	tradingAdapter := ccxtadapters.NewAdapter(ccxtService)
 
+	// Shared kill switch. Created before the max-loss monitor so the safety
+	// close path can engage it (fail loud) when a close order cannot be
+	// placed, and so the persisted state is reconciled before any service
+	// that depends on it starts.
+	sharedKillSwitch := apprisk.NewKillSwitch()
+	if db != nil {
+		store := apprisk.NewSQLKillSwitchStore(db)
+		sharedKillSwitch.SetStore(store)
+		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
+			// Reconcile fails closed (kill switch engaged in memory); log
+			// loudly. Trading stays blocked until the operator resolves the
+			// persistence error and disengages deliberately.
+			logrusLogger.WithError(err).Error("kill switch reconcile failed; trading is BLOCKED (fail-closed) until resolved")
+		}
+		reconcileCancel()
+	}
+	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
+
 	maxLossMonitorConfig := services.DefaultMaxLossMonitorConfig()
 	maxLossMonitor := services.NewMaxLossMonitorService(
 		maxLossMonitorConfig,
@@ -398,6 +417,26 @@ func run() error {
 				ReduceOnly: true,
 			})
 			if placeErr != nil {
+				// FAIL LOUDLY: the safety close could not be executed. The
+				// ccxt adapter has no order-placement capability, so this
+				// path can never succeed. Engage the kill switch so no
+				// further trading happens with a broken safety net, and
+				// surface the failure at error level instead of silently
+				// retrying a guaranteed-failure close.
+				engageCtx, engageCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				engageErr := sharedKillSwitch.Engage(engageCtx, fmt.Sprintf(
+					"max-loss close failed for %s/%s (%s qty=%s); kill switch engaged to halt trading: %v",
+					exchange, symbol, side, quantity.String(), placeErr))
+				engageCancel()
+				if engageErr != nil {
+					logrusLogger.WithError(engageErr).Errorf(
+						"max-loss-monitor: CLOSE FAILED AND KILL SWITCH ENGAGE FAILED for %s/%s side=%s qty=%s: %v",
+						exchange, symbol, side, quantity.String(), placeErr)
+				} else {
+					logrusLogger.Errorf(
+						"max-loss-monitor: CLOSE FAILED for %s/%s side=%s qty=%s; kill switch ENGAGED to halt trading: %v",
+						exchange, symbol, side, quantity.String(), placeErr)
+				}
 				return nil, fmt.Errorf("place close order %s %s %s qty=%s: %w", exchange, side, symbol, quantity.String(), placeErr)
 			}
 			logrusLogger.Warnf("max-loss-monitor: CLOSE order placed: %s/%s side=%s qty=%s orderID=%s",
@@ -569,18 +608,6 @@ func run() error {
 		cfg.Security.CORSAllowedOrigins = cfg.Server.AllowedOrigins
 	}
 
-	sharedKillSwitch := apprisk.NewKillSwitch()
-	if db != nil {
-		store := apprisk.NewSQLKillSwitchStore(db)
-		sharedKillSwitch.SetStore(store)
-		reconcileCtx, reconcileCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := sharedKillSwitch.Reconcile(reconcileCtx); err != nil {
-			zaplogrus.Warnf("kill switch reconcile: %v", err)
-		}
-		reconcileCancel()
-	}
-	sharedSafeMode := apprisk.NewSafeMode(apprisk.DefaultSafeModeConfig())
-
 	// Setup routes and get cleanup function
 	cleanupRoutes, err := api.SetupRoutes(ctx, router, db, redisClient, ccxtService, collectorService, cleanupService, cacheAnalyticsService, signalAggregator, analyticsService, &cfg.Telegram, &cfg.AI, &cfg.Features, authMiddleware, walletValidator, opModeService, technicalAnalysisService, &cfg.Security, apiKeyService, sharedKillSwitch, sharedSafeMode, &cfg.Testnet)
 	if err != nil {
@@ -599,15 +626,33 @@ func run() error {
 		IdleTimeout:       parseDurationEnv("NEURATRADE_HTTP_IDLE_TIMEOUT", 15*time.Second),
 	}
 
+	// TLS: when certificates are configured, serve HTTPS. In production,
+	// fail closed (refuse to start) if no TLS is configured; development
+	// keeps plain HTTP so local tooling is unaffected.
+	tlsCert := strings.TrimSpace(cfg.Server.TLSCertFile)
+	tlsKey := strings.TrimSpace(cfg.Server.TLSKeyFile)
+	if (tlsCert == "") != (tlsKey == "") {
+		return fmt.Errorf("server.tls_cert_file and server.tls_key_file must both be set (got cert=%q key=%q)", tlsCert, tlsKey)
+	}
+	if tlsCert == "" && isProductionLike(cfg.Environment) {
+		return fmt.Errorf("TLS is required in production: set server.tls_cert_file and server.tls_key_file (or TLS_CERT_FILE/TLS_KEY_FILE)")
+	}
+
 	// Start server in a goroutine
 	go func() {
 		fmt.Printf("DEBUG: Starting server on address :%d\n", cfg.Server.Port)
 		logger.LogStartup("celebrum-backend-api", "1.0.0", cfg.Server.Port)
 		addr := fmt.Sprintf(":%d", cfg.Server.Port)
 		fmt.Printf("DEBUG: Full address: %s\n", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("DEBUG: Server error on address %s: %v\n", addr, err)
-			logger.WithError(err).Fatal("Failed to start server")
+		var serveErr error
+		if tlsCert != "" {
+			serveErr = srv.ListenAndServeTLS(tlsCert, tlsKey)
+		} else {
+			serveErr = srv.ListenAndServe()
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			fmt.Printf("DEBUG: Server error on address %s: %v\n", addr, serveErr)
+			logger.WithError(serveErr).Fatal("Failed to start server")
 		}
 	}()
 
@@ -704,6 +749,13 @@ func getEnvIntWithDefault(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// isProductionLike reports whether the configured environment is a
+// production deployment (used for fail-closed TLS enforcement).
+func isProductionLike(environment string) bool {
+	env := strings.ToLower(strings.TrimSpace(environment))
+	return env == "production" || env == "prod"
 }
 
 func getEnvFloatWithDefault(key string, fallback float64) float64 {

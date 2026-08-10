@@ -190,6 +190,13 @@ export interface GridUniverseOptions {
    * sweeping the target×ADX dials so watchlist rows carry the full config.
    */
   readonly tier?: UniverseTier;
+  /**
+   * Execution-parity outcome from the live harness (see real-money-readiness):
+   * whether sim fills matched live fills. Gate-scored eligibility propagates
+   * this into validateGridEvidence instead of hardcoding a pass — readiness
+   * acceptance must not claim parity that was never measured.
+   */
+  readonly executionParityPassed?: boolean;
 }
 
 export interface GridUniverseEntry {
@@ -473,7 +480,7 @@ export function gateScoredEligibility(
         testBars,
         minimumWindows,
         grid,
-        executionParityPassed: true,
+        executionParityPassed: options.executionParityPassed ?? false,
       });
       if (tier === "readiness") {
         // Full readiness board: valid evidence must clear EVERY gate AND
@@ -488,6 +495,21 @@ export function gateScoredEligibility(
         if (!fastEligible) continue;
         if (!passesTimeSplitGate(candles, grid)) continue;
         if (result.kind !== "ok") {
+          // Fast tier tolerates ONLY history-depth failures (complete-window
+          // count below minimum, fixed-OOS trade count below minimum): a
+          // symbol with shallow history may still be admitted on the light
+          // criteria. ANY data-quality failure (stale/gapped/negative-volume
+          // candles, invalid timestamps, historical return at/below -100%)
+          // is a hard drop even in the light tier — fast admission must not
+          // paper over bad data.
+          const depthOnlyFailures =
+            result.dataQuality.failures.every((failure) =>
+              failure.startsWith("complete window count"),
+            ) &&
+            result.failures.every((failure) =>
+              failure.startsWith("fixed OOS trade count"),
+            );
+          if (!depthOnlyFailures) continue;
           // Invalid evidence cannot rank; keep the first passing combo.
           if (best === null) {
             best = {
@@ -544,7 +566,11 @@ function evaluateUniverseSymbol(
     gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars[0] ?? 0,
   };
 
+  // Zero windows (candles shorter than train+test) yields profitableWindowsPct
+  // and aggregateReturnPct of 0, which a permissive minimum could "pass" with
+  // no walk-forward evidence and no trades — fail closed instead.
   const passedBase =
+    walkForward.windows.length >= 1 &&
     walkForward.profitableWindowsPct >= options.minProfitableWindowsPct &&
     walkForward.aggregateReturnPct >= options.minAggregateReturnPct;
 

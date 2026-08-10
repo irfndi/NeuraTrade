@@ -118,6 +118,7 @@ function sma(
   i: number,
   period: number,
 ): number | null {
+  if (period < 1) return null;
   if (i < period - 1) return null;
   let sum = 0;
   for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
@@ -419,8 +420,15 @@ export function runGridPaperTradingIteration(
       i = candles.length - 1;
     }
     const current = candles[i];
-    const trend = sma(candles, i, options.trendFilterPeriod);
-    if (trend === null) {
+    // trendFilterPeriod 0 disables the trend filter (CLI sets 0 when
+    // onlyWithTrend is off): skip the sma call entirely — a 0-period sma
+    // would be NaN, defeating the null guard and propagating NaN into grid
+    // decisions. Only an enabled-but-not-ready filter holds.
+    const trendFilterEnabled = options.trendFilterPeriod >= 1;
+    const trend = trendFilterEnabled
+      ? sma(candles, i, options.trendFilterPeriod)
+      : null;
+    if (trendFilterEnabled && trend === null) {
       return {
         action: "hold" as const,
         side: state.side,
@@ -717,8 +725,12 @@ export function runGridPaperTradingIteration(
       const buyLevel = mid.minus(step);
       const sellLevel = mid.plus(step);
       const onlyWithTrend = options.onlyWithTrend ?? false;
-      const allowLong = !onlyWithTrend || current.close > trend;
-      const allowShort = !onlyWithTrend || current.close < trend;
+      // A disabled trend filter (trendFilterPeriod 0 -> trend null) imposes
+      // no direction constraint, mirroring onlyWithTrend === false.
+      const allowLong =
+        !onlyWithTrend || trend === null || current.close > trend;
+      const allowShort =
+        !onlyWithTrend || trend === null || current.close < trend;
 
       let entrySide: GridPaperPositionSide | null = null;
       let theoreticalEntryPrice = money(0);

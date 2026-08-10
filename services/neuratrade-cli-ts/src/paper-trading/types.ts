@@ -61,6 +61,10 @@ export interface PaperPosition {
   readonly openedAt: Date;
   readonly signalId: string;
   readonly capitalAtEntry?: Money;
+  /** Leverage the position was actually opened at (futures engines; sizing
+   *  may lift leverage above the config value). Persisted so reduce-only
+   *  closes send the open leverage, not the config value. */
+  readonly leverage?: number;
   readonly scaledOut: boolean;
   readonly scaleOutPrice: Money;
 }

@@ -231,14 +231,24 @@ func TestNewAdminMiddleware_EnvironmentAware(t *testing.T) {
 		assert.Equal(t, "short-key-12345", am.apiKey)
 	})
 
-	t.Run("allows example keys in non-production with warning", func(t *testing.T) {
+	t.Run("rejects example keys in non-production too", func(t *testing.T) {
 		t.Setenv("ADMIN_API_KEY", "admin-dev-key-change-in-production")
 		t.Setenv("ENVIRONMENT", "development")
 		t.Setenv("GIN_MODE", "debug")
 
-		// Should not panic/fatal in non-production
-		am := MustNewAdminMiddleware()
-		assert.NotNil(t, am)
+		// Denylisted example keys must be rejected in ANY environment so the
+		// footgun cannot silently reach production.
+		_, err := NewAdminMiddleware()
+		assert.Error(t, err)
+	})
+
+	t.Run("rejects change-me-in-production placeholder", func(t *testing.T) {
+		t.Setenv("ADMIN_API_KEY", "change-me-in-production")
+		t.Setenv("ENVIRONMENT", "development")
+		t.Setenv("GIN_MODE", "debug")
+
+		_, err := NewAdminMiddleware()
+		assert.Error(t, err)
 	})
 }
 
@@ -276,18 +286,22 @@ func TestIsProductionEnvironment(t *testing.T) {
 
 func TestGenerateSecureKey(t *testing.T) {
 	t.Run("generates key of correct length", func(t *testing.T) {
-		key := generateSecureKey(32)
+		key, err := generateSecureKey(32)
+		assert.NoError(t, err)
 		assert.Len(t, key, 32)
 	})
 
 	t.Run("generates unique keys", func(t *testing.T) {
-		key1 := generateSecureKey(32)
-		key2 := generateSecureKey(32)
+		key1, err1 := generateSecureKey(32)
+		key2, err2 := generateSecureKey(32)
+		assert.NoError(t, err1)
+		assert.NoError(t, err2)
 		assert.NotEqual(t, key1, key2)
 	})
 
 	t.Run("generates hex characters only", func(t *testing.T) {
-		key := generateSecureKey(32)
+		key, err := generateSecureKey(32)
+		assert.NoError(t, err)
 		for _, c := range key {
 			assert.True(t, (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'),
 				"key should only contain hex characters, got: %c", c)

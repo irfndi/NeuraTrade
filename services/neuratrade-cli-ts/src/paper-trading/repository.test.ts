@@ -572,4 +572,221 @@ describe("PaperTradingRepositorySQLite", () => {
     expect(liveCapped.map((t) => t.id)).toEqual(["live-1"]);
     db.close();
   });
+
+  it("upserts one open position per (exchange, symbol)", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const base = {
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "1m",
+      side: "long" as const,
+      openedAt: new Date("2026-08-01T00:00:00.000Z"),
+      signalId: "s1",
+      scaledOut: false,
+      scaleOutPrice: money(0),
+    };
+    await Effect.runPromise(
+      repository.saveOpenPosition({
+        ...base,
+        id: "pos-a",
+        entryPrice: money("70000"),
+        size: money("0.1"),
+        stopLoss: money("69000"),
+        takeProfit: money("71000"),
+      }),
+    );
+    await Effect.runPromise(
+      repository.saveOpenPosition({
+        ...base,
+        id: "pos-b",
+        entryPrice: money("71000"),
+        size: money("0.2"),
+        stopLoss: money("70000"),
+        takeProfit: money("72000"),
+      }),
+    );
+
+    // The second save REPLACES the first: no silent shadowing, one row.
+    const loaded = await Effect.runPromise(
+      repository.getOpenPosition("bitget-futures", "BTC/USDT:USDT"),
+    );
+    expect(loaded?.id).toBe("pos-b");
+    expect(loaded?.entryPrice.toString()).toBe("71000");
+    const count = db.query("SELECT COUNT(*) AS c FROM paper_positions").get() as {
+      c: number;
+    };
+    expect(count.c).toBe(1);
+    db.close();
+  });
+
+  it("dedupes legacy duplicate open positions during ensureTables", async () => {
+    const db = new Database(":memory:");
+    // Pre-fix state: two rows for the same key with different surrogate ids.
+    db.exec(`
+      CREATE TABLE paper_positions (
+        id TEXT PRIMARY KEY,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        side TEXT NOT NULL,
+        entry_price REAL NOT NULL,
+        size REAL NOT NULL,
+        stop_loss REAL NOT NULL,
+        take_profit REAL NOT NULL,
+        opened_at TEXT NOT NULL,
+        signal_id TEXT
+      );
+      INSERT INTO paper_positions VALUES
+        ('dup-1', 'bitget-futures', 'BTC/USDT:USDT', '1m', 'long', 70000, 0.1, 69000, 71000, '2026-08-01T00:00:00.000Z', 's1'),
+        ('dup-2', 'bitget-futures', 'BTC/USDT:USDT', '1m', 'long', 70500, 0.2, 69500, 71500, '2026-08-01T00:01:00.000Z', 's2');
+    `);
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+
+    const count = db.query("SELECT COUNT(*) AS c FROM paper_positions").get() as {
+      c: number;
+    };
+    expect(count.c).toBe(1);
+    const indexes = (
+      db.query("PRAGMA index_list(paper_positions)").all() as Array<{
+        name: string;
+      }>
+    ).map((i) => i.name);
+    expect(indexes).toContain("idx_paper_positions_exchange_symbol");
+    const loaded = await Effect.runPromise(
+      repository.getOpenPosition("bitget-futures", "BTC/USDT:USDT"),
+    );
+    expect(loaded).not.toBeNull();
+    db.close();
+  });
+
+  it("migrates a pre-decimal DB, backfills money columns, and is idempotent", async () => {
+    const db = new Database(":memory:");
+    // Original schema: no decimal columns, no scaled_out — with REAL rows.
+    db.exec(`
+      CREATE TABLE paper_portfolio (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        capital REAL NOT NULL,
+        peak_capital REAL NOT NULL,
+        updated_at DATETIME NOT NULL
+      );
+      CREATE TABLE paper_positions (
+        id TEXT PRIMARY KEY,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        side TEXT NOT NULL,
+        entry_price REAL NOT NULL,
+        size REAL NOT NULL,
+        stop_loss REAL NOT NULL,
+        take_profit REAL NOT NULL,
+        opened_at TEXT NOT NULL,
+        signal_id TEXT
+      );
+      CREATE TABLE paper_trades (
+        id TEXT PRIMARY KEY,
+        exchange TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        side TEXT NOT NULL,
+        entry_price REAL NOT NULL,
+        exit_price REAL NOT NULL,
+        size REAL NOT NULL,
+        pnl REAL NOT NULL,
+        pnl_pct REAL NOT NULL,
+        exit_reason TEXT NOT NULL,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT NOT NULL
+      );
+      INSERT INTO paper_portfolio VALUES (1, 12345.5, 13000.25, '2026-08-01T00:00:00.000Z');
+      INSERT INTO paper_positions VALUES
+        ('legacy-1', 'bitget-futures', 'BTC/USDT:USDT', '1m', 'long', 70000.5, 0.1, 69000.5, 71000.5, '2026-08-01T00:00:00.000Z', 's1');
+      INSERT INTO paper_trades VALUES
+        ('legacy-t1', 'bitget-futures', 'BTC/USDT:USDT', '1m', 'long', 70000.5, 70500.5, 0.1, 50, 0.714, 'take_profit', '2026-08-01T00:00:00.000Z', '2026-08-01T01:00:00.000Z');
+    `);
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    await Effect.runPromise(repository.ensureTables()); // must be re-runnable
+
+    // Every column the read queries reference exists after migration.
+    const columns = (
+      db.query("PRAGMA table_info(paper_positions)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        "entry_price_decimal",
+        "size_decimal",
+        "stop_loss_decimal",
+        "take_profit_decimal",
+        "scaled_out",
+        "scale_out_price",
+        "scale_out_price_decimal",
+      ]),
+    );
+
+    // Backfilled legacy rows read back exactly (CAST of the REAL value, not
+    // float drift through toNumber).
+    const portfolio = await Effect.runPromise(repository.getPortfolio());
+    expect(portfolio.capital.toString()).toBe("12345.5");
+    expect(portfolio.peakCapital.toString()).toBe("13000.25");
+    const position = await Effect.runPromise(
+      repository.getOpenPosition("bitget-futures", "BTC/USDT:USDT"),
+    );
+    expect(position?.entryPrice.toString()).toBe("70000.5");
+    const trades = await Effect.runPromise(repository.listRecentTrades(1));
+    expect(trades[0]?.entryPrice.toString()).toBe("70000.5");
+    expect(trades[0]?.pnl.toString()).toBe("50");
+    db.close();
+  });
+
+  it("round-trips Decimal exactly through scaleOutPosition", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const position: PaperPosition = {
+      id: "scale-1",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "1m",
+      side: "long",
+      entryPrice: money("70000.12345678901234567890"),
+      size: money("1.12345678901234567890"),
+      stopLoss: money("69000.00000000000000000001"),
+      takeProfit: money("71000.99999999999999999999"),
+      openedAt: new Date("2026-08-01T00:00:00.000Z"),
+      signalId: "s1",
+      scaledOut: false,
+      scaleOutPrice: money(0),
+    };
+    await Effect.runPromise(repository.saveOpenPosition(position));
+    const { trade, updatedPosition } = await Effect.runPromise(
+      repository.scaleOutPosition(
+        position,
+        money("70500.98765432109876543210"),
+        40,
+        new Date("2026-08-01T00:01:00.000Z"),
+      ),
+    );
+
+    expect(trade.entryPrice.toString()).toBe(position.entryPrice.toString());
+    // Decimal.js normalizes trailing zeros: 70500.98765432109876543210 -> …321.
+    expect(trade.exitPrice.toString()).toBe("70500.9876543210987654321");
+    expect(trade.size.toString()).toBe(position.size.times("0.4").toString());
+
+    const trades = await Effect.runPromise(repository.listRecentTrades(1));
+    expect(trades[0]?.size.toString()).toBe(trade.size.toString());
+    expect(trades[0]?.exitPrice.toString()).toBe(trade.exitPrice.toString());
+
+    const loaded = await Effect.runPromise(
+      repository.getOpenPosition("bitget-futures", "BTC/USDT:USDT"),
+    );
+    expect(loaded?.size.toString()).toBe(updatedPosition.size.toString());
+    expect(loaded?.scaledOut).toBe(true);
+    db.close();
+  });
 });

@@ -5,7 +5,8 @@ import {
   type MarketDataGatewayService,
 } from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
-import { ExchangeAdapter } from "../exchange/adapter.js";
+import { ExchangeAdapter, ExchangeError } from "../exchange/adapter.js";
+import type { ExchangeAdapterService } from "../exchange/adapter.js";
 import { makeSimulatedExchangeAdapter } from "../exchange/adapters/simulated.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
@@ -72,11 +73,46 @@ function makeOrderBook(price: number): OrderBook {
   };
 }
 
+function makeGatewayWithCandles(
+  candles: Candle[],
+  orderBook: OrderBook,
+): MarketDataGatewayService {
+  return {
+    fetchTick: () => Effect.fail({ reason: "not used" } as never),
+    fetchOHLCV: () => Effect.succeed(candles),
+    fetchOrderBook: () => Effect.succeed(orderBook),
+    fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+    fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
+    fetch24hrVolumes: () => Effect.succeed({}),
+    fetchFundingRates: () => Effect.succeed([]),
+  };
+}
+
+/** Flat candles with the LAST bar replaced so exit conditions are hit. */
+function makeCandlesWithLastBar(
+  last: Partial<Candle>,
+  count = 30,
+  baseClose = 100,
+): Candle[] {
+  const candles = makeCandles(count, baseClose, "flat");
+  candles[candles.length - 1] = { ...candles[candles.length - 1], ...last };
+  return candles;
+}
+
 class InMemoryPaperRepository implements PaperTradingRepositoryService {
-  private capital = money(10_000);
-  private peakCapital = money(10_000);
+  private capital: Decimal;
+  private peakCapital: Decimal;
   private position: PaperPosition | null = null;
   private trades: PaperTrade[] = [];
+
+  constructor(capital = 10_000, peakCapital = 10_000) {
+    this.capital = money(capital);
+    this.peakCapital = money(peakCapital);
+  }
+
+  seedPosition(position: PaperPosition | null) {
+    this.position = position;
+  }
 
   ensureTables() {
     return Effect.void;
@@ -331,6 +367,7 @@ function makeGateway(price: number): MarketDataGatewayService {
 
 function makeOptions(
   composerConfig: ComposerConfig = defaultComposerConfig,
+  overrides: Partial<PaperTradingOptions> = {},
 ): PaperTradingOptions {
   return {
     exchange: "binance",
@@ -360,7 +397,55 @@ function makeOptions(
     minAtrPct: 0,
     initialCapital: 10_000,
     isLive: false,
+    ...overrides,
   };
+}
+
+function defaultRiskGuard() {
+  return makeRiskGuard({
+    liveTradingEnabled: false,
+    maxPositionSizePct: 100,
+    maxDailyLossPct: 100,
+    maxDrawdownPct: 100,
+    minCapital: 0,
+    maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+  });
+}
+
+function runIteration(
+  options: PaperTradingOptions,
+  deps: {
+    repo?: InMemoryPaperRepository;
+    gateway?: MarketDataGatewayService;
+    adapter?: ExchangeAdapterService;
+    riskGuard?: ReturnType<typeof makeRiskGuard>;
+    killSwitch?: KillSwitchService;
+    circuitBreaker?: CircuitBreakerService;
+  } = {},
+) {
+  return Effect.runPromise(
+    runPaperTradingIteration(options).pipe(
+      Effect.provideService(
+        PaperTradingRepository,
+        deps.repo ?? new InMemoryPaperRepository(),
+      ),
+      Effect.provideService(
+        MarketDataGateway,
+        deps.gateway ?? makeGateway(100),
+      ),
+      Effect.provideService(
+        ExchangeAdapter,
+        deps.adapter ?? makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      ),
+      Effect.provideService(RiskGuard, deps.riskGuard ?? defaultRiskGuard()),
+      Effect.provideService(KillSwitch, deps.killSwitch ?? new InMemoryKillSwitch()),
+      Effect.provideService(
+        CircuitBreaker,
+        deps.circuitBreaker ?? new InMemoryCircuitBreaker(),
+      ),
+      Effect.provide(scalpingServiceLayers),
+    ),
+  );
 }
 
 describe("runPaperTradingIteration", () => {
@@ -485,5 +570,238 @@ describe("runPaperTradingIteration", () => {
     expect(result.action).toBe("hold");
     expect(result.note).toContain("CIRCUIT BREAKER OPEN");
     expect(result.position).toBeNull();
+  });
+
+  it("caps entry size at maxPositionSizePct", async () => {
+    // riskPerTradePct 1% of 10_000 = 100 risked over a ~1.5% stop sizes
+    // 6666.67 notional; the 20% position cap cuts it to 2000 -> size 20 BTC.
+    const result = await runIteration(
+      makeOptions(undefined, { riskPerTradePct: 1, maxPositionSizePct: 20 }),
+    );
+
+    expect(result.action).toBe("opened");
+    expect(result.position?.size.toNumber()).toBeCloseTo(20, 4);
+  });
+
+  it("does not place an order below the minAtrPct volatility gate", async () => {
+    // minAtrPct 100% can never be met by the up-trend candles' ATR; the gate
+    // must hold BEFORE adapter.placeOrder, so no order and no fee.
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      placeOrder: () =>
+        Effect.fail(new ExchangeError("unexpected order below minAtrPct gate")),
+    };
+
+    const result = await runIteration(
+      makeOptions(undefined, { minAtrPct: 100 }),
+      { adapter },
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("LOW VOLATILITY");
+    expect(result.position).toBeNull();
+    expect(result.capital).toBe(10_000);
+  });
+
+  it("holds without ordering when the order book is empty", async () => {
+    const gateway = {
+      ...makeGateway(100),
+      fetchOrderBook: () =>
+        Effect.succeed({ ...makeOrderBook(100), bids: [], asks: [] }),
+    };
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      placeOrder: () =>
+        Effect.fail(new ExchangeError("no order should be placed on empty book")),
+    };
+
+    const result = await runIteration(makeOptions(), { gateway, adapter });
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toBe("empty order book");
+    expect(result.position).toBeNull();
+  });
+
+  it("seeds initialCapital only on a fresh portfolio and stays terminal when blown", async () => {
+    const freshRepo = new InMemoryPaperRepository(0, 0);
+    const fresh = await runIteration(
+      makeOptions(undefined, { initialCapital: 500 }),
+      { repo: freshRepo },
+    );
+    expect(fresh.action).toBe("opened");
+    // Sized from the seeded 500, not from any other default.
+    expect(fresh.position?.size.toNumber()).toBeCloseTo(5, 4);
+    expect(fresh.capital).toBeLessThan(500);
+
+    // A blown account (capital 0, peak retained) must NOT be resurrected.
+    const blownRepo = new InMemoryPaperRepository(0, 5_000);
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      placeOrder: () =>
+        Effect.fail(new ExchangeError("no entry on a blown account")),
+    };
+    const blown = await runIteration(
+      makeOptions(undefined, { initialCapital: 10_000 }),
+      { repo: blownRepo, adapter },
+    );
+
+    expect(blown.action).toBe("hold");
+    expect(blown.note).toContain("capital exhausted");
+    expect(blown.capital).toBe(0);
+    expect(blown.position).toBeNull();
+  });
+
+  it("closes with the adapter fill price and fee when a stop loss hits", async () => {
+    const repo = new InMemoryPaperRepository();
+    repo.seedPosition({
+      id: "pos-stop",
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      side: "long",
+      entryPrice: money(100),
+      size: money(10),
+      stopLoss: money(95),
+      takeProfit: money(120),
+      openedAt: new Date(),
+      signalId: "signal-1",
+      scaledOut: false,
+      scaleOutPrice: money(0),
+    });
+    const gateway = makeGatewayWithCandles(
+      makeCandlesWithLastBar({ open: 100, high: 101, low: 94, close: 100 }),
+      makeOrderBook(100),
+    );
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      closePosition: () =>
+        Effect.succeed({
+          orderId: "close-1",
+          symbol: "BTC/USDT",
+          side: "sell" as const,
+          filledQty: 10,
+          filledPrice: 96,
+          fee: 0.5,
+          timestamp: new Date(),
+        }),
+    };
+
+    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+
+    expect(result.action).toBe("closed");
+    expect(result.position).toBeNull();
+    expect(result.note).toContain("stop_loss");
+    // pnl (96-100)*10 = -40, fee 0.5 -> 10000 - 40 - 0.5.
+    expect(result.capital).toBeCloseTo(9959.5, 6);
+  });
+
+  it("falls back to the take-profit level and charges a fee when no fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    repo.seedPosition({
+      id: "pos-tp",
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      side: "long",
+      entryPrice: money(100),
+      size: money(10),
+      stopLoss: money(90),
+      takeProfit: money(120),
+      openedAt: new Date(),
+      signalId: "signal-1",
+      scaledOut: false,
+      scaleOutPrice: money(0),
+    });
+    const gateway = makeGatewayWithCandles(
+      makeCandlesWithLastBar({ open: 110, high: 121, low: 109, close: 120 }),
+      makeOrderBook(100),
+    );
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      closePosition: () => Effect.succeed(null),
+    };
+
+    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+
+    expect(result.action).toBe("closed");
+    expect(result.note).toContain("take_profit");
+    // fallback exit = max(open 110, takeProfit 120) = 120; pnl (120-100)*10
+    // = 200, fee 120*10*0.1% = 1.2 -> 10000 + 200 - 1.2.
+    expect(result.capital).toBeCloseTo(10198.8, 6);
+  });
+
+  it("closes on a signal exit at the candle close without a fill", async () => {
+    const repo = new InMemoryPaperRepository();
+    repo.seedPosition({
+      id: "pos-signal",
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      side: "long",
+      entryPrice: money(100),
+      size: money(10),
+      stopLoss: money(10),
+      takeProfit: money(150),
+      openedAt: new Date(),
+      signalId: "signal-1",
+      scaledOut: false,
+      scaleOutPrice: money(0),
+    });
+    // Down-trend candles + ask-heavy book compose a sell signal that exits
+    // the long (exit does not gate on confidence, only direction).
+    const orderBook: OrderBook = {
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      bids: [{ price: 99.0, volume: 10 }],
+      asks: [{ price: 100.0, volume: 200 }],
+      timestamp: new Date(),
+    };
+    const gateway = makeGatewayWithCandles(
+      makeCandles(100, 100, "down"),
+      orderBook,
+    );
+    const adapter = {
+      ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
+      closePosition: () => Effect.succeed(null),
+    };
+
+    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+
+    expect(result.action).toBe("closed");
+    expect(result.note).toContain("signal");
+    expect(result.position).toBeNull();
+    expect(result.capital).toBeLessThan(10_000);
+  });
+
+  it("records the scale-out fee against the partial size only", async () => {
+    const repo = new InMemoryPaperRepository();
+    repo.seedPosition({
+      id: "pos-scale",
+      exchange: "binance",
+      symbol: "BTC/USDT",
+      timeframe: "1h",
+      side: "long",
+      entryPrice: money(100),
+      size: money(10),
+      stopLoss: money(90),
+      takeProfit: money(130),
+      openedAt: new Date(),
+      signalId: "signal-1",
+      scaledOut: false,
+      scaleOutPrice: money(115),
+    });
+    const gateway = makeGatewayWithCandles(
+      makeCandlesWithLastBar({ open: 110, high: 116, low: 109, close: 115 }),
+      makeOrderBook(100),
+    );
+
+    const result = await runIteration(makeOptions(), { repo, gateway });
+
+    expect(result.action).toBe("scaled_out");
+    expect(result.note).toContain("SCALE-OUT");
+    // Scale 50% of 10 = 5 at 115: pnl (115-100)*5 = 75, fee 115*5*0.1% =
+    // 0.575 -> 10000 + 75 - 0.575; remaining size 5.
+    expect(result.capital).toBeCloseTo(10074.425, 6);
+    expect(result.position?.size.toNumber()).toBeCloseTo(5, 6);
   });
 });

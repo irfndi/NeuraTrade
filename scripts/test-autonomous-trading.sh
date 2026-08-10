@@ -12,6 +12,8 @@
 # 4. Test Telegram bot commands (Phases 1-4)
 # 5. Validate autonomous trading readiness
 #
+# Exits 1 when any test failed, so automation/CI can detect a failed run.
+#
 
 set -euo pipefail
 
@@ -27,6 +29,7 @@ NC='\033[0m'
 TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
+TESTS_WARNED=0
 
 # Print functions
 print_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -48,14 +51,18 @@ test_result() {
 
   if [ "$result" = "pass" ]; then
     print_success "$name"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
   elif [ "$result" = "skip" ]; then
     print_warn "$name (skipped: $message)"
-    ((TESTS_SKIPPED++))
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  elif [ "$result" = "warn" ]; then
+    print_warn "$name"
+    [ -n "$message" ] && echo "   Details: $message"
+    TESTS_WARNED=$((TESTS_WARNED + 1))
   else
     print_error "$name"
     [ -n "$message" ] && echo "   Details: $message"
-    ((TESTS_FAILED++))
+    TESTS_FAILED=$((TESTS_FAILED + 1))
   fi
 }
 
@@ -71,8 +78,12 @@ check_configuration() {
     test_result "Config file exists" "pass"
 
     # Check if config is empty or valid JSON
-    local config_size
-    config_size=$(stat -f%z "$config_file" 2>/dev/null || stat -c%s "$config_file" 2>/dev/null || echo "0")
+    local config_size=0
+    if stat -f%z "$config_file" >/dev/null 2>&1; then
+      config_size=$(stat -f%z "$config_file")
+    elif stat -c%s "$config_file" >/dev/null 2>&1; then
+      config_size=$(stat -c%s "$config_file")
+    fi
 
     if [ "$config_size" -lt 5 ]; then
       test_result "Config file has content" "fail" "File is empty or too small ($config_size bytes)"
@@ -146,7 +157,7 @@ check_database() {
       local required_tables=("users" "wallets" "exchange_api_keys" "trading_pairs" "exchanges")
 
       for table in "${required_tables[@]}"; do
-        if echo "$tables" | grep -q "^${table}$"; then
+        if grep -Fxq -- "$table" <<<"$tables"; then
           test_result "Table '$table' exists" "pass"
         else
           test_result "Table '$table' exists" "fail" "Run migrations: make migrate"
@@ -179,36 +190,48 @@ check_services() {
 
   # Check CCXT service
   print_step "Checking CCXT service (port 3001)..."
-  if curl -s --connect-timeout 5 http://localhost:3001/health &>/dev/null; then
+  if curl -fsS --connect-timeout 5 --max-time 10 http://localhost:3001/health &>/dev/null; then
     test_result "CCXT service HTTP" "pass"
 
     # Test public market data access (no auth required)
-    local ticker_response
-    ticker_response=$(curl -s --connect-timeout 5 "http://localhost:3001/api/ticker/binance/BTC/USDT" 2>/dev/null || echo "")
+    local ticker_response=""
+    if ! ticker_response=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/ticker/binance/BTC/USDT" 2>/dev/null); then
+      ticker_response=""
+    fi
 
     if [ -n "$ticker_response" ]; then
-      test_result "CCXT public market data (ticker)" "pass" "No auth required for public data"
+      if command -v jq &>/dev/null && ! jq empty <<<"$ticker_response" 2>/dev/null; then
+        test_result "CCXT public market data (ticker)" "fail" "Invalid JSON from CCXT"
+      else
+        test_result "CCXT public market data (ticker)" "pass" "No auth required for public data"
+      fi
     else
       test_result "CCXT public market data (ticker)" "fail" "CCXT not returning data"
     fi
 
     # Test orderbook (public data)
-    local orderbook_response
-    orderbook_response=$(curl -s --connect-timeout 5 "http://localhost:3001/api/orderbook/binance/BTC/USDT" 2>/dev/null || echo "")
+    local orderbook_response=""
+    if ! orderbook_response=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/orderbook/binance/BTC/USDT" 2>/dev/null); then
+      orderbook_response=""
+    fi
 
     if [ -n "$orderbook_response" ]; then
-      test_result "CCXT public market data (orderbook)" "pass" "No auth required for public data"
+      if command -v jq &>/dev/null && ! jq empty <<<"$orderbook_response" 2>/dev/null; then
+        test_result "CCXT public market data (orderbook)" "warn" "Invalid JSON from CCXT"
+      else
+        test_result "CCXT public market data (orderbook)" "pass" "No auth required for public data"
+      fi
     else
       test_result "CCXT public market data (orderbook)" "warn" "May need exchange initialization"
     fi
   else
     test_result "CCXT service HTTP" "fail" "Service not running on port 3001"
-    print_info "Start CCXT service: cd services/ccxt-service && bun run start"
+    print_info "Start CCXT service: cd services/ccxt && bun run start"
   fi
 
   # Check backend API
   print_step "Checking Backend API (port 8080)..."
-  if curl -s --connect-timeout 5 http://localhost:8080/health &>/dev/null; then
+  if curl -fsS --connect-timeout 5 --max-time 10 http://localhost:8080/health &>/dev/null; then
     test_result "Backend API health" "pass"
   else
     test_result "Backend API health" "fail" "Service not running on port 8080"
@@ -217,7 +240,7 @@ check_services() {
 
   # Check Telegram service
   print_step "Checking Telegram service (port 3002)..."
-  if curl -s --connect-timeout 5 http://localhost:3002/health &>/dev/null; then
+  if curl -fsS --connect-timeout 5 --max-time 10 http://localhost:3002/health &>/dev/null; then
     test_result "Telegram service HTTP" "pass"
   else
     test_result "Telegram service HTTP" "warn" "Service not running (needed for bot commands)"
@@ -244,8 +267,10 @@ test_telegram_commands() {
   test_result "Telegram bot token" "pass" "Token configured (masked)"
 
   # Check if bot is reachable
-  local bot_info
-  bot_info=$(curl -s "https://api.telegram.org/bot${bot_token}/getMe" 2>/dev/null || echo "")
+  local bot_info=""
+  if ! bot_info=$(curl -fsS --max-time 10 "https://api.telegram.org/bot${bot_token}/getMe" 2>/dev/null); then
+    bot_info=""
+  fi
 
   if echo "$bot_info" | grep -q '"ok":true'; then
     local bot_name
@@ -279,7 +304,7 @@ test_telegram_commands() {
 
   # Test /start command via internal API
   local start_response
-  start_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  start_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/start\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -292,7 +317,7 @@ test_telegram_commands() {
 
   # Test /help command
   local help_response
-  help_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  help_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/help\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -308,7 +333,7 @@ test_telegram_commands() {
 
   # Test /ai_models
   local ai_models_response
-  ai_models_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  ai_models_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/ai_models\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -324,7 +349,7 @@ test_telegram_commands() {
 
   # Test /status
   local status_response
-  status_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  status_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/status\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -337,7 +362,7 @@ test_telegram_commands() {
 
   # Test /opportunities
   local opp_response
-  opp_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  opp_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/opportunities\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -364,7 +389,7 @@ test_wallet_exchange() {
   print_step "Testing wallet commands..."
 
   local wallet_response
-  wallet_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/command" \
+  wallet_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/command" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"command\":\"/wallet\",\"telegram_user_id\":\"$chat_id\"}" \
     2>/dev/null || echo "")
@@ -379,7 +404,7 @@ test_wallet_exchange() {
   print_info "Testing /connect_exchange validation..."
 
   local connect_response
-  connect_response=$(curl -s -X POST "$backend_url/api/v1/telegram/internal/connect-exchange" \
+  connect_response=$(curl -s --max-time 10 -X POST "$backend_url/api/v1/telegram/internal/connect-exchange" \
     -H "Content-Type: application/json" \
     -d "{\"chat_id\":\"$chat_id\",\"exchange\":\"binance\",\"account_label\":\"test\"}" \
     2>/dev/null || echo "")
@@ -401,19 +426,27 @@ test_autonomous_readiness() {
   local missing=()
 
   # Check config
-  if [ ! -f "$HOME/.neuratrade/config.json" ] || [ "$(stat -f%z "$HOME/.neuratrade/config.json" 2>/dev/null || stat -c%s "$HOME/.neuratrade/config.json" 2>/dev/null || echo "0")" -lt 5 ]; then
+  local config_size=0
+  if [ -f "$HOME/.neuratrade/config.json" ]; then
+    if stat -f%z "$HOME/.neuratrade/config.json" >/dev/null 2>&1; then
+      config_size=$(stat -f%z "$HOME/.neuratrade/config.json")
+    elif stat -c%s "$HOME/.neuratrade/config.json" >/dev/null 2>&1; then
+      config_size=$(stat -c%s "$HOME/.neuratrade/config.json")
+    fi
+  fi
+  if [ "$config_size" -lt 5 ]; then
     ready=false
     missing+=("Configuration file")
   fi
 
   # Check CCXT service
-  if ! curl -s --connect-timeout 3 http://localhost:3001/health &>/dev/null; then
+  if ! curl -fsS --connect-timeout 3 --max-time 10 http://localhost:3001/health &>/dev/null; then
     ready=false
     missing+=("CCXT service (port 3001)")
   fi
 
   # Check backend
-  if ! curl -s --connect-timeout 3 http://localhost:8080/health &>/dev/null; then
+  if ! curl -fsS --connect-timeout 3 --max-time 10 http://localhost:8080/health &>/dev/null; then
     ready=false
     missing+=("Backend API (port 8080)")
   fi
@@ -423,7 +456,7 @@ test_autonomous_readiness() {
     local tables
     tables=$(sqlite3 "$HOME/.neuratrade/data/neuratrade.db" "SELECT name FROM sqlite_master WHERE type='table';" 2>/dev/null || echo "")
 
-    if ! echo "$tables" | grep -q "^users$"; then
+    if ! grep -Fxq -- "users" <<<"$tables"; then
       ready=false
       missing+=("Database migrations")
     fi
@@ -454,7 +487,7 @@ test_ccxt_market_data() {
   print_info "Testing: CCXT provides PUBLIC market data WITHOUT authentication"
   print_info "Authentication is ONLY required for: trading, balances, orders"
 
-  if ! curl -s --connect-timeout 3 http://localhost:3001/health &>/dev/null; then
+  if ! curl -fsS --connect-timeout 3 --max-time 10 http://localhost:3001/health &>/dev/null; then
     test_result "CCXT service availability" "fail" "Service not running"
     return
   fi
@@ -466,7 +499,7 @@ test_ccxt_market_data() {
 
   # Markets endpoint
   local markets
-  markets=$(curl -s --connect-timeout 5 "http://localhost:3001/api/markets/binance" 2>/dev/null || echo "")
+  markets=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/markets/binance" 2>/dev/null || echo "")
   if [ -n "$markets" ] && echo "$markets" | grep -q '"BTC/USDT"\|"BTCUSDT"'; then
     test_result "GET /api/markets/binance (public)" "pass" "Returns trading pairs"
   else
@@ -475,7 +508,7 @@ test_ccxt_market_data() {
 
   # Ticker endpoint
   local ticker
-  ticker=$(curl -s --connect-timeout 5 "http://localhost:3001/api/ticker/binance/BTC/USDT" 2>/dev/null || echo "")
+  ticker=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/ticker/binance/BTC/USDT" 2>/dev/null || echo "")
   if [ -n "$ticker" ] && echo "$ticker" | grep -q '"last"\|"bid"\|"ask"'; then
     test_result "GET /api/ticker/binance/BTC/USDT (public)" "pass" "Returns price data"
   else
@@ -484,7 +517,7 @@ test_ccxt_market_data() {
 
   # Orderbook endpoint
   local orderbook
-  orderbook=$(curl -s --connect-timeout 5 "http://localhost:3001/api/orderbook/binance/BTC/USDT" 2>/dev/null || echo "")
+  orderbook=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/orderbook/binance/BTC/USDT" 2>/dev/null || echo "")
   if [ -n "$orderbook" ] && echo "$orderbook" | grep -q '"bids"\|"asks"'; then
     test_result "GET /api/orderbook/binance/BTC/USDT (public)" "pass" "Returns orderbook"
   else
@@ -493,7 +526,7 @@ test_ccxt_market_data() {
 
   # OHLCV endpoint
   local ohlcv
-  ohlcv=$(curl -s --connect-timeout 5 "http://localhost:3001/api/ohlcv/binance/BTC/USDT?timeframe=1h" 2>/dev/null || echo "")
+  ohlcv=$(curl -fsS --connect-timeout 5 --max-time 10 "http://localhost:3001/api/ohlcv/binance/BTC/USDT?timeframe=1h" 2>/dev/null || echo "")
   if [ -n "$ohlcv" ] && echo "$ohlcv" | grep -q '\[.*\]'; then
     test_result "GET /api/ohlcv/binance/BTC/USDT (public)" "pass" "Returns candlestick data"
   else
@@ -504,7 +537,7 @@ test_ccxt_market_data() {
 
   # Balance endpoint (requires auth)
   local balance
-  balance=$(curl -s --connect-timeout 5 "http://localhost:3001/api/balance/binance" 2>/dev/null || echo "")
+  balance=$(curl -s --connect-timeout 5 --max-time 10 "http://localhost:3001/api/balance/binance" 2>/dev/null || echo "")
   if echo "$balance" | grep -q '"error".*auth\|"error".*key\|"error".*API'; then
     test_result "GET /api/balance/binance (protected)" "pass" "Correctly requires authentication"
   elif echo "$balance" | grep -q '"BTC"\|"USDT"\|"free"'; then
@@ -522,6 +555,7 @@ print_summary() {
 
   echo "Tests Passed:  $TESTS_PASSED"
   echo "Tests Failed:  $TESTS_FAILED"
+  echo "Tests Warned:  $TESTS_WARNED"
   echo "Tests Skipped: $TESTS_SKIPPED"
   echo ""
 
@@ -558,6 +592,10 @@ main() {
   test_autonomous_readiness
 
   print_summary
+
+  if [ "$TESTS_FAILED" -gt 0 ]; then
+    exit 1
+  fi
 }
 
 # Run main

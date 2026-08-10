@@ -68,10 +68,17 @@ export function fetchTick(
       closeTime: number;
     }>(`/api/v3/ticker/24hr?symbol=${bSymbol}`);
 
+    const price = Number(data.lastPrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      return yield* Effect.fail(
+        new MarketDataError(`Binance ticker has invalid price for ${symbol}`),
+      );
+    }
+
     return {
       exchange: "binance",
       symbol,
-      price: Number(data.lastPrice),
+      price,
       volume: Number(data.volume),
       bid: Number(data.bidPrice),
       ask: Number(data.askPrice),

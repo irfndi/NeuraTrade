@@ -119,4 +119,100 @@ describe("Binance gateway", () => {
 
     expect(result._tag).toBe("Failure");
   });
+
+  it("fetchTick rejects zero-price tickers", async () => {
+    mockFetch({
+      symbol: "BTCUSDT",
+      lastPrice: "",
+      volume: "0",
+      bidPrice: "0",
+      askPrice: "0",
+      highPrice: "0",
+      lowPrice: "0",
+      quoteVolume: "0",
+      openTime: 0,
+      closeTime: 1704067200000,
+    });
+
+    const result = await Effect.runPromise(
+      Binance.fetchTick("BTC/USDT").pipe(
+        Effect.match({
+          onFailure: (err) => ({ ok: false, reason: err.reason }),
+          onSuccess: () => ({ ok: true, reason: "" }),
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("invalid price");
+  });
+
+  it("fetchFundingRates paginates until history is exhausted", async () => {
+    const requests: string[] = [];
+    const batch = [
+      {
+        symbol: "BTCUSDT",
+        fundingRate: "0.0001",
+        fundingTime: 1704067200000,
+      },
+      {
+        symbol: "BTCUSDT",
+        fundingRate: "0.00009",
+        fundingTime: 1704038400000,
+      },
+    ];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      requests.push(u);
+      // Second page is past the end of history: empty batch terminates.
+      const body = requests.length >= 2 ? [] : batch;
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Binance.fetchFundingRates(
+        "BTC/USDT",
+        new Date("2023-12-31T00:00:00Z"),
+      ),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(rates.map((r) => r.fundingRate)).toEqual([0.0001, 0.00009]);
+    // Second request advances past the last row's fundingTime.
+    const secondStart = new URL(requests[1]!).searchParams.get("startTime");
+    expect(Number(secondStart)).toBe(1704038400000 + 1);
+    expect(requests[1]).toContain("fapi.binance.com");
+  });
+
+  it("fetchFundingRates terminates when the API repeats the same window", async () => {
+    const requests: string[] = [];
+    const batch = [
+      {
+        symbol: "BTCUSDT",
+        fundingRate: "0.0001",
+        fundingTime: 1704067200000,
+      },
+    ];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requests.push(String(url));
+      return new Response(JSON.stringify(batch), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Binance.fetchFundingRates(
+        "BTC/USDT",
+        new Date("2023-12-31T00:00:00Z"),
+      ),
+    );
+
+    // lastTime <= currentStart on the repeat page -> no infinite loop.
+    expect(requests).toHaveLength(2);
+    expect(rates).toHaveLength(2);
+  });
 });

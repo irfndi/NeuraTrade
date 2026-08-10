@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/irfndi/neuratrade/internal/app/risk"
@@ -50,6 +51,7 @@ type liveExecutionTestLookup struct {
 	order     ccxt.OrderResponse
 	positions ccxt.PositionsResponse
 	err       error
+	ticker    ccxt.Ticker
 }
 
 func (l liveExecutionTestLookup) FetchOrder(context.Context, string, string, string) (*ccxt.OrderResponse, error) {
@@ -72,6 +74,33 @@ func (l liveExecutionTestLookup) FetchPositions(context.Context, string) (*ccxt.
 	}
 	return &l.positions, nil
 }
+
+func (l liveExecutionTestLookup) FetchSingleTicker(_ context.Context, _, _ string) (ccxt.MarketPriceInterface, error) {
+	ticker := l.ticker
+	if ticker.Last.IsZero() {
+		// Default to 100 to match the price used by existing tests.
+		ticker.Last = decimal.RequireFromString("100")
+	}
+	return testMarketPrice{last: ticker.Last, ask: ticker.Ask, bid: ticker.Bid}, nil
+}
+
+// testMarketPrice is a minimal MarketPriceInterface implementation for tests.
+type testMarketPrice struct {
+	last decimal.Decimal
+	ask  decimal.Decimal
+	bid  decimal.Decimal
+}
+
+func (p testMarketPrice) GetPrice() decimal.Decimal      { return p.last }
+func (p testMarketPrice) GetVolume() decimal.Decimal     { return decimal.Zero }
+func (p testMarketPrice) GetTimestamp() time.Time        { return time.Now() }
+func (p testMarketPrice) GetExchangeName() string        { return "bitget" }
+func (p testMarketPrice) GetSymbol() string              { return "" }
+func (p testMarketPrice) GetBid() decimal.Decimal        { return p.bid }
+func (p testMarketPrice) GetAsk() decimal.Decimal        { return p.ask }
+func (p testMarketPrice) GetHigh() decimal.Decimal       { return decimal.Zero }
+func (p testMarketPrice) GetLow() decimal.Decimal        { return decimal.Zero }
+func (p testMarketPrice) GetPriceChange24h() float64     { return 0 }
 
 func TestLiveExecutionHTTPReturnsFuturesPositions(t *testing.T) {
 	bridge, _ := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{positions: ccxt.PositionsResponse{
@@ -226,6 +255,66 @@ func TestLiveExecutionHTTPIsIdempotentForIntent(t *testing.T) {
 	require.Equal(t, 200, first.Code)
 	require.Equal(t, 200, second.Code)
 	require.Equal(t, int32(1), executor.placed.Load())
+}
+
+func TestLiveExecutionHTTPRejectsPriceDeviationFromMarket(t *testing.T) {
+	bridge, executor := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{
+		ticker: ccxt.Ticker{Last: decimal.RequireFromString("100")},
+	})
+	defer bridge.close()
+
+	// Client price 200 deviates 100% from the market price of 100: the
+	// order must be rejected before the executor is reached (the notional
+	// gate must never trust a client-supplied price).
+	recorder := invokeLiveExecutionHandler(t, bridge, `{"intent_id":"dev-1","chat_id":"123","exchange":"bitget-futures","symbol":"BTC/USDT","side":"buy","size":"0.1","price":"200","portfolio_value":"100","confidence":"0.9"}`)
+
+	require.Equal(t, 400, recorder.Code)
+	require.Equal(t, int32(0), executor.placed.Load())
+}
+
+func TestLiveExecutionHTTPNotionalUsesMarketPrice(t *testing.T) {
+	// The bypass: client price within tolerance of market but low enough
+	// that client-price notional looks safe while market-price notional
+	// exceeds the limit. market=210, client=205 (2.4% deviation), size
+	// 0.12: client notional = 24.6 < 25, market notional = 25.2 > 25.
+	bridge, executor := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{
+		ticker: ccxt.Ticker{Last: decimal.RequireFromString("210")},
+	})
+	defer bridge.close()
+
+	recorder := invokeLiveExecutionHandler(t, bridge, `{"intent_id":"notional-1","chat_id":"123","exchange":"bitget-futures","symbol":"BTC/USDT","side":"buy","size":"0.12","price":"205","portfolio_value":"100","confidence":"0.9"}`)
+
+	require.Equal(t, 400, recorder.Code)
+	require.Equal(t, int32(0), executor.placed.Load())
+}
+
+func TestLiveExecutionHTTPMarketOrderWithoutPrice(t *testing.T) {
+	bridge, executor := newLiveExecutionHTTPTestBridge(t, liveExecutionTestLookup{order: ccxt.OrderResponse{
+		Order: ccxt.Order{
+			ID:            "exchange-order-1",
+			ClientOrderID: "NTclient",
+			Symbol:        "BTC/USDT",
+			Type:          "market",
+			Side:          "buy",
+			Status:        "closed",
+			Amount:        decimal.RequireFromString("0.1"),
+			Filled:        decimal.RequireFromString("0.1"),
+			Price:         decimal.RequireFromString("100"),
+			Cost:          decimal.RequireFromString("10.01"),
+			Fee:           decimal.RequireFromString("0.0123"),
+		},
+	}})
+	defer bridge.close()
+
+	// Market orders may omit the price; the notional gate uses the fetched
+	// market price (0.1 * 100 = 10 < 25).
+	recorder := invokeLiveExecutionHandler(t, bridge, `{"intent_id":"noprice-1","chat_id":"123","exchange":"bitget-futures","symbol":"BTC/USDT","side":"buy","size":"0.1","portfolio_value":"100","confidence":"0.9"}`)
+
+	var response liveFuturesOrderResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, 200, recorder.Code)
+	require.Equal(t, int32(1), executor.placed.Load())
+	require.Equal(t, "filled", response.Status)
 }
 
 func newLiveExecutionHTTPTestBridge(t *testing.T, lookup liveExecutionTestLookup) (*riskGatedLiveExecution, *liveExecutionTestExecutor) {

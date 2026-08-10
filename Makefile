@@ -156,8 +156,8 @@ test-backend: mod-download ## Run backend tests
 		NEURATRADE_HOME="$$TEST_HOME" \
 		ADMIN_API_KEY= \
 		DATABASE_DRIVER=$${DATABASE_DRIVER:-sqlite} \
-		SQLITE_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
-		SQLITE_DB_PATH=$${SQLITE_PATH:-/tmp/neuratrade-ci.db} \
+		SQLITE_PATH=$${SQLITE_PATH:-$$TEST_HOME/neuratrade-ci.db} \
+		SQLITE_DB_PATH=$${SQLITE_DB_PATH:-$$TEST_HOME/neuratrade-ci.db} \
 		go test -v -race -timeout=20m ./cmd/... ./internal/... ./pkg/... ./test/integration/... ./test/e2e/; \
 		TEST_EXIT=$$?; \
 		rm -rf "$$TEST_HOME"; \
@@ -185,6 +185,8 @@ test-frontend: ## Run Telegram service tests
 
 test-scripts: ## Run operational script tests
 	@echo "$(GREEN)Running script tests...$(NC)"
+	@bash scripts/gen-proto_test.sh
+	@bash scripts/test-neuratrade-cli.sh
 	@bash services/backend-api/scripts/startup-orchestrator_test.sh
 	@bash services/backend-api/scripts/scalping-soak_test.sh
 	@bash services/backend-api/scripts/verify-scalping-soak-artifact_test.sh

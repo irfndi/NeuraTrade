@@ -129,876 +129,348 @@ import {
 import { runWalkForward } from "../scalping/walk-forward.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
 import { makeParityReplayCommand } from "./parity-replay.js";
+import {
+  exchangeOption,
+  symbolOption,
+  timeframeOption,
+  capitalOption,
+  positionSizeOption,
+  riskPerTradeOption,
+  riskBasedMaxPositionSizeOption,
+  stopLossOption,
+  takeProfitOption,
+  feeOption,
+  futuresOption,
+  leverageOption,
+  fundingRateOption,
+  slippageBpsOption,
+  trailingStopPctOption,
+  trailingStopAtrMultOption,
+  minAtrPctOption,
+  adxMinOption,
+  volumeMinRatioOption,
+  volumeLookbackOption,
+  minConfluenceOption,
+  entryCandleConfirmOption,
+  signalPersistenceOption,
+  momentumConfirmBarsOption,
+  makerFeeOption,
+  entryOrderTypeOption,
+  entryLimitOffsetBpsOption,
+  rsiPeriodOption,
+  rsiOversoldStrongOption,
+  rsiOverboughtStrongOption,
+  trendFilterPeriodOption,
+  entryRsiLongThresholdOption,
+  entryRsiShortThresholdOption,
+  exitRsiPeriodOption,
+  exitRsiLongLevelOption,
+  exitRsiShortLevelOption,
+  observedPriceOption,
+  realisticOption,
+  strictRealismOption,
+  realisticSlippageBpsOption,
+  trendSignalStyleOption,
+  trendFastPeriodOption,
+  trendSlowPeriodOption,
+  directionalOnlyOption,
+  rsiFollowTrendOption,
+  strictAgreementOption,
+  entryOnCloseOption,
+  breakoutLookbackOption,
+  breakoutVolumeMinRatioOption,
+  breakoutAdxMinOption,
+  fundingBiasThresholdOption,
+  useFundingOption,
+  strategyTypeOption,
+  gridStepPctOption,
+  gridMaxGridsOption,
+  gridPauseAfterLossBarsOption,
+  onlyWithTrendOption,
+  targetRatioOption,
+  chopGateAdxOption,
+  volatilityTargetAnnualPctOption,
+  noAtrOption,
+  scanEntryOrdersOption,
+  randomSearchOption,
+  walkForwardOption,
+  wfTrainDaysOption,
+  wfTestDaysOption,
+  wfStepDaysOption,
+  minTradesOption,
+  minOosTradesOption,
+  selectByOption,
+  stopLossMinOption,
+  stopLossMaxOption,
+  stopLossStepOption,
+  takeProfitMinOption,
+  takeProfitMaxOption,
+  takeProfitStepOption,
+  breakevenAtRMinOption,
+  breakevenAtRMaxOption,
+  breakevenAtRStepOption,
+  maxBarsInTradeMinOption,
+  maxBarsInTradeMaxOption,
+  maxBarsInTradeStepOption,
+  lossCooldownBarsMinOption,
+  lossCooldownBarsMaxOption,
+  lossCooldownBarsStepOption,
+  adxMinMinOption,
+  adxMinMaxOption,
+  adxMinStepOption,
+  minEfficiencyRatioMinOption,
+  minEfficiencyRatioMaxOption,
+  minEfficiencyRatioStepOption,
+  rsiLongMaxMinOption,
+  rsiLongMaxMaxOption,
+  rsiLongMaxStepOption,
+  rsiShortMinMinOption,
+  rsiShortMinMaxOption,
+  rsiShortMinStepOption,
+  strategyOption,
+  lossConfidencePenaltyOption,
+  lossConfidenceDecayOption,
+  htfTimeframeOption,
+  htfTrendFastPeriodOption,
+  htfTrendSlowPeriodOption,
+  htfSignalConfidenceOption,
+  entryPullbackEmaPeriodOption,
+  entryPullbackMarginPctOption,
+  minEfficiencyRatioOption,
+  efficiencyRatioPeriodOption,
+  rsiLongMaxOption,
+  rsiShortMinOption,
+  bollingerLongMaxPctBOption,
+  bollingerShortMinPctBOption,
+  profileOption,
+  recordEquityCurveOption,
+  exportTradesOption,
+  oosPctOption,
+  mcIterationsOption,
+  breakevenAtROption,
+  maxBarsInTradeOption,
+  lossCooldownBarsOption,
+  sessionStartOption,
+  sessionEndOption,
+  autoRegimeFilterOption,
+  autoRegimeAdxThresholdOption,
+  confidenceOption,
+  useAtrStopsOption,
+  atrStopMultiplierOption,
+  atrTakeProfitMultiplierOption,
+  atrRiskRewardOption,
+  scaleOutAtROption,
+  scaleOutPctOption,
+  volatilityLookbackOption,
+  volatilityLowPctOption,
+  volatilityHighPctOption,
+  volatilityLowFactorOption,
+  volatilityHighFactorOption,
+  priceOnlyOption,
+  noRsiOption,
+  holdUntilStopOption,
+  noTrendOption,
+  regimeModeOption,
+  atrStopMinOption,
+  atrStopMaxOption,
+  atrStopStepOption,
+  atrTpMinOption,
+  atrTpMaxOption,
+  atrTpStepOption,
+  confMinOption,
+  confMaxOption,
+  confStepOption,
+  minCandlesOption,
+  topOption,
+  optimizeScanOption,
+  minReturnOption,
+  minSharpeOption,
+  scanMaxDrawdownOption,
+  saveWatchlistOption,
+  intervalOption,
+  iterationsOption,
+  replayBarsOption,
+  liveOption,
+  apiKeyOption,
+  apiSecretOption,
+  marginModeOption,
+  productTypeOption,
+  maxDrawdownOption,
+  maxDailyLossOption,
+  maxPositionSizeOption,
+  maxTradesPerDayOption,
+  minCapitalOption,
+  watchlistOption,
+  noWatchlistOption,
+  killSwitchOption,
+  disengageOption,
+  soakWatchlistOption,
+  profileNameOption,
+  trainWindowOption,
+  testWindowOption,
+  wfMinTradesOption,
+  minTradesPerMonthOption,
+  gridUniverseExchangeOption,
+  gridUniverseTimeframeOption,
+  gridUniverseMinCandlesOption,
+  gridUniverseTrainWindowOption,
+  gridUniverseTestWindowOption,
+  gridUniverseMinProfitableWindowsOption,
+  gridUniverseMinAggregateReturnOption,
+  gridUniverseFeeOption,
+  gridUniverseSlippageOption,
+  gridUniverseTrendFilterOption,
+  gridUniverseMarketOption,
+  gridUniverseOutputOption,
+  gridUniverseWatchOption,
+  gridUniverseIntervalOption,
+  gridUniverseMinFillFrequencyOption,
+  gridUniverseTargetFillsPerDayOption,
+  gridUniverseAccountCapitalOption,
+  gridUniverseTierOption,
+  watchlistListExchangeOption,
+  watchlistListTimeframeOption,
+} from "./scalp-options.js";
 
-const exchangeOption = Options.text("exchange").pipe(
-  Options.withDefault("binance"),
-  Options.withDescription("Exchange identifier"),
-);
-
-const symbolOption = Options.text("symbol").pipe(
-  Options.withDefault("BTC/USDT"),
-  Options.withDescription("Trading pair symbol"),
-);
-
-const timeframeOption = Options.text("timeframe").pipe(
-  Options.withDefault("1h"),
-  Options.withDescription("Candle timeframe"),
-);
-
-const capitalOption = Options.integer("capital").pipe(
-  Options.withDefault(10000),
-  Options.withDescription("Initial capital in quote currency"),
-);
-
-const positionSizeOption = Options.integer("position-size").pipe(
-  Options.withDefault(100),
-  Options.withDescription("Position size as percent of capital"),
-);
-
-const riskPerTradeOption = Options.float("risk-per-trade").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Risk per trade as percent of capital (overrides --position-size; 0 = disabled)",
-  ),
-);
-
-const riskBasedMaxPositionSizeOption = Options.float("max-position-size").pipe(
-  Options.withDefault(100),
-  Options.withDescription(
-    "Maximum position size as percent of capital when using --risk-per-trade",
-  ),
-);
-
-const stopLossOption = Options.float("stop-loss").pipe(
-  Options.withDefault(1.5),
-  Options.withDescription("Stop loss percent"),
-);
-
-const takeProfitOption = Options.float("take-profit").pipe(
-  Options.withDefault(3.0),
-  Options.withDescription("Take profit percent"),
-);
-
-const feeOption = Options.float("fee").pipe(
-  Options.withDefault(0.1),
-  Options.withDescription("Trading fee percent per side"),
-);
-
-const futuresOption = Options.boolean("futures").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Trade perpetual futures instead of spot"),
-);
-
-const leverageOption = Options.integer("leverage").pipe(
-  Options.withDefault(3),
-  Options.withDescription("Futures leverage (default 3x)"),
-);
-
-const fundingRateOption = Options.float("funding-rate-pct").pipe(
-  Options.withDefault(0.01),
-  Options.withDescription(
-    "Per-interval funding cost in percent (default 0.01% every 8h)",
-  ),
-);
-
-const slippageBpsOption = Options.float("slippage-bps").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Slippage in basis points applied to fills"),
-);
-
-const trailingStopPctOption = Options.float("trailing-stop-pct").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Trail stop-loss this percentage behind the most favorable price (0 = disabled)",
-  ),
-);
-
-const trailingStopAtrMultOption = Options.float("trailing-stop-atr-mult").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Trail stop-loss at this ATR multiplier behind the most favorable price (0 = disabled)",
-  ),
-);
-
-const minAtrPctOption = Options.float("min-atr-pct").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Minimum ATR% required to enter a trade, filters low-volatility chop (0 = disabled)",
-  ),
-);
-
-const adxMinOption = Options.float("adx-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Minimum ADX required by the regime filter (0 = use default adxWeakTrend)",
-  ),
-);
-
-const volumeMinRatioOption = Options.float("volume-min-ratio").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Require current volume >= this ratio of its moving average to enter (0 = disabled)",
-  ),
-);
-
-const volumeLookbackOption = Options.integer("volume-lookback").pipe(
-  Options.withDefault(20),
-  Options.withDescription("Lookback period for volume moving average filter"),
-);
-
-const minConfluenceOption = Options.integer("min-confluence").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Minimum number of components that must agree to enter (0 = disabled)",
-  ),
-);
-
-const entryCandleConfirmOption = Options.boolean("entry-candle-confirm").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Require the entry candle body to align with the signal direction",
-  ),
-);
-
-const signalPersistenceOption = Options.integer("signal-persistence").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Require the same directional signal for N consecutive candles before entering (0 = disabled)",
-  ),
-);
-
-const momentumConfirmBarsOption = Options.integer("momentum-confirm-bars").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Require net price movement over the last N candles to align with the signal (0 = disabled)",
-  ),
-);
-const makerFeeOption = Options.float("maker-fee-pct").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maker fee percent per side (for limit entries)"),
-);
-
-const entryOrderTypeOption = Options.choice("entry-order-type", [
-  "market",
-  "limit",
-] as const).pipe(
-  Options.withDefault("market" as const),
-  Options.withDescription("Entry fill type: market or limit"),
-);
-
-const entryLimitOffsetBpsOption = Options.float("entry-limit-offset-bps").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Limit entry offset from signal price in basis points",
-  ),
-);
-
-const rsiPeriodOption = Options.integer("rsi-period").pipe(
-  Options.withDefault(14),
-  Options.withDescription("RSI lookback period"),
-);
-
-const rsiOversoldStrongOption = Options.float("rsi-oversold-strong").pipe(
-  Options.withDefault(30),
-  Options.withDescription("RSI level considered strongly oversold"),
-);
-
-const rsiOverboughtStrongOption = Options.float("rsi-overbought-strong").pipe(
-  Options.withDefault(70),
-  Options.withDescription("RSI level considered strongly overbought"),
-);
-
-const trendFilterPeriodOption = Options.integer("trend-filter-period").pipe(
-  Options.withDefault(200),
-  Options.withDescription("SMA trend filter period for Connors RSI(2) entries"),
-);
-
-const entryRsiLongThresholdOption = Options.float(
-  "entry-rsi-long-threshold",
-).pipe(
-  Options.withDefault(10),
-  Options.withDescription("RSI(2) long entry threshold"),
-);
-
-const entryRsiShortThresholdOption = Options.float(
-  "entry-rsi-short-threshold",
-).pipe(
-  Options.withDefault(90),
-  Options.withDescription("RSI(2) short entry threshold"),
-);
-
-const exitRsiPeriodOption = Options.integer("exit-rsi-period").pipe(
-  Options.withDefault(0),
-  Options.withDescription("RSI exit lookback period (0 disables RSI exits)"),
-);
-
-const exitRsiLongLevelOption = Options.float("exit-rsi-long-level").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Close long when RSI rises above this level"),
-);
-
-const exitRsiShortLevelOption = Options.float("exit-rsi-short-level").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Close short when RSI falls below this level"),
-);
-
-const observedPriceOption = Options.boolean("observed-price").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Use observed price (close-only) for entries"),
-);
-
-const realisticOption = Options.boolean("realistic").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Apply realistic slippage and fee assumptions"),
-);
-
-const strictRealismOption = Options.boolean("strict-realism").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Use strict realism (close-only + slippage)"),
-);
-
-const realisticSlippageBpsOption = Options.float("realistic-slippage-bps").pipe(
-  Options.withDefault(5),
-  Options.withDescription("Realistic slippage in basis points"),
-);
-
-const trendSignalStyleOption = Options.choice("trend-signal-style", [
-  "slope",
-  "cross",
-] as const).pipe(
-  Options.withDefault("slope" as const),
-  Options.withDescription("Trend signal style: slope or cross"),
-);
-
-const trendFastPeriodOption = Options.integer("trend-fast-period").pipe(
-  Options.withDefault(9),
-  Options.withDescription("Fast EMA period for trend component"),
-);
-
-const trendSlowPeriodOption = Options.integer("trend-slow-period").pipe(
-  Options.withDefault(21),
-  Options.withDescription("Slow EMA period for trend component"),
-);
-
-const directionalOnlyOption = Options.boolean("directional-only").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Use only directional components as signals"),
-);
-
-const rsiFollowTrendOption = Options.boolean("rsi-follow-trend").pipe(
-  Options.withDefault(false),
-  Options.withDescription("RSI confirms trend direction instead of fading"),
-);
-
-const strictAgreementOption = Options.boolean("strict-agreement").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Require all directional components to agree"),
-);
-
-const entryOnCloseOption = Options.boolean("entry-on-close").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Enter at the close of the signal candle"),
-);
-
-const breakoutLookbackOption = Options.integer("breakout-lookback").pipe(
-  Options.withDefault(20),
-  Options.withDescription("Breakout regime lookback period"),
-);
-
-const breakoutVolumeMinRatioOption = Options.float(
-  "breakout-volume-min-ratio",
-).pipe(
-  Options.withDefault(1.2),
-  Options.withDescription("Breakout minimum volume ratio"),
-);
-
-const breakoutAdxMinOption = Options.float("breakout-adx-min").pipe(
-  Options.withDefault(20),
-  Options.withDescription("Breakout minimum ADX threshold"),
-);
-
-const fundingBiasThresholdOption = Options.float("funding-bias-threshold").pipe(
-  Options.withDefault(0.0001),
-  Options.withDescription("Funding bias threshold for contrarian signal"),
-);
-
-const useFundingOption = Options.boolean("use-funding").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Enable funding-rate bias component"),
-);
-
-const strategyTypeOption = Options.choice("strategy-type", [
-  "signal",
-  "grid",
-] as const).pipe(
-  Options.withDefault("signal" as const),
-  Options.withDescription("Strategy type: signal-based or grid scalping"),
-);
-
-const gridStepPctOption = Options.float("grid-step-pct").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Grid step percentage (0 disables grid)"),
-);
-
-const gridMaxGridsOption = Options.float("grid-max-grids").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum number of grid levels"),
-);
-
-const gridPauseAfterLossBarsOption = Options.integer(
-  "grid-pause-after-loss-bars",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Bars to pause grid after a loss"),
-);
-
-const onlyWithTrendOption = Options.boolean("only-with-trend").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Grid: only enter long above trend SMA and short below it",
-  ),
-);
-
-const targetRatioOption = Options.float("target-ratio").pipe(
-  Options.withDefault(1),
-  Options.withDescription(
-    "Grid: target distance as a multiple of the grid step (default 1.0)",
-  ),
-);
-
-const chopGateAdxOption = Options.float("chop-gate-adx").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Grid: skip new entries while causal ADX(14) >= this threshold (0 = disabled)",
-  ),
-);
-
-const volatilityTargetAnnualPctOption = Options.float(
-  "volatility-target-annual-pct",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Annual volatility target percent for position sizing",
-  ),
-);
-
-const noAtrOption = Options.boolean("no-atr").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Disable ATR stops and use fixed percent stops"),
-);
-
-const scanEntryOrdersOption = Options.boolean("scan-entry-orders").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Scan market/limit entry order types in optimize"),
-);
-
-const randomSearchOption = Options.integer("random-search").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Random search sample count (0 = full grid)"),
-);
-
-const walkForwardOption = Options.boolean("walk-forward").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Run walk-forward optimization"),
-);
-
-const wfTrainDaysOption = Options.integer("wf-train-days").pipe(
-  Options.withDefault(180),
-  Options.withDescription("Walk-forward training window in days"),
-);
-
-const wfTestDaysOption = Options.integer("wf-test-days").pipe(
-  Options.withDefault(60),
-  Options.withDescription("Walk-forward testing window in days"),
-);
-
-const wfStepDaysOption = Options.integer("wf-step-days").pipe(
-  Options.withDefault(60),
-  Options.withDescription("Walk-forward step size in days"),
-);
-
-const minTradesOption = Options.integer("min-trades").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum trades filter for optimization/selection"),
-);
-
-const minOosTradesOption = Options.integer("min-oos-trades").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum out-of-sample trades filter"),
-);
-
-const selectByOption = Options.choice("select-by", [
-  "return",
-  "sharpe",
-  "calmar",
-] as const).pipe(
-  Options.withDefault("return" as const),
-  Options.withDescription("Objective for selecting best candidate"),
-);
-
-const stopLossMinOption = Options.float("stop-loss-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum fixed stop loss percent to test"),
-);
-
-const stopLossMaxOption = Options.float("stop-loss-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum fixed stop loss percent to test"),
-);
-
-const stopLossStepOption = Options.float("stop-loss-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for fixed stop loss percent"),
-);
-
-const takeProfitMinOption = Options.float("take-profit-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum fixed take profit percent to test"),
-);
-
-const takeProfitMaxOption = Options.float("take-profit-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum fixed take profit percent to test"),
-);
-
-const takeProfitStepOption = Options.float("take-profit-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for fixed take profit percent"),
-);
-
-const breakevenAtRMinOption = Options.float("breakeven-at-r-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum breakeven-at-R to test"),
-);
-
-const breakevenAtRMaxOption = Options.float("breakeven-at-r-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum breakeven-at-R to test"),
-);
-
-const breakevenAtRStepOption = Options.float("breakeven-at-r-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for breakeven-at-R"),
-);
-
-const maxBarsInTradeMinOption = Options.integer("max-bars-in-trade-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum max-bars-in-trade to test"),
-);
-
-const maxBarsInTradeMaxOption = Options.integer("max-bars-in-trade-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum max-bars-in-trade to test"),
-);
-
-const maxBarsInTradeStepOption = Options.integer("max-bars-in-trade-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for max-bars-in-trade"),
-);
-
-const lossCooldownBarsMinOption = Options.integer(
-  "loss-cooldown-bars-min",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum loss-cooldown-bars to test"),
-);
-
-const lossCooldownBarsMaxOption = Options.integer(
-  "loss-cooldown-bars-max",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum loss-cooldown-bars to test"),
-);
-
-const lossCooldownBarsStepOption = Options.integer(
-  "loss-cooldown-bars-step",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for loss-cooldown-bars"),
-);
-
-const adxMinMinOption = Options.float("adx-min-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum ADX filter to test"),
-);
-
-const adxMinMaxOption = Options.float("adx-min-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum ADX filter to test"),
-);
-
-const adxMinStepOption = Options.float("adx-min-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for ADX filter"),
-);
-
-const minEfficiencyRatioMinOption = Options.float(
-  "min-efficiency-ratio-min",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum efficiency ratio to test"),
-);
-
-const minEfficiencyRatioMaxOption = Options.float(
-  "min-efficiency-ratio-max",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum efficiency ratio to test"),
-);
-
-const minEfficiencyRatioStepOption = Options.float(
-  "min-efficiency-ratio-step",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for efficiency ratio"),
-);
-
-const rsiLongMaxMinOption = Options.float("rsi-long-max-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum RSI long max filter to test"),
-);
-
-const rsiLongMaxMaxOption = Options.float("rsi-long-max-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum RSI long max filter to test"),
-);
-
-const rsiLongMaxStepOption = Options.float("rsi-long-max-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for RSI long max filter"),
-);
-
-const rsiShortMinMinOption = Options.float("rsi-short-min-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum RSI short min filter to test"),
-);
-
-const rsiShortMinMaxOption = Options.float("rsi-short-min-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Maximum RSI short min filter to test"),
-);
-
-const rsiShortMinStepOption = Options.float("rsi-short-min-step").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Step size for RSI short min filter"),
-);
-
-const strategyOption = Options.choice("strategy", [
-  "meanReversion",
-  "trendFollowing",
-  "breakout",
-  "emaPullback",
-  "momentum",
-  "rangeExpansion",
-  "fundingCarry",
-  "dualEmaCross",
-  "ensemble",
-  "microScalp",
-  "connorsRsi2",
-  "gridScalp",
-] as const).pipe(
-  Options.withDefault("meanReversion" as const),
-  Options.withDescription("Strategy template for paper-trade"),
-);
-
-const lossConfidencePenaltyOption = Options.float(
-  "loss-confidence-penalty",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Boost min-confidence by this amount after a losing trade (0 = disabled)",
-  ),
-);
-
-const lossConfidenceDecayOption = Options.float("loss-confidence-decay").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Decay the post-loss confidence penalty by this amount each candle (0 = step reset)",
-  ),
-);
-
-const htfTimeframeOption = Options.text("htf-timeframe").pipe(
-  Options.withDefault(""),
-  Options.withDescription(
-    "Higher-timeframe for trend filter (e.g. 1h). Empty disables the filter.",
-  ),
-);
-
-const htfTrendFastPeriodOption = Options.integer("htf-trend-fast").pipe(
-  Options.withDefault(50),
-  Options.withDescription("Higher-timeframe EMA fast period for trend filter"),
-);
-
-const htfTrendSlowPeriodOption = Options.integer("htf-trend-slow").pipe(
-  Options.withDefault(100),
-  Options.withDescription("Higher-timeframe EMA slow period for trend filter"),
-);
-
-const htfSignalConfidenceOption = Options.float("htf-signal-confidence").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Confidence boost when HTF trend aligns (0 disables)",
-  ),
-);
-
-const entryPullbackEmaPeriodOption = Options.integer(
-  "entry-pullback-ema-period",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Only enter when price is within --entry-pullback-margin-pct of this EMA period (0 = disabled)",
-  ),
-);
-
-const entryPullbackMarginPctOption = Options.float(
-  "entry-pullback-margin-pct",
-).pipe(
-  Options.withDefault(0.1),
-  Options.withDescription(
-    "Allowed distance from the pullback EMA as a percentage of price",
-  ),
-);
-
-const minEfficiencyRatioOption = Options.float("min-efficiency-ratio").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Minimum Kaufman Efficiency Ratio (0-1) required to enter; high values filter chop",
-  ),
-);
-
-const efficiencyRatioPeriodOption = Options.integer(
-  "efficiency-ratio-period",
-).pipe(
-  Options.withDefault(20),
-  Options.withDescription("Lookback period for the efficiency-ratio filter"),
-);
-
-const rsiLongMaxOption = Options.float("rsi-long-max").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Leading RSI filter: only enter longs when RSI <= this value (0 = disabled)",
-  ),
-);
-
-const rsiShortMinOption = Options.float("rsi-short-min").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Leading RSI filter: only enter shorts when RSI >= this value (0 = disabled)",
-  ),
-);
-
-const bollingerLongMaxPctBOption = Options.float(
-  "bollinger-long-max-pctb",
-).pipe(
-  Options.withDefault(-1),
-  Options.withDescription(
-    "Leading Bollinger %B filter: only enter longs when %B <= this value (-1 = disabled)",
-  ),
-);
-
-const bollingerShortMinPctBOption = Options.float(
-  "bollinger-short-min-pctb",
-).pipe(
-  Options.withDefault(2),
-  Options.withDescription(
-    "Leading Bollinger %B filter: only enter shorts when %B >= this value (2 = disabled)",
-  ),
-);
-
-const profileOption = Options.text("profile").pipe(
-  Options.withDefault(""),
-  Options.withDescription(
-    "Strategy profile name to load from ~/.neuratrade/profiles",
-  ),
-);
-
-const recordEquityCurveOption = Options.boolean("record-equity-curve").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Record equity curve at each trade close"),
-);
-
-const exportTradesOption = Options.text("export-trades").pipe(
-  Options.withDefault(""),
-  Options.withDescription(
-    "Write trades.csv (+ equity.csv if --record-equity-curve) to this path",
-  ),
-);
-
-const oosPctOption = Options.integer("oos-pct").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Percentage of recent candles to hold out for out-of-sample validation (0 disables)",
-  ),
-);
-
-const mcIterationsOption = Options.integer("mc-iterations").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Number of Monte Carlo permutations for drawdown simulation (0 disables)",
-  ),
-);
-
-const breakevenAtROption = Options.float("breakeven-at-r").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Move stop-loss to breakeven once price reaches this R profit (0 disables)",
-  ),
-);
-
-const maxBarsInTradeOption = Options.integer("max-bars-in-trade").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Maximum bars to hold a position before time-stop exit (0 disables)",
-  ),
-);
-
-const lossCooldownBarsOption = Options.integer("loss-cooldown-bars").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Bars to skip after a losing trade before allowing new entries (0 disables)",
-  ),
-);
-
-const sessionStartOption = Options.text("session-start").pipe(
-  Options.withDefault(""),
-  Options.withDescription("UTC session start in HH:MM (empty disables)"),
-);
-
-const sessionEndOption = Options.text("session-end").pipe(
-  Options.withDefault(""),
-  Options.withDescription("UTC session end in HH:MM (empty disables)"),
-);
-
-const autoRegimeFilterOption = Options.boolean("auto-regime-filter").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Block entries that do not match the detected trend/mean-reversion regime",
-  ),
-);
-
-const autoRegimeAdxThresholdOption = Options.float(
-  "auto-regime-adx-threshold",
-).pipe(
-  Options.withDefault(25),
-  Options.withDescription("ADX threshold for auto-regime detection"),
-);
-
-const confidenceOption = Options.float("min-confidence").pipe(
-  Options.withDefault(0.5),
-  Options.withDescription("Minimum signal confidence to enter a trade"),
-);
-
-const useAtrStopsOption = Options.boolean("use-atr-stops").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Use ATR-based dynamic stop loss and take profit"),
-);
-
-const atrStopMultiplierOption = Options.float("atr-stop-multiplier").pipe(
-  Options.withDefault(1.5),
-  Options.withDescription(
-    "ATR multiplier for stop loss when --use-atr-stops is set",
-  ),
-);
-
-const atrTakeProfitMultiplierOption = Options.float(
-  "atr-take-profit-multiplier",
-).pipe(
-  Options.withDefault(2.5),
-  Options.withDescription(
-    "ATR multiplier for take profit when --use-atr-stops is set (legacy; overridden by --atr-risk-reward)",
-  ),
-);
-
-const atrRiskRewardOption = Options.float("atr-risk-reward").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "ATR take-profit distance as a multiple of the stop distance (0 = use --atr-take-profit-multiplier)",
-  ),
-);
-
-const scaleOutAtROption = Options.float("scale-out-at-r").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Partial scale-out trigger in R multiples (e.g. 1.0 = +1R). 0 disables scale-out.",
-  ),
-);
-
-const scaleOutPctOption = Options.float("scale-out-pct").pipe(
-  Options.withDefault(50),
-  Options.withDescription(
-    "Percentage of the position to close at the scale-out trigger",
-  ),
-);
-
-const volatilityLookbackOption = Options.integer("volatility-lookback").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Lookback window length for ATR% volatility calibration. 0 disables.",
-  ),
-);
-
-const volatilityLowPctOption = Options.float("volatility-low-pct").pipe(
-  Options.withDefault(20),
-  Options.withDescription(
-    "Low percentile threshold for volatility calibration",
-  ),
-);
-
-const volatilityHighPctOption = Options.float("volatility-high-pct").pipe(
-  Options.withDefault(80),
-  Options.withDescription(
-    "High percentile threshold for volatility calibration",
-  ),
-);
-
-const volatilityLowFactorOption = Options.float("volatility-low-factor").pipe(
-  Options.withDefault(0.8),
-  Options.withDescription(
-    "Multiplier applied to ATR stop distance in low-volatility regimes",
-  ),
-);
-
-const volatilityHighFactorOption = Options.float("volatility-high-factor").pipe(
-  Options.withDefault(1.2),
-  Options.withDescription(
-    "Multiplier applied to ATR stop distance in high-volatility regimes",
-  ),
-);
-
-const priceOnlyOption = Options.boolean("price-only").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Ignore synthetic order-book components in backtest (trend/volatility/RSI/regime only)",
-  ),
-);
-
-const noRsiOption = Options.boolean("no-rsi").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Disable RSI mean-reversion component in backtest"),
-);
-
-const holdUntilStopOption = Options.boolean("hold-until-stop").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Ignore opposite-signal exits and only exit on stop/take-profit",
-  ),
-);
-
-const noTrendOption = Options.boolean("no-trend").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Disable trend-following EMA component in backtest"),
-);
-
-const regimeModeOption = Options.choice("regime-mode", [
-  "trend",
-  "reversion",
-  "breakout",
-] as const).pipe(
-  Options.withDefault("trend" as const),
-  Options.withDescription(
-    "Regime filter mode: trend-following or mean-reversion",
-  ),
-);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function makeLayer(home?: string) {
   return Layer.mergeAll(
@@ -1739,50 +1211,14 @@ function emptyResult(
   };
 }
 
-const atrStopMinOption = Options.float("atr-stop-min").pipe(
-  Options.withDefault(1.0),
-  Options.withDescription("Minimum ATR stop multiplier to test"),
-);
 
-const atrStopMaxOption = Options.float("atr-stop-max").pipe(
-  Options.withDefault(3.0),
-  Options.withDescription("Maximum ATR stop multiplier to test"),
-);
 
-const atrStopStepOption = Options.float("atr-stop-step").pipe(
-  Options.withDefault(0.5),
-  Options.withDescription("Step size for ATR stop multiplier"),
-);
 
-const atrTpMinOption = Options.float("atr-tp-min").pipe(
-  Options.withDefault(2.0),
-  Options.withDescription("Minimum ATR take-profit multiplier to test"),
-);
 
-const atrTpMaxOption = Options.float("atr-tp-max").pipe(
-  Options.withDefault(5.0),
-  Options.withDescription("Maximum ATR take-profit multiplier to test"),
-);
 
-const atrTpStepOption = Options.float("atr-tp-step").pipe(
-  Options.withDefault(0.5),
-  Options.withDescription("Step size for ATR take-profit multiplier"),
-);
 
-const confMinOption = Options.float("conf-min").pipe(
-  Options.withDefault(0.5),
-  Options.withDescription("Minimum min-confidence to test"),
-);
 
-const confMaxOption = Options.float("conf-max").pipe(
-  Options.withDefault(0.7),
-  Options.withDescription("Maximum min-confidence to test"),
-);
 
-const confStepOption = Options.float("conf-step").pipe(
-  Options.withDefault(0.1),
-  Options.withDescription("Step size for min-confidence"),
-);
 
 export interface OptimizeCandidateParams {
   readonly useAtrStops: boolean;
@@ -2173,54 +1609,12 @@ function printOptimizeResult(
   });
 }
 
-const minCandlesOption = Options.integer("min-candles").pipe(
-  Options.withDefault(500),
-  Options.withDescription(
-    "Minimum candles required for a symbol to be included in scan",
-  ),
-);
 
-const topOption = Options.integer("top").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Limit scan to top N symbols by candle count (0 = all)",
-  ),
-);
 
-const optimizeScanOption = Options.boolean("optimize").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Run a coarse per-symbol parameter grid search and report best params",
-  ),
-);
 
-const minReturnOption = Options.float("min-return-pct").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Skip symbols with total return below this threshold",
-  ),
-);
 
-const minSharpeOption = Options.float("min-sharpe").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Skip symbols with Sharpe ratio below this threshold",
-  ),
-);
 
-const scanMaxDrawdownOption = Options.float("max-drawdown-pct").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Skip symbols with max drawdown above this threshold",
-  ),
-);
 
-const saveWatchlistOption = Options.text("save-watchlist").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Write passing symbols to a JSON watchlist file in NEURATRADE_HOME/data",
-  ),
-);
 
 export interface ScanArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
   readonly symbol?: string;
@@ -2861,108 +2255,21 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
   });
 }
 
-const intervalOption = Options.integer("interval").pipe(
-  Options.withDefault(60),
-  Options.withDescription("Seconds between paper-trading iterations"),
-);
 
-const iterationsOption = Options.integer("iterations").pipe(
-  Options.withDefault(1),
-  Options.withDescription("Number of iterations to run (0 = infinite)"),
-);
 
-const replayBarsOption = Options.integer("replay-bars").pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Grid: replay the last N stored candles one per iteration (0 = live shadow)",
-  ),
-);
 
-const liveOption = Options.boolean("live").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Use live exchange adapter (Binance spot or Bitget futures)",
-  ),
-);
 
-const apiKeyOption = Options.text("api-key").pipe(
-  Options.withDefault(""),
-  Options.withDescription("Binance API key (or set BINANCE_API_KEY env)"),
-);
 
-const apiSecretOption = Options.text("api-secret").pipe(
-  Options.withDefault(""),
-  Options.withDescription("Binance API secret (or set BINANCE_API_SECRET env)"),
-);
 
-const marginModeOption = Options.text("margin-mode").pipe(
-  Options.withDefault("crossed"),
-  Options.withDescription("Futures margin mode: crossed or isolated"),
-);
 
-const productTypeOption = Options.text("product-type").pipe(
-  Options.withDefault("USDT-FUTURES"),
-  Options.withDescription(
-    "Futures product type: USDT-FUTURES, COIN-FUTURES or USDC-FUTURES",
-  ),
-);
 
-const maxDrawdownOption = Options.float("max-drawdown-pct").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Max drawdown % before blocking new trades (live default 5%)",
-  ),
-);
 
-const maxDailyLossOption = Options.float("max-daily-loss-pct").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Max daily loss % before blocking new trades (live default 2%)",
-  ),
-);
 
-const maxPositionSizeOption = Options.float("max-position-size-pct").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Max position size % of capital per trade (live default 10%)",
-  ),
-);
 
-const maxTradesPerDayOption = Options.integer("max-trades-per-day").pipe(
-  Options.optional,
-  Options.withDescription("Max trades per day (live default 10)"),
-);
 
-const minCapitalOption = Options.integer("min-capital").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Minimum capital required to trade (live default 100)",
-  ),
-);
 
-const watchlistOption = Options.text("watchlist").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Path to a JSON watchlist in NEURATRADE_HOME/data (uses per-symbol best params)",
-  ),
-);
-const noWatchlistOption = Options.boolean("no-watchlist").pipe(
-  Options.withDescription(
-    "Run paper-trade with the --symbol only, ignoring the DB watchlist fallback (validated single-candidate soaks)",
-  ),
-);
 
-const killSwitchOption = Options.boolean("kill-switch").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Engage kill switch before starting (blocks all new trades)",
-  ),
-);
 
-const disengageOption = Options.boolean("disengage").pipe(
-  Options.withDefault(false),
-  Options.withDescription("Disengage kill switch before starting"),
-);
 
 export interface WatchlistEntry {
   readonly symbol: string;
@@ -4145,9 +3452,6 @@ function printSoakResult(result: import("../scalping/soak.js").SoakResult) {
   });
 }
 
-const soakWatchlistOption = Options.text("watchlist").pipe(
-  Options.withDescription("Path to a JSON watchlist in NEURATRADE_HOME/data"),
-);
 
 export const soakCommand = Command.make(
   "soak",
@@ -4535,11 +3839,6 @@ export const soakCommand = Command.make(
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run multi-ticker paper-trading soak harness"));
 
-const profileNameOption = Options.text("name").pipe(
-  Options.withDescription(
-    "Profile name (used as filename in ~/.neuratrade/profiles)",
-  ),
-);
 
 const profileSaveCommand = Command.make(
   "save",
@@ -5527,20 +4826,8 @@ export const libraryCommand = Command.make(
   Command.withSubcommands([libraryListCommand, libraryStrategyCommand]),
 );
 
-const trainWindowOption = Options.integer("train-window").pipe(
-  Options.withDefault(180),
-  Options.withDescription("Walk-forward training window in days"),
-);
 
-const testWindowOption = Options.integer("test-window").pipe(
-  Options.withDefault(60),
-  Options.withDescription("Walk-forward testing window in days"),
-);
 
-const wfMinTradesOption = Options.integer("min-trades").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Minimum trades per window"),
-);
 
 export const walkForwardCommand = Command.make(
   "walk-forward",
@@ -5602,12 +4889,6 @@ export const walkForwardCommand = Command.make(
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run walk-forward optimization"));
 
-const minTradesPerMonthOption = Options.integer("min-trades-per-month").pipe(
-  Options.optional,
-  Options.withDescription(
-    "G1 override: minimum in-sample trades per month (default 20 for 5m, 10 otherwise)",
-  ),
-);
 
 export const readinessCommand = Command.make(
   "readiness",
@@ -5715,127 +4996,23 @@ export function probeNamesProbedSymbol(
   ).symbol;
   return token.toUpperCase() === bitgetSymbol.toUpperCase();
 }
-const gridUniverseExchangeOption = Options.text("exchange").pipe(
-  Options.withDefault("bitget-futures"),
-  Options.withDescription("Exchange to scan for grid candidates"),
-);
 
-const gridUniverseTimeframeOption = Options.text("timeframe").pipe(
-  Options.withDefault("15m"),
-  Options.withDescription("Candle timeframe for the grid universe scan"),
-);
 
-const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
-  Options.withDefault(500),
-  Options.withDescription(
-    "Minimum candles a symbol must have to be included in the scan",
-  ),
-);
 
-const gridUniverseTrainWindowOption = Options.integer("train-window").pipe(
-  Options.withDefault(180),
-  Options.withDescription("Walk-forward training window in candles"),
-);
 
-const gridUniverseTestWindowOption = Options.integer("test-window").pipe(
-  Options.withDefault(60),
-  Options.withDescription("Walk-forward test window in candles"),
-);
 
-const gridUniverseMinProfitableWindowsOption = Options.float(
-  "min-profitable-windows-pct",
-).pipe(
-  Options.withDefault(60),
-  Options.withDescription(
-    "Minimum % of walk-forward windows a symbol must be profitable in",
-  ),
-);
 
-const gridUniverseMinAggregateReturnOption = Options.float(
-  "min-aggregate-return-pct",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Minimum aggregate walk-forward return % a symbol must exceed",
-  ),
-);
 
-const gridUniverseFeeOption = Options.float("fee").pipe(
-  Options.withDefault(0.06),
-  Options.withDescription("Per-side fee % applied in the grid backtests"),
-);
 
-const gridUniverseSlippageOption = Options.float("slippage-bps").pipe(
-  Options.withDefault(2),
-  Options.withDescription("Slippage in basis points applied to grid fills"),
-);
 
-const gridUniverseTrendFilterOption = Options.integer(
-  "trend-filter-period",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription("SMA trend filter period for the grid backtests"),
-);
 
-const gridUniverseMarketOption = Options.boolean("market").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Discover symbols from the exchange contract list (24h-volume filtered) instead of the stored candle set",
-  ),
-);
 
-const gridUniverseOutputOption = Options.text("output").pipe(
-  Options.optional,
-  Options.withDescription(
-    "Write surviving candidates to a JSON whitelist in NEURATRADE_HOME/data",
-  ),
-);
 
-const gridUniverseWatchOption = Options.boolean("watch").pipe(
-  Options.withDefault(false),
-  Options.withDescription(
-    "Continuously re-scan the universe and upsert survivors into the DB watchlist",
-  ),
-);
 
-const gridUniverseIntervalOption = Options.integer("interval").pipe(
-  Options.withDefault(3600),
-  Options.withDescription(
-    "Seconds between scans in --watch continuous mode (default 3600)",
-  ),
-);
 
-const gridUniverseMinFillFrequencyOption = Options.float(
-  "min-fill-frequency-pct",
-).pipe(
-  Options.withDefault(0),
-  Options.withDescription(
-    "Reject survivors whose grid step touches < this % of candles (0 = disabled)",
-  ),
-);
 
-const gridUniverseTargetFillsPerDayOption = Options.float(
-  "target-fills-per-day",
-).pipe(
-  Options.optional,
-  Options.withDescription(
-    "Portfolio fills/day target for survivor selection (default: account-scaled 5-50)",
-  ),
-);
 
-const gridUniverseAccountCapitalOption = Options.float("account-capital").pipe(
-  Options.withDefault(1000),
-  Options.withDescription(
-    "Account capital USDT scaling the fills/day target when --target-fills-per-day is unset (default 1000)",
-  ),
-);
 
-const gridUniverseTierOption = Options.text("tier").pipe(
-  Options.withDefault("readiness"),
-  Options.withDescription(
-    "Eligibility tier: 'readiness' (full stage-4 gate board) or 'fast' (light: strict time-split + walk-forward profitability + fills/day floor)",
-  ),
-);
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -6224,15 +5401,7 @@ export const gridUniverseScanCommand = Command.make(
   ),
 );
 
-const watchlistListExchangeOption = Options.text("exchange").pipe(
-  Options.withDefault("bitget-futures"),
-  Options.withDescription("Exchange to list watchlist for"),
-);
 
-const watchlistListTimeframeOption = Options.text("timeframe").pipe(
-  Options.withDefault("15m"),
-  Options.withDescription("Timeframe to list watchlist for"),
-);
 
 export const watchlistListCommand = Command.make(
   "list",

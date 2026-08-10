@@ -148,7 +148,14 @@ export function runPaperTradingIteration(
     yield* repo.ensureTables();
 
     const portfolio = yield* repo.getPortfolio();
-    let capital = portfolio.capital.lessThanOrEqualTo(0)
+    // Seed initial capital only for a FRESH portfolio (no row persisted yet:
+    // the repository reports capital 0/peak 0). A blown account — persisted
+    // capital <= 0 with a positive peak — is a terminal state and must NOT
+    // be silently resurrected, or soak/drawdown results are falsified.
+    const isFreshPortfolio =
+      portfolio.capital.lessThanOrEqualTo(0) &&
+      portfolio.peakCapital.lessThanOrEqualTo(0);
+    let capital = isFreshPortfolio
       ? money(options.initialCapital)
       : portfolio.capital;
     let peakCapital = Decimal.max(portfolio.peakCapital, capital);
@@ -176,6 +183,15 @@ export function runPaperTradingIteration(
         position,
         capital: toNumber(capital),
         note: "insufficient candles",
+      };
+    }
+
+    if (orderBook.bids.length === 0 && orderBook.asks.length === 0) {
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: "empty order book",
       };
     }
 
@@ -299,6 +315,17 @@ export function runPaperTradingIteration(
       };
     }
 
+    if (capital.lessThanOrEqualTo(0)) {
+      // Blown paper account: capital is exhausted. Exits above may still
+      // recover it; entry is terminal until the position closes with a win.
+      return {
+        action: "hold" as const,
+        position,
+        capital: toNumber(capital),
+        note: "capital exhausted (blown paper account)",
+      };
+    }
+
     // Open new position if signal is strong enough and no position.
     if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
       const side = signal.direction === "buy" ? "long" : "short";
@@ -332,6 +359,21 @@ export function runPaperTradingIteration(
         options.volatilityLookback,
         options.timeframe,
       );
+
+      // Volatility gate BEFORE any order placement: a below-threshold entry
+      // must not place an exchange order (leaving an untracked live position
+      // and a phantom fee deduction). Mirrors futures-engine.ts.
+      if (options.minAtrPct > 0) {
+        const atrPct = atr && entryPriceNum > 0 ? atr / entryPriceNum : 0;
+        if (atrPct < options.minAtrPct / 100) {
+          return {
+            action: "hold" as const,
+            position,
+            capital: toNumber(capital),
+            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
+          };
+        }
+      }
 
       const positionValue = calculatePaperPositionValue(
         capital,
@@ -379,19 +421,6 @@ export function runPaperTradingIteration(
       const filledPrice = money(fill.filledPrice);
       const entryFee = money(fill.fee);
       capital = capital.minus(entryFee);
-
-      if (options.minAtrPct > 0) {
-        const filledPriceNum = toNumber(filledPrice, 8);
-        const atrPct = atr && filledPriceNum > 0 ? atr / filledPriceNum : 0;
-        if (atrPct < options.minAtrPct / 100) {
-          return {
-            action: "hold" as const,
-            position,
-            capital: toNumber(capital),
-            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
-          };
-        }
-      }
 
       const stopMult = options.atrStopMultiplier;
       const tpMult = options.atrTakeProfitMultiplier;

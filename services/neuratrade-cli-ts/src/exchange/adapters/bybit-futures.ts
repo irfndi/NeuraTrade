@@ -183,6 +183,22 @@ export function toBybitSymbol(symbol: string): string {
   return symbol.replace("/", "").split(":")[0].toUpperCase();
 }
 
+/**
+ * Hedge-mode position leg for an order: 1 = long, 2 = short. A reduce-only
+ * order acts on the opposing leg (Sell closes the long, Buy closes the
+ * short); a regular order opens the leg matching its side. One-way mode
+ * always uses 0, which is invalid for hedge-mode accounts.
+ */
+export function bybitPositionIdx(
+  side: BybitOrderSide,
+  reduceOnly: boolean,
+): number {
+  if (reduceOnly) {
+    return side === "Sell" ? 1 : 2;
+  }
+  return side === "Buy" ? 1 : 2;
+}
+
 // ---------------------------------------------------------------------------
 // Authentication
 // ---------------------------------------------------------------------------
@@ -263,9 +279,22 @@ function fetchBybit<T>(
     });
 
     if (response.status === 429) {
-      const retryAfter = Number(response.headers.get("Retry-After") || "0");
+      // Retry-After is normally delta-seconds, but may be an HTTP-date on
+      // some proxies. Number() on an HTTP-date yields NaN; falling back to 0
+      // would busy-loop into another 429 immediately, so default to a sane
+      // constant backoff instead. Mirrors bitget-client.ts fetchBitget.
+      const rawRetryAfter = response.headers.get("Retry-After");
+      const retryAfter = Number(rawRetryAfter || "0");
+      const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 5000;
+      if (rawRetryAfter && !Number.isFinite(retryAfter)) {
+        console.warn(
+          `[bybit-futures] unparseable Retry-After header ${JSON.stringify(rawRetryAfter)} on ${path}; falling back to ${retryAfterMs}ms`,
+        );
+      }
       return yield* Effect.fail(
-        new BybitRateLimitError({ retryAfterMs: retryAfter * 1000, endpoint: path }),
+        new BybitRateLimitError({ retryAfterMs, endpoint: path }),
       );
     }
 
@@ -423,6 +452,10 @@ export interface BybitClientImpl {
     symbol: string;
     orderId: string;
   }) => Effect.Effect<BybitOrder, BybitClientError>;
+  readonly cancelOrder: (args: {
+    symbol: string;
+    orderId: string;
+  }) => Effect.Effect<void, BybitClientError>;
   readonly setLeverage: (args: {
     symbol: string;
     buyLeverage: string;
@@ -457,6 +490,10 @@ function makeBybitClientImpl(
   ) => fetchBybit<T>(baseUrl, "GET", path, { query, signed }, credentials);
   const post = <T>(path: string, body: unknown) =>
     fetchBybit<T>(baseUrl, "POST", path, { body, signed: true }, credentials);
+
+  // Account position mode, kept in sync with setPositionMode so placeOrder
+  // can pick the correct hedge-mode leg (0 is only valid for one-way).
+  let positionMode: "one_way" | "hedge_mode" = "one_way";
 
   return {
     getContract: (symbol) =>
@@ -496,7 +533,10 @@ function makeBybitClientImpl(
         qty: order.qty,
         ...(order.orderType === "Limit" ? { timeInForce: "GTC" } : {}),
         ...(order.price !== undefined ? { price: order.price } : {}),
-        positionIdx: 0,
+        positionIdx:
+          positionMode === "hedge_mode"
+            ? bybitPositionIdx(order.side, order.reduceOnly === true)
+            : 0,
         ...(order.reduceOnly === true ? { reduceOnly: true } : {}),
       }).pipe(
         Effect.map((ack) => ({
@@ -515,6 +555,12 @@ function makeBybitClientImpl(
           return parseOrder(item ?? {});
         }),
       ),
+    cancelOrder: ({ symbol, orderId }) =>
+      post<unknown>("/v5/order/cancel", {
+        category: "linear",
+        symbol,
+        orderId,
+      }).pipe(Effect.as(undefined)),
     setLeverage: ({ symbol, buyLeverage, sellLeverage }) =>
       post<unknown>("/v5/position/set-leverage", {
         category: "linear",
@@ -532,7 +578,14 @@ function makeBybitClientImpl(
       post<unknown>("/v5/position/set-mode", {
         category: "linear",
         mode: mode === "hedge_mode" ? 3 : 0,
-      }).pipe(Effect.as(undefined)),
+      }).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            positionMode = mode;
+          }),
+        ),
+        Effect.as(undefined),
+      ),
   };
 }
 
@@ -688,9 +741,29 @@ export function makeBybitFuturesAdapter(
       const filledQty = money(data.cumExecQty);
       const filledPrice = money(data.avgPrice);
       if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
+        // The order did not fill. A limit order may still be resting on the
+        // exchange — failing without cleanup lets a retry open a duplicate.
+        // Cancel it before reporting the error, and say so in the message.
+        const orderId = data.orderId || ack.orderId;
+        const status = data.orderStatus;
+        const resting =
+          status === "Created" ||
+          status === "New" ||
+          status === "Untriggered" ||
+          status === "PartiallyFilled";
+        const cleanup = yield* (resting
+          ? client.cancelOrder({ symbol, orderId }).pipe(
+              Effect.mapError(toExchangeError),
+              Effect.match({
+                onSuccess: () => `resting order ${orderId} canceled`,
+                onFailure: (err) =>
+                  `cancel failed: ${err.reason}; order ${orderId} may still be resting`,
+              }),
+            )
+          : Effect.succeed(`final state ${status}`));
         return yield* Effect.fail(
           new ExchangeError(
-            `futures order ${data.orderId || ack.orderId} not filled (status=${data.orderStatus}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice})`,
+            `futures order ${orderId} not filled (status=${status}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}); ${cleanup}`,
           ),
         );
       }

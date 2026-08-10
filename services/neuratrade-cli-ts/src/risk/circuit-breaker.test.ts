@@ -116,4 +116,39 @@ describe("CircuitBreakerService", () => {
     const loss = await Effect.runPromise(cb.currentDailyLossPct());
     expect(loss).toBe(1);
   });
+
+  it("opens the breaker when start-of-day capital is zero (fail closed)", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-5, 0));
+    const open = await Effect.runPromise(cb.isOpen());
+    expect(open).toBe(true);
+  });
+
+  it("opens the breaker when start-of-day capital is negative (fail closed)", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(3, -100));
+    const open = await Effect.runPromise(cb.isOpen());
+    expect(open).toBe(true);
+  });
+
+  it("zero-capital breach preserves the accumulated daily PnL", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-1, 100));
+    await Effect.runPromise(cb.recordTradeResult(-1, 100));
+    await Effect.runPromise(cb.recordTradeResult(0, 0)); // invalid capital
+    const loss = await Effect.runPromise(cb.currentDailyLossPct());
+    expect(loss).toBe(2);
+  });
+
+  it("stays open after a loss-then-profit recovery (latch semantics)", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-3, 100));
+    await Effect.runPromise(cb.recordTradeResult(2, 100)); // recovers above threshold
+    const open = await Effect.runPromise(cb.isOpen());
+    expect(open).toBe(true);
+  });
 });

@@ -21,6 +21,7 @@ import {
 } from "../paper-trading/grid-engine.js";
 import {
   PaperTradingRepository,
+  PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
 } from "../paper-trading/repository.js";
 import { RiskGuard, type RiskGuardService } from "../risk/guards.js";
@@ -92,7 +93,11 @@ class InMemRepo implements PaperTradingRepositoryService {
   }
 
   getOpenPosition() {
-    return Effect.never;
+    return Effect.fail(
+      new PaperTradingRepositoryError(
+        "InMemRepo.getOpenPosition is not implemented — the grid replay engine has no position-tracking path that calls it; failing loudly instead of hanging",
+      ),
+    );
   }
 
   saveOpenPosition() {
@@ -100,11 +105,19 @@ class InMemRepo implements PaperTradingRepositoryService {
   }
 
   closePosition() {
-    return Effect.never;
+    return Effect.fail(
+      new PaperTradingRepositoryError(
+        "InMemRepo.closePosition is not implemented — the grid replay engine closes via recordGridTrade; failing loudly instead of hanging",
+      ),
+    );
   }
 
   scaleOutPosition() {
-    return Effect.never;
+    return Effect.fail(
+      new PaperTradingRepositoryError(
+        "InMemRepo.scaleOutPosition is not implemented — the grid replay engine never scales out; failing loudly instead of hanging",
+      ),
+    );
   }
 
   getPortfolio() {
@@ -191,7 +204,23 @@ class InMemRepo implements PaperTradingRepositoryService {
 
 function withinTol(a: number, b: number, tol = 0.005): boolean {
   if (a === 0 && b === 0) return true;
+  // Tolerance is RELATIVE to the larger magnitude: |a-b|/max(|a|,|b|) <= tol.
+  // Both parity dimensions already rescale to the same unit before comparing
+  // (entry price in quote, pnl in percentage points), so this is a symmetric
+  // relative-error check, not an absolute 0.5pp/0.5%-of-price bound.
   return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1e-9) <= tol;
+}
+
+/**
+ * PnL parity is an ABSOLUTE 0.5 percentage-point bound, not the relative
+ * `withinTol` used for entry prices: a 0.5pp disagreement is equally
+ * meaningful whether pnl is 0.5pp or 50pp, and the relative check would
+ * accept a 0.25pp gap on a 50pp trade while rejecting a 0.005pp gap on a
+ * 0.5pp trade. Both sides arrive here in pp — bt pnlPct is a fraction
+ * (0.01 = 1%) scaled by *100, deployed pnlPct is already pp.
+ */
+function withinPp(a: number, b: number, tolPp = 0.5): boolean {
+  return Math.abs(a - b) <= tolPp;
 }
 
 function inferBtExitReason(t: GridTrade): "target" | "stop" | "liquidation" {
@@ -214,7 +243,7 @@ function computeExecutionParityChecks(
     if (d.side === b.side && d.exitReason === inferBtExitReason(b)) {
       reasonMatches++;
     }
-    if (withinTol(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
+    if (withinPp(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
   }
   const countMatch = btTrades.length === depTrades.length;
   const pairCoverage = btTrades.length === 0 || n === btTrades.length;

@@ -172,6 +172,10 @@ func (m *mockRiskController) DisengageKillSwitch(_ context.Context) error {
 	return nil
 }
 
+func (m *mockRiskController) ShouldCancelOrders() bool {
+	return m.killSwitchEngaged
+}
+
 type mockOrderController struct {
 	cancelled bool
 	err       error

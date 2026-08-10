@@ -52,6 +52,12 @@ export interface MarketDataGatewayService {
     exchange: string,
   ) => Effect.Effect<readonly string[], MarketDataError, never>;
 
+  /**
+   * 24h quote volume per symbol, keyed by the exchange's RAW wire symbol
+   * (e.g. "BTCUSDT"), not the normalized "BASE/QUOTE" form used by
+   * fetchSymbols — the ticker endpoints do not return base/quote split.
+   * Consumers normalize canonical symbols with `symbol.replace("/", "")`.
+   */
   readonly fetch24hrVolumes: (
     exchange: string,
   ) => Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never>;

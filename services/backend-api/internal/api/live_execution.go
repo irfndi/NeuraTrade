@@ -32,6 +32,7 @@ type liveOrderLookup interface {
 	FetchOrder(context.Context, string, string, string) (*ccxt.OrderResponse, error)
 	FetchBalance(context.Context, string) (*ccxt.BalanceResponse, error)
 	FetchPositions(context.Context, string) (*ccxt.PositionsResponse, error)
+	FetchSingleTicker(context.Context, string, string) (ccxt.MarketPriceInterface, error)
 }
 
 func newRiskGatedLiveExecution(
@@ -51,9 +52,25 @@ func newRiskGatedLiveExecution(
 		return nil, errors.New("NEURATRADE_LIVE_MAX_ORDER_NOTIONAL must be a positive decimal")
 	}
 
+	maxLeverage := decimal.NewFromInt(10)
+	if raw := strings.TrimSpace(os.Getenv("NEURATRADE_LIVE_MAX_LEVERAGE")); raw != "" {
+		parsed, parseErr := decimal.NewFromString(raw)
+		if parseErr != nil || !parsed.IsPositive() {
+			return nil, errors.New("NEURATRADE_LIVE_MAX_LEVERAGE must be a positive decimal")
+		}
+		maxLeverage = parsed
+	}
+
 	policy := risk.NewEngine()
 	if err := policy.AddRule(risk.NewMaxNotionalRule(maxNotional)); err != nil {
 		return nil, fmt.Errorf("add live max-notional rule: %w", err)
+	}
+	// Leverage/portfolio-based second gate: rejects orders whose notional
+	// (amount x market price) implies excessive effective leverage against
+	// the account's portfolio value, independent of the client-supplied
+	// price used to fake a small notional.
+	if err := policy.AddRule(risk.NewMaxLeverageRule(maxLeverage)); err != nil {
+		return nil, fmt.Errorf("add live max-leverage rule: %w", err)
 	}
 	riskActor, err := risk.NewRiskActor(risk.RiskActorConfig{
 		ID:           "live-order-risk-actor",
@@ -79,7 +96,7 @@ func newRiskGatedLiveExecution(
 		nil,
 		idempotencyStore,
 		auditLog,
-	).WithLiveGuard(liveGuard)
+	).WithLiveGuard(liveGuard).WithKillSwitch(killSwitch)
 
 	riskActorRef := actor.NewRef(riskActor, actor.DefaultConfig())
 	executionActorRef := actor.NewRef(executionActor, actor.DefaultConfig())

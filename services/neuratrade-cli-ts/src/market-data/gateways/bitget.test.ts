@@ -139,6 +139,123 @@ describe("Bitget gateway", () => {
     expect(volumes["BTCUSDT"]).toBe(78901234);
   });
 
+  it("fetchDemoSymbols sends the PAPTRADING demo header", async () => {
+    let requestedUrl = "";
+    let demoHeader: string | null = null;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      requestedUrl = String(input);
+      const headers = new Headers(init?.headers);
+      demoHeader = headers.get("PAPTRADING");
+      return new Response(JSON.stringify(symbolsFixture), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const symbols = await Effect.runPromise(Bitget.fetchDemoSymbols());
+
+    expect(symbols).toEqual(["BTC/USDT"]);
+    expect(requestedUrl).toContain("/api/v2/mix/market/contracts");
+    expect(requestedUrl).toContain("productType=USDT-FUTURES");
+    expect(demoHeader === "1").toBe(true);
+  });
+
+  it("maps spot granularity for fetchOHLCV URLs", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify(candlesFixture), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(
+      Bitget.fetchOHLCV("BTC/USDT", "5m", 2, undefined, "spot"),
+    );
+
+    expect(requestedUrl).toContain("/api/v2/spot/market/candles");
+    expect(requestedUrl).toContain("granularity=5min");
+  });
+
+  it("maps futures granularity for fetchOHLCV URLs", async () => {
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify(candlesFixture), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await Effect.runPromise(
+      Bitget.fetchOHLCV("BTC/USDT:USDT", "1h", 2, undefined, "futures"),
+    );
+
+    expect(requestedUrl).toContain("/api/v2/mix/market/history-candles");
+    expect(requestedUrl).toContain("granularity=1H");
+  });
+
+  it("fetchTick rejects zero-price tickers", async () => {
+    mockFetch({ code: "00000", msg: "success", data: [{ symbol: "BTCUSDT" }] });
+
+    const result = await Effect.runPromise(
+      Bitget.fetchTick("BTC/USDT", "spot").pipe(
+        Effect.match({
+          onFailure: (err) => ({ ok: false, reason: err.reason }),
+          onSuccess: () => ({ ok: true, reason: "" }),
+        }),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("invalid price");
+  });
+
+  it("fetchFundingRates stops paginating once a page predates startTime", async () => {
+    const requests: string[] = [];
+    const startMs = 1704009600000; // 2023-12-31T08:00:00Z
+    const pages: Record<string, unknown> = {
+      "1": {
+        code: "00000",
+        msg: "success",
+        data: [
+          { symbol: "BTCUSDT", fundingRate: "0.0001", fundingTime: "1704067200000" },
+          { symbol: "BTCUSDT", fundingRate: "0.00009", fundingTime: "1704038400000" },
+        ],
+      },
+      "2": {
+        code: "00000",
+        msg: "success",
+        data: [
+          { symbol: "BTCUSDT", fundingRate: "0.00008", fundingTime: "1704009600000" },
+          { symbol: "BTCUSDT", fundingRate: "0.00007", fundingTime: "1703980800000" },
+        ],
+      },
+    };
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const u = String(url);
+      requests.push(u);
+      const pageNo = new URL(u).searchParams.get("pageNo") ?? "1";
+      const body = pages[pageNo] ?? { code: "00000", msg: "success", data: [] };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const rates = await Effect.runPromise(
+      Bitget.fetchFundingRates("BTC/USDT:USDT", new Date(startMs)),
+    );
+
+    // Page 2's oldest row (1703980800000) predates startTime: no page 3.
+    expect(requests).toHaveLength(2);
+    expect(rates.map((r) => r.fundingRate)).toEqual([0.0001, 0.00009, 0.00008]);
+  });
+
   it("returns MarketDataError on HTTP failure", async () => {
     mockFetch({ msg: "bad request" }, 400);
 

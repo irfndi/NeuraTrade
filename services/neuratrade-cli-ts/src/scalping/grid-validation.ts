@@ -87,7 +87,6 @@ export type GridValidationResult = GridValidationOk | GridValidationInvalid;
 const MAX_FRESHNESS_HOURS = 48;
 const CONFIDENCE_RESAMPLES = 5000;
 const CONFIDENCE_BLOCK_LENGTH = 5;
-const DECIMAL_SYNTAX = /^[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
 function xorshift32(state: number): number {
   let value = state >>> 0;
@@ -141,11 +140,11 @@ export function bootstrapBlockConfidence(
       sampleCount: numeric.length,
     };
   }
-  if (
-    seed === 0 ||
-    !values.every((value) => DECIMAL_SYNTAX.test(value)) ||
-    !numeric.every((value) => Number.isFinite(value))
-  ) {
+  if (seed === 0 || !numeric.every((value) => Number.isFinite(value))) {
+    // pnlPct.toString() legitimately serializes tiny values in exponential
+    // notation (e.g. "1e-7"); a string-syntax gate would crash the whole
+    // universe scan on valid evidence. Only genuinely non-numeric input is
+    // a caller bug worth throwing on.
     throw new Error("invalid block-bootstrap input");
   }
   const estimands: number[] = [];
