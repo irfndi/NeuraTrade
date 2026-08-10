@@ -58,11 +58,17 @@ import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
 import { BybitConfigLive } from "../services/bybit-config.js";
 import { RateLimiterLive } from "../services/rate-limiter.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
-import type { FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
+import {
+  FuturesExchangeAdapter,
+  type FuturesExchangeAdapterService,
+} from "../exchange/futures-adapter.js";
 import type { MarketDataGatewayService } from "../market-data/gateway.js";
-import { RiskGuardLive } from "../risk/guards.js";
+import { RiskGuard, RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
-import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerSQLiteLive,
+} from "../risk/circuit-breaker.js";
 import { Decimal, money, toNumber } from "../utils/money.js";
 import {
   runPaperTradingIteration,
@@ -77,6 +83,13 @@ import {
   type GridPaperTradingOptions,
   type GridPaperTradingIterationResult,
 } from "../paper-trading/grid-engine.js";
+import {
+  freshFlowTradeState,
+  iterateFlowTrade,
+  type FlowTradeError,
+  type FlowTradeIterationResult,
+  type FlowTradeOptions,
+} from "../scalping/flow-trade.js";
 import type { ContractSizeSpec } from "../paper-trading/types.js";
 import type { BitgetProductType } from "../services/bitget-client.js";
 import {
@@ -363,6 +376,9 @@ import {
   flowSpreadBpsOption,
   flowLimitOption,
   flowMinTurnoverOption,
+  flowTradeExchangeOption,
+  flowTradeSymbolOption,
+  flowHoldMinutesOption,
 } from "./scalp-options.js";
 
 
@@ -5819,9 +5835,245 @@ export const flowRecordCommand = Command.make(
   ),
 );
 
+export interface FlowTradeArgs {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: "5m" | "1m";
+  readonly capital: number;
+  readonly maxPositionSizePct: Option.Option<number>;
+  readonly leverage: number;
+  readonly interval: number;
+  readonly iterations: number;
+  readonly threshold: number;
+  readonly holdMinutes: number;
+  readonly minCapital: Option.Option<number>;
+  readonly maxDrawdownPct: Option.Option<number>;
+  readonly maxDailyLossPct: Option.Option<number>;
+  readonly marginMode: string;
+  readonly productType: string;
+  readonly live: boolean;
+  readonly killSwitch: boolean;
+  readonly disengage: boolean;
+}
+
+/**
+ * Flow Ignition live trade engine — testnet execution validation of the
+ * flow-v1 signal. Signals are computed from MAINNET data in the local DB (the
+ * flow recorder / fetch), orders go through the exchange adapter (bybit
+ * testnet creds with --live). Mirrors paper-trade's risk wiring.
+ */
+export const flowTradeCommand = Command.make(
+  "flow-trade",
+  {
+    exchange: flowTradeExchangeOption,
+    symbol: flowTradeSymbolOption,
+    timeframe: flowTimeframeOption,
+    capital: capitalOption,
+    maxPositionSizePct: maxPositionSizeOption,
+    leverage: leverageOption,
+    interval: intervalOption,
+    iterations: iterationsOption,
+    threshold: flowThresholdOption,
+    holdMinutes: flowHoldMinutesOption,
+    minCapital: minCapitalOption,
+    maxDrawdownPct: maxDrawdownOption,
+    maxDailyLossPct: maxDailyLossOption,
+    marginMode: marginModeOption,
+    productType: productTypeOption,
+    live: liveOption,
+    killSwitch: killSwitchOption,
+    disengage: disengageOption,
+  },
+  (args) =>
+    Effect.gen(function* () {
+      const path = yield* Path;
+      const sqlite = yield* SqliteClient;
+      const db = sqlite.database;
+
+      const repoLayer = MarketDataRepositorySQLiteLive(db);
+      const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
+
+      const riskOverrides: MutablePartialRiskLimits = {};
+      if (Option.isSome(args.maxDrawdownPct))
+        riskOverrides.maxDrawdownPct = args.maxDrawdownPct.value;
+      if (Option.isSome(args.maxDailyLossPct))
+        riskOverrides.maxDailyLossPct = args.maxDailyLossPct.value;
+      if (Option.isSome(args.minCapital))
+        riskOverrides.minCapital = args.minCapital.value;
+      const riskGuardLayer = RiskGuardLive(args.live, riskOverrides);
+      const killSwitchLayer = KillSwitchSQLiteLive(db);
+      const circuitBreakerMaxLoss = Option.getOrElse(
+        args.maxDailyLossPct,
+        () => 2,
+      );
+      const circuitBreakerLayer = CircuitBreakerSQLiteLive(
+        db,
+        circuitBreakerMaxLoss,
+      );
+      // Signals ALWAYS come from the mainnet data in the DB (the proposal's
+      // split: mainnet research, testnet execution); the live gateway is only
+      // used by the bybit adapter for reference ticks, which the engine
+      // avoids by passing its own reference price.
+      const marketDataLayer = Layer.provide(
+        MarketDataGatewayRepositoryLive,
+        repoLayer,
+      );
+      const futuresAdapterLayer = (
+        args.live
+          ? BybitFuturesExchangeAdapterLive.pipe(
+              Layer.provide(BybitClientLiveConfig),
+              Layer.provide(BybitConfigLive),
+            )
+          : SimulatedFuturesExchangeAdapterLive()
+      ) as Layer.Layer<
+        FuturesExchangeAdapterService,
+        never,
+        MarketDataGatewayService
+      >;
+      const layers = Layer.mergeAll(
+        BunServices.layer,
+        PathLive(process.env.NEURATRADE_HOME),
+        marketDataLayer,
+        repoLayer,
+        paperRepoLayer,
+        riskGuardLayer,
+        killSwitchLayer,
+        circuitBreakerLayer,
+      );
+
+      if (args.killSwitch) {
+        yield* Effect.provide(
+          KillSwitch.pipe(
+            Effect.flatMap((ks) => ks.engage("CLI --kill-switch")),
+          ),
+          killSwitchLayer,
+        );
+      }
+      if (args.disengage) {
+        yield* Effect.provide(
+          KillSwitch.pipe(Effect.flatMap((ks) => ks.disengage())),
+          killSwitchLayer,
+        );
+      }
+
+      return yield* flowTradeProgram(args).pipe(
+        Effect.provide(futuresAdapterLayer),
+        Effect.provide(layers),
+        Effect.tapError((err) =>
+          Console.error(
+            `flow-trade failed: ${"reason" in err ? err.reason : String(err)}`,
+          ),
+        ),
+      );
+    }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
+).pipe(
+  Command.withDescription(
+    "Run the flow-v1 live trade engine (testnet execution, mainnet DB signals)",
+  ),
+);
+
+function flowTradeProgram(args: FlowTradeArgs) {
+  return Effect.gen(function* () {
+    const repo = yield* PaperTradingRepository;
+    const gateway = yield* MarketDataGateway;
+    const adapter = yield* FuturesExchangeAdapter;
+    const riskGuard = yield* RiskGuard;
+    const killSwitch = yield* KillSwitch;
+    const circuitBreaker = yield* CircuitBreaker;
+    yield* repo.ensureTables();
+
+    const productType = parseProductType(args.productType);
+    const marginMode = parseMarginMode(args.marginMode);
+    const opts: FlowTradeOptions = {
+      exchange: args.exchange,
+      symbol: args.symbol,
+      timeframe: args.timeframe,
+      capital: args.capital,
+      maxPositionSizePct: Option.getOrElse(args.maxPositionSizePct, () => 10),
+      leverage: args.leverage,
+      productType,
+      marginMode,
+      threshold: args.threshold,
+      holdMinutes: args.holdMinutes,
+      isLive: args.live,
+    };
+
+    const runIteration = (): Effect.Effect<
+      FlowTradeIterationResult,
+      FlowTradeError,
+      never
+    > =>
+      iterateFlowTrade(
+        repo,
+        gateway,
+        adapter,
+        riskGuard,
+        killSwitch,
+        circuitBreaker,
+        opts,
+      ).pipe(
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            const tag =
+              "tag" in err && typeof err.tag === "string" ? err.tag : "";
+            // Safety-critical errors must propagate so the loop stops and the
+            // process exits for the operator; only transient network/IO
+            // errors are safe to skip and retry on the next cadence.
+            if (
+              tag === "RiskError" ||
+              tag === "KillSwitchError" ||
+              tag === "CircuitBreakerError"
+            ) {
+              return yield* Effect.fail(err);
+            }
+            const current = yield* repo
+              .getFlowTradeState(args.exchange, args.symbol)
+              .pipe(Effect.orElseSucceed(() => null));
+            const reason =
+              "reason" in err && typeof err.reason === "string"
+                ? err.reason
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+            yield* Console.error(
+              `flow-trade iteration skipped (network/IO error): ${reason}`,
+            );
+            return {
+              action: "hold" as const,
+              side: current?.side ?? null,
+              state:
+                current ?? freshFlowTradeState(opts, Date.now()),
+              note: `skip: ${reason}`,
+            };
+          }),
+        ),
+      );
+
+    let remaining = args.iterations;
+    let last: FlowTradeIterationResult | null = null;
+    // iterations=0 means run forever.
+    while (args.iterations === 0 || remaining !== 0) {
+      const result = yield* runIteration();
+      last = result;
+      yield* Console.log(`[flow-trade] ${result.note}`);
+
+      if (remaining > 0) {
+        remaining -= 1;
+      }
+
+      // Sleep between iterations: always in infinite mode (0), otherwise only
+      // when more iterations remain.
+      if (args.iterations === 0 || remaining !== 0) {
+        yield* Effect.sleep(`${args.interval} seconds`);
+      }
+    }
+    return last;
+  });
+}
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay|flow-backtest|flow-universe|flow-record --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay|flow-backtest|flow-universe|flow-record|flow-trade --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -5842,5 +6094,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     flowBacktestCommand,
     flowUniverseCommand,
     flowRecordCommand,
+    flowTradeCommand,
   ]),
 );

@@ -7,6 +7,7 @@ import type {
   PaperPosition,
   PaperTrade,
 } from "./types.js";
+import type { FlowTradeState } from "../scalping/flow-trade.js";
 
 /**
  * Error raised when paper-trading persistence fails.
@@ -139,6 +140,37 @@ export interface PaperTradingRepositoryService {
     liveOnly?: boolean,
   ) => Effect.Effect<
     readonly GridPaperTrade[],
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  /** Load the persisted flow-trade state for one (exchange, symbol), or null
+   *  when no row exists yet (fresh start — flat). */
+  readonly getFlowTradeState: (
+    exchange: string,
+    symbol: string,
+  ) => Effect.Effect<FlowTradeState | null, PaperTradingRepositoryError, never>;
+
+  /** Upsert the flow-trade state (one row per exchange+symbol). */
+  readonly saveFlowTradeState: (
+    state: FlowTradeState,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  /** Delete the flow-trade state row (used after a position is closed). */
+  readonly clearFlowTradeState: (
+    exchange: string,
+    symbol: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  /** Read open-interest history rows for a symbol/timeframe (the flow data
+   *  layer's OI series, keyed by wire symbol). */
+  readonly getOpenInterest: (
+    symbol: string,
+    timeframe: string,
+    since?: number,
+    until?: number,
+  ) => Effect.Effect<
+    readonly OpenInterestHistoryRow[],
     PaperTradingRepositoryError,
     never
   >;
@@ -358,6 +390,30 @@ CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_symbol
   ON grid_paper_trades(exchange, symbol, timeframe);
 CREATE INDEX IF NOT EXISTS idx_grid_paper_trades_closed_at
   ON grid_paper_trades(closed_at DESC);
+
+-- Flow Ignition live trade state: one directional position per symbol at a
+-- time (no grid). side/entry_* are NULL when flat; UNIQUE(exchange, symbol)
+-- keeps a single row per instrument so saveFlowTradeState is an upsert.
+CREATE TABLE IF NOT EXISTS flow_trade_state (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  side TEXT,
+  entry_price REAL,
+  qty REAL,
+  entry_time INTEGER,
+  stop_price REAL,
+  last_peak REAL,
+  exit_at INTEGER,
+  order_id TEXT,
+  capital REAL NOT NULL,
+  atr REAL,
+  stage TEXT,
+  entry_ofi_sign INTEGER,
+  last_price REAL,
+  killed INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (exchange, symbol)
+);
 
 CREATE TABLE IF NOT EXISTS watchlist (
   exchange TEXT NOT NULL,
@@ -1775,6 +1831,145 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to clear watchlist: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  getFlowTradeState(
+    exchange: string,
+    symbol: string,
+  ): Effect.Effect<FlowTradeState | null, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        const row = this.db
+          .query(
+            `SELECT exchange, symbol, side, entry_price, qty, entry_time,
+                    stop_price, last_peak, exit_at, order_id, capital, atr,
+                    stage, entry_ofi_sign, last_price, killed, updated_at
+             FROM flow_trade_state
+             WHERE exchange = ? AND symbol = ?`,
+          )
+          .get(exchange, symbol) as {
+          exchange: string;
+          symbol: string;
+          side: string | null;
+          entry_price: number | null;
+          qty: number | null;
+          entry_time: number | null;
+          stop_price: number | null;
+          last_peak: number | null;
+          exit_at: number | null;
+          order_id: string | null;
+          capital: number;
+          atr: number | null;
+          stage: string | null;
+          entry_ofi_sign: number | null;
+          last_price: number | null;
+          killed: number;
+          updated_at: number;
+        } | null;
+
+        if (!row) return null;
+
+        return {
+          exchange: row.exchange,
+          symbol: row.symbol,
+          side: (row.side as FlowTradeState["side"]) ?? null,
+          entryPrice: row.entry_price ?? null,
+          qty: row.qty ?? null,
+          entryTime: row.entry_time ?? null,
+          stopPrice: row.stop_price ?? null,
+          lastPeak: row.last_peak ?? null,
+          exitAt: row.exit_at ?? null,
+          orderId: row.order_id ?? null,
+          capital: row.capital,
+          atr: row.atr ?? null,
+          stage: (row.stage as FlowTradeState["stage"]) ?? null,
+          entryOfiSign: row.entry_ofi_sign ?? null,
+          lastPrice: row.last_price ?? null,
+          killed: Boolean(row.killed),
+          updatedAt: row.updated_at,
+        };
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load flow trade state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveFlowTradeState(
+    state: FlowTradeState,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query(
+            `INSERT INTO flow_trade_state
+             (exchange, symbol, side, entry_price, qty, entry_time, stop_price,
+              last_peak, exit_at, order_id, capital, atr, stage, entry_ofi_sign,
+              last_price, killed, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(exchange, symbol) DO UPDATE SET
+               side = excluded.side,
+               entry_price = excluded.entry_price,
+               qty = excluded.qty,
+               entry_time = excluded.entry_time,
+               stop_price = excluded.stop_price,
+               last_peak = excluded.last_peak,
+               exit_at = excluded.exit_at,
+               order_id = excluded.order_id,
+               capital = excluded.capital,
+               atr = excluded.atr,
+               stage = excluded.stage,
+               entry_ofi_sign = excluded.entry_ofi_sign,
+               last_price = excluded.last_price,
+               killed = excluded.killed,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            state.exchange,
+            state.symbol,
+            state.side,
+            state.entryPrice,
+            state.qty,
+            state.entryTime,
+            state.stopPrice,
+            state.lastPeak,
+            state.exitAt,
+            state.orderId,
+            state.capital,
+            state.atr,
+            state.stage,
+            state.entryOfiSign,
+            state.lastPrice,
+            state.killed ? 1 : 0,
+            state.updatedAt,
+          );
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to save flow trade state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  clearFlowTradeState(
+    exchange: string,
+    symbol: string,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query("DELETE FROM flow_trade_state WHERE exchange = ? AND symbol = ?")
+          .run(exchange, symbol);
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to clear flow trade state: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

@@ -1232,6 +1232,27 @@ export const flowHoldTimesOption = Options.text("hold-times").pipe(
   ),
 );
 
+export const flowTradeExchangeOption = Options.text("exchange").pipe(
+  Options.withDefault("bybit-futures"),
+  Options.withDescription(
+    "Exchange key for the flow live engine (data reads + adapter orders)",
+  ),
+);
+
+export const flowTradeSymbolOption = Options.text("symbol").pipe(
+  Options.withDefault("BTCUSDT"),
+  Options.withDescription(
+    "Bybit wire symbol to trade, e.g. BTCUSDT (default: the flow universe's #1 always-include base)",
+  ),
+);
+
+export const flowHoldMinutesOption = Options.integer("hold-minutes").pipe(
+  Options.withDefault(60),
+  Options.withDescription(
+    "Time exit for flow positions, in minutes (default 60)",
+  ),
+);
+
 export const flowFeeOption = Options.float("fee").pipe(
   Options.withDefault(0.055),
   Options.withDescription("Taker fee percent per side (default 0.055)"),

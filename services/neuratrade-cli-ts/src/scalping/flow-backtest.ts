@@ -252,10 +252,10 @@ export interface FlowBacktestReport {
 }
 
 // ---------------------------------------------------------------------------
-// Per-bar context (shared by signals and the trade engine)
+// Per-bar context (shared by signals, the trade engine, and the live engine)
 // ---------------------------------------------------------------------------
 
-interface BarContext {
+export interface BarContext {
   readonly ts: number;
   readonly open: number;
   readonly high: number;
@@ -350,7 +350,7 @@ function rollingZ(history: readonly number[], value: number): number {
  * boundary t uses the context of the last bar with ts < t — exact for
  * :00-aligned bar grids, within one bar otherwise.
  */
-function computeContexts(
+export function computeContexts(
   candles: readonly CandleLike[],
   oi: readonly FlowOiPoint[] | undefined,
   funding: readonly FlowFundingPoint[] | undefined,
