@@ -149,7 +149,11 @@ export function passesStage2Screen(
  * survivors are comparable across symbols and runs.
  */
 export const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
-  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5],
+  // 0.75/1.0/1.25 added 2026-08-10: the validated gate-scored candidates
+  // (BTC step 1.0, SOL step 1.25) were outside the original space — the
+  // funnel could never surface them, so 'no profitable demo config' was
+  // only proven for <=0.5% steps.
+  gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25],
   gridMaxGrids: [1, 2, 3],
   gridPauseAfterLossBars: [0, 6, 24],
 } as const;

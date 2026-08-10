@@ -3,6 +3,7 @@ import type { MarketDataGatewayService } from "../gateway.js";
 import { MarketDataError, MarketDataGateway } from "../gateway.js";
 import * as Binance from "./binance.js";
 import * as Bitget from "./bitget.js";
+import * as Bybit from "./bybit.js";
 
 /**
  * Composite gateway that routes by exchange name.
@@ -11,6 +12,7 @@ import * as Bitget from "./bitget.js";
  *   - binance
  *   - bitget (spot)
  *   - bitget-futures
+ *   - bybit-futures (testnet)
  *
  * Additional exchanges can be added here without changing consumers.
  */
@@ -22,6 +24,9 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       }
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetchTick(symbol, "futures");
+      }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchTick(symbol);
       }
       return Binance.fetchTick(symbol);
     }),
@@ -40,6 +45,9 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
           "futures",
         );
       }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchOHLCV(symbol, timeframe, limit, startTime);
+      }
       return Binance.fetchOHLCV(symbol, timeframe, limit, startTime);
     }),
 
@@ -50,6 +58,9 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       }
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetchOrderBook(symbol, limit, "futures");
+      }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchOrderBook(symbol, limit);
       }
       return Binance.fetchOrderBook(symbol, limit);
     }),
@@ -62,16 +73,23 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetchSymbols("futures");
       }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchSymbols();
+      }
       return Binance.fetchSymbols();
     }),
 
   fetchDemoSymbols: (exchange) =>
     dispatch(exchange, "fetchDemoSymbols", () => {
-      // Only Bitget futures has a simulated (PAPTRADING) environment; the
-      // other gateways have no demo concept and report their full list (a
-      // no-op filter for the universe bound).
+      // Bitget futures has a simulated (PAPTRADING) environment; Bybit
+      // testnet IS the demo (same tradeable list). The other gateways have
+      // no demo concept and report their full list (a no-op filter for the
+      // universe bound).
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetchDemoSymbols();
+      }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchDemoSymbols();
       }
       if (exchange.toLowerCase() === "bitget") {
         return Bitget.fetchSymbols("spot");
@@ -87,6 +105,9 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetch24hrVolumes("futures");
       }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetch24hrVolumes();
+      }
       return Binance.fetch24hrVolumes();
     }),
 
@@ -94,6 +115,9 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
     dispatch(exchange, "fetchFundingRates", () => {
       if (exchange.toLowerCase() === "bitget-futures") {
         return Bitget.fetchFundingRates(symbol, startTime, endTime, limit);
+      }
+      if (exchange.toLowerCase() === "bybit-futures") {
+        return Bybit.fetchFundingRates(symbol, startTime, endTime, limit);
       }
       return Binance.fetchFundingRates(symbol, startTime, endTime, limit);
     }),
@@ -104,7 +128,7 @@ function dispatch<A>(
   operation: string,
   run: () => Effect.Effect<A, MarketDataError, never>,
 ): Effect.Effect<A, MarketDataError, never> {
-  const supported = ["binance", "bitget", "bitget-futures"];
+  const supported = ["binance", "bitget", "bitget-futures", "bybit-futures"];
   if (!supported.includes(exchange.toLowerCase())) {
     return Effect.fail(
       new MarketDataError(

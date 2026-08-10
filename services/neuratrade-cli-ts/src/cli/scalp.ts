@@ -43,6 +43,10 @@ import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-liv
 import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simulated-futures.js";
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
 import {
+  BybitFuturesExchangeAdapterLive,
+  BybitClientLiveConfig,
+} from "../exchange/adapters/bybit-futures.js";
+import {
   BitgetClientLiveConfig,
   BitgetClient,
   BitgetApiError,
@@ -51,8 +55,11 @@ import {
   type BitgetContract,
 } from "../services/bitget-client.js";
 import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
+import { BybitConfigLive } from "../services/bybit-config.js";
 import { RateLimiterLive } from "../services/rate-limiter.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
+import type { FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
+import type { MarketDataGatewayService } from "../market-data/gateway.js";
 import { RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
 import { CircuitBreakerSQLiteLive } from "../risk/circuit-breaker.js";
@@ -3411,7 +3418,10 @@ export function resolveFuturesMarketExchange(
   exchange: string,
   futures: boolean,
 ): string {
-  return futures && exchange === "binance" ? "bitget-futures" : exchange;
+  if (!futures) return exchange;
+  if (exchange === "binance") return "bitget-futures";
+  if (exchange === "bybit") return "bybit-futures";
+  return exchange;
 }
 
 export function validateLiveExecutionMarket(
@@ -3886,14 +3896,19 @@ function paperTradeProgram(args: PaperTradeArgs) {
       : SimulatedExchangeAdapterLive();
     const futuresAdapterLayer = (
       args.live
-        ? BitgetFuturesExchangeAdapterLive.pipe(
-            Layer.provide(BitgetClientLiveConfig),
-          )
+        ? resolveFuturesMarketExchange(args.exchange, true) === "bybit-futures"
+          ? BybitFuturesExchangeAdapterLive.pipe(
+              Layer.provide(BybitClientLiveConfig),
+              Layer.provide(BybitConfigLive),
+            )
+          : BitgetFuturesExchangeAdapterLive.pipe(
+              Layer.provide(BitgetClientLiveConfig),
+            )
         : SimulatedFuturesExchangeAdapterLive()
     ) as Layer.Layer<
-      import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+      FuturesExchangeAdapterService,
       never,
-      import("../market-data/gateway.js").MarketDataGatewayService
+      MarketDataGatewayService
     >;
 
     const runSpotIteration = (
@@ -4298,14 +4313,20 @@ export const soakCommand = Command.make(
         : SimulatedExchangeAdapterLive();
       const futuresAdapterLayer = (
         mergedArgs.live
-          ? BitgetFuturesExchangeAdapterLive.pipe(
-              Layer.provide(BitgetClientLiveConfig),
-            )
+          ? resolveFuturesMarketExchange(mergedArgs.exchange, true) ===
+            "bybit-futures"
+            ? BybitFuturesExchangeAdapterLive.pipe(
+                Layer.provide(BybitClientLiveConfig),
+                Layer.provide(BybitConfigLive),
+              )
+            : BitgetFuturesExchangeAdapterLive.pipe(
+                Layer.provide(BitgetClientLiveConfig),
+              )
           : SimulatedFuturesExchangeAdapterLive()
       ) as Layer.Layer<
-        import("../exchange/futures-adapter.js").FuturesExchangeAdapterService,
+        FuturesExchangeAdapterService,
         never,
-        import("../market-data/gateway.js").MarketDataGatewayService
+        MarketDataGatewayService
       >;
 
       const composerConfig = buildBacktestComposerConfig(
@@ -6064,6 +6085,16 @@ export const gridUniverseScanCommand = Command.make(
               : rawResult.survivors;
 
           if (survivors.length > 0) {
+            // Tradeability probe: Bitget's demo is a SUBSET of the live
+            // contract list, so survivors must be probed against the demo
+            // account. Bybit testnet has no subset — the scan's universe
+            // already came from the testnet instrument list, so the probe
+            // is redundant (skipped, not silently dropped).
+            if (args.exchange.toLowerCase() !== "bitget-futures") {
+              yield* Console.log(
+                `🎯 Probe skipped: ${args.exchange} universe is sourced from its demo/tradeable instrument list`,
+              );
+            } else {
             const client = yield* BitgetClient;
             const tradeable: GridUniverseEntry[] = [];
             for (const entry of survivors) {
@@ -6120,6 +6151,7 @@ export const gridUniverseScanCommand = Command.make(
               );
             }
             survivors = tradeable;
+            }
           }
           const result = {
             entries: rawResult.entries,
