@@ -31,57 +31,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  db-migrate:
-    image: postgres:17-alpine
-    environment:
-      DATABASE_HOST: postgres
-      DATABASE_PORT: 5432
-      DATABASE_USER: ${POSTGRES_USER}
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      DATABASE_DBNAME: ${POSTGRES_DB}
-    volumes:
-      - ./services/backend-api/database:/db
-    command: >
-      sh -c "cd /db && bash migrate.sh run"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
-  backend-api:
-    build:
-      context: ./services/backend-api
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-    env_file:
-      - .env
-    environment:
-      HOME: /tmp
-      NEURATRADE_HOME: /tmp/neuratrade
-      DATABASE_DRIVER: postgres
-      DATABASE_HOST: postgres
-      DATABASE_PORT: 5432
-      DATABASE_USER: ${POSTGRES_USER}
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      DATABASE_DBNAME: ${POSTGRES_DB}
-      DATABASE_SSLMODE: disable
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      TELEGRAM_SERVICE_URL: http://telegram-service:3002
-      TELEGRAM_GRPC_ADDRESS: telegram-service:50052
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
-
   telegram-service:
     build:
       context: ./services/telegram-service

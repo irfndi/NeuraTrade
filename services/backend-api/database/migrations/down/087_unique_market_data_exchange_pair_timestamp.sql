@@ -1,1 +1,0 @@
-DROP INDEX IF EXISTS uq_market_data_exchange_pair_timestamp;

@@ -1,8 +1,0 @@
--- Migration 086 (SQLite): Backfill encrypted_passphrase column for existing
--- exchange_api_keys tables that pre-date 082. Migration 082 is a no-op for
--- databases that already have the table (CREATE TABLE IF NOT EXISTS), so
--- the column was never added. 086 fixes that with an idempotent ALTER.
---
--- The actual ALTER is run from sqlite-migrate.sh which checks
--- PRAGMA table_info first; the SQL file body is documentation only
--- (the runner will skip the body via its special-case branch).
