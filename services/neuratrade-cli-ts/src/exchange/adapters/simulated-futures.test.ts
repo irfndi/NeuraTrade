@@ -20,6 +20,7 @@ const mockGateway: MarketDataGatewayService = {
       timestamp: new Date(),
     }),
   fetchSymbols: () => Effect.die("not used"),
+  fetchDemoSymbols: () => Effect.die("not used"),
   fetch24hrVolumes: () => Effect.die("not used"),
   fetchFundingRates: () => Effect.succeed([]),
 };

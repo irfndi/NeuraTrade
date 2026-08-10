@@ -42,6 +42,16 @@ export interface MarketDataGatewayService {
     exchange: string,
   ) => Effect.Effect<readonly string[], MarketDataError, never>;
 
+  /**
+   * The exchange's demo/simulated-trading instrument subset (normalized
+   * "BASE/QUOTE" symbols), or the full instrument list when the exchange
+   * has no demo environment. Consumers use it as the hard universe bound:
+   * a symbol outside this set can never be paper-traded.
+   */
+  readonly fetchDemoSymbols: (
+    exchange: string,
+  ) => Effect.Effect<readonly string[], MarketDataError, never>;
+
   readonly fetch24hrVolumes: (
     exchange: string,
   ) => Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never>;

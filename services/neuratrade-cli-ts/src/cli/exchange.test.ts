@@ -21,6 +21,7 @@ const StubMarketDataGateway = Layer.succeed(MarketDataGateway, {
   fetchOHLCV: () => Effect.die(new Error("not reached in test")),
   fetchOrderBook: () => Effect.die(new Error("not reached in test")),
   fetchSymbols: () => Effect.die(new Error("not reached in test")),
+  fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
   fetch24hrVolumes: () => Effect.die(new Error("not reached in test")),
   fetchFundingRates: () => Effect.die(new Error("not reached in test")),
 });

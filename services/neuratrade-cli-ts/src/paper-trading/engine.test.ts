@@ -5,16 +5,9 @@ import {
   type MarketDataGatewayService,
 } from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
-import {
-  ExchangeAdapter,
-  type ExchangeAdapterService,
-} from "../exchange/adapter.js";
+import { ExchangeAdapter } from "../exchange/adapter.js";
 import { makeSimulatedExchangeAdapter } from "../exchange/adapters/simulated.js";
-import {
-  RiskGuard,
-  type RiskGuardService,
-  makeRiskGuard,
-} from "../risk/guards.js";
+import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import { KillSwitch, type KillSwitchService } from "../risk/kill-switch.js";
 import {
   CircuitBreaker,
@@ -277,7 +270,7 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 class InMemoryKillSwitch implements KillSwitchService {
   private engaged = false;
 
-  engage(reason: string) {
+  engage(_reason: string) {
     return Effect.sync(() => {
       this.engaged = true;
     });
@@ -330,6 +323,7 @@ function makeGateway(price: number): MarketDataGatewayService {
     fetchOHLCV: () => Effect.succeed(candles),
     fetchOrderBook: () => Effect.succeed(orderBook),
     fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+    fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
     fetch24hrVolumes: () => Effect.succeed({}),
     fetchFundingRates: () => Effect.succeed([]),
   };

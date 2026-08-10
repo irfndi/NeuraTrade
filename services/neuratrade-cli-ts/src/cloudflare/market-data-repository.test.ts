@@ -33,6 +33,7 @@ const fakeGateway = Layer.succeed(MarketDataGateway, {
     Effect.succeed(Array.from({ length: limit }, (_, i) => candle(i))),
   fetchOrderBook: () => Effect.fail(new MarketDataError("unused")),
   fetchSymbols: () => Effect.succeed(["BTC/USDT", "ETH/USDT"]),
+  fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
   fetch24hrVolumes: () => Effect.succeed({}),
   fetchFundingRates: () => Effect.succeed([]),
 });

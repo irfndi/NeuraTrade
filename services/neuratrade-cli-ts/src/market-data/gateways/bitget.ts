@@ -31,6 +31,7 @@ function bitgetSymbol(
 function getJSON<T>(
   path: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  extraHeaders: Record<string, string> = {},
 ): Effect.Effect<T, MarketDataError, never> {
   return Effect.gen(function* () {
     const controller = new AbortController();
@@ -41,7 +42,7 @@ function getJSON<T>(
         fetch(`${BASE_URL}${path}`, {
           method: "GET",
           signal: controller.signal,
-          headers: { Accept: "application/json" },
+          headers: { Accept: "application/json", ...extraHeaders },
         }),
       catch: (err) =>
         new MarketDataError(
@@ -260,6 +261,34 @@ export function fetchSymbols(
 
   return Effect.gen(function* () {
     const data = yield* getJSON<readonly BitgetSymbolInfo[]>(path);
+
+    return data
+      .filter((s) => (s.status ?? "online") !== "offline")
+      .map((s) => `${s.baseCoin}/${s.quoteCoin}`);
+  });
+}
+
+/**
+ * Demo-tradeable futures contracts — the SAME public contracts endpoint but
+ * with the PAPTRADING header that routes to Bitget's simulated engine. The
+ * demo subset is much smaller than the live 741-contract list (~25: the
+ * majors + a few test contracts), and it is the ONLY universe the paper
+ * engines can trade. The market funnel must scan this set, not the live
+ * list, or every survivor is dropped by the tradeability probe
+ * (verified 2026-08-10: TIA/IOTX/WLFI/GRVT/CYS all 40034 on the demo
+ * account while BTC/ETH/SOL/ADA/NEAR etc. probe OK).
+ */
+export function fetchDemoSymbols(): Effect.Effect<
+  readonly string[],
+  MarketDataError,
+  never
+> {
+  return Effect.gen(function* () {
+    const data = yield* getJSON<readonly BitgetSymbolInfo[]>(
+      `/api/v2/mix/market/contracts?productType=USDT-FUTURES`,
+      DEFAULT_TIMEOUT_MS,
+      { PAPTRADING: "1" },
+    );
 
     return data
       .filter((s) => (s.status ?? "online") !== "offline")

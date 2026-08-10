@@ -65,6 +65,20 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       return Binance.fetchSymbols();
     }),
 
+  fetchDemoSymbols: (exchange) =>
+    dispatch(exchange, "fetchDemoSymbols", () => {
+      // Only Bitget futures has a simulated (PAPTRADING) environment; the
+      // other gateways have no demo concept and report their full list (a
+      // no-op filter for the universe bound).
+      if (exchange.toLowerCase() === "bitget-futures") {
+        return Bitget.fetchDemoSymbols();
+      }
+      if (exchange.toLowerCase() === "bitget") {
+        return Bitget.fetchSymbols("spot");
+      }
+      return Binance.fetchSymbols();
+    }),
+
   fetch24hrVolumes: (exchange) =>
     dispatch(exchange, "fetch24hrVolumes", () => {
       if (exchange.toLowerCase() === "bitget") {

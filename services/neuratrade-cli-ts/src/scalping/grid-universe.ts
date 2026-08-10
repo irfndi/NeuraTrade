@@ -674,9 +674,10 @@ export function runMarketUniverseScan(
         : "market scan: tier=readiness (full gate board)",
     );
 
-    const [marketSymbols, volumes] = yield* Effect.all([
+    const [marketSymbols, volumes, demoSymbols] = yield* Effect.all([
       gateway.fetchSymbols(options.exchange),
       gateway.fetch24hrVolumes(options.exchange),
+      gateway.fetchDemoSymbols(options.exchange),
     ]);
     // Tickers key volumes by "BTCUSDT" while fetchSymbols returns
     // "BTC/USDT"; normalize so the liquidity filter sees the same keys.
@@ -686,12 +687,25 @@ export function runMarketUniverseScan(
         volume,
       ]),
     );
+    // Hard universe bound: the demo/tradeable instrument subset. The live
+    // list (~741 contracts) includes contracts the simulated engine cannot
+    // trade — scanning them wastes the whole cycle on symbols the
+    // tradeability probe then drops (verified 2026-08-10: TIA/IOTX/WLFI/
+    // GRVT/CYS 40034 on the demo account; the PAPTRADING-scoped list is
+    // ~25 majors). Gateways without a demo concept return the full list,
+    // making this filter a no-op.
+    const demoSet = new Set(
+      demoSymbols.map((symbol) =>
+        symbol.includes("/") ? symbol : symbol.replace(/USDT$/, "/USDT"),
+      ),
+    );
 
     const candidates = marketSymbols
       .filter(
         (symbol) =>
           (normalizedVolumes.get(symbol) ?? 0) >= MIN_UNIVERSE_24H_VOLUME_USDT,
       )
+      .filter((symbol) => demoSet.has(symbol))
       // Canonical futures form ("BTC/USDT:USDT") — the convention the
       // watchlist, soak, and grid engine all expect.
       .map((symbol) => (symbol.includes(":") ? symbol : `${symbol}:USDT`));

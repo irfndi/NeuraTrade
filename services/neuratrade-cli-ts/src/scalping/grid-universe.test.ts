@@ -639,6 +639,8 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       fetchCalls: Map<string, number>;
       fail?: { symbol: string; reason: string };
       flatSymbols?: Set<string>;
+      /** Optional demo-subset bound; defaults to `symbols` (no filtering). */
+      demoSymbols?: string[];
     },
   ) {
     return Layer.succeed(MarketDataGateway, {
@@ -668,6 +670,8 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       },
       fetchOrderBook: () => Effect.die("unused"),
       fetchSymbols: () => Effect.succeed(behavior.symbols),
+      fetchDemoSymbols: () =>
+        Effect.succeed(behavior.demoSymbols ?? behavior.symbols),
       fetch24hrVolumes: () => Effect.succeed(behavior.volumes),
       fetchFundingRates: () => Effect.die("unused"),
     });
@@ -781,6 +785,29 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       expect(entry.oosTrades ?? 0).toBeGreaterThan(0);
       expect(entry.fillsPerDay ?? 0).toBeGreaterThan(0);
     }
+  });
+
+  it("excludes volume-passing symbols outside the demo subset", async () => {
+    const fetchCalls = new Map<string, number>();
+    const gateway = makeGateway({
+      symbols: ["ALPHA/USDT", "GAMMA/USDT"],
+      volumes: {
+        ALPHAUSDT: 5_000_000,
+        GAMMAUSDT: 2_000_000,
+      },
+      // The demo universe bound: GAMMA passes the volume screen but the
+      // demo subset does not list it — it must never be fetched/evaluated
+      // (live Bitget lists 741 contracts; the PAPTRADING demo subset is
+      // ~25, and everything else is dropped by the tradeability probe).
+      demoSymbols: ["ALPHA/USDT"],
+      fetchCalls,
+    });
+    const { repo, candlesByKey } = makeRepo();
+
+    const result = await runScan(gateway, { repo, candlesByKey });
+
+    expect(fetchCalls.has("GAMMA/USDT:USDT")).toBe(false);
+    expect(result.entries.map((e) => e.symbol)).toEqual(["ALPHA/USDT:USDT"]);
   });
 
   it("fetches only the tail for symbols already in the cache (1 req/cycle)", async () => {

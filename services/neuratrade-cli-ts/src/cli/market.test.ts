@@ -36,6 +36,8 @@ function makeGateway(): MarketDataGatewayService {
         asks: [{ price: 101, volume: 1 }],
         timestamp: new Date(),
       }),
+    fetchDemoSymbols: () =>
+      Effect.fail({ reason: "not used" } as never),
     fetchSymbols: () =>
       Effect.succeed(["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/BTC"]),
     fetch24hrVolumes: () =>

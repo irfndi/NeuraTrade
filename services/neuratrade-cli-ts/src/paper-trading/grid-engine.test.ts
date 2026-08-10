@@ -186,6 +186,7 @@ function makeGateway(candles: Candle[]): MarketDataGatewayService {
         timestamp: new Date(),
       }),
     fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+    fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
     fetch24hrVolumes: () => Effect.succeed({}),
     fetchFundingRates: () => Effect.succeed([]),
   };

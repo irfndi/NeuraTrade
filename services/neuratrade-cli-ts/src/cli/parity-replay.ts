@@ -386,6 +386,8 @@ function runReplay(
         }),
       fetchSymbols: () =>
         Effect.fail(new MarketDataError("not used in replay")),
+      fetchDemoSymbols: () =>
+        Effect.fail(new MarketDataError("not used in replay")),
       fetch24hrVolumes: () => Effect.succeed({}),
       fetchFundingRates: () => Effect.succeed([]),
     };

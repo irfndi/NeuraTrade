@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Ref } from "effect";
+import { Effect, Layer, Ref } from "effect";
 import { MarketDataError, MarketDataGateway } from "./gateway.js";
 import { MarketDataRepository } from "./repository.js";
 import type { Candle, FundingRate, OrderBook, Tick } from "./types.js";
@@ -125,6 +125,11 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
         .listSymbols(exchange, "1h", 1)
         .pipe(Effect.mapError(toMarketDataError));
 
+    const fetchDemoSymbols = (
+      exchange: string,
+    ): Effect.Effect<readonly string[], MarketDataError, never> =>
+      fetchSymbols(exchange);
+
     const fetch24hrVolumes = (
       _exchange: string,
     ): Effect.Effect<
@@ -147,6 +152,7 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       fetchOHLCV,
       fetchOrderBook,
       fetchSymbols,
+      fetchDemoSymbols,
       fetch24hrVolumes,
       fetchFundingRates,
     };
