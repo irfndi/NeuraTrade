@@ -5660,7 +5660,7 @@ export const flowBacktestCommand = Command.make(
               oiValue: number | null;
             }>(
               `SELECT ts, oi, oi_value AS oiValue FROM open_interest_history
-               WHERE exchange = 'bybit' AND symbol = ? AND ts BETWEEN ? AND ?
+               WHERE exchange IN ('bybit','bybit-futures') AND symbol = ? AND ts BETWEEN ? AND ?
                ORDER BY ts ASC`,
               [symbol, start.getTime(), end.getTime()],
             )
@@ -5671,7 +5671,7 @@ export const flowBacktestCommand = Command.make(
               timestamp: string;
             }>(
               `SELECT funding_rate AS fundingRate, timestamp FROM funding_rates
-               WHERE exchange = 'bybit' AND symbol = ? AND timestamp >= ? AND timestamp <= ?
+               WHERE exchange IN ('bybit','bybit-futures') AND symbol = ? AND timestamp >= ? AND timestamp <= ?
                ORDER BY timestamp ASC`,
               [symbol, start.toISOString(), end.toISOString()],
             )

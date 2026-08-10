@@ -101,14 +101,19 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
       run(Bybit.fetchOHLCV(symbol, "5m", PAGE, startTime, MAINNET)),
     );
     if (batch === undefined || batch.length === 0) break;
-    const oldestTs = batch[0].timestamp.getTime();
+    // Bybit clamps limit to 200/page and returns DESC — the cursor must
+    // advance from the page's OLDEST bar (batch.at(-1)), not batch[0]
+    // (the newest), or every page returns the same window forever.
+    const oldestTs = batch.at(-1)!.timestamp.getTime();
     const keep = batch.filter((c) => c.timestamp.getTime() >= startMs);
+    let inserted = 0;
     db.transaction(() => {
       for (const c of keep) {
-        insCandle.run(EX_ID, pair, "5m", c.open, c.high, c.low, c.close, c.volume, c.timestamp.toISOString());
+        const res = insCandle.run(EX_ID, pair, "5m", c.open, c.high, c.low, c.close, c.volume, c.timestamp.toISOString());
+        inserted += Number(res.changes);
       }
     })();
-    saved += keep.length;
+    saved += inserted;
     if (oldestTs < startMs) break;
     startTime = new Date(oldestTs - 1);
     if (saved % 20000 < PAGE) {
