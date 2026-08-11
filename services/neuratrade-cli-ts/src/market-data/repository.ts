@@ -940,17 +940,26 @@ function findTradingPairId(
     const variants = tradingPairSymbolVariants(symbol);
     const placeholders = variants.map(() => "?").join(",");
 
+    // Prefer the exact symbol match over the widened variant forms. The
+    // variant set is `[symbol, canonical]`; without an explicit ordering the
+    // IN lookup row order is undefined, so a bare canonical row (e.g.
+    // "BTC/USDT" when querying "BTC/USDT:USDT") can win and point reads at a
+    // pair the requested timeframe has no data for. Order exact match first.
     const existing = yield* Effect.try({
       try: () =>
         hasExchangeScope
           ? (db
               .query(
-                `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders}) AND exchange_id = ?`,
+                `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders}) AND exchange_id = ?
+                 ORDER BY CASE WHEN symbol = ? THEN 0 ELSE 1 END`,
               )
-              .get(...variants, exchangeId) as { id: number } | undefined)
+              .get(...variants, exchangeId, symbol) as { id: number } | undefined)
           : (db
-              .query(`SELECT id FROM trading_pairs WHERE symbol IN (${placeholders})`)
-              .get(...variants) as { id: number } | undefined),
+              .query(
+                `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders})
+                 ORDER BY CASE WHEN symbol = ? THEN 0 ELSE 1 END`,
+              )
+              .get(...variants, symbol) as { id: number } | undefined),
       catch: (err) =>
         new MarketDataRepositoryError(
           `Trading pair lookup failed for ${symbol}: ${
