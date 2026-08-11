@@ -834,14 +834,17 @@ function planWalkForward(
   const maxSteps = Math.floor((span - trainMs) / testMs);
   const steps = Math.max(0, Math.min(opts.walkForwardSteps, maxSteps));
   const windows = [];
+  // Anchor the test windows at the END of the data range so the most recent
+  // data is what gets evaluated (most relevant for real-money readiness).
   for (let i = 0; i < steps; i++) {
-    const testStart = t0 + trainMs + i * testMs;
+    const testEnd = t1 - (steps - 1 - i) * testMs;
+    const testStart = testEnd - testMs;
     windows.push({
       index: i,
-      trainStart: t0 + i * testMs,
+      trainStart: testStart - trainMs,
       trainEnd: testStart,
       testStart,
-      testEnd: testStart + testMs,
+      testEnd,
     });
   }
   return { windows };
