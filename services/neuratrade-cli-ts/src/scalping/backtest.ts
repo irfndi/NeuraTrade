@@ -1,13 +1,15 @@
 import type {
   CandleLike,
   ComposerConfig,
+  ComposerThresholds,
+  ComposerWeights,
   Direction,
   FundingRate,
   OHLCVInput,
   OrderBookMetricsInput,
   ScalpingSignal,
 } from "./types.js";
-import { composeSignal } from "./composer.js";
+import { composeSignal, defaultComposerConfig } from "./composer.js";
 import {
   calculateADX,
   calculateAnnualizedVolatility,
@@ -411,6 +413,89 @@ export function runBacktest(options: BacktestOptions): BacktestResult {
 
   const base = runBacktestCore(options);
   return attachMonteCarlo(base, options.initialCapital, mcIterations);
+}
+
+/** A single composer configuration candidate for a parameter sweep. */
+export interface ComposerSweepCandidate {
+  readonly name: string;
+  /** Deep-merged over the base composer config (candidate fields win). */
+  readonly composerConfig: {
+    readonly weights?: Partial<ComposerWeights>;
+    readonly thresholds?: Partial<ComposerThresholds>;
+    readonly enabled?: ComposerConfig["enabled"];
+  };
+}
+
+/** Ranked result of one candidate in a composer parameter sweep. */
+export interface ComposerSweepResult {
+  readonly name: string;
+  readonly result: BacktestResult;
+  readonly totalReturnPct: number;
+  readonly sharpeRatio: number;
+  readonly maxDrawdownPct: number;
+  readonly totalTrades: number;
+  readonly winRate: number;
+  readonly robustnessScore: number;
+}
+
+/**
+ * Sweep composer configurations over a fixed set of backtest options to find
+ * profitable setups. Each candidate is merged over the base composer config
+ * (candidate fields win) and run through `runBacktest`. Results are sorted by
+ * total return descending so the most profitable configs surface first.
+ */
+export function sweepComposerConfigs(
+  baseOptions: Omit<BacktestOptions, "composerConfig">,
+  candidates: readonly ComposerSweepCandidate[],
+  baseComposerConfig: ComposerConfig = defaultComposerConfig,
+): ComposerSweepResult[] {
+  const results: ComposerSweepResult[] = [];
+  for (const candidate of candidates) {
+    const merged: ComposerConfig = {
+      ...baseComposerConfig,
+      weights: {
+        ...baseComposerConfig.weights,
+        ...candidate.composerConfig.weights,
+      },
+      thresholds: {
+        ...baseComposerConfig.thresholds,
+        ...candidate.composerConfig.thresholds,
+      },
+      enabled: candidate.composerConfig.enabled ?? baseComposerConfig.enabled,
+    };
+    const result = runBacktest({ ...baseOptions, composerConfig: merged });
+    results.push({
+      name: candidate.name,
+      result,
+      totalReturnPct: result.totalReturnPct,
+      sharpeRatio: result.sharpeRatio,
+      maxDrawdownPct: result.maxDrawdownPct,
+      totalTrades: result.totalTrades,
+      winRate: result.winRate,
+      robustnessScore: result.robustnessScore,
+    });
+  }
+  return results.sort((a, b) => b.totalReturnPct - a.totalReturnPct);
+}
+
+/**
+ * Convenience builder for a sweep candidate from a partial threshold override.
+ * Spreads are merged over the base thresholds so callers only specify the
+ * fields they want to vary.
+ */
+export function composerSweepCandidate(
+  name: string,
+  overrides: Partial<ComposerConfig["thresholds"]> & {
+    weights?: Partial<ComposerConfig["weights"]>;
+  },
+): ComposerSweepCandidate {
+  return {
+    name,
+    composerConfig: {
+      weights: overrides.weights,
+      thresholds: overrides,
+    },
+  };
 }
 
 /**

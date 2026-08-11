@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  analyzeRegime,
   composeSignal,
   defaultComposerConfig,
   validateWeights,
@@ -668,5 +669,50 @@ describe("validateWeights", () => {
     expect(
       validateWeights({ ...defaultComposerConfig.weights, spread: 0.5 }),
     ).toBe(false);
+  });
+});
+
+describe("analyzeRegime", () => {
+  const thresholds = defaultComposerConfig.thresholds;
+
+  it("returns null for too-short histories", () => {
+    expect(analyzeRegime(makeCandles(10), thresholds)).toBeNull();
+  });
+
+  it("classifies a strong linear trend as trending with a directional DI", () => {
+    const candles = makeCandles(120, 100, "up");
+    const regime = analyzeRegime(candles, thresholds);
+    expect(regime).not.toBeNull();
+    expect(regime!.adx).not.toBeNull();
+    expect(regime!.trending).toBe(true);
+    expect(regime!.trendRegime).toBe("trending");
+    expect(regime!.plusDI).toBeGreaterThan(regime!.minusDI!);
+    expect(regime!.atrPct).toBeGreaterThan(0);
+    expect(regime!.bollinger).not.toBeNull();
+  });
+
+  it("classifies a flat chop series as ranging", () => {
+    const candles = makeCandles(120, 100, "flat");
+    const regime = analyzeRegime(candles, thresholds);
+    expect(regime).not.toBeNull();
+    expect(regime!.trendRegime).toBe("ranging");
+    expect(regime!.trending).toBe(false);
+  });
+
+  it("maps ATR% to a volatility regime", () => {
+    const candles = makeCandles(120, 100, "flat");
+    const low = analyzeRegime(candles, {
+      ...thresholds,
+      volatilityModeratePct: 0.5,
+      volatilityHighPct: 1,
+    });
+    expect(low!.volatilityRegime).toBe("low");
+
+    const high = analyzeRegime(candles, {
+      ...thresholds,
+      volatilityModeratePct: 0.0001,
+      volatilityHighPct: 0.0002,
+    });
+    expect(high!.volatilityRegime).toBe("high");
   });
 });

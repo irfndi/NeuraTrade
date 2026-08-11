@@ -101,6 +101,108 @@ export const defaultComposerConfig: ComposerConfig = {
   thresholds: defaultThresholds,
 };
 
+/** Trend regime classification derived from ADX plus the DI balance. */
+export type TrendRegime = "trending" | "ranging";
+
+/** Volatility regime classification derived from ATR relative to price. */
+export type VolatilityRegime = "low" | "normal" | "high";
+
+/**
+ * A structured digest of the current market regime, computed causally from the
+ * candle history. It disambiguates "trending vs ranging" (ADX + DI lines) and
+ * "volatility regime" (ATR as a fraction of price), and exposes the Bollinger
+ * position used to skip middle-of-band entries.
+ */
+export interface RegimeAnalysis {
+  /** ADX(14) trend strength. Null when there is insufficient data. */
+  readonly adx: number | null;
+  readonly plusDI: number | null;
+  readonly minusDI: number | null;
+  /** Wilder ATR(14). Null when there is insufficient data. */
+  readonly atr: number | null;
+  /** ATR as a fraction of the latest close price. 0 when price is unknown. */
+  readonly atrPct: number;
+  /** Bollinger(20,2) position. Null when there is insufficient data. */
+  readonly bollinger: BollingerPosition | null;
+  /** True when ADX indicates a directional trend rather than chop. */
+  readonly trending: boolean;
+  readonly trendRegime: TrendRegime;
+  readonly volatilityRegime: VolatilityRegime;
+}
+
+/** Bollinger band snapshot with the normalized percent-B position. */
+export interface BollingerPosition {
+  readonly upper: number;
+  readonly middle: number;
+  readonly lower: number;
+  readonly percentB: number;
+}
+
+/**
+ * Compute the current market regime from the trailing candles. Uses the
+ * classic ADX/DI/ATR/Bollinger indicators and classifies the trend and
+ * volatility regimes. Returns null when the candle history is too short to
+ * produce a meaningful reading.
+ */
+export function analyzeRegime(
+  candles: readonly CandleLike[],
+  thresholds: Pick<
+    ComposerThresholds,
+    | "adxWeakTrend"
+    | "adxStrongTrend"
+    | "atrMaxPctOfPrice"
+    | "bollingerEntryMinPct"
+    | "bollingerEntryMaxPct"
+    | "volatilityLowPct"
+    | "volatilityModeratePct"
+    | "volatilityHighPct"
+  >,
+): RegimeAnalysis | null {
+  if (candles.length < 30) return null;
+
+  const { adx, plusDI, minusDI } = calculateADX(candles, 14);
+  const atr = calculateATR(candles, 14);
+  const bb = calculateBollingerBands(candles, 20);
+  if (adx === null || plusDI === null || minusDI === null || atr === null) {
+    return null;
+  }
+
+  const lastClose = candles[candles.length - 1].close;
+  const atrPct = lastClose > 0 ? atr / lastClose : 0;
+
+  const weakTrend = thresholds.adxWeakTrend ?? 20;
+  const strongVm = thresholds.volatilityModeratePct ?? 0.02;
+  const highVm = thresholds.volatilityHighPct ?? 0.05;
+
+  let volatilityRegime: VolatilityRegime;
+  if (atrPct >= highVm) volatilityRegime = "high";
+  else if (atrPct >= strongVm) volatilityRegime = "normal";
+  else volatilityRegime = "low";
+
+  const trending = adx >= weakTrend && plusDI !== minusDI;
+  const bollinger: BollingerPosition | null =
+    bb === null
+      ? null
+      : {
+          upper: bb.upper,
+          middle: bb.middle,
+          lower: bb.lower,
+          percentB: bb.percentB,
+        };
+
+  return {
+    adx,
+    plusDI,
+    minusDI,
+    atr,
+    atrPct,
+    bollinger,
+    trending,
+    trendRegime: trending ? "trending" : "ranging",
+    volatilityRegime,
+  };
+}
+
 export function validateWeights(weights: ComposerWeights): boolean {
   const sum =
     weights.spread +
@@ -210,7 +312,6 @@ export function composeSignal(
   }
 
   const components: SignalComponent[] = [];
-  const filters: SignalComponent[] = [];
 
   if (isComponentEnabled(effectiveConfig, "spread")) {
     const spreadComponent = buildSpreadComponent(
@@ -880,10 +981,14 @@ function buildRegimeComponent(
 ): SignalComponent | null {
   if (candles.length < 30) return null;
 
-  const { adx, plusDI, minusDI } = calculateADX(candles, 14);
-  const atr = calculateATR(candles, 14);
-  const bb = calculateBollingerBands(candles, 20);
+  const regime = analyzeRegime(candles, thresholds);
+  if (regime === null) return null;
 
+  const adx = regime.adx;
+  const plusDI = regime.plusDI;
+  const minusDI = regime.minusDI;
+  const atr = regime.atr;
+  const bb = regime.bollinger;
   if (
     adx === null ||
     plusDI === null ||
@@ -895,7 +1000,7 @@ function buildRegimeComponent(
   }
 
   const midPrice = ob.midPrice;
-  const atrPct = midPrice > 0 ? atr / midPrice : 0;
+  const atrPct = regime.atrPct;
 
   // Skip if volatility is excessive (ATR too large relative to price).
   if (thresholds.atrMaxPctOfPrice > 0 && atrPct > thresholds.atrMaxPctOfPrice) {

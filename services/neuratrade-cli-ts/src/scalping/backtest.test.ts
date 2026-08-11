@@ -3,8 +3,10 @@ import {
   assessBacktestRealism,
   attachMonteCarlo,
   calculatePositionValue,
+  composerSweepCandidate,
   normalizeFeePct,
   runBacktest,
+  sweepComposerConfigs,
 } from "./backtest.js";
 import { defaultComposerConfig } from "./composer.js";
 import type { FundingRate } from "../market-data/types.js";
@@ -1077,5 +1079,71 @@ describe("assessBacktestRealism", () => {
     };
     const result = assessBacktestRealism(fake, { entryOrderType: "limit" });
     expect(result.warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("sweepComposerConfigs", () => {
+  it("ranks candidates by total return and merges thresholds over the base config", () => {
+    const candles = makeCandles(300, 100, "up");
+    const base = {
+      symbol: "BTC/USDT",
+      exchange: "test",
+      timeframe: "1h",
+      candles,
+      initialCapital: 10_000,
+      positionSizePct: 100,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      feePct: 0.06,
+      minConfidence: 0.35,
+      slippageBps: 2,
+      maxBarsInTrade: 12,
+      htfCandles: [],
+    } as const;
+
+    const candidates = [
+      composerSweepCandidate("base", {}),
+      composerSweepCandidate("tight-band", {
+        adxWeakTrend: 30,
+        bollingerEntryMinPct: 0.1,
+        bollingerEntryMaxPct: 0.9,
+      }),
+    ];
+
+    const ranked = sweepComposerConfigs(base, candidates);
+    expect(ranked).toHaveLength(2);
+    // Sorted descending by total return.
+    expect(ranked[0].totalReturnPct).toBeGreaterThanOrEqual(
+      ranked[1].totalReturnPct,
+    );
+    // Every result carries the summary fields.
+    for (const r of ranked) {
+      expect(r.result.totalTrades).toBe(r.totalTrades);
+      expect(r.sharpeRatio).toBe(r.result.sharpeRatio);
+    }
+  });
+
+  it("candidate threshold overrides actually change the merged config", () => {
+    const candles = makeCandles(300, 100, "up");
+    const base = {
+      symbol: "BTC/USDT",
+      exchange: "test",
+      timeframe: "1h",
+      candles,
+      initialCapital: 10_000,
+      positionSizePct: 100,
+      stopLossPct: 0,
+      takeProfitPct: 0,
+      feePct: 0.06,
+      minConfidence: 0.35,
+      slippageBps: 2,
+      maxBarsInTrade: 12,
+      htfCandles: [],
+    } as const;
+
+    const candidate = composerSweepCandidate("tight-adx", { adxWeakTrend: 40 });
+    expect(candidate.composerConfig.thresholds?.adxWeakTrend).toBe(40);
+    const ranked = sweepComposerConfigs(base, [candidate]);
+    expect(ranked).toHaveLength(1);
   });
 });
