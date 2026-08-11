@@ -13,6 +13,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   computeFlowSignal,
+  flowRoundTripCostPct,
   runFlowBacktest,
   defaultFlowBacktestOptions,
   ATR_STOP_MULT,
@@ -153,7 +154,9 @@ function makeOptions(
 }
 
 /** Single-window backtest options for fast fixtures. */
-function fastOptions(overrides: Partial<FlowBacktestOptions> = {}): FlowBacktestOptions {
+function fastOptions(
+  overrides: Partial<FlowBacktestOptions> = {},
+): FlowBacktestOptions {
   return makeOptions({
     trainDays: 2,
     testDays: 1,
@@ -291,8 +294,8 @@ describe("flow-v1 walk-forward backtest", () => {
       series: [series],
       options: fastOptions({ fees: { taker: 0.005, maker: 0 }, spreadBps: 2 }),
     });
-    const freeTrades = free.portfolio.trades;
-    const expTrades = expensive.portfolio.trades;
+    const freeTrades = free.byHoldTime[0].trades;
+    const expTrades = expensive.byHoldTime[0].trades;
     expect(freeTrades.length).toBeGreaterThan(0);
     expect(expTrades.length).toBe(freeTrades.length);
 
@@ -307,9 +310,62 @@ describe("flow-v1 walk-forward backtest", () => {
       if (f.netEdgePct > 0 && e.netEdgePct <= 0) flippedToLoser++;
     }
     expect(flippedToLoser).toBeGreaterThan(0);
-    expect(expensive.portfolio.winRate).toBeLessThan(free.portfolio.winRate);
-    expect(expensive.portfolio.avgEdgePerTradePct).toBeLessThan(
-      free.portfolio.avgEdgePerTradePct,
+    expect(expensive.byHoldTime[0].winRate).toBeLessThan(
+      free.byHoldTime[0].winRate,
+    );
+    expect(expensive.byHoldTime[0].avgEdgePerTradePct).toBeLessThan(
+      free.byHoldTime[0].avgEdgePerTradePct,
+    );
+  });
+
+  it("charges taker fee and spread on entry plus exit", () => {
+    const fees = { taker: 0.00055, maker: 0.0002 };
+    expect(flowRoundTripCostPct(fees, 2)).toBeCloseTo(0.15, 10);
+
+    const report = runFlowBacktest({
+      series: [buildSeries(TRENDING)],
+      options: fastOptions({ fees, spreadBps: 2, conservativeFillRate: 1 }),
+    });
+    expect(report.byHoldTime[0].trades.length).toBeGreaterThan(0);
+    for (const trade of report.byHoldTime[0].trades) {
+      expect(trade.costPct).toBeCloseTo(0.15, 10);
+    }
+  });
+
+  it("rejects selected configs whose breakeven win rate is too high", () => {
+    const report = runFlowBacktest({
+      series: [buildSeries(TRENDING)],
+      options: fastOptions({
+        fees: { taker: 0.05, maker: 0 },
+        spreadBps: 2,
+        conservativeFillRate: 1,
+        holdTimes: [0.5],
+      }),
+    });
+    expect(report.byHoldTime.some((h) => h.totalTrades > 0)).toBe(true);
+    const rejected = report.byHoldTime.find(
+      (h) =>
+        h.totalTrades > 0 &&
+        h.breakevenWinRate > report.options.maxBreakevenWinRate,
+    );
+    expect(rejected).toBeDefined();
+    expect(rejected!.avgLossPct).toBeGreaterThan(rejected!.avgWinPct);
+    expect(rejected!.passesHonestyGates).toBe(false);
+    expect(report.portfolio.totalTrades).toBe(0);
+  });
+
+  it("discounts optimistic signal fills with a deterministic conservative fill model", () => {
+    const full = runFlowBacktest({
+      series: [buildSeries(TRENDING)],
+      options: fastOptions({ conservativeFillRate: 1 }),
+    });
+    const conservative = runFlowBacktest({
+      series: [buildSeries(TRENDING)],
+      options: fastOptions({ conservativeFillRate: 0.25 }),
+    });
+    expect(full.byHoldTime[0].totalTrades).toBeGreaterThan(0);
+    expect(conservative.byHoldTime[0].totalTrades).toBeLessThan(
+      full.byHoldTime[0].totalTrades,
     );
   });
 

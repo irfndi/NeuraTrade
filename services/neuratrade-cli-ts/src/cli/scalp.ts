@@ -1,6 +1,14 @@
 import { Command, Options } from "./kit/kit.ts";
 import { BunServices } from "@effect/platform-bun";
-import { Console, Duration, Effect, FileSystem, Layer, Option, Schedule } from "effect";
+import {
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Schedule,
+} from "effect";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
 import { ConfigLive } from "../services/config.js";
@@ -156,6 +164,7 @@ import {
 } from "../scalping/flow-backtest.js";
 import {
   selectFlowUniverse,
+  type FlowInstrument,
   type FlowUniverseEntry,
 } from "../scalping/flow-universe.js";
 import {
@@ -375,152 +384,15 @@ import {
   flowHoldTimesOption,
   flowFeeOption,
   flowSpreadBpsOption,
+  flowConservativeFillRateOption,
+  flowMaxBreakevenWinRateOption,
   flowLimitOption,
   flowMinTurnoverOption,
+  flowUniverseDataSourceOption,
   flowTradeExchangeOption,
   flowTradeSymbolOption,
   flowHoldMinutesOption,
 } from "./scalp-options.js";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function makeLayer(home?: string) {
   return Layer.mergeAll(
@@ -895,7 +767,10 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
     // never wired — backtests silently ran the default composer.
     if (args.template !== undefined && args.template !== "") {
       const template = args.template as StrategyTemplateName;
-      composerConfig = buildComposerConfigFromTemplate(template, composerConfig);
+      composerConfig = buildComposerConfigFromTemplate(
+        template,
+        composerConfig,
+      );
       args = buildBacktestArgsFromTemplate(template, args);
     }
 
@@ -1260,15 +1135,6 @@ function emptyResult(
     robustnessScore: 0,
   };
 }
-
-
-
-
-
-
-
-
-
 
 export interface OptimizeCandidateParams {
   readonly useAtrStops: boolean;
@@ -1658,13 +1524,6 @@ function printOptimizeResult(
     }
   });
 }
-
-
-
-
-
-
-
 
 export interface ScanArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
   readonly symbol?: string;
@@ -2305,22 +2164,6 @@ function printScanResult(results: ReadonlyArray<ScanResult>) {
   });
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 export interface WatchlistEntry {
   readonly symbol: string;
   readonly exchange?: string;
@@ -2516,7 +2359,9 @@ function mergeSoakArgs(args: SoakArgs, profile: StrategyProfile): SoakArgs {
 }
 
 type MutablePartialRiskLimits = {
-  -readonly [K in keyof import("../risk/guards.js").RiskLimits]?: import("../risk/guards.js").RiskLimits[K];
+  -readonly [
+    K in keyof import("../risk/guards.js").RiskLimits
+  ]?: import("../risk/guards.js").RiskLimits[K];
 };
 
 function loadWatchlist(
@@ -2979,8 +2824,7 @@ function bitgetContractSpecs(
   const precision = Number(contract.quantityPrecision);
   return {
     minQty: Number(contract.minTradeNum),
-    qtyStep:
-      Number.isFinite(precision) && precision > 0 ? 10 ** -precision : 0,
+    qtyStep: Number.isFinite(precision) && precision > 0 ? 10 ** -precision : 0,
     minTradeUSDT: Number(contract.minTradeUSDT),
   };
 }
@@ -3162,49 +3006,51 @@ function paperTradeProgram(args: PaperTradeArgs) {
     ): FuturesPaperTradingOptions => {
       const contractSpecs = contractSpecsFor(symbol);
       return {
-      exchange: resolveFuturesMarketExchange(exchangeOverride, true),
-      symbol,
-      timeframe: args.timeframe,
-      composerConfig,
-      positionSizePct: args.positionSize,
-      riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
-      maxPositionSizePct:
-        overrides?.maxPositionSizePct ??
-        Option.getOrElse(args.maxPositionSizePct, () => 100),
-      feePct: args.fee,
-      minConfidence: overrides?.minConfidence ?? args.minConfidence,
-      useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
-      atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
-      atrTakeProfitMultiplier:
-        overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
-      atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
-      scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
-      scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
-      volatilityLookback:
-        overrides?.volatilityLookback ?? args.volatilityLookback,
-      volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
-      volatilityHighPct: overrides?.volatilityHighPct ?? args.volatilityHighPct,
-      volatilityLowFactor:
-        overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
-      volatilityHighFactor:
-        overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
-      stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
-      takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
-      holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
-      minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
-      initialCapital: args.capital,
-      isLive: args.live,
-      leverage: args.leverage,
-      marginMode,
-      productType,
-      volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
-      // Account-scaled sizing bounds (RefactorSizing 2026-08-09): cap
-      // per-trade risk by the daily loss limit and raise leverage for the
-      // notional floor on tiny accounts.
-      maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2),
-      maxConcurrentTrades: 1,
-      notionalFloor: 5,
-      ...(contractSpecs !== undefined ? { contractSpecs } : {}),
+        exchange: resolveFuturesMarketExchange(exchangeOverride, true),
+        symbol,
+        timeframe: args.timeframe,
+        composerConfig,
+        positionSizePct: args.positionSize,
+        riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
+        maxPositionSizePct:
+          overrides?.maxPositionSizePct ??
+          Option.getOrElse(args.maxPositionSizePct, () => 100),
+        feePct: args.fee,
+        minConfidence: overrides?.minConfidence ?? args.minConfidence,
+        useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
+        atrStopMultiplier:
+          overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
+        atrTakeProfitMultiplier:
+          overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
+        atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
+        scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
+        scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
+        volatilityLookback:
+          overrides?.volatilityLookback ?? args.volatilityLookback,
+        volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
+        volatilityHighPct:
+          overrides?.volatilityHighPct ?? args.volatilityHighPct,
+        volatilityLowFactor:
+          overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
+        volatilityHighFactor:
+          overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
+        stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
+        takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
+        holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
+        minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
+        initialCapital: args.capital,
+        isLive: args.live,
+        leverage: args.leverage,
+        marginMode,
+        productType,
+        volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
+        // Account-scaled sizing bounds (RefactorSizing 2026-08-09): cap
+        // per-trade risk by the daily loss limit and raise leverage for the
+        // notional floor on tiny accounts.
+        maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2),
+        maxConcurrentTrades: 1,
+        notionalFloor: 5,
+        ...(contractSpecs !== undefined ? { contractSpecs } : {}),
       };
     };
 
@@ -3501,7 +3347,6 @@ function printSoakResult(result: import("../scalping/soak.js").SoakResult) {
     yield* Console.log(`  Avg Sharpe:   ${agg.avgSharpeRatio.toFixed(3)}`);
   });
 }
-
 
 export const soakCommand = Command.make(
   "soak",
@@ -3888,7 +3733,6 @@ export const soakCommand = Command.make(
       return result;
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run multi-ticker paper-trading soak harness"));
-
 
 const profileSaveCommand = Command.make(
   "save",
@@ -4876,9 +4720,6 @@ export const libraryCommand = Command.make(
   Command.withSubcommands([libraryListCommand, libraryStrategyCommand]),
 );
 
-
-
-
 export const walkForwardCommand = Command.make(
   "walk-forward",
   {
@@ -4938,7 +4779,6 @@ export const walkForwardCommand = Command.make(
       return result;
     }).pipe(Effect.provide(makeDbLayer(process.env.NEURATRADE_HOME))),
 ).pipe(Command.withDescription("Run walk-forward optimization"));
-
 
 export const readinessCommand = Command.make(
   "readiness",
@@ -5047,22 +4887,6 @@ export function probeNamesProbedSymbol(
   return token.toUpperCase() === bitgetSymbol.toUpperCase();
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /**
  * `scalp grid-universe scan` — per-symbol grid walk-forward universe scanner.
  *
@@ -5157,8 +4981,7 @@ export const gridUniverseScanCommand = Command.make(
         // db-mainnet evaluates on mainnet-fidelity candles; its fills are
         // modeled conservatively by default (a wick touch is not a fill).
         dataSource: args.dataSource,
-        fillModel:
-          args.dataSource === "db-mainnet" ? "conservative" : "wick",
+        fillModel: args.dataSource === "db-mainnet" ? "conservative" : "wick",
       };
 
       const targetFillsPerDay = Option.isSome(args.targetFillsPerDay)
@@ -5303,20 +5126,18 @@ export const gridUniverseScanCommand = Command.make(
           const futuresSymbols =
             args.dataSource === "db-mainnet"
               ? []
-              : yield* gateway
-                  .fetchSymbols(args.exchange)
-                  .pipe(
-                    Effect.catch((err) =>
-                      Effect.gen(function* () {
-                        const reason =
-                          err instanceof Error ? err.message : String(err);
-                        yield* Console.warn(
-                          `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
-                        );
-                        return [] as readonly string[];
-                      }),
-                    ),
-                  );
+              : yield* gateway.fetchSymbols(args.exchange).pipe(
+                  Effect.catch((err) =>
+                    Effect.gen(function* () {
+                      const reason =
+                        err instanceof Error ? err.message : String(err);
+                      yield* Console.warn(
+                        `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
+                      );
+                      return [] as readonly string[];
+                    }),
+                  ),
+                );
           const futuresSet = new Set(futuresSymbols);
           const canonicalSymbol = (symbol: string) =>
             symbol.includes(":")
@@ -5352,62 +5173,62 @@ export const gridUniverseScanCommand = Command.make(
                 `🎯 Probe skipped: ${args.exchange} universe is sourced from its demo/tradeable instrument list`,
               );
             } else {
-            const client = yield* BitgetClient;
-            const tradeable: GridUniverseEntry[] = [];
-            for (const entry of survivors) {
-              const probe = yield* client
-                .getLeverage({
-                  symbol: entry.symbol,
-                  productType: "USDT-FUTURES",
-                })
-                .pipe(Effect.result);
-              if (probe._tag === "Success") {
-                tradeable.push(entry);
-              } else if (
-                probe._tag === "Failure" &&
-                probe.failure instanceof BitgetApiError &&
-                (isBitgetUnsupportedInstrumentError(probe.failure) ||
-                  probeNamesProbedSymbol(
-                    probe.failure,
-                    entry.symbol,
-                    "USDT-FUTURES",
-                  ))
-              ) {
-                // Only a probe error that proves the instrument is unsupported
-                // (40034 with a missing-symbol/contract message) drops the
-                // survivor; auth, rate-limit, transport, and other parameter
-                // defects must NOT drop survivors. Log the exact API evidence
-                // so a drop is auditable (verified 2026-08-09: the demo
-                // returns 40034 "Parameter CYSUSDT does not exist" for
-                // contracts its subset does not list).
-                const dropEvidence =
-                  probe.failure instanceof BitgetApiError
-                    ? `Bitget ${probe.failure.code ?? "?"}: ${probe.failure.body.slice(0, 140)}`
-                    : "demo subset does not list this contract";
-                yield* Console.log(
-                  `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo (${dropEvidence})`,
-                );
-              } else {
-                const reason =
-                  probe._tag === "Failure"
-                    ? probe.failure instanceof BitgetApiError
-                      ? `BitgetApiError code=${probe.failure.code ?? "-"}: ${probe.failure.body.slice(0, 140)}`
-                      : probe.failure instanceof Error
-                        ? probe.failure.message
-                        : String(probe.failure)
-                    : "unknown";
-                yield* Console.log(
-                  `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
-                );
-                tradeable.push(entry);
+              const client = yield* BitgetClient;
+              const tradeable: GridUniverseEntry[] = [];
+              for (const entry of survivors) {
+                const probe = yield* client
+                  .getLeverage({
+                    symbol: entry.symbol,
+                    productType: "USDT-FUTURES",
+                  })
+                  .pipe(Effect.result);
+                if (probe._tag === "Success") {
+                  tradeable.push(entry);
+                } else if (
+                  probe._tag === "Failure" &&
+                  probe.failure instanceof BitgetApiError &&
+                  (isBitgetUnsupportedInstrumentError(probe.failure) ||
+                    probeNamesProbedSymbol(
+                      probe.failure,
+                      entry.symbol,
+                      "USDT-FUTURES",
+                    ))
+                ) {
+                  // Only a probe error that proves the instrument is unsupported
+                  // (40034 with a missing-symbol/contract message) drops the
+                  // survivor; auth, rate-limit, transport, and other parameter
+                  // defects must NOT drop survivors. Log the exact API evidence
+                  // so a drop is auditable (verified 2026-08-09: the demo
+                  // returns 40034 "Parameter CYSUSDT does not exist" for
+                  // contracts its subset does not list).
+                  const dropEvidence =
+                    probe.failure instanceof BitgetApiError
+                      ? `Bitget ${probe.failure.code ?? "?"}: ${probe.failure.body.slice(0, 140)}`
+                      : "demo subset does not list this contract";
+                  yield* Console.log(
+                    `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo (${dropEvidence})`,
+                  );
+                } else {
+                  const reason =
+                    probe._tag === "Failure"
+                      ? probe.failure instanceof BitgetApiError
+                        ? `BitgetApiError code=${probe.failure.code ?? "-"}: ${probe.failure.body.slice(0, 140)}`
+                        : probe.failure instanceof Error
+                          ? probe.failure.message
+                          : String(probe.failure)
+                      : "unknown";
+                  yield* Console.log(
+                    `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
+                  );
+                  tradeable.push(entry);
+                }
               }
-            }
-            if (tradeable.length < survivors.length) {
-              yield* Console.log(
-                `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
-              );
-            }
-            survivors = tradeable;
+              if (tradeable.length < survivors.length) {
+                yield* Console.log(
+                  `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
+                );
+              }
+              survivors = tradeable;
             }
           }
           const result = {
@@ -5480,8 +5301,6 @@ export const gridUniverseScanCommand = Command.make(
     "Per-symbol grid walk-forward scan; finds profitable grid candidates across the stored universe",
   ),
 );
-
-
 
 export const watchlistListCommand = Command.make(
   "list",
@@ -5571,10 +5390,12 @@ function formatFlowBacktestReport(report: FlowBacktestReport): string {
       `    #${w.index} test ${new Date(w.testStart).toISOString().slice(0, 16)}..${new Date(w.testEnd).toISOString().slice(0, 16)}: ${w.signals} signals (${w.purged} purged at boundary)`,
     );
   }
-  lines.push("  hold-time | trades | win %  | avg edge/trade | max DD  | expectancy");
+  lines.push(
+    "  hold-time | trades | win %  | avg edge/trade | max DD  | expectancy",
+  );
   for (const h of report.byHoldTime) {
     lines.push(
-      `  ${String(h.holdTimeHours).padStart(4)}h    | ${String(h.totalTrades).padStart(6)} | ${(h.winRate * 100).toFixed(1).padStart(5)}% | ${signedPct(h.avgEdgePerTradePct).padStart(15)} | ${h.maxDrawdownPct.toFixed(2).padStart(6)}% | ${signedPct(h.expectancyPct).padStart(9)}`,
+      `  ${String(h.holdTimeHours).padStart(4)}h    | ${String(h.totalTrades).padStart(6)} | ${(h.winRate * 100).toFixed(1).padStart(5)}% | ${signedPct(h.avgEdgePerTradePct).padStart(15)} | ${h.maxDrawdownPct.toFixed(2).padStart(6)}% | ${signedPct(h.expectancyPct).padStart(9)} | BE ${(h.breakevenWinRate * 100).toFixed(1)}% ${h.passesHonestyGates ? "PASS" : "REJECT"}`,
     );
   }
   const p = report.portfolio;
@@ -5612,6 +5433,8 @@ export const flowBacktestCommand = Command.make(
     holdTimes: flowHoldTimesOption,
     fee: flowFeeOption,
     spreadBps: flowSpreadBpsOption,
+    conservativeFillRate: flowConservativeFillRateOption,
+    maxBreakevenWinRate: flowMaxBreakevenWinRateOption,
     zMode: Options.text("z-mode").pipe(
       Options.withDefault("per-symbol"),
       Options.withDescription(
@@ -5672,6 +5495,11 @@ export const flowBacktestCommand = Command.make(
         walkForwardSteps: defaultFlowBacktestOptions.walkForwardSteps,
         zMode: args.zMode,
         stopMultiplier: args.stopMult > 0 ? args.stopMult : null,
+        conservativeFillRate: Math.max(
+          0,
+          Math.min(1, args.conservativeFillRate),
+        ),
+        maxBreakevenWinRate: args.maxBreakevenWinRate,
       };
 
       const series: FlowSymbolSeries[] = [];
@@ -5703,7 +5531,13 @@ export const flowBacktestCommand = Command.make(
            WHERE (tp.symbol = ? OR tp.symbol = ?) AND c.timeframe = ?
              AND c.timestamp >= ? AND c.timestamp <= ?
            ORDER BY c.timestamp ASC`,
-          [canonical, symbol, args.timeframe, start.toISOString(), end.toISOString()],
+          [
+            canonical,
+            symbol,
+            args.timeframe,
+            start.toISOString(),
+            end.toISOString(),
+          ],
         );
         const oiRows = hasOiTable
           ? yield* sqlite.queryAll<{
@@ -5776,13 +5610,51 @@ export const flowUniverseCommand = Command.make(
   {
     limit: flowLimitOption,
     minTurnover: flowMinTurnoverOption,
+    dataSource: flowUniverseDataSourceOption,
   },
   (args) =>
     Effect.gen(function* () {
-      // Mainnet Bybit public market data (no auth needed).
-      const baseUrl = "https://api.bybit.com";
-      const volumes = yield* fetch24hrVolumes(baseUrl);
-      const instruments = yield* fetchInstruments(baseUrl);
+      const sqlite = yield* SqliteClient;
+      let volumes: Readonly<Record<string, number>>;
+      let instruments: readonly FlowInstrument[];
+      if (args.dataSource === "db-mainnet") {
+        const rows = yield* sqlite.queryAll<{
+          symbol: string;
+          turnover24h: number;
+          firstTs: string;
+        }>(
+          `WITH first_seen AS (
+             SELECT trading_pair_id, exchange_id, timeframe, MIN(timestamp) AS firstTs
+             FROM ohlcv_data
+             GROUP BY trading_pair_id, exchange_id, timeframe
+           )
+           SELECT REPLACE(REPLACE(tp.symbol, '/USDT:USDT', 'USDT'), '/USDT', 'USDT') AS symbol,
+                  SUM(c.close_price * c.volume) AS turnover24h,
+                  fs.firstTs AS firstTs
+           FROM ohlcv_data c
+           JOIN trading_pairs tp ON tp.id = c.trading_pair_id
+           JOIN exchanges e ON e.id = c.exchange_id
+           JOIN first_seen fs ON fs.trading_pair_id = c.trading_pair_id
+             AND fs.exchange_id = c.exchange_id
+             AND fs.timeframe = c.timeframe
+           WHERE e.name IN ('bybit','bybit-futures')
+             AND c.timestamp >= datetime('now', '-1 day')
+           GROUP BY tp.symbol, fs.firstTs`,
+        );
+        volumes = Object.fromEntries(
+          rows.map((r) => [r.symbol, r.turnover24h]),
+        );
+        instruments = rows.map((r) => ({
+          symbol: r.symbol,
+          status: "Trading",
+          listedTime: new Date(r.firstTs).getTime(),
+        }));
+      } else {
+        // Mainnet Bybit public market data (no auth needed).
+        const baseUrl = "https://api.bybit.com";
+        volumes = yield* fetch24hrVolumes(baseUrl);
+        instruments = yield* fetchInstruments(baseUrl);
+      }
       const ranked = selectFlowUniverse(volumes, instruments, undefined, {
         topN: args.limit,
       });
@@ -5796,7 +5668,7 @@ export const flowUniverseCommand = Command.make(
           const msg =
             err instanceof Error
               ? err.message
-              : (err as { reason?: string }).reason ?? String(err);
+              : ((err as { reason?: string }).reason ?? String(err));
           yield* Console.error(`flow-universe failed: ${msg}`);
           return [] as readonly FlowUniverseEntry[];
         }),
@@ -6093,8 +5965,7 @@ function flowTradeProgram(args: FlowTradeArgs) {
             return {
               action: "hold" as const,
               side: current?.side ?? null,
-              state:
-                current ?? freshFlowTradeState(opts, Date.now()),
+              state: current ?? freshFlowTradeState(opts, Date.now()),
               note: `skip: ${reason}`,
             };
           }),

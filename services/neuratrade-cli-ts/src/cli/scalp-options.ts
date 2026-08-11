@@ -18,7 +18,11 @@ function minMaxStep(
   base: string,
   kind: "float" | "integer",
   label: string,
-  defaults: { readonly min: number; readonly max: number; readonly step: number } = {
+  defaults: {
+    readonly min: number;
+    readonly max: number;
+    readonly step: number;
+  } = {
     min: 0,
     max: 0,
     step: 0,
@@ -92,7 +96,9 @@ export const riskPerTradeOption = Options.float("risk-per-trade").pipe(
   ),
 );
 
-export const riskBasedMaxPositionSizeOption = Options.float("max-position-size").pipe(
+export const riskBasedMaxPositionSizeOption = Options.float(
+  "max-position-size",
+).pipe(
   Options.withDefault(SCALP_OPTION_DEFAULTS.maxPositionSize),
   Options.withDescription(
     "Maximum position size as percent of capital when using --risk-per-trade",
@@ -143,7 +149,9 @@ export const trailingStopPctOption = Options.float("trailing-stop-pct").pipe(
   ),
 );
 
-export const trailingStopAtrMultOption = Options.float("trailing-stop-atr-mult").pipe(
+export const trailingStopAtrMultOption = Options.float(
+  "trailing-stop-atr-mult",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Trail stop-loss at this ATR multiplier behind the most favorable price (0 = disabled)",
@@ -183,21 +191,27 @@ export const minConfluenceOption = Options.integer("min-confluence").pipe(
   ),
 );
 
-export const entryCandleConfirmOption = Options.boolean("entry-candle-confirm").pipe(
+export const entryCandleConfirmOption = Options.boolean(
+  "entry-candle-confirm",
+).pipe(
   Options.withDefault(false),
   Options.withDescription(
     "Require the entry candle body to align with the signal direction",
   ),
 );
 
-export const signalPersistenceOption = Options.integer("signal-persistence").pipe(
+export const signalPersistenceOption = Options.integer(
+  "signal-persistence",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Require the same directional signal for N consecutive candles before entering (0 = disabled)",
   ),
 );
 
-export const momentumConfirmBarsOption = Options.integer("momentum-confirm-bars").pipe(
+export const momentumConfirmBarsOption = Options.integer(
+  "momentum-confirm-bars",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Require net price movement over the last N candles to align with the signal (0 = disabled)",
@@ -217,7 +231,9 @@ export const entryOrderTypeOption = Options.choice("entry-order-type", [
   Options.withDescription("Entry fill type: market or limit"),
 );
 
-export const entryLimitOffsetBpsOption = Options.float("entry-limit-offset-bps").pipe(
+export const entryLimitOffsetBpsOption = Options.float(
+  "entry-limit-offset-bps",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Limit entry offset from signal price in basis points",
@@ -229,17 +245,23 @@ export const rsiPeriodOption = Options.integer("rsi-period").pipe(
   Options.withDescription("RSI lookback period"),
 );
 
-export const rsiOversoldStrongOption = Options.float("rsi-oversold-strong").pipe(
+export const rsiOversoldStrongOption = Options.float(
+  "rsi-oversold-strong",
+).pipe(
   Options.withDefault(30),
   Options.withDescription("RSI level considered strongly oversold"),
 );
 
-export const rsiOverboughtStrongOption = Options.float("rsi-overbought-strong").pipe(
+export const rsiOverboughtStrongOption = Options.float(
+  "rsi-overbought-strong",
+).pipe(
   Options.withDefault(70),
   Options.withDescription("RSI level considered strongly overbought"),
 );
 
-export const trendFilterPeriodOption = Options.integer("trend-filter-period").pipe(
+export const trendFilterPeriodOption = Options.integer(
+  "trend-filter-period",
+).pipe(
   Options.withDefault(200),
   Options.withDescription("SMA trend filter period for Connors RSI(2) entries"),
 );
@@ -268,7 +290,9 @@ export const exitRsiLongLevelOption = Options.float("exit-rsi-long-level").pipe(
   Options.withDescription("Close long when RSI rises above this level"),
 );
 
-export const exitRsiShortLevelOption = Options.float("exit-rsi-short-level").pipe(
+export const exitRsiShortLevelOption = Options.float(
+  "exit-rsi-short-level",
+).pipe(
   Options.withDefault(0),
   Options.withDescription("Close short when RSI falls below this level"),
 );
@@ -288,7 +312,9 @@ export const strictRealismOption = Options.boolean("strict-realism").pipe(
   Options.withDescription("Use strict realism (close-only + slippage)"),
 );
 
-export const realisticSlippageBpsOption = Options.float("realistic-slippage-bps").pipe(
+export const realisticSlippageBpsOption = Options.float(
+  "realistic-slippage-bps",
+).pipe(
   Options.withDefault(5),
   Options.withDescription("Realistic slippage in basis points"),
 );
@@ -348,7 +374,9 @@ export const breakoutAdxMinOption = Options.float("breakout-adx-min").pipe(
   Options.withDescription("Breakout minimum ADX threshold"),
 );
 
-export const fundingBiasThresholdOption = Options.float("funding-bias-threshold").pipe(
+export const fundingBiasThresholdOption = Options.float(
+  "funding-bias-threshold",
+).pipe(
   Options.withDefault(0.0001),
   Options.withDescription("Funding bias threshold for contrarian signal"),
 );
@@ -548,7 +576,9 @@ export const lossConfidencePenaltyOption = Options.float(
   ),
 );
 
-export const lossConfidenceDecayOption = Options.float("loss-confidence-decay").pipe(
+export const lossConfidenceDecayOption = Options.float(
+  "loss-confidence-decay",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Decay the post-loss confidence penalty by this amount each candle (0 = step reset)",
@@ -572,7 +602,9 @@ export const htfTrendSlowPeriodOption = Options.integer("htf-trend-slow").pipe(
   Options.withDescription("Higher-timeframe EMA slow period for trend filter"),
 );
 
-export const htfSignalConfidenceOption = Options.float("htf-signal-confidence").pipe(
+export const htfSignalConfidenceOption = Options.float(
+  "htf-signal-confidence",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Confidence boost when HTF trend aligns (0 disables)",
@@ -597,7 +629,9 @@ export const entryPullbackMarginPctOption = Options.float(
   ),
 );
 
-export const minEfficiencyRatioOption = Options.float("min-efficiency-ratio").pipe(
+export const minEfficiencyRatioOption = Options.float(
+  "min-efficiency-ratio",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Minimum Kaufman Efficiency Ratio (0-1) required to enter; high values filter chop",
@@ -650,7 +684,9 @@ export const profileOption = Options.text("profile").pipe(
   ),
 );
 
-export const recordEquityCurveOption = Options.boolean("record-equity-curve").pipe(
+export const recordEquityCurveOption = Options.boolean(
+  "record-equity-curve",
+).pipe(
   Options.withDefault(false),
   Options.withDescription("Record equity curve at each trade close"),
 );
@@ -690,7 +726,9 @@ export const maxBarsInTradeOption = Options.integer("max-bars-in-trade").pipe(
   ),
 );
 
-export const lossCooldownBarsOption = Options.integer("loss-cooldown-bars").pipe(
+export const lossCooldownBarsOption = Options.integer(
+  "loss-cooldown-bars",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Bars to skip after a losing trade before allowing new entries (0 disables)",
@@ -707,7 +745,9 @@ export const sessionEndOption = Options.text("session-end").pipe(
   Options.withDescription("UTC session end in HH:MM (empty disables)"),
 );
 
-export const autoRegimeFilterOption = Options.boolean("auto-regime-filter").pipe(
+export const autoRegimeFilterOption = Options.boolean(
+  "auto-regime-filter",
+).pipe(
   Options.withDefault(false),
   Options.withDescription(
     "Block entries that do not match the detected trend/mean-reversion regime",
@@ -731,7 +771,9 @@ export const useAtrStopsOption = Options.boolean("use-atr-stops").pipe(
   Options.withDescription("Use ATR-based dynamic stop loss and take profit"),
 );
 
-export const atrStopMultiplierOption = Options.float("atr-stop-multiplier").pipe(
+export const atrStopMultiplierOption = Options.float(
+  "atr-stop-multiplier",
+).pipe(
   Options.withDefault(1.5),
   Options.withDescription(
     "ATR multiplier for stop loss when --use-atr-stops is set",
@@ -768,7 +810,9 @@ export const scaleOutPctOption = Options.float("scale-out-pct").pipe(
   ),
 );
 
-export const volatilityLookbackOption = Options.integer("volatility-lookback").pipe(
+export const volatilityLookbackOption = Options.integer(
+  "volatility-lookback",
+).pipe(
   Options.withDefault(0),
   Options.withDescription(
     "Lookback window length for ATR% volatility calibration. 0 disables.",
@@ -782,21 +826,27 @@ export const volatilityLowPctOption = Options.float("volatility-low-pct").pipe(
   ),
 );
 
-export const volatilityHighPctOption = Options.float("volatility-high-pct").pipe(
+export const volatilityHighPctOption = Options.float(
+  "volatility-high-pct",
+).pipe(
   Options.withDefault(80),
   Options.withDescription(
     "High percentile threshold for volatility calibration",
   ),
 );
 
-export const volatilityLowFactorOption = Options.float("volatility-low-factor").pipe(
+export const volatilityLowFactorOption = Options.float(
+  "volatility-low-factor",
+).pipe(
   Options.withDefault(0.8),
   Options.withDescription(
     "Multiplier applied to ATR stop distance in low-volatility regimes",
   ),
 );
 
-export const volatilityHighFactorOption = Options.float("volatility-high-factor").pipe(
+export const volatilityHighFactorOption = Options.float(
+  "volatility-high-factor",
+).pipe(
   Options.withDefault(1.2),
   Options.withDescription(
     "Multiplier applied to ATR stop distance in high-volatility regimes",
@@ -843,30 +893,30 @@ export const {
   max: atrStopMaxOption,
   step: atrStopStepOption,
 } = minMaxStep("atr-stop", "float", "ATR stop multiplier", {
-    min: 1,
-    max: 3,
-    step: 0.5,
-  });
+  min: 1,
+  max: 3,
+  step: 0.5,
+});
 
 export const {
   min: atrTpMinOption,
   max: atrTpMaxOption,
   step: atrTpStepOption,
 } = minMaxStep("atr-tp", "float", "ATR take-profit multiplier", {
-    min: 2,
-    max: 5,
-    step: 0.5,
-  });
+  min: 2,
+  max: 5,
+  step: 0.5,
+});
 
 export const {
   min: confMinOption,
   max: confMaxOption,
   step: confStepOption,
 } = minMaxStep("conf", "float", "min-confidence", {
-    min: 0.5,
-    max: 0.7,
-    step: 0.1,
-  });
+  min: 0.5,
+  max: 0.7,
+  step: 0.1,
+});
 
 export const minCandlesOption = Options.integer("min-candles").pipe(
   Options.withDefault(500),
@@ -977,7 +1027,9 @@ export const maxDailyLossOption = Options.float("max-daily-loss-pct").pipe(
   ),
 );
 
-export const maxPositionSizeOption = Options.float("max-position-size-pct").pipe(
+export const maxPositionSizeOption = Options.float(
+  "max-position-size-pct",
+).pipe(
   Options.optional,
   Options.withDescription(
     "Max position size % of capital per trade (live default 10%)",
@@ -1046,7 +1098,9 @@ export const wfMinTradesOption = Options.integer("min-trades").pipe(
   Options.withDescription("Minimum trades per window"),
 );
 
-export const minTradesPerMonthOption = Options.integer("min-trades-per-month").pipe(
+export const minTradesPerMonthOption = Options.integer(
+  "min-trades-per-month",
+).pipe(
   Options.optional,
   Options.withDescription(
     "G1 override: minimum in-sample trades per month (default 20 for 5m, 10 otherwise)",
@@ -1070,7 +1124,9 @@ export const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
   ),
 );
 
-export const gridUniverseTrainWindowOption = Options.integer("train-window").pipe(
+export const gridUniverseTrainWindowOption = Options.integer(
+  "train-window",
+).pipe(
   Options.withDefault(180),
   Options.withDescription("Walk-forward training window in candles"),
 );
@@ -1161,7 +1217,9 @@ export const gridUniverseTargetFillsPerDayOption = Options.float(
   ),
 );
 
-export const gridUniverseAccountCapitalOption = Options.float("account-capital").pipe(
+export const gridUniverseAccountCapitalOption = Options.float(
+  "account-capital",
+).pipe(
   Options.withDefault(1000),
   Options.withDescription(
     "Account capital USDT scaling the fills/day target when --target-fills-per-day is unset (default 1000)",
@@ -1212,9 +1270,7 @@ export const flowStartOption = Options.text("start").pipe(
 
 export const flowEndOption = Options.text("end").pipe(
   Options.withDefault(""),
-  Options.withDescription(
-    "Inclusive end date (YYYY-MM-DD). Default: now",
-  ),
+  Options.withDescription("Inclusive end date (YYYY-MM-DD). Default: now"),
 );
 
 export const flowTimeframeOption = Options.choice("timeframe", [
@@ -1227,9 +1283,7 @@ export const flowTimeframeOption = Options.choice("timeframe", [
 
 export const flowThresholdOption = Options.float("threshold").pipe(
   Options.withDefault(1.0),
-  Options.withDescription(
-    "Entry score threshold in z-units (default 1.0)",
-  ),
+  Options.withDescription("Entry score threshold in z-units (default 1.0)"),
 );
 
 export const flowHoldTimesOption = Options.text("hold-times").pipe(
@@ -1272,6 +1326,24 @@ export const flowSpreadBpsOption = Options.float("spread-bps").pipe(
   ),
 );
 
+export const flowConservativeFillRateOption = Options.float(
+  "conservative-fill-rate",
+).pipe(
+  Options.withDefault(0.75),
+  Options.withDescription(
+    "Deterministic fraction of flow signals filled after queue/partial-fill discount (default 0.75)",
+  ),
+);
+
+export const flowMaxBreakevenWinRateOption = Options.float(
+  "max-breakeven-win-rate",
+).pipe(
+  Options.withDefault(0.4),
+  Options.withDescription(
+    "Reject selected flow configs requiring a higher breakeven win rate (default 0.40)",
+  ),
+);
+
 export const flowLimitOption = Options.integer("limit").pipe(
   Options.withDefault(40),
   Options.withDescription("Maximum ranked rows to print"),
@@ -1284,4 +1356,12 @@ export const flowMinTurnoverOption = Options.float("min-turnover").pipe(
   ),
 );
 
-
+export const flowUniverseDataSourceOption = Options.choice("data-source", [
+  "live-mainnet",
+  "db-mainnet",
+] as const).pipe(
+  Options.withDefault("live-mainnet" as const),
+  Options.withDescription(
+    "Universe source: live Bybit mainnet tickers or cached mainnet SQLite candles",
+  ),
+);

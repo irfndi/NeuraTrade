@@ -102,6 +102,10 @@ export interface FlowBacktestOptions {
   readonly zMode: "per-symbol" | "cross-sectional";
   /** ATR stop multiplier; null disables the ATR stop (pure time/OFI exits). */
   readonly stopMultiplier: number | null;
+  /** Deterministic fill fraction for conservative queue/partial-fill modeling. */
+  readonly conservativeFillRate: number;
+  /** Reject selected configs whose required win rate exceeds this ceiling. */
+  readonly maxBreakevenWinRate: number;
 }
 
 export const defaultFlowBacktestOptions: FlowBacktestOptions = {
@@ -118,6 +122,8 @@ export const defaultFlowBacktestOptions: FlowBacktestOptions = {
   walkForwardSteps: 3,
   zMode: "per-symbol",
   stopMultiplier: ATR_STOP_MULT,
+  conservativeFillRate: 0.75,
+  maxBreakevenWinRate: 0.4,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,6 +242,14 @@ export interface HoldTimeResult {
   readonly maxDrawdownPct: number;
   /** Per-trade expected value in % of notional (= avg edge per trade). */
   readonly expectancyPct: number;
+  /** Mean net win size, % of notional after fees/spread/funding. */
+  readonly avgWinPct: number;
+  /** Mean net loss size as positive %, after fees/spread/funding. */
+  readonly avgLossPct: number;
+  /** Loss / (win + loss); configs above maxBreakevenWinRate are rejected. */
+  readonly breakevenWinRate: number;
+  /** True when the hold-time profile passes the asymmetry honesty gate. */
+  readonly passesHonestyGates: boolean;
   readonly bySymbol: readonly SymbolTradeAggregate[];
 }
 
@@ -291,6 +305,27 @@ export interface BarContext {
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
 const EPS = 1e-12;
+
+export function flowRoundTripCostPct(
+  fees: FlowFees,
+  spreadBps: number,
+): number {
+  const taker = fees.taker;
+  const spreadLeg = spreadBps / 10_000;
+  return (taker + spreadLeg + taker + spreadLeg) * 100;
+}
+
+function deterministicFillPass(sig: FlowSignal, fillRate: number): boolean {
+  if (fillRate >= 1) return true;
+  if (fillRate <= 0) return false;
+  const key = `${sig.symbol}:${sig.entryTs}:${sig.side}`;
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 0x1_0000_0000 < fillRate;
+}
 
 /** Per-bar signed OFI delta in [-1, 1]: (buyVol - sellVol) / volume. */
 function barOfiDelta(c: CandleLike): number {
@@ -407,7 +442,8 @@ export function computeContexts(
       trSum += trueRange(sorted[k], prevClose);
       prevClose = closes[k];
     }
-    const ret = windowBars > 0 && firstClose > 0 ? closes[i] / firstClose - 1 : 0;
+    const ret =
+      windowBars > 0 && firstClose > 0 ? closes[i] / firstClose - 1 : 0;
     const atr15 = windowBars > 0 ? trSum / windowBars : 0;
 
     // 1h VWAP: bars in [t-1h, t).
@@ -597,10 +633,7 @@ function runSymbolEngine(
 ): readonly FlowBacktestTrade[] {
   const { opts } = engineOpts;
   const holdMs = engineOpts.holdTimeHours * MS_PER_HOUR;
-  const taker = opts.fees.taker;
-  const spreadLeg = opts.spreadBps / 10_000;
-  const entryCost = taker + spreadLeg;
-  const exitCost = taker + spreadLeg;
+  const roundTripCostPct = flowRoundTripCostPct(opts.fees, opts.spreadBps);
 
   // Signals sorted by entryTs; one position per symbol at a time.
   const byEntryTs = [...signals].sort((a, b) => a.entryTs - b.entryTs);
@@ -626,7 +659,10 @@ function runSymbolEngine(
       const sig = byEntryTs[sigIdx];
       if (sig.entryTs === ctx.ts) {
         sigIdx++;
-        if (sig.side === "LONG" || sig.side === "SHORT") {
+        if (
+          (sig.side === "LONG" || sig.side === "SHORT") &&
+          deterministicFillPass(sig, opts.conservativeFillRate)
+        ) {
           const atr = sig.atr15 > 0 ? sig.atr15 : ctx.atr15;
           if (atr > 0) {
             const side = sig.side;
@@ -723,7 +759,7 @@ function runSymbolEngine(
         side === "LONG"
           ? ((exitPrice - pos.entryPrice) / pos.entryPrice) * 100
           : ((pos.entryPrice - exitPrice) / pos.entryPrice) * 100;
-      const costPct = (entryCost + exitCost) * 100;
+      const costPct = roundTripCostPct;
       const fundingPct = fundingPaidPct(
         engineOpts.funding,
         pos.entryTs,
@@ -826,11 +862,37 @@ function maxDrawdownPct(edges: readonly number[]): number {
 
 function aggregateTrades(
   trades: readonly FlowBacktestTrade[],
+  opts: FlowBacktestOptions,
 ): Omit<HoldTimeResult, "holdTimeHours"> {
   const sorted = [...trades].sort((a, b) => a.exitTs - b.exitTs);
   const total = sorted.length;
   const wins = sorted.filter((t) => t.win).length;
   const edgeSum = sorted.reduce((s, t) => s + t.netEdgePct, 0);
+  const winEdges = sorted
+    .filter((t) => t.netEdgePct > 0)
+    .map((t) => t.netEdgePct);
+  const lossEdges = sorted
+    .filter((t) => t.netEdgePct <= 0)
+    .map((t) => Math.abs(t.netEdgePct));
+  const avgWinPct =
+    winEdges.length > 0
+      ? winEdges.reduce((s, e) => s + e, 0) / winEdges.length
+      : 0;
+  const avgLossPct =
+    lossEdges.length > 0
+      ? lossEdges.reduce((s, e) => s + e, 0) / lossEdges.length
+      : 0;
+  const breakevenWinRate =
+    avgWinPct > 0 && avgLossPct > 0
+      ? avgLossPct / (avgWinPct + avgLossPct)
+      : avgWinPct > 0
+        ? 0
+        : 1;
+  const passesHonestyGates =
+    total > 0 &&
+    avgWinPct > 0 &&
+    breakevenWinRate <= opts.maxBreakevenWinRate &&
+    edgeSum / total > 0;
 
   const bySymbolMap = new Map<
     string,
@@ -871,8 +933,18 @@ function aggregateTrades(
     avgEdgePerTradePct: total > 0 ? edgeSum / total : 0,
     maxDrawdownPct: maxDrawdownPct(sorted.map((t) => t.netEdgePct)),
     expectancyPct: total > 0 ? edgeSum / total : 0,
+    avgWinPct,
+    avgLossPct,
+    breakevenWinRate,
+    passesHonestyGates,
     bySymbol,
   };
+}
+
+function selectPassingHoldTime(
+  holds: readonly HoldTimeResult[],
+): HoldTimeResult {
+  return holds.find((h) => h.passesHonestyGates) ?? emptyHoldTime(0);
 }
 
 /**
@@ -891,11 +963,20 @@ function aggregateTrades(
  * cross-sectional normalization — the untested variant).
  */
 function applyCrossSectionalZ(
-  prepared: readonly { series: FlowSymbolSeries; ctxs: readonly BarContext[] }[],
+  prepared: readonly {
+    series: FlowSymbolSeries;
+    ctxs: readonly BarContext[];
+  }[],
 ): readonly { series: FlowSymbolSeries; ctxs: readonly BarContext[] }[] {
   const byTs = new Map<
     number,
-    { ret: number[]; oi: number[]; ofi: number[]; vol: number[]; fund: number[] }
+    {
+      ret: number[];
+      oi: number[];
+      ofi: number[];
+      vol: number[];
+      fund: number[];
+    }
   >();
   for (const p of prepared) {
     for (const c of p.ctxs) {
@@ -946,7 +1027,9 @@ function applyCrossSectionalZ(
       if (!raw || raw.ret.length < 2) return c;
       const zf = (xs: readonly number[], x: number) => {
         const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
-        const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length);
+        const sd = Math.sqrt(
+          xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length,
+        );
         if (sd < 1e-12) return 0;
         return (x - mean) / sd;
       };
@@ -962,9 +1045,7 @@ function applyCrossSectionalZ(
   }));
 }
 
-export function runFlowBacktest(
-  data: FlowBacktestData,
-): FlowBacktestReport {
+export function runFlowBacktest(data: FlowBacktestData): FlowBacktestReport {
   const opts = data.options;
 
   // Per-symbol contexts + signals (computed once; windows filter them).
@@ -972,9 +1053,8 @@ export function runFlowBacktest(
     series: s,
     ctxs: computeContexts(s.candles, s.oi, s.funding),
   }));
-  const prepared = (opts.zMode === "cross-sectional"
-    ? applyCrossSectionalZ(baseCtxs)
-    : baseCtxs
+  const prepared = (
+    opts.zMode === "cross-sectional" ? applyCrossSectionalZ(baseCtxs) : baseCtxs
   ).map((p) => ({
     series: p.series,
     ctxs: p.ctxs,
@@ -1001,7 +1081,10 @@ export function runFlowBacktest(
 
   // Purge rule: label window [entryTs, entryTs + maxHoldMs] must sit fully
   // inside the test segment — never straddle a train/test boundary.
-  const windowSignalCounts = plan.windows.map((w) => ({ signals: 0, purged: 0 }));
+  const windowSignalCounts = plan.windows.map((w) => ({
+    signals: 0,
+    purged: 0,
+  }));
   const keptByWindow: readonly FlowSignal[][][] = plan.windows.map(() =>
     prepared.map(() => [] as FlowSignal[]),
   );
@@ -1033,7 +1116,8 @@ export function runFlowBacktest(
         const winSignals = keptByWindow[wi][si];
         if (winSignals.length === 0) return;
         let firstEntry = Number.POSITIVE_INFINITY;
-        for (const s of winSignals) if (s.entryTs < firstEntry) firstEntry = s.entryTs;
+        for (const s of winSignals)
+          if (s.entryTs < firstEntry) firstEntry = s.entryTs;
         const firstBarIdx = p.ctxs.findIndex((c) => c.ts >= firstEntry);
         if (firstBarIdx < 0) return;
         const ctxs = p.ctxs.slice(firstBarIdx);
@@ -1047,7 +1131,7 @@ export function runFlowBacktest(
         );
       });
     });
-    return { holdTimeHours: holdHours, ...aggregateTrades(trades) };
+    return { holdTimeHours: holdHours, ...aggregateTrades(trades, opts) };
   });
 
   const windows = plan.windows.map((w, i) => ({
@@ -1060,7 +1144,7 @@ export function runFlowBacktest(
     options: opts,
     windows,
     byHoldTime,
-    portfolio: byHoldTime[0] ?? emptyHoldTime(0),
+    portfolio: selectPassingHoldTime(byHoldTime),
   };
 }
 
@@ -1073,6 +1157,10 @@ function emptyHoldTime(holdTimeHours: number): HoldTimeResult {
     avgEdgePerTradePct: 0,
     maxDrawdownPct: 0,
     expectancyPct: 0,
+    avgWinPct: 0,
+    avgLossPct: 0,
+    breakevenWinRate: 1,
+    passesHonestyGates: false,
     bySymbol: [],
   };
 }
