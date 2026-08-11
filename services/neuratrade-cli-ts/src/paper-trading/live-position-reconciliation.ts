@@ -7,6 +7,17 @@ import type { GridPaperState } from "./types.js";
 
 export type LivePositionReconciliation =
   | { readonly kind: "matched" }
+  | {
+      readonly kind: "adopt";
+      /** The exchange position to adopt into local state. */
+      readonly position: FuturesPosition;
+    }
+  | {
+      readonly kind: "unadoptable";
+      /** The exchange position that could not be adopted. */
+      readonly position: FuturesPosition;
+      readonly reason: string;
+    }
   | { readonly kind: "mismatch"; readonly reason: string };
 
 export interface LivePositionExpectation {
@@ -25,11 +36,27 @@ export function reconcileLivePosition(
   expected?: LivePositionExpectation,
 ): LivePositionReconciliation {
   if (state.side === null) {
-    return exchangePosition === null
-      ? { kind: "matched" }
+    if (exchangePosition === null) {
+      return { kind: "matched" };
+    }
+    // The exchange holds a position the local state never recorded (e.g. a
+    // fill was lost between placement and persistence). Adopt it so the
+    // position is managed instead of tripping the kill switch forever. A
+    // position with invalid quantity/price cannot be adopted and must be
+    // closed instead (kind "unadoptable").
+    const adoptable =
+      exchangePosition.quantity.isFinite() &&
+      exchangePosition.quantity.greaterThan(0) &&
+      exchangePosition.entryPrice.isFinite() &&
+      exchangePosition.entryPrice.greaterThan(0) &&
+      exchangePosition.available.isFinite() &&
+      exchangePosition.available.greaterThan(0);
+    return adoptable
+      ? { kind: "adopt", position: exchangePosition }
       : {
-          kind: "mismatch",
-          reason: `exchange position exists without local state (${exchangePosition.side} ${exchangePosition.quantity.toString()})`,
+          kind: "unadoptable",
+          position: exchangePosition,
+          reason: `exchange position exists without local state and is not adoptable (${exchangePosition.side} ${exchangePosition.quantity.toString()} @ ${exchangePosition.entryPrice.toString()})`,
         };
   }
 
@@ -88,7 +115,8 @@ export function reconcileLivePosition(
   }
 
   if (
-    state.entryFillSource !== "live" ||
+    (state.entryFillSource !== "live" &&
+      state.entryFillSource !== "adopted") ||
     state.entryOrderId === undefined ||
     state.entryOrderId.length === 0 ||
     state.entryFilledQty === undefined ||

@@ -7,6 +7,7 @@ import {
 import type { Candle } from "../market-data/types.js";
 import {
   PaperTradingRepository,
+  PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
 } from "./repository.js";
 import type { GridPaperState, GridPaperTrade } from "./types.js";
@@ -66,6 +67,12 @@ function makeCandles(
 class InMemoryPaperRepository implements PaperTradingRepositoryService {
   private gridState: GridPaperState | null = null;
   private gridTrades: GridPaperTrade[] = [];
+  /** Number of saveGridState calls to fail first (negative = always fail). */
+  private savesFailRemaining: number;
+
+  constructor(savesFailRemaining = 0) {
+    this.savesFailRemaining = savesFailRemaining;
+  }
 
   ensureTables() {
     return Effect.void;
@@ -128,8 +135,19 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
   }
 
   saveGridState(state: GridPaperState) {
-    return Effect.sync(() => {
-      this.gridState = state;
+    return Effect.try({
+      try: () => {
+        if (this.savesFailRemaining !== 0) {
+          if (this.savesFailRemaining > 0) this.savesFailRemaining--;
+          throw new Error("sqlite busy (test injection)");
+        }
+        this.gridState = state;
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `failed to save grid state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
     });
   }
 
@@ -160,6 +178,22 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
 
   clearWatchlist() {
     return Effect.void;
+  }
+
+  getFlowTradeState() {
+    return Effect.succeed(null);
+  }
+
+  saveFlowTradeState() {
+    return Effect.void;
+  }
+
+  clearFlowTradeState() {
+    return Effect.void;
+  }
+
+  getOpenInterest() {
+    return Effect.succeed([]);
   }
 
   replaceWatchlist() {
@@ -815,12 +849,15 @@ describe("grid paper engine", () => {
     expect(records.length).toBeGreaterThan(0);
   });
 
-  it("fails closed when the exchange has an untracked live position", async () => {
+  it("adopts an untracked exchange position and keeps managing it", async () => {
     const repo = new InMemoryPaperRepository();
     const { adapter, orders } = makeTrackingFuturesAdapter();
+    // Short @ 1000: on the oscillating candle the exit rules (target below
+    // the bar low, stop above the bar high at 1x) do NOT trigger, so the
+    // adopted position survives the iteration for assertions.
     const exchangePosition: FuturesPosition = {
       symbol: "ETH/USDT",
-      side: "long",
+      side: "short",
       productType: "USDT-FUTURES",
       marginMode: "isolated",
       leverage: 1,
@@ -829,9 +866,240 @@ describe("grid paper engine", () => {
       entryPrice: money(1000),
       marginCoin: "USDT",
     };
-    const mismatchAdapter: FuturesExchangeAdapterService = {
+    const adoptAdapter: FuturesExchangeAdapterService = {
       ...adapter,
       getPosition: () => Effect.succeed(exchangePosition),
+    };
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adoptAdapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    // The orphan is adopted (not killed) so exit rules can manage it.
+    expect(result.note).toContain("adopted");
+    expect(orders).toHaveLength(0);
+    expect(killReason).toBe("");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBe("short");
+    expect(state?.entryFillSource).toBe("adopted");
+    expect(state?.entryOrderId).toBe("adopted");
+    expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(0.01, 12);
+    expect(state?.entryPrice.toNumber()).toBeCloseTo(1000, 12);
+    expect(state?.killed).toBe(false);
+
+    // A second iteration reconciles the adopted state as matched: no kill,
+    // no re-adoption, position still managed.
+    const second = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adoptAdapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+    expect(second.note).not.toContain("MISMATCH");
+    expect(second.note).not.toContain("adopted");
+    expect(killReason).toBe("");
+  });
+
+  it("adopts the exchange position when placeOrder loses the fill confirmation", async () => {
+    // Regression 2026-08-10: a place-order ack succeeded but the adapter's
+    // fill poll failed, so no OPENED state was persisted and the position
+    // orphaned until the kill switch tripped. The engine must now check the
+    // exchange and adopt the position before the order can orphan.
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter();
+    // The exchange position does not exist at reconciliation time (top of
+    // the iteration) — it only appears after placeOrder fails, modelling an
+    // order that was acked but whose fill confirmation was lost.
+    let positionVisible = false;
+    const adoptedAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      placeOrder: () =>
+        Effect.sync(() => {
+          positionVisible = true;
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(new ExchangeError("futures order 123 not filled")),
+          ),
+        ),
+      getPosition: () =>
+        Effect.sync(() =>
+          positionVisible
+            ? {
+                symbol: "ETH/USDT",
+                side: "long",
+                productType: "USDT-FUTURES",
+                marginMode: "isolated",
+                leverage: 1,
+                quantity: money("0.02"),
+                available: money("0.02"),
+                entryPrice: money(1010),
+                marginCoin: "USDT",
+              }
+            : null,
+        ),
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adoptedAdapter,
+    );
+
+    expect(result.note).toContain("adopted");
+    expect(result.note).toContain("fill confirmation lost");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBe("long");
+    expect(state?.entryFillSource).toBe("adopted");
+    expect(state?.entryOrderId).toBe("adopted");
+    expect(state?.entryFilledQty?.toNumber()).toBeCloseTo(0.02, 12);
+  });
+
+  it("retries a transient state-save failure after placement instead of killing", async () => {
+    const repo = new InMemoryPaperRepository(1); // first save fails, then recovers
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(orders.length).toBeGreaterThan(0);
+    expect(result.note).toContain("[LIVE] opened");
+    expect(killReason).toBe("");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).not.toBeNull();
+    expect(state?.entryFillSource).toBe("live");
+  });
+
+  it("engages the kill switch fail-closed when the state save fails after placement", async () => {
+    const repo = new InMemoryPaperRepository(-1); // always fail saves
+    const { adapter, orders } = makeTrackingFuturesAdapter();
+    let killReason = "";
+    const killSwitch: KillSwitchService = {
+      isEngaged: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(killReason),
+      engage: (reason) =>
+        Effect.sync(() => {
+          killReason = reason;
+        }),
+      disengage: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      makeOptions({ isLive: true }),
+      repo,
+      makeCandles(20, 1000, "oscillate"),
+      adapter,
+      makeRiskGuard(),
+      makeCircuitBreaker(),
+      killSwitch,
+    );
+
+    expect(orders.length).toBeGreaterThan(0); // the order WAS placed
+    expect(killReason).toBe("state save failed after order placement");
+    expect(result.note).toContain("state save failed after order placement");
+    expect(result.action).toBe("hold");
+  });
+
+  it("cancels resting orders when a genuine mismatch engages the kill switch", async () => {
+    const repo = new InMemoryPaperRepository();
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(20),
+        peakCapital: money(20),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.02"),
+        entryFee: money(0),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(
+          makeOptions({ isLive: true }),
+        ),
+        cohortId: "test-live-cohort",
+        candidateLockAt: new Date("2026-01-01T00:00:00.000Z"),
+        datasetCutoffAt: new Date("2026-01-01T00:00:00.000Z"),
+        entryOpenedAt: new Date("2026-01-01T00:15:00.000Z"),
+        executionEnvironment: "bitget-live",
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const { adapter } = makeTrackingFuturesAdapter();
+    const cancelled: string[] = [];
+    const mismatchAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      getPosition: () =>
+        Effect.succeed({
+          symbol: "ETH/USDT",
+          side: "short",
+          productType: "USDT-FUTURES",
+          marginMode: "isolated",
+          leverage: 1,
+          quantity: money("0.02"),
+          available: money("0.02"),
+          entryPrice: money(1000),
+          marginCoin: "USDT",
+        }),
+      cancelOpenOrders: (symbol) =>
+        Effect.sync(() => {
+          cancelled.push(symbol);
+        }),
     };
     let killReason = "";
     const killSwitch: KillSwitchService = {
@@ -855,10 +1123,8 @@ describe("grid paper engine", () => {
     );
 
     expect(result.note).toContain("LIVE POSITION MISMATCH");
-    expect(orders).toHaveLength(0);
-    expect(killReason).toContain(
-      "exchange position exists without local state",
-    );
+    expect(killReason).toContain("differs from exchange short");
+    expect(cancelled).toContain("ETH/USDT");
   });
 
   it("fails closed when persisted live state has no exchange position", async () => {

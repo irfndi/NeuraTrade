@@ -18,6 +18,7 @@ import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
   type FuturesOrderFill,
+  type FuturesPosition,
   type FuturesMarginMode,
   type FuturesProductType,
 } from "../exchange/futures-adapter.js";
@@ -127,6 +128,41 @@ function sma(
 
 function makeId(): string {
   return `grid-paper-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Build the post-entry GridPaperState for a live position recorded from the
+ * exchange rather than from a place-order fill (reconciliation adoption, or
+ * adoption after a lost fill confirmation). Carries the same provenance
+ * fields as a normal live entry so readiness-fingerprint checks and exit
+ * rules keep working. entryFillSource "adopted" is accepted by the
+ * reconciliation as a live-bound state.
+ */
+function adoptedGridState(
+  state: GridPaperState,
+  position: FuturesPosition,
+  strategyFingerprint: string,
+  executionEnvironment: "bitget-demo" | "bitget-live",
+  now: Date,
+): GridPaperState {
+  return {
+    ...state,
+    side: position.side,
+    entryPrice: position.entryPrice,
+    entryOrderId: "adopted",
+    entryClientOid: undefined,
+    entryFilledQty: position.quantity,
+    entryFee: money(0),
+    entryFillSource: "adopted",
+    leverage: position.leverage,
+    strategyConfigFingerprint: strategyFingerprint,
+    cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+    candidateLockAt: now,
+    datasetCutoffAt: now,
+    entryOpenedAt: now,
+    executionEnvironment,
+    updatedAt: now,
+  };
 }
 
 interface GridOrderSizing {
@@ -442,6 +478,42 @@ export function runGridPaperTradingIteration(
     const productType = options.productType ?? "USDT-FUTURES";
     const marginMode = options.marginMode ?? "isolated";
 
+    let note = "no action";
+
+    // Persist grid state with up to 3 attempts (200ms/400ms backoff). On
+    // final failure, engage the account kill switch fail-closed: a live
+    // position that is not recorded locally must halt trading, never
+    // silently continue. Returns true when the state was persisted.
+    const saveStateWithRetry = (
+      s: GridPaperState,
+      failReason: string,
+    ): Effect.Effect<boolean, KillSwitchError, never> =>
+      Effect.gen(function* () {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const saved = yield* repo.saveGridState(s).pipe(Effect.result);
+          if (saved._tag === "Success") return true;
+          if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
+        }
+        yield* killSwitch.engage(failReason);
+        return false;
+      });
+
+    // Best-effort cancellation of any resting open orders for the symbol.
+    // Adapters without cancellation support omit cancelOpenOrders; the kill
+    // switch remains the fail-closed gate regardless.
+    const cancelRestingOrders = (
+      symbol: string,
+      productType: FuturesProductType,
+    ): Effect.Effect<void, never, never> =>
+      adapter.cancelOpenOrders === undefined
+        ? Effect.void
+        : adapter.cancelOpenOrders(symbol, productType).pipe(
+            Effect.match({
+              onSuccess: () => undefined,
+              onFailure: () => undefined,
+            }),
+          );
+
     if (isLive) {
       const reconciliation = reconcileLivePosition(
         state,
@@ -453,9 +525,73 @@ export function runGridPaperTradingIteration(
           entryPrice: state.entryPrice,
         },
       );
-      if (reconciliation.kind === "mismatch") {
+      if (reconciliation.kind === "adopt") {
+        // The exchange holds a position the local state never recorded
+        // (e.g. the fill confirmation was lost between the adapter and the
+        // state save). Adopt it into local state and CONTINUE managing it —
+        // exit rules apply below — instead of holding the kill switch
+        // forever on a position we can see and control.
+        state = adoptedGridState(
+          state,
+          reconciliation.position,
+          strategyFingerprint,
+          executionEnvironment,
+          current.timestamp,
+        );
+        const persisted = yield* saveStateWithRetry(
+          state,
+          "state save failed after position adoption",
+        );
+        if (!persisted) {
+          return {
+            action: "hold" as const,
+            side: state.side,
+            capital: toNumber(state.capital),
+            peakCapital: toNumber(state.peakCapital),
+            note: "KILL SWITCH ENGAGED: state save failed after position adoption",
+          };
+        }
+        note = `[LIVE] adopted ${reconciliation.position.side} ${reconciliation.position.quantity.toString()} @ ${reconciliation.position.entryPrice.toString()} (untracked exchange position)`;
+      } else if (reconciliation.kind === "unadoptable") {
+        // The exchange position cannot be represented locally (invalid
+        // quantity/price). Close it out instead of adopting garbage.
+        const close = yield* adapter
+          .closePosition({
+            symbol: options.symbol,
+            side: reconciliation.position.side === "long" ? "sell" : "buy",
+            productType,
+            marginMode,
+            leverage: state.leverage,
+            size: reconciliation.position.quantity,
+          })
+          .pipe(Effect.result);
+        if (close._tag === "Success" && close.success !== null) {
+          note = `[LIVE] closed untracked invalid exchange position (${reconciliation.reason})`;
+        } else {
+          const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
+          yield* killSwitch.engage(reason);
+          yield* cancelRestingOrders(options.symbol, productType);
+          state = {
+            ...state,
+            killed: true,
+            lastTimestamp: current.timestamp,
+            updatedAt: new Date(),
+          };
+          yield* repo.saveGridState(state);
+          return {
+            action: "hold" as const,
+            side: state.side,
+            capital: toNumber(state.capital),
+            peakCapital: toNumber(state.peakCapital),
+            note: reason,
+          };
+        }
+      } else if (reconciliation.kind === "mismatch") {
         const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
         yield* killSwitch.engage(reason);
+        // Cancel any resting open orders for the symbol so pending orders
+        // cannot pile up while the kill switch holds (best-effort).
+        yield* cancelRestingOrders(options.symbol, productType);
         state = {
           ...state,
           killed: true,
@@ -522,8 +658,6 @@ export function runGridPaperTradingIteration(
       new Date(),
       state.capital,
     );
-
-    let note = "no action";
 
     const closeTrade = (
       side: GridPaperPositionSide,
@@ -631,7 +765,8 @@ export function runGridPaperTradingIteration(
             s.entryPrice,
           ).size;
           const closeSize =
-            s.entryFillSource === "live" &&
+            (s.entryFillSource === "live" ||
+              s.entryFillSource === "adopted") &&
             s.entryFilledQty?.greaterThan(0) === true
               ? s.entryFilledQty
               : size;
@@ -671,7 +806,8 @@ export function runGridPaperTradingIteration(
           s.maxPositionPct,
           s.leverage,
           s.updatedAt,
-          s.entryFillSource === "live" &&
+          (s.entryFillSource === "live" ||
+            s.entryFillSource === "adopted") &&
             s.entryOrderId &&
             s.entryFilledQty &&
             s.entryFee
@@ -822,36 +958,101 @@ export function runGridPaperTradingIteration(
               // position mode so Bitget doesn't reject orders with 40774
               // (order type must match the account's position type).
               yield* adapter.setPositionMode(productType, "one_way");
-              const fill = yield* adapter.placeOrder({
-                symbol: options.symbol,
-                side: entrySide === "long" ? "buy" : "sell",
-                type: "limit",
-                size,
-                productType,
-                marginMode,
-                leverage: orderLeverage,
-                price: entryLevelPrice,
-              });
-              state = {
-                ...state,
-                side: entrySide,
-                entryPrice: money(fill.filledPrice),
-                entryOrderId: fill.orderId,
-                entryClientOid: fill.clientOid,
-                entryFilledQty: fill.filledQty,
-                entryFee: fill.fee,
-                entryFillSource: "live",
-                leverage: orderLeverage,
-                strategyConfigFingerprint: strategyFingerprint,
-                cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
-                candidateLockAt: current.timestamp,
-                datasetCutoffAt: current.timestamp,
-                entryOpenedAt: new Date(),
-                executionEnvironment,
-                updatedAt: new Date(),
-                lastTimestamp: current.timestamp,
-              };
-              note = `[LIVE] opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${orderLeverage}x)`;
+              const placed = yield* adapter
+                .placeOrder({
+                  symbol: options.symbol,
+                  side: entrySide === "long" ? "buy" : "sell",
+                  type: "limit",
+                  size,
+                  productType,
+                  marginMode,
+                  leverage: orderLeverage,
+                  price: entryLevelPrice,
+                })
+                .pipe(Effect.result);
+              if (placed._tag === "Failure") {
+                // The adapter may have acked the order and then lost the
+                // fill confirmation (e.g. its fill poll failed after the
+                // order was accepted). Check the exchange directly and
+                // adopt the position if one now exists, so the order cannot
+                // orphan on the book; otherwise surface the original error.
+                const currentPosition = yield* adapter
+                  .getPosition(options.symbol, productType)
+                  .pipe(Effect.result);
+                if (
+                  currentPosition._tag === "Success" &&
+                  currentPosition.success !== null
+                ) {
+                  state = adoptedGridState(
+                    state,
+                    currentPosition.success,
+                    strategyFingerprint,
+                    executionEnvironment,
+                    current.timestamp,
+                  );
+                  const persisted = yield* saveStateWithRetry(
+                    state,
+                    "state save failed after order placement",
+                  );
+                  note = `[LIVE] placed ${entrySide} ${size.toFixed(6)} then adopted ${currentPosition.success.side} ${currentPosition.success.quantity.toString()} @ ${currentPosition.success.entryPrice.toString()} (fill confirmation lost)`;
+                  if (!persisted) {
+                    return {
+                      action: "hold" as const,
+                      side: state.side,
+                      capital: toNumber(state.capital),
+                      peakCapital: toNumber(state.peakCapital),
+                      note: "KILL SWITCH ENGAGED: state save failed after order placement",
+                    };
+                  }
+                } else {
+                  return yield* Effect.fail(
+                    new ExchangeError(
+                      `live ${entrySide} entry failed: ${placed.failure.reason}`,
+                      placed.failure,
+                    ),
+                  );
+                }
+              } else {
+                const fill = placed.success;
+                state = {
+                  ...state,
+                  side: entrySide,
+                  entryPrice: money(fill.filledPrice),
+                  entryOrderId: fill.orderId,
+                  entryClientOid: fill.clientOid,
+                  entryFilledQty: fill.filledQty,
+                  entryFee: fill.fee,
+                  entryFillSource: "live",
+                  leverage: orderLeverage,
+                  strategyConfigFingerprint: strategyFingerprint,
+                  cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+                  candidateLockAt: current.timestamp,
+                  datasetCutoffAt: current.timestamp,
+                  entryOpenedAt: new Date(),
+                  executionEnvironment,
+                  updatedAt: new Date(),
+                  lastTimestamp: current.timestamp,
+                };
+                // Persist the opened position IMMEDIATELY after the ack —
+                // never defer to the end-of-iteration save. A crash or a
+                // contended DB between the ack and that save orphans the
+                // live position (regression 2026-08-10: ADA short 126 filled
+                // on the Bitget demo with no grid_paper_state row).
+                const persisted = yield* saveStateWithRetry(
+                  state,
+                  "state save failed after order placement",
+                );
+                note = `[LIVE] opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${orderLeverage}x)`;
+                if (!persisted) {
+                  return {
+                    action: "hold" as const,
+                    side: state.side,
+                    capital: toNumber(state.capital),
+                    peakCapital: toNumber(state.peakCapital),
+                    note: "KILL SWITCH ENGAGED: state save failed after order placement",
+                  };
+                }
+              }
             }
           }
         } else {

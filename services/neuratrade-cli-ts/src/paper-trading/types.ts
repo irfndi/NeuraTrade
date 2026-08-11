@@ -113,7 +113,7 @@ export interface GridPaperState {
   readonly entryClientOid?: string;
   readonly entryFilledQty?: Money;
   readonly entryFee?: Money;
-  readonly entryFillSource?: "simulated" | "live";
+  readonly entryFillSource?: "simulated" | "live" | "adopted";
   readonly strategyConfigFingerprint?: string;
   readonly cohortId?: string;
   readonly candidateLockAt?: Date;

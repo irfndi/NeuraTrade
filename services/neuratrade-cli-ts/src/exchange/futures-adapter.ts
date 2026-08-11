@@ -113,6 +113,16 @@ export interface FuturesExchangeAdapterService {
     productType: FuturesProductType,
     positionMode: FuturesPositionMode,
   ) => Effect.Effect<void, ExchangeError>;
+
+  /**
+   * Cancel all resting open orders for a symbol. Optional: implementations
+   * without exchange-level order cancellation omit this member, and engines
+   * must treat absence as "no cancellation available" and skip.
+   */
+  readonly cancelOpenOrders?: (
+    symbol: string,
+    productType: FuturesProductType,
+  ) => Effect.Effect<void, ExchangeError>;
 }
 
 export const FuturesExchangeAdapter =

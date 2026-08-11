@@ -452,6 +452,10 @@ export interface BybitClientImpl {
     symbol: string;
     orderId: string;
   }) => Effect.Effect<BybitOrder, BybitClientError>;
+  /** All resting open orders for a symbol (realtime endpoint, no orderId). */
+  readonly getOpenOrders: (
+    symbol: string,
+  ) => Effect.Effect<ReadonlyArray<BybitOrder>, BybitClientError>;
   readonly cancelOrder: (args: {
     symbol: string;
     orderId: string;
@@ -554,6 +558,15 @@ function makeBybitClientImpl(
           const item = result?.list?.[0];
           return parseOrder(item ?? {});
         }),
+      ),
+    getOpenOrders: (symbol) =>
+      get<{ list?: ReadonlyArray<unknown> }>("/v5/order/realtime", {
+        category: "linear",
+        symbol,
+      }).pipe(
+        Effect.map((result) =>
+          (result?.list ?? []).map((order) => parseOrder(order)),
+        ),
       ),
     cancelOrder: ({ symbol, orderId }) =>
       post<unknown>("/v5/order/cancel", {
@@ -818,9 +831,24 @@ export function makeBybitFuturesAdapter(
       });
     });
 
+  const cancelOpenOrders: FuturesExchangeAdapterService["cancelOpenOrders"] = (
+    symbol,
+    _productType,
+  ) =>
+    Effect.gen(function* () {
+      const bybitSymbol = toBybitSymbol(symbol);
+      const open = yield* withError(client.getOpenOrders(bybitSymbol));
+      for (const order of open) {
+        yield* withError(
+          client.cancelOrder({ symbol: bybitSymbol, orderId: order.orderId }),
+        );
+      }
+    });
+
   return {
     placeOrder,
     closePosition,
+    cancelOpenOrders,
 
     getPosition: (symbol, productType) =>
       Effect.gen(function* () {

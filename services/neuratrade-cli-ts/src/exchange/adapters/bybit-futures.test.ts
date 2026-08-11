@@ -20,12 +20,14 @@ let calls: string[] = [];
 let lastOrder: BybitOrderRequest | undefined;
 let orderStatus = "Filled";
 let cancelError: string | undefined;
+let openOrders: ReadonlyArray<{ orderId: string }> = [];
 
 function makeStubClient(): BybitClientImpl {
   calls = [];
   lastOrder = undefined;
   orderStatus = "Filled";
   cancelError = undefined;
+  openOrders = [];
   return {
     getContract: () =>
       Effect.succeed({
@@ -84,6 +86,7 @@ function makeStubClient(): BybitClientImpl {
         cumExecQty: orderStatus === "Filled" ? lastOrder?.qty ?? "0" : "0",
         cumExecFee: orderStatus === "Filled" ? "0.5" : "0",
       }),
+    getOpenOrders: () => Effect.succeed(openOrders as never),
     cancelOrder: (args) =>
       cancelError
         ? Effect.fail(
@@ -392,6 +395,22 @@ describe("BybitFuturesExchangeAdapter", () => {
       expect(outcome.reason).toContain("cancel failed");
       expect(outcome.reason).toContain("may still be resting");
     }
+  });
+
+  it("cancels every resting open order for a symbol via cancelOpenOrders", async () => {
+    openOrders = [{ orderId: "bybit-1" }, { orderId: "bybit-2" }];
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const cancel = adapter.cancelOpenOrders;
+        if (cancel !== undefined) {
+          yield* cancel("BTC/USDT:USDT", "USDT-FUTURES");
+        }
+      }),
+    );
+
+    expect(calls).toContain("cancelOrder:BTCUSDT:bybit-1");
+    expect(calls).toContain("cancelOrder:BTCUSDT:bybit-2");
   });
 
   it("derives the hedge-mode position leg from side and reduceOnly", () => {

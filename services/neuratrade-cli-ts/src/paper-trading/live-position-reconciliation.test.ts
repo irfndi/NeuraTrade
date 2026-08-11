@@ -141,7 +141,8 @@ describe("reconcileLivePosition", () => {
     });
   });
 
-  it("rejects an exchange position without local state", () => {
+  it("adopts an exchange position that exists without local state", () => {
+    const position = makePosition("long", money("0.01"));
     const result = reconcileLivePosition(
       {
         side: null,
@@ -150,14 +151,48 @@ describe("reconcileLivePosition", () => {
         entryOrderId: undefined,
         entryFee: undefined,
       },
-      makePosition("long", money("0.01")),
+      position,
     );
 
-    expect(result).toEqual({
-      kind: "mismatch",
-      reason:
-        "exchange position exists without local state (long 0.01)",
+    expect(result).toEqual({ kind: "adopt", position });
+  });
+
+  it("rejects an unadoptable exchange position (invalid quantity)", () => {
+    const position = makePosition("long", money("0"));
+    const result = reconcileLivePosition(
+      {
+        side: null,
+        entryFillSource: undefined,
+        entryFilledQty: undefined,
+        entryOrderId: undefined,
+        entryFee: undefined,
+      },
+      position,
+    );
+
+    expect(result.kind).toBe("unadoptable");
+    expect(result).toMatchObject({
+      kind: "unadoptable",
+      position,
+      reason: expect.stringContaining("not adoptable"),
     });
+  });
+
+  it("accepts an adopted local position as live-bound evidence", () => {
+    const quantity = money("0.01");
+
+    expect(
+      reconcileLivePosition(
+        {
+          side: "long",
+          entryFillSource: "adopted",
+          entryFilledQty: quantity,
+          entryOrderId: "adopted",
+          entryFee: money(0),
+        },
+        makePosition("long", quantity),
+      ),
+    ).toEqual({ kind: "matched" });
   });
 
   it("rejects local state without an exchange position", () => {
