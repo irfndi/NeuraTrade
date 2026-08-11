@@ -914,10 +914,13 @@ export function runGridPaperTradingIteration(
               minOrderableNotional:
                 options.contractSpecs === undefined
                   ? undefined
-                  : Math.max(
-                      options.contractSpecs.minTradeUSDT,
-                      options.contractSpecs.minQty *
-                        toNumber(theoreticalEntryPrice),
+                  : toNumber(
+                      Decimal.max(
+                        money(options.contractSpecs.minTradeUSDT),
+                        money(options.contractSpecs.minQty).times(
+                          theoreticalEntryPrice,
+                        ),
+                      ),
                     ),
             })
             .pipe(Effect.result);

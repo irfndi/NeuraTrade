@@ -6,7 +6,7 @@ import {
   calculateATR,
 } from "../scalping/indicators.js";
 import { ExitEngine, SignalComposer } from "../scalping/services.js";
-import { Decimal, money, toNumber } from "../utils/money.js";
+import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import {
   MarketDataError,
   MarketDataGateway,
@@ -105,7 +105,7 @@ export interface FuturesPaperTradingIterationResult {
 function calculateFuturesNotionalValue(
   capital: Decimal,
   entryPrice: Decimal,
-  stopDistancePct: number,
+  stopDistancePct: Money,
   currentVolatility: number,
   options: FuturesPaperTradingOptions,
 ): {
@@ -131,7 +131,7 @@ function calculateFuturesNotionalValue(
   if (
     options.riskPerTradePct &&
     options.riskPerTradePct > 0 &&
-    stopDistancePct > 0
+    stopDistancePct.greaterThan(0)
   ) {
     let riskAmount = capital.times(options.riskPerTradePct / 100);
     // Daily-cap bound: never risk more than maxDailyLossPct divided by the
@@ -499,25 +499,24 @@ export function runFuturesPaperTradingIteration(
       const needsAtr = options.useAtrStops || options.minAtrPct > 0;
       const atr = needsAtr ? calculateATR(candles, 14) : null;
       const useAtr = options.useAtrStops && atr !== null && atr > 0;
-      const entryPriceNum = midPrice(orderBook);
-      const entryPrice = money(entryPriceNum);
+      const entryPrice = midPriceMoney(orderBook);
 
-      let estimatedStopLoss: number;
+      let estimatedStopLoss: Money;
       if (useAtr) {
+        const stopDistance = money(atr).times(options.atrStopMultiplier);
         estimatedStopLoss =
           side === "long"
-            ? entryPriceNum - atr * options.atrStopMultiplier
-            : entryPriceNum + atr * options.atrStopMultiplier;
+            ? entryPrice.minus(stopDistance)
+            : entryPrice.plus(stopDistance);
       } else {
         estimatedStopLoss =
           side === "long"
-            ? entryPriceNum * (1 - options.stopLossPct / 100)
-            : entryPriceNum * (1 + options.stopLossPct / 100);
+            ? entryPrice.times(1 - options.stopLossPct / 100)
+            : entryPrice.times(1 + options.stopLossPct / 100);
       }
-      const stopDistancePct =
-        entryPriceNum > 0
-          ? Math.abs(entryPriceNum - estimatedStopLoss) / entryPriceNum
-          : 0;
+      const stopDistancePct = entryPrice.greaterThan(0)
+        ? entryPrice.minus(estimatedStopLoss).abs().div(entryPrice)
+        : money(0);
       const currentVolatility = calculateAnnualizedVolatility(
         candles,
         options.volatilityLookback,
@@ -525,7 +524,10 @@ export function runFuturesPaperTradingIteration(
       );
 
       if (options.minAtrPct > 0) {
-        const atrPct = atr && entryPriceNum > 0 ? atr / entryPriceNum : 0;
+        const atrPct =
+          atr && entryPrice.greaterThan(0)
+            ? money(atr).div(entryPrice).toNumber()
+            : 0;
         if (atrPct < options.minAtrPct / 100) {
           return {
             action: "hold" as const,
@@ -786,6 +788,16 @@ function midPrice(orderBook: OrderBook): number {
     return orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0;
   }
   return (orderBook.bids[0].price + orderBook.asks[0].price) / 2;
+}
+
+/** Orderbook mid as money (Decimal), used for entry-price math. */
+function midPriceMoney(orderBook: OrderBook): Money {
+  if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
+    return money(orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0);
+  }
+  return money(orderBook.bids[0].price)
+    .plus(orderBook.asks[0].price)
+    .div(2);
 }
 
 function toOrderBookMetrics(orderBook: OrderBook) {
