@@ -364,6 +364,7 @@ import {
   gridUniverseTargetFillsPerDayOption,
   gridUniverseAccountCapitalOption,
   gridUniverseTierOption,
+  gridUniverseDataSourceOption,
   watchlistListExchangeOption,
   watchlistListTimeframeOption,
   flowSymbolsOption,
@@ -5091,6 +5092,7 @@ export const gridUniverseScanCommand = Command.make(
     accountCapital: gridUniverseAccountCapitalOption,
     tier: gridUniverseTierOption,
     market: gridUniverseMarketOption,
+    dataSource: gridUniverseDataSourceOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -5098,6 +5100,24 @@ export const gridUniverseScanCommand = Command.make(
         return yield* Effect.fail(
           new Error(
             `invalid --tier '${args.tier}': expected 'readiness' or 'fast'`,
+          ),
+        );
+      }
+      if (args.dataSource !== "gateway" && args.dataSource !== "db-mainnet") {
+        return yield* Effect.fail(
+          new Error(
+            `invalid --data-source '${args.dataSource}': expected 'gateway' or 'db-mainnet'`,
+          ),
+        );
+      }
+      if (args.dataSource === "db-mainnet" && !args.market) {
+        // The DB-sourced (non-market) scan reads candles at the scan
+        // timeframe — for bybit-futures those 15m rows are TESTNET-native.
+        // db-mainnet must go through the market scan so candles come from
+        // the resampled 5m mainnet cache instead.
+        return yield* Effect.fail(
+          new Error(
+            `--data-source db-mainnet requires --market (db-mainnet candles come from the 5m mainnet DB cache via the market scan)`,
           ),
         );
       }
@@ -5134,6 +5154,11 @@ export const gridUniverseScanCommand = Command.make(
         trendFilterPeriod: args.trendFilterPeriod,
         searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
         tier: args.tier,
+        // db-mainnet evaluates on mainnet-fidelity candles; its fills are
+        // modeled conservatively by default (a wick touch is not a fill).
+        dataSource: args.dataSource,
+        fillModel:
+          args.dataSource === "db-mainnet" ? "conservative" : "wick",
       };
 
       const targetFillsPerDay = Option.isSome(args.targetFillsPerDay)
@@ -5272,20 +5297,26 @@ export const gridUniverseScanCommand = Command.make(
       const runScan = () =>
         Effect.gen(function* () {
           const gateway = yield* MarketDataGateway;
-          const futuresSymbols = yield* gateway
-            .fetchSymbols(args.exchange)
-            .pipe(
-              Effect.catch((err) =>
-                Effect.gen(function* () {
-                  const reason =
-                    err instanceof Error ? err.message : String(err);
-                  yield* Console.warn(
-                    `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
+          // db-mainnet: the universe already came from the mainnet 5m cache —
+          // fetching the testnet contract list to filter survivors would
+          // re-introduce testnet ground truth. Empty set = no filter.
+          const futuresSymbols =
+            args.dataSource === "db-mainnet"
+              ? []
+              : yield* gateway
+                  .fetchSymbols(args.exchange)
+                  .pipe(
+                    Effect.catch((err) =>
+                      Effect.gen(function* () {
+                        const reason =
+                          err instanceof Error ? err.message : String(err);
+                        yield* Console.warn(
+                          `⚠️ futures symbol fetch failed (${reason}) — skipping the futures filter this cycle`,
+                        );
+                        return [] as readonly string[];
+                      }),
+                    ),
                   );
-                  return [] as readonly string[];
-                }),
-              ),
-            );
           const futuresSet = new Set(futuresSymbols);
           const canonicalSymbol = (symbol: string) =>
             symbol.includes(":")

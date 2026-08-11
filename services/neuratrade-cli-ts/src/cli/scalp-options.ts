@@ -1175,6 +1175,13 @@ export const gridUniverseTierOption = Options.text("tier").pipe(
   ),
 );
 
+export const gridUniverseDataSourceOption = Options.text("data-source").pipe(
+  Options.withDefault("gateway"),
+  Options.withDescription(
+    "Candle source for the market scan: 'gateway' (default, live exchange candles — testnet-wired for bybit-futures) or 'db-mainnet' (5m mainnet candles from the DB resampled to the scan timeframe; no gateway fetches; fills modeled conservatively). Requires --market",
+  ),
+);
+
 export const watchlistListExchangeOption = Options.text("exchange").pipe(
   Options.withDefault("bitget-futures"),
   Options.withDescription("Exchange to list watchlist for"),

@@ -272,14 +272,19 @@ module.exports = {
         "index.ts",
         "scalp",
         "grid-universe-scan",
-        // Bybit testnet mirrors ~788 linear contracts (vs the Bitget demo's
-        // 25 majors) — the only universe with gate-eligible grid configs
-        // (verified 2026-08-10: 10 gate-eligible, ETH selected ~13
-        // fills/day; Bitget demo yields 0 regardless of step size).
+        // Bybit mainnet 5m candles (fetch-flow-mainnet backfill, ~12 months
+        // for ~40 symbols) resampled to the scan timeframe — the ONLY
+        // universe with gate-eligible grid configs. Testnet wicks are ~3.3x
+        // wider than mainnet and contaminated every downstream metric
+        // (verified 2026-08-11: ETH +17.85% testnet walk-forward edge but
+        // -10.3% over 12 mainnet months), so the watch evaluates on
+        // db-mainnet data with conservative (modeled) fills instead.
         "--exchange",
         "bybit-futures",
         "--timeframe",
         "15m",
+        "--data-source",
+        "db-mainnet",
         "--min-candles",
         "500",
         "--min-fill-frequency-pct",

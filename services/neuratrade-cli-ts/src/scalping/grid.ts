@@ -106,6 +106,18 @@ export interface GridWalkForwardWindow {
   readonly testReturnPct: number;
   readonly testMaxDrawdownPct: number;
   readonly testTrades: number;
+  /**
+   * Mean winning trade return (%) in this window's test slice
+   * (pnlPct of winning trades × 100); undefined when the window had no
+   * winning trades.
+   */
+  readonly avgWinPct?: number;
+  /**
+   * Mean losing trade magnitude (%) in this window's test slice
+   * (|pnlPct| of losing trades × 100); undefined when the window had no
+   * losing trades.
+   */
+  readonly avgLossPct?: number;
 }
 
 export interface GridWalkForwardResult {
@@ -114,6 +126,20 @@ export interface GridWalkForwardResult {
   readonly profitableWindowsPct: number;
   readonly maxDrawdownPct: number;
   readonly totalTrades: number;
+  /**
+   * Trade-weighted mean winning trade return (%) across all window test
+   * slices (Σ win pnlPct / wins × 100); undefined when no window had a
+   * winning trade.
+   */
+  readonly avgWinPct?: number;
+  /**
+   * Trade-weighted mean losing trade magnitude (%) across all window test
+   * slices (Σ |loss pnlPct| / losses × 100); undefined when no window had a
+   * losing trade. Together with avgWinPct this gives the structural
+   * win/loss asymmetry the funnel gate requires (breakevenWinRate =
+   * avgLossPct / (avgWinPct + avgLossPct) ≤ 0.40 → target ≥ 1.5× stop).
+   */
+  readonly avgLossPct?: number;
 }
 
 function sma(
@@ -436,6 +462,12 @@ export function runGridWalkForward(
   let runningCapital = initialCapital;
   let aggregateMaxDrawdown = 0;
   let totalTrades = 0;
+  // Trade-weighted win/loss accumulation across ALL window test slices:
+  // sums (not per-window means) so windows with more trades weigh more.
+  let totalWinPct = 0;
+  let totalLossPct = 0;
+  let totalWins = 0;
+  let totalLosses = 0;
 
   for (
     let start = 0;
@@ -465,6 +497,27 @@ export function runGridWalkForward(
     );
     totalTrades += testResult.totalTrades;
 
+    // Per-window win/loss means (undefined when a window has no winners or
+    // no losers) — the funnel gate needs the asymmetry per validation slice,
+    // not just the aggregate.
+    let windowWins = 0;
+    let windowLosses = 0;
+    let windowWinPct = 0;
+    let windowLossPct = 0;
+    for (const trade of testResult.trades) {
+      if (trade.pnlPct >= 0) {
+        windowWins += 1;
+        windowWinPct += trade.pnlPct;
+      } else {
+        windowLosses += 1;
+        windowLossPct += Math.abs(trade.pnlPct);
+      }
+    }
+    totalWins += windowWins;
+    totalLosses += windowLosses;
+    totalWinPct += windowWinPct;
+    totalLossPct += windowLossPct;
+
     windows.push({
       trainStartIndex: start,
       trainEndIndex: start + trainWindow,
@@ -474,6 +527,10 @@ export function runGridWalkForward(
       testReturnPct: testResult.totalReturnPct,
       testMaxDrawdownPct: testResult.maxDrawdownPct,
       testTrades: testResult.totalTrades,
+      avgWinPct:
+        windowWins > 0 ? (windowWinPct / windowWins) * 100 : undefined,
+      avgLossPct:
+        windowLosses > 0 ? (windowLossPct / windowLosses) * 100 : undefined,
     });
   }
 
@@ -491,5 +548,8 @@ export function runGridWalkForward(
     profitableWindowsPct,
     maxDrawdownPct: aggregateMaxDrawdown,
     totalTrades,
+    avgWinPct: totalWins > 0 ? (totalWinPct / totalWins) * 100 : undefined,
+    avgLossPct:
+      totalLosses > 0 ? (totalLossPct / totalLosses) * 100 : undefined,
   };
 }

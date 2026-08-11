@@ -13,7 +13,7 @@ import {
 } from "../market-data/gateway.js";
 import {
   MarketDataRepository,
-  type MarketDataRepositoryError,
+  MarketDataRepositoryError,
   type MarketDataRepositoryService,
 } from "../market-data/repository.js";
 import type { Candle } from "../market-data/types.js";
@@ -197,6 +197,38 @@ export interface GridUniverseOptions {
    * acceptance must not claim parity that was never measured.
    */
   readonly executionParityPassed?: boolean;
+  /**
+   * Candle source for the market scan. 'gateway' (default) fetches live
+   * candles through the market gateway (testnet-wired for bybit-futures —
+   * testnet wicks are ~3.3x wider than mainnet and contaminate every
+   * downstream metric). 'db-mainnet' reads 5m MAINNET candles from the
+   * market-data DB (exchange 'bybit-futures', timeframe '5m') and resamples
+   * them to the scan's timeframe — no gateway fetches, no testnet wicks.
+   */
+  readonly dataSource?: "gateway" | "db-mainnet";
+  /**
+   * Fill model for the fills/day projection and fill-frequency gates.
+   * 'wick' (default) counts a grid level touched by a candle range as a
+   * fill (optimistic). 'conservative' discounts touch-counted fills by
+   * `fillFraction` — a wick does not guarantee a limit fill at that price
+   * (queue/partial-fill risk). db-mainnet scans default to 'conservative'.
+   */
+  readonly fillModel?: "wick" | "conservative";
+  /**
+   * Fraction (0..1) of touch-counted fills that actually fill under
+   * fillModel 'conservative' (default 0.5).
+   */
+  readonly fillFraction?: number;
+  /**
+   * Structural-asymmetry gate threshold: the config's breakeven win rate
+   * (avgLossPct / (avgWinPct + avgLossPct) over the walk-forward window
+   * trades) must be at most this value (default 0.40 = target >= 1.5x stop).
+   * Configs whose average loss is too large relative to their average win
+   * are rejected even when walk-forward returns are positive — the ETH
+   * 1.25/1/0/1/24 profile (BE 56%) loses -10.3% over 12 mainnet months
+   * despite +17.85% testnet walk-forward edge.
+   */
+  readonly maxBreakevenWinRate?: number;
 }
 
 export interface GridUniverseEntry {
@@ -364,6 +396,89 @@ function timeframeMinutesFor(timeframe: string): number {
 }
 
 /**
+ * Resample ascending candles (e.g. 5m mainnet rows) into a coarser
+ * timeframe by grouping on aligned window boundaries
+ * (timestamp floored to targetMinutes). Per group: open = first open,
+ * high = max, low = min, close = last close, volume = sum, timestamp =
+ * window start, exchange/symbol preserved, timeframe = targetTimeframe.
+ * Partial edge groups (1-2 bars at the series ends) are kept — backtest
+ * warmup absorbs them and dropping them would silently shorten history.
+ * Candles MUST be sorted ascending by timestamp; targetMinutes must be a
+ * multiple of the input spacing (5m base for db-mainnet).
+ */
+export function resampleCandles(
+  candles: readonly Candle[],
+  targetMinutes: number,
+  targetTimeframe: string,
+): Candle[] {
+  if (candles.length === 0) return [];
+  const windowMs = targetMinutes * 60_000;
+  const groups = new Map<number, Candle>();
+  for (const c of candles) {
+    const windowStart = Math.floor(c.timestamp.getTime() / windowMs) * windowMs;
+    const existing = groups.get(windowStart);
+    if (existing === undefined) {
+      groups.set(windowStart, {
+        ...c,
+        timeframe: targetTimeframe,
+        timestamp: new Date(windowStart),
+      });
+    } else {
+      groups.set(windowStart, {
+        ...existing,
+        high: Math.max(existing.high, c.high),
+        low: Math.min(existing.low, c.low),
+        close: c.close,
+        volume: existing.volume + c.volume,
+      });
+    }
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, bar]) => bar);
+}
+
+/**
+ * Structural win/loss asymmetry of a walk-forward run:
+ * breakevenWinRate = avgLossPct / (avgWinPct + avgLossPct) — the win rate
+ * at which the config breaks even given its average win and average loss
+ * sizes. A config with avgWin 1.10% / avgLoss 1.40% (ETH-1.25/1/0/1/24)
+ * breaks even at 56%; the BTC/SOL gate-validated profiles (target 3-4)
+ * break even at <= 40% (target >= 1.5x stop). Returns undefined when the
+ * walk-forward produced no measurable win/loss data (no trades, or a
+ * degenerate all-flat series) — callers pass that through (no rejection).
+ */
+export function breakevenWinRateFromWalkForward(
+  walkForward: Pick<
+    GridWalkForwardResult,
+    "avgWinPct" | "avgLossPct"
+  >,
+): number | undefined {
+  const { avgWinPct, avgLossPct } = walkForward;
+  if (avgWinPct === undefined && avgLossPct === undefined) return undefined;
+  const win = avgWinPct ?? 0;
+  const loss = avgLossPct ?? 0;
+  const denom = win + loss;
+  if (!(denom > 0) || !Number.isFinite(denom)) return undefined;
+  return loss / denom;
+}
+
+/**
+ * Effective fill-model multiplier: 1 for 'wick' (touch = fill), fillFraction
+ * for 'conservative' (touch x fraction). Defaults: 'wick' for the gateway
+ * path, 'conservative' for db-mainnet (mainnet wicks are real, but a touch
+ * still does not guarantee a limit fill).
+ */
+export function fillModelMultiplier(
+  options: Pick<GridUniverseOptions, "fillModel" | "fillFraction" | "dataSource">,
+): number {
+  if ((options.fillModel ?? (options.dataSource === "db-mainnet" ? "conservative" : "wick")) === "conservative") {
+    return Math.max(0, Math.min(1, options.fillFraction ?? 0.5));
+  }
+  return 1;
+}
+
+/**
  * Stage-4 gate criteria — EXACTLY the manifest sweep gates from
  * scripts/gate-scored-grid-search-2026-08-06.ts: every gate must clear.
  */
@@ -426,20 +541,35 @@ export function gateScoredEligibility(
   options: GridUniverseOptions,
 ): GridUniverseEntry | null {
   const tier = options.tier ?? "readiness";
+  // Structural-asymmetry gate (both tiers): the config's breakeven win rate
+  // over the walk-forward window trades must be <= maxBreakevenWinRate
+  // (default 0.40 = target >= 1.5x stop). Rejects profiles like ETH
+  // 1.25/1/0/1/24 (BE 56%) whose average loss overwhelms the average win
+  // despite positive walk-forward returns.
+  const maxBreakevenWinRate = options.maxBreakevenWinRate ?? 0.4;
+  const breakevenWinRate = breakevenWinRateFromWalkForward(entry.walkForward);
+  const asymmetryOk =
+    breakevenWinRate === undefined || breakevenWinRate <= maxBreakevenWinRate;
   // Fast-tier acceptance (light): walk-forward profitability (the entry's
   // `passed` flag) + a fills/day floor from computeFillFrequencyPct (5%
   // touch on the sweep's grid step) + the strict time-split honesty check.
   // The readiness window/OOS>=30/stress-LB requirements are dropped. The
   // floor is checked here (not just via options.minFillFrequencyPct) so the
-  // touch rate is measured honestly even when that option is disabled.
+  // touch rate is measured honestly even when that option is disabled. The
+  // conservative fill model discounts the floor (modeled fills = touch x
+  // fillFraction) — a testnet-grade wick touch must not clear the floor at
+  // face value.
   const fastEligible =
     tier === "fast" &&
     entry.passed &&
+    asymmetryOk &&
     computeFillFrequencyPct(
       candles,
       entry.bestParams.gridStepPct,
       FAST_TIER_MIN_FILL_FREQUENCY_PCT,
-    ) >= FAST_TIER_MIN_FILL_FREQUENCY_PCT;
+    ) *
+      fillModelMultiplier(options) >=
+      FAST_TIER_MIN_FILL_FREQUENCY_PCT;
 
   let best: {
     targetRatio: number;
@@ -484,9 +614,11 @@ export function gateScoredEligibility(
       });
       if (tier === "readiness") {
         // Full readiness board: valid evidence must clear EVERY gate AND
-        // survive the strict time-split (regime-concentration guard);
+        // survive the strict time-split (regime-concentration guard) AND
+        // the structural-asymmetry requirement (BE win rate <= 0.40);
         // invalid evidence fails closed.
         if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
+        if (!asymmetryOk) continue;
         if (!passesTimeSplitGate(candles, grid)) continue;
       } else {
         // Fast tier: the light criteria are the ONLY acceptance — evidence
@@ -574,14 +706,29 @@ function evaluateUniverseSymbol(
     walkForward.profitableWindowsPct >= options.minProfitableWindowsPct &&
     walkForward.aggregateReturnPct >= options.minAggregateReturnPct;
 
+  // Structural-asymmetry gate: a config whose average loss is too large
+  // relative to its average win must be rejected even when walk-forward
+  // returns are positive (the ETH-1.25/1/0/1/24 profile has BE 56% and
+  // loses -10.3% over 12 mainnet months despite +17.85% testnet edge).
+  const maxBreakevenWinRate = options.maxBreakevenWinRate ?? 0.4;
+  const breakevenWinRate = breakevenWinRateFromWalkForward(walkForward);
+  const asymmetryOk =
+    breakevenWinRate === undefined || breakevenWinRate <= maxBreakevenWinRate;
+
+  // Fill model: 'wick' counts every touch as a fill; 'conservative' (the
+  // db-mainnet default) discounts touches by fillFraction — a wick does not
+  // guarantee a limit fill at that price. The gate and fills/day projection
+  // both use the modeled fill rate.
+  const fillMultiplier = fillModelMultiplier(options);
   const fillGate = options.minFillFrequencyPct ?? 0;
   const fillFrequencyPct = computeFillFrequencyPct(
     candles,
     bestParams.gridStepPct,
     fillGate,
   );
+  const modeledFillPct = fillFrequencyPct * fillMultiplier;
 
-  const passed = passedBase && fillFrequencyPct >= fillGate;
+  const passed = passedBase && asymmetryOk && modeledFillPct >= fillGate;
 
   // Candidate metrics for the frequency-targeted selection stage. All are
   // display/selection hints, not money — plain numbers are fine.
@@ -591,9 +738,11 @@ function evaluateUniverseSymbol(
   const oosTrades = walkForward.totalTrades;
   // ponytail: computeFillFrequencyPct(…, 0) reports 100 (gate disabled), so
   // fillsPerDay degrades to the bars/day upper bound; to measure the real
-  // touch rate, pass options.minFillFrequencyPct when it's > 0.
+  // touch rate, pass options.minFillFrequencyPct when it's > 0. The
+  // conservative fill model discounts the projection (fills/day = modeled
+  // fill rate x bars/day).
   const fillsPerDay =
-    (fillFrequencyPct / 100) * barsPerDayForTimeframe(options.timeframe);
+    (modeledFillPct / 100) * barsPerDayForTimeframe(options.timeframe);
   // Approximation: aggregate OOS return spread evenly over OOS trades —
   // ignores compounding and win/loss asymmetry, but ranks candidates fairly.
   const edgePerTradePct = walkForward.aggregateReturnPct / Math.max(oosTrades, 1);
@@ -698,47 +847,81 @@ export function runMarketUniverseScan(
     const repo = yield* MarketDataRepository;
 
     const tier = options.tier ?? "readiness";
+    const dataSource = options.dataSource ?? "gateway";
     yield* Effect.log(
       tier === "fast"
-        ? "market scan: tier=fast (light: time-split + walk-forward + fills/day floor)"
-        : "market scan: tier=readiness (full gate board)",
+        ? `market scan: tier=fast (light: time-split + walk-forward + fills/day floor) dataSource=${dataSource}`
+        : `market scan: tier=readiness (full gate board) dataSource=${dataSource}`,
     );
 
-    const [marketSymbols, volumes, demoSymbols] = yield* Effect.all([
-      gateway.fetchSymbols(options.exchange),
-      gateway.fetch24hrVolumes(options.exchange),
-      gateway.fetchDemoSymbols(options.exchange),
-    ]);
-    // Tickers key volumes by "BTCUSDT" while fetchSymbols returns
-    // "BTC/USDT"; normalize so the liquidity filter sees the same keys.
-    const normalizedVolumes = new Map<string, number>(
-      Object.entries(volumes).map(([symbol, volume]) => [
-        symbol.includes("/") ? symbol : symbol.replace(/USDT$/, "/USDT"),
-        volume,
-      ]),
-    );
-    // Hard universe bound: the demo/tradeable instrument subset. The live
-    // list (~741 contracts) includes contracts the simulated engine cannot
-    // trade — scanning them wastes the whole cycle on symbols the
-    // tradeability probe then drops (verified 2026-08-10: TIA/IOTX/WLFI/
-    // GRVT/CYS 40034 on the demo account; the PAPTRADING-scoped list is
-    // ~25 majors). Gateways without a demo concept return the full list,
-    // making this filter a no-op.
-    const demoSet = new Set(
-      demoSymbols.map((symbol) =>
-        symbol.includes("/") ? symbol : symbol.replace(/USDT$/, "/USDT"),
-      ),
-    );
+    // db-mainnet candles come from the 5m mainnet cache; the scan
+    // timeframe must be a resample of 5m (5m itself = identity).
+    const targetMinutes = timeframeMinutesFor(options.timeframe);
+    if (
+      dataSource === "db-mainnet" &&
+      (targetMinutes % 5 !== 0 || targetMinutes < 5)
+    ) {
+      return yield* Effect.fail(
+        new MarketDataRepositoryError(
+          `db-mainnet data source cannot resample 5m candles to timeframe '${options.timeframe}' (${targetMinutes} min bars) — use a multiple of 5m`,
+        ),
+      );
+    }
 
-    const candidates = marketSymbols
-      .filter(
-        (symbol) =>
-          (normalizedVolumes.get(symbol) ?? 0) >= MIN_UNIVERSE_24H_VOLUME_USDT,
+    let candidates: string[];
+    if (dataSource === "db-mainnet") {
+      // Mainnet-fidelity universe: symbol discovery comes from the 5m
+      // mainnet cache (fetch-flow-mainnet curated ~40 liquid symbols), NOT
+      // from the testnet gateway's contract list / 24h volumes / demo
+      // subset. Zero gateway calls on this path — the testnet demo list
+      // would re-contaminate the universe.
+      candidates = (
+        yield* repo.listSymbolsByCandleCount(
+          options.exchange,
+          "5m",
+          Math.ceil((options.minCandles * targetMinutes) / 5),
+        )
       )
-      .filter((symbol) => demoSet.has(symbol))
-      // Canonical futures form ("BTC/USDT:USDT") — the convention the
-      // watchlist, soak, and grid engine all expect.
-      .map((symbol) => (symbol.includes(":") ? symbol : `${symbol}:USDT`));
+        .filter((s) => s.count >= options.minCandles)
+        .map((s) => s.symbol);
+    } else {
+      const [marketSymbols, volumes, demoSymbols] = yield* Effect.all([
+        gateway.fetchSymbols(options.exchange),
+        gateway.fetch24hrVolumes(options.exchange),
+        gateway.fetchDemoSymbols(options.exchange),
+      ]);
+      // Tickers key volumes by "BTCUSDT" while fetchSymbols returns
+      // "BTC/USDT"; normalize so the liquidity filter sees the same keys.
+      const normalizedVolumes = new Map<string, number>(
+        Object.entries(volumes).map(([symbol, volume]) => [
+          symbol.includes("/") ? symbol : symbol.replace(/USDT$/, "/USDT"),
+          volume,
+        ]),
+      );
+      // Hard universe bound: the demo/tradeable instrument subset. The live
+      // list (~741 contracts) includes contracts the simulated engine cannot
+      // trade — scanning them wastes the whole cycle on symbols the
+      // tradeability probe then drops (verified 2026-08-10: TIA/IOTX/WLFI/
+      // GRVT/CYS 40034 on the demo account; the PAPTRADING-scoped list is
+      // ~25 majors). Gateways without a demo concept return the full list,
+      // making this filter a no-op.
+      const demoSet = new Set(
+        demoSymbols.map((symbol) =>
+          symbol.includes("/") ? symbol : symbol.replace(/USDT$/, "/USDT"),
+        ),
+      );
+
+      candidates = marketSymbols
+        .filter(
+          (symbol) =>
+            (normalizedVolumes.get(symbol) ?? 0) >=
+            MIN_UNIVERSE_24H_VOLUME_USDT,
+        )
+        .filter((symbol) => demoSet.has(symbol))
+        // Canonical futures form ("BTC/USDT:USDT") — the convention the
+        // watchlist, soak, and grid engine all expect.
+        .map((symbol) => (symbol.includes(":") ? symbol : `${symbol}:USDT`));
+    }
 
     const fetchBatch = (symbol: string, startTime: Date | undefined) =>
       Effect.gen(function* () {
@@ -819,8 +1002,36 @@ export function runMarketUniverseScan(
     // Incremental candle cache: fetch only bars newer than the DB max, save
     // them, backfill only when the cache is too thin. Steady state = 1
     // request/symbol/cycle; the batch no longer refetches history each run.
+    // db-mainnet: candles come from the 5m mainnet cache, resampled to the
+    // scan timeframe in memory — NO gateway fetch, NO testnet wicks, and
+    // the resampled bars are NEVER written back (writing them under the
+    // scan timeframe key would mix mainnet-resampled and testnet-native
+    // rows in ohlcv_data).
+    const dbMainnetCandles = (symbol: string, targetBars: number) =>
+      Effect.gen(function* () {
+        const fiveMin = yield* repo.getCandles({
+          exchange: options.exchange,
+          symbol,
+          timeframe: "5m",
+          // Fetch 5m rows covering targetBars at the scan timeframe plus a
+          // small slack (a partial edge group would otherwise yield one bar
+          // short of the requested depth).
+          limit: Math.ceil((targetBars * targetMinutes) / 5) + 4,
+        });
+        if (fiveMin.length === 0) return [] as readonly Candle[];
+        const resampled = resampleCandles(
+          fiveMin,
+          targetMinutes,
+          options.timeframe,
+        );
+        return resampled.slice(-targetBars);
+      });
+
     const ensureCandles = (symbol: string) =>
       Effect.gen(function* () {
+        if (dataSource === "db-mainnet") {
+          return yield* dbMainnetCandles(symbol, options.minCandles);
+        }
         const range = yield* repo.getCandleRange(
           options.exchange,
           symbol,
@@ -860,8 +1071,14 @@ export function runMarketUniverseScan(
     // Top up a gate candidate's cache backward toward DEEP_HISTORY_TARGET,
     // bounded by the shared per-cycle request budget. Returns the deep
     // history for gate validation (persisted so later cycles resume).
+    // db-mainnet: the 5m mainnet cache IS the history ceiling (fetch-flow-
+    // mainnet backfilled ~12 months); read + resample whatever exists, no
+    // gateway fetches, no budget spend, no writes.
     const deepFetch = (symbol: string, existingCount: number) =>
       Effect.gen(function* () {
+        if (dataSource === "db-mainnet") {
+          return yield* dbMainnetCandles(symbol, DEEP_HISTORY_TARGET);
+        }
         if (existingCount >= DEEP_HISTORY_TARGET) {
           return yield* repo.getCandles({
             exchange: options.exchange,
