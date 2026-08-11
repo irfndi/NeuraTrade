@@ -129,6 +129,37 @@ describe("MarketDataRepositorySQLite", () => {
     expect(loaded[1].close).toBe(68_000);
   });
 
+  it("retrieves candles when queried by a canonical symbol variant", async () => {
+    await Effect.runPromise(repo.ensureTables());
+
+    // Row is written under the futures settle-suffixed form.
+    const candles: Candle[] = [
+      {
+        exchange: "binance",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "1h",
+        open: 66_000,
+        high: 68_000,
+        low: 65_500,
+        close: 67_000,
+        volume: 100,
+        timestamp: new Date("2026-01-01T00:00:00Z"),
+      },
+    ];
+    await Effect.runPromise(repo.saveCandles(candles));
+
+    // Querying the bare canonical form (no :USDT) must still resolve the row.
+    const loaded = await Effect.runPromise(
+      repo.getCandles({
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+      }),
+    );
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].close).toBe(67_000);
+  });
+
   it("works against the shared Go backend schema (display_name/ccxt_id/exchange_id NOT NULL)", async () => {
     // Mirror the Go backend's fat schema: extra NOT NULL columns that the
     // CLI's slim ensureTables does not create.

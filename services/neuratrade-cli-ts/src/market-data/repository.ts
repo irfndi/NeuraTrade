@@ -937,17 +937,20 @@ function findTradingPairId(
     });
     const hasExchangeScope = cols.has("exchange_id");
 
+    const variants = tradingPairSymbolVariants(symbol);
+    const placeholders = variants.map(() => "?").join(",");
+
     const existing = yield* Effect.try({
       try: () =>
         hasExchangeScope
           ? (db
               .query(
-                "SELECT id FROM trading_pairs WHERE symbol = ? AND exchange_id = ?",
+                `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders}) AND exchange_id = ?`,
               )
-              .get(symbol, exchangeId) as { id: number } | undefined)
+              .get(...variants, exchangeId) as { id: number } | undefined)
           : (db
-              .query("SELECT id FROM trading_pairs WHERE symbol = ?")
-              .get(symbol) as { id: number } | undefined),
+              .query(`SELECT id FROM trading_pairs WHERE symbol IN (${placeholders})`)
+              .get(...variants) as { id: number } | undefined),
       catch: (err) =>
         new MarketDataRepositoryError(
           `Trading pair lookup failed for ${symbol}: ${
@@ -958,6 +961,27 @@ function findTradingPairId(
     });
     return existing?.id ?? null;
   });
+}
+
+/**
+ * Build the canonical symbol variants to match rows written by different
+ * recorders. A raw wire symbol ("BTCUSDT") maps to "BTC/USDT"; futures rows
+ * are additionally stored under the settle-suffixed form "BTC/USDT:USDT".
+ * Exact-match lookups fail against those variant forms, so readers resolve
+ * across all of them (the first match wins).
+ */
+function tradingPairSymbolVariants(symbol: string): string[] {
+  const variants = new Set<string>();
+  variants.add(symbol);
+  if (symbol.includes("/")) {
+    // "BTC/USDT:USDT" and "BTC/USDT" both derive from the same market.
+    variants.add(symbol.includes(":") ? symbol.split(":")[0]! : `${symbol}:USDT`);
+  } else if (symbol.endsWith("USDT") && !symbol.includes("/")) {
+    const canonical = `${symbol.slice(0, -4)}/${symbol.slice(-4)}`;
+    variants.add(canonical);
+    variants.add(`${canonical}:USDT`);
+  }
+  return [...variants];
 }
 
 function getOrCreateExchange(
