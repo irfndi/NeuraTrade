@@ -5540,12 +5540,11 @@ export const flowBacktestCommand = Command.make(
                   c.close_price AS close, c.volume, c.timestamp
            FROM ohlcv_data c
            JOIN trading_pairs tp ON tp.id = c.trading_pair_id
-           WHERE (tp.symbol = ? OR tp.symbol = ?) AND c.timeframe = ?
+           WHERE tp.symbol IN (${variantPlaceholders}) AND c.timeframe = ?
              AND c.timestamp >= ? AND c.timestamp <= ?
            ORDER BY c.timestamp ASC`,
           [
-            canonical,
-            symbol,
+            ...symbolVariants,
             args.timeframe,
             start.toISOString(),
             end.toISOString(),
