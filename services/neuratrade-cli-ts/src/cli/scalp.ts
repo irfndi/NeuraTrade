@@ -442,6 +442,18 @@ const backtestOptions = {
   exchange: exchangeOption,
   symbol: symbolOption,
   timeframe: timeframeOption,
+  start: Options.text("start").pipe(
+    Options.withDefault(""),
+    Options.withDescription(
+      "Inclusive backtest start date (YYYY-MM-DD). Empty = earliest available candle.",
+    ),
+  ),
+  end: Options.text("end").pipe(
+    Options.withDefault(""),
+    Options.withDescription(
+      "Inclusive backtest end date (YYYY-MM-DD). Empty = latest available candle.",
+    ),
+  ),
   template: Options.text("template").pipe(
     Options.withDefault(""),
     Options.withDescription(
@@ -684,16 +696,45 @@ export function buildBacktestComposerConfig(
   };
 }
 
+/**
+ * Derive the inclusive candle range for a backtest from either the raw CLI
+ * `--start`/`--end` options or profile-set `startDate`/`endDate`. Empty values
+ * leave the bound open (earliest/latest available candle). An inverted or
+ * equal (zero-width) range is rejected.
+ */
+function resolveBacktestCandleRange(args: ResolvedBacktestArgs): {
+  from?: Date;
+  to?: Date;
+} {
+  const start = args.start ?? args.startDate;
+  const end = args.end ?? args.endDate;
+  const range: { from?: Date; to?: Date } = {};
+  if (start && start.trim().length > 0)
+    range.from = new Date(`${start}T00:00:00Z`);
+  if (end && end.trim().length > 0) range.to = new Date(`${end}T00:00:00Z`);
+
+  if (range.from && range.to && range.from.getTime() >= range.to.getTime()) {
+    throw new Error(
+      `backtest range is inverted or empty: start (${start}) must be before end (${end})`,
+    );
+  }
+  return range;
+}
+
 export function backtestProgram(args: ResolvedBacktestArgs) {
   return Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
     const path = yield* Path;
     const engine = yield* BacktestEngine;
 
+    const candleRange = resolveBacktestCandleRange(args);
+
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
       symbol: args.symbol,
       timeframe: args.timeframe,
+      from: candleRange.from,
+      to: candleRange.to,
     });
 
     const htfCandles =
@@ -702,6 +743,8 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
             exchange: args.exchange,
             symbol: args.symbol,
             timeframe: args.htfTimeframe,
+            from: candleRange.from,
+            to: candleRange.to,
           })
         : [];
 

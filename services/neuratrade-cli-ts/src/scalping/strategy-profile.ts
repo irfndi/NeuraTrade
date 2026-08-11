@@ -475,6 +475,14 @@ export interface ResolvedBacktestArgs {
   readonly onlyWithTrend?: boolean;
   readonly targetRatio?: number;
   readonly chopGateAdx?: number;
+  /** Inclusive backtest start date (YYYY-MM-DD). When set, only candles on/after this date are loaded. */
+  readonly startDate?: string;
+  /** Inclusive backtest end date (YYYY-MM-DD). When set, only candles on/before this date are loaded. */
+  readonly endDate?: string;
+  /** Raw CLI backtest start date (YYYY-MM-DD). Maps to startDate on profile resolution. */
+  readonly start?: string;
+  /** Raw CLI backtest end date (YYYY-MM-DD). Maps to endDate on profile resolution. */
+  readonly end?: string;
 }
 
 function profileDir(homeDir: string): string {

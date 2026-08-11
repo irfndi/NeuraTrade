@@ -1439,6 +1439,140 @@ describe("backtestProgram fill-model option forwarding", () => {
     });
     db.close();
   });
+
+  it("limits candles to the requested start/end date range", async () => {
+    const db = new Database(":memory:");
+    const base = new Date("2026-01-15T00:00:00Z").getTime();
+    const candles: Candle[] = Array.from({ length: 60 }, (_, i) => {
+      const close = 100 + i * 0.5;
+      return {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: close - 0.2,
+        high: close + 0.5,
+        low: close - 0.5,
+        close,
+        volume: 10,
+        timestamp: new Date(base + i * 3600_000),
+      };
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(candles);
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+
+    let candleTs: number[] = [];
+    const fakeEngine = Layer.succeed(BacktestEngine, {
+      runBacktest: (options) => {
+        candleTs = (options.candles ?? []).map((c) => c.timestamp.getTime());
+        return Effect.succeed(makeResult());
+      },
+      runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+    });
+
+    // Only candles from 2026-01-16 onward (index 24+) should be loaded.
+    const args = makeOptimizeArgs({
+      start: "2026-01-16",
+    });
+    await Effect.runPromise(
+      backtestProgram(
+        args as unknown as Parameters<typeof backtestProgram>[0],
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MarketDataRepositorySQLiteLive(db),
+            fakeEngine,
+            BunServices.layer,
+            PathLive("/tmp"),
+          ),
+        ),
+      ),
+    );
+
+    expect(candleTs.length).toBeGreaterThan(0);
+    const minTs = Math.min(...candleTs);
+    const cutoff = new Date("2026-01-16T00:00:00Z").getTime();
+    expect(minTs).toBeGreaterThanOrEqual(cutoff);
+    db.close();
+  });
+
+  it("rejects an inverted or empty start/end range", async () => {
+    const db = new Database(":memory:");
+    const base = new Date("2026-01-15T00:00:00Z").getTime();
+    const candles: Candle[] = Array.from({ length: 10 }, (_, i) => {
+      const close = 100 + i * 0.5;
+      return {
+        exchange: "binance",
+        symbol: "BTC/USDT",
+        timeframe: "1h",
+        open: close - 0.2,
+        high: close + 0.5,
+        low: close - 0.5,
+        close,
+        volume: 10,
+        timestamp: new Date(base + i * 3600_000),
+      };
+    });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        yield* repo.ensureTables();
+        yield* repo.saveCandles(candles);
+      }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+    );
+    const fakeEngine = Layer.succeed(BacktestEngine, {
+      runBacktest: () => Effect.succeed(makeResult()),
+      runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+    });
+
+    const run = (args: Partial<OptimizeArgs>) =>
+      Effect.runPromise(
+        backtestProgram(
+          makeOptimizeArgs(args) as unknown as Parameters<
+            typeof backtestProgram
+          >[0],
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              MarketDataRepositorySQLiteLive(db),
+              fakeEngine,
+              BunServices.layer,
+              PathLive("/tmp"),
+            ),
+          ),
+        ),
+      );
+
+    // start after end → rejected.
+    await expect(run({ start: "2026-01-16", end: "2026-01-15" })).rejects.toThrow(
+      /range is inverted or empty/,
+    );
+    // start == end → rejected.
+    await expect(run({ start: "2026-01-15", end: "2026-01-15" })).rejects.toThrow(
+      /range is inverted or empty/,
+    );
+    db.close();
+  });
 });
 
 describe("backtestProgram funding-rate wiring", () => {
