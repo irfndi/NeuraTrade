@@ -36,6 +36,7 @@ import {
   type BybitCredentials,
 } from "../../services/bybit-config.js";
 import { Decimal, money, type Money } from "../../utils/money.js";
+import { validateOrder } from "../../services/bybit-guards.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -748,6 +749,44 @@ export function makeBybitFuturesAdapter(
             }),
           );
         }
+
+        // Final pre-trade fail-closed gate: run the BigInt-based bybit guards
+        // against the sized order, the instrument rules, and the wallet so a
+        // real order cannot exceed account balance or violate precision. The
+        // Money-based guards above handle floor sizing and margin; this net is
+        // belt-and-suspenders before any signed request leaves the process.
+        yield* validateOrder(
+          {
+            order: {
+              symbol,
+              side: request.side === "buy" ? "buy" : "sell",
+              orderType: request.type === "market" ? "market" : "limit",
+              size: qty.toString(),
+              ...(request.type === "limit" ? { price: price.toString() } : {}),
+              leverage: money(leverage).toNumber(),
+            },
+            contract: {
+              symbol: contract.symbol,
+              status: contract.status,
+              minOrderQty: contract.minOrderQty,
+              qtyStep: contract.qtyStep,
+              minOrderAmt: contract.minOrderAmt,
+              tickSize: contract.tickSize,
+              maxLeverage: contract.maxLeverage,
+            },
+            balances: coins.map((c) => ({
+              asset: c.coin,
+              available: c.availableToWithdraw || c.walletBalance || "0",
+              walletBalance: c.walletBalance,
+            })),
+            feeRate: "0.0006",
+          },
+          price.toString(),
+        ).pipe(
+          Effect.mapError(
+            (err) => new ExchangeError(`bybit guard rejected: ${err.reason}`, err),
+          ),
+        );
       }
 
       const order: BybitOrderRequest = {

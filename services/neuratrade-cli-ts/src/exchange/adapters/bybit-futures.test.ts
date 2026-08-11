@@ -542,4 +542,39 @@ describe("BybitFuturesExchangeAdapter", () => {
       expect(outcome.reason).toContain("position not found");
     }
   });
+
+  it("fails closed via the bybit guards when USDT margin is not sufficient", async () => {
+    // margin = 0.9999 * 40000 / 10 = 3999.6, which the adapter's own margin check
+    // (<= available 4000) allows, but the wired bybit guards add the fee buffer
+    // (3999.6 * 1.0006 = 4001.99 > 4000) and reject before any signed request.
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "market",
+            size: money(0.9999),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 10,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain("bybit guard rejected");
+      expect(outcome.reason).toContain("insufficient USDT margin");
+    }
+    // No order reached the exchange.
+    expect(calls.join("\n")).not.toContain("placeOrder:BTCUSDT");
+  });
 });
