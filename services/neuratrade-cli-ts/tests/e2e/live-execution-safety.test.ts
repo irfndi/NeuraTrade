@@ -126,7 +126,7 @@ describe("live execution safety", () => {
           "--grid-step-pct",
           "1",
           "--grid-max-grids",
-          "1.5",
+          "1",
           "--grid-pause-after-loss-bars",
           "12",
           "--fee",

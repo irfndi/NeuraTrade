@@ -53,6 +53,7 @@ async function seedPassingTrades(home: string): Promise<void> {
       entryFee: money("0.01"),
       exitFee: money("0.01"),
       realizedPnlPct: money("0.2"),
+      strategyConfigFingerprint: "e2e-fixture",
     };
     await Effect.runPromise(repository.recordGridTrade(trade));
   }
@@ -88,6 +89,7 @@ async function seedPartialTrade(home: string): Promise<void> {
       entryFee: money("0.01"),
       exitFee: money("0.01"),
       realizedPnlPct: money("0.2"),
+      strategyConfigFingerprint: "e2e-fixture-partial",
     }),
   );
   db.close();
@@ -125,6 +127,7 @@ async function seedPositiveButUncertainTrades(home: string): Promise<void> {
         entryFee: money("0.01"),
         exitFee: money("0.01"),
         realizedPnlPct: money(realizedPnlPct),
+        strategyConfigFingerprint: "e2e-fixture-uncertain",
       }),
     );
   }

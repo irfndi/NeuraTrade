@@ -236,20 +236,54 @@ describe("live grid fill integration", () => {
     const db = new Database(":memory:");
     try {
       const repository = new PaperTradingRepositorySQLite(db);
-      const orphanPosition: FuturesPosition = {
-        symbol: "BTC/USDT:USDT",
-        side: "long",
-        productType: "USDT-FUTURES",
-        marginMode: "isolated",
-        leverage: 1,
-        quantity: money("0.01"),
-        available: money("0.01"),
-        entryPrice: money(70_000),
-        marginCoin: "USDT",
-      };
+      await Effect.runPromise(repository.ensureTables());
+
+      // Establish a flat state row with the correct strategy fingerprint by
+      // running one real iteration against a flat exchange (no position).
+      const flatAdapter = makeAdapter();
+      const flatLayers = Layer.mergeAll(
+        Layer.succeed(MarketDataGateway, makeGateway(makeCandles(40))),
+        Layer.succeed(FuturesExchangeAdapter, flatAdapter),
+        Layer.succeed(RiskGuard, riskGuard),
+        Layer.succeed(KillSwitch, killSwitch),
+        Layer.succeed(CircuitBreaker, circuitBreaker),
+      );
+      await Effect.runPromise(
+        runGridPaperTradingIteration(options).pipe(
+          Effect.provideService(PaperTradingRepository, repository),
+          Effect.provide(flatLayers),
+        ),
+      );
+
+      // Inject a local live long position into the persisted state (keeping the
+      // fingerprint intact) so the engine has evidence to reconcile. The
+      // exchange then returns null, which is a genuine divergence ("local state
+      // exists without exchange position") and must trip the fail-closed kill
+      // switch. (A valid orphan position with no local state is deliberately
+      // adopted and managed, not kill-switched.)
+      const persisted = await Effect.runPromise(
+        repository.getGridState(options.exchange, options.symbol, options.timeframe),
+      );
+      if (persisted === null) {
+        throw new Error("expected a persisted grid state after the flat iteration");
+      }
+      await Effect.runPromise(
+        repository.saveGridState({
+          ...persisted,
+          side: "long",
+          entryPrice: money(70_000),
+          entryOrderId: "entry-seeded",
+          entryFilledQty: money("0.01"),
+          entryFee: money("0.02"),
+          entryFillSource: "live",
+          killed: false,
+          updatedAt: new Date(),
+        }),
+      );
+
       const adapter: FuturesExchangeAdapterService = {
-        ...makeAdapter(),
-        getPosition: () => Effect.succeed(orphanPosition),
+        ...flatAdapter,
+        getPosition: () => Effect.succeed(null),
       };
       const layers = Layer.mergeAll(
         Layer.succeed(MarketDataGateway, makeGateway(makeCandles(40))),

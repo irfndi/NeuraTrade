@@ -535,6 +535,9 @@ describe("PaperTradingRepositorySQLite", () => {
         openedAt: new Date("2026-08-01T00:00:00.000Z"),
         closedAt: new Date(closedAt),
         fillSource,
+        ...(fillSource === "live"
+          ? { strategyConfigFingerprint: "repo-fixture" }
+          : {}),
       }) as const;
 
     await Effect.runPromise(

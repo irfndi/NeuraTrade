@@ -1474,6 +1474,20 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   recordGridTrade(
     trade: GridPaperTrade,
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    // Fail closed: a LIVE fill must carry its provenance, or it cannot enter
+    // the readiness cohort (the provenance gate would reject it downstream
+    // anyway). Rejecting here keeps unprovenanced live fills out of the DB
+    // entirely. Simulated (paper) fills record without provenance.
+    const isLive =
+      trade.fillSource === "live" ||
+      trade.executionEnvironment?.endsWith("-live") === true;
+    if (isLive && !trade.strategyConfigFingerprint) {
+      return Effect.fail(
+        new PaperTradingRepositoryError(
+          `Refusing to record live grid trade ${trade.id}: missing strategy_config_fingerprint (provenance)`,
+        ),
+      );
+    }
     return Effect.try({
       try: () => {
         this.db

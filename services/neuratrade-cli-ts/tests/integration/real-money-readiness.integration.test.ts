@@ -149,10 +149,31 @@ describe("real-money readiness SQLite integration", () => {
 
   it("rejects a trade record that drops required provenance columns", async () => {
     const db = new Database(":memory:");
+    // Complete base schema (all money/state columns) but WITHOUT the
+    // provenance columns (fill_source, strategy_config_fingerprint, cohort_id,
+    // candidate_lock_at, dataset_cutoff_at, entry_opened_at,
+    // execution_environment). ensureTables() must succeed (backfill only needs
+    // the base money columns), while recordGridTrade must fail closed because
+    // the provenance columns are absent — proving no fill can enter the cohort
+    // unprovenanced.
     db.exec(`
       CREATE TABLE grid_paper_trades (
         id TEXT PRIMARY KEY, exchange TEXT NOT NULL, symbol TEXT NOT NULL,
-        timeframe TEXT NOT NULL, opened_at DATETIME NOT NULL, closed_at DATETIME NOT NULL
+        timeframe TEXT NOT NULL, side TEXT NOT NULL,
+        entry_price REAL NOT NULL, exit_price REAL NOT NULL,
+        capital_before REAL NOT NULL, capital_after REAL NOT NULL,
+        pnl_pct REAL NOT NULL,
+        entry_price_decimal TEXT, exit_price_decimal TEXT,
+        capital_before_decimal TEXT, capital_after_decimal TEXT,
+        pnl_pct_decimal TEXT,
+        entry_order_id TEXT, entry_client_oid TEXT,
+        exit_order_id TEXT, exit_client_oid TEXT,
+        entry_filled_qty REAL, entry_filled_qty_decimal TEXT,
+        exit_filled_qty REAL, exit_filled_qty_decimal TEXT,
+        entry_fee REAL, entry_fee_decimal TEXT,
+        exit_fee REAL, exit_fee_decimal TEXT,
+        realized_pnl_pct REAL, realized_pnl_pct_decimal TEXT,
+        exit_reason TEXT NOT NULL, opened_at DATETIME NOT NULL, closed_at DATETIME NOT NULL
       );
     `);
     const repository = new PaperTradingRepositorySQLite(db);
