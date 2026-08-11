@@ -21,6 +21,13 @@ let lastOrder: BybitOrderRequest | undefined;
 let orderStatus = "Filled";
 let cancelError: string | undefined;
 let openOrders: ReadonlyArray<{ orderId: string }> = [];
+let lastTradingStop: {
+  symbol: string;
+  positionIdx: number;
+  takeProfit?: string;
+  stopLoss?: string;
+} | undefined;
+let tradingStopError: string | undefined;
 
 function makeStubClient(): BybitClientImpl {
   calls = [];
@@ -28,6 +35,8 @@ function makeStubClient(): BybitClientImpl {
   orderStatus = "Filled";
   cancelError = undefined;
   openOrders = [];
+  lastTradingStop = undefined;
+  tradingStopError = undefined;
   return {
     getContract: () =>
       Effect.succeed({
@@ -105,6 +114,19 @@ function makeStubClient(): BybitClientImpl {
       }),
     setMarginMode: () => Effect.void,
     setPositionMode: () => Effect.void,
+    setTradingStop: (args) =>
+      tradingStopError
+        ? Effect.fail(
+            new BybitApiError({
+              status: 400,
+              body: tradingStopError,
+              endpoint: "/v5/position/trading-stop",
+            }),
+          )
+        : Effect.sync(() => {
+            lastTradingStop = args;
+            calls.push(`setTradingStop:${args.symbol}:${args.positionIdx}`);
+          }),
   };
 }
 
@@ -418,5 +440,106 @@ describe("BybitFuturesExchangeAdapter", () => {
     expect(bybitPositionIdx("Sell", false)).toBe(2); // open short
     expect(bybitPositionIdx("Sell", true)).toBe(1); // reduce long
     expect(bybitPositionIdx("Buy", true)).toBe(2); // reduce short
+  });
+
+  it("attaches TP and SL to a long position with positionIdx 1", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop !== undefined) {
+          yield* setTradingStop({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "long",
+            takeProfit: money(70000),
+            stopLoss: money(60000),
+          });
+        }
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:1");
+    expect(lastTradingStop?.symbol).toBe("BTCUSDT");
+    expect(lastTradingStop?.positionIdx).toBe(1);
+    expect(lastTradingStop?.takeProfit).toBe("70000");
+    expect(lastTradingStop?.stopLoss).toBe("60000");
+  });
+
+  it("attaches TP only, leaving SL omitted", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop !== undefined) {
+          yield* setTradingStop({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "long",
+            takeProfit: money(70000),
+          });
+        }
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:1");
+    expect(lastTradingStop?.takeProfit).toBe("70000");
+    expect(lastTradingStop?.stopLoss).toBeUndefined();
+  });
+
+  it("attaches SL only to a short position with positionIdx 2", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop !== undefined) {
+          yield* setTradingStop({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "short",
+            stopLoss: money(75000),
+          });
+        }
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:2");
+    expect(lastTradingStop?.positionIdx).toBe(2);
+    expect(lastTradingStop?.takeProfit).toBeUndefined();
+    expect(lastTradingStop?.stopLoss).toBe("75000");
+  });
+
+  it("maps a trading-stop API error to an ExchangeError", async () => {
+    tradingStopError = "position not found";
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop === undefined) {
+          return { ok: true as const, reason: "" };
+        }
+        return yield* setTradingStop({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "long",
+          stopLoss: money(60000),
+        }).pipe(
+          Effect.map(() => ({ ok: true as const, reason: "" })),
+          Effect.catch((err) =>
+            Effect.succeed({ ok: false as const, reason: err.reason }),
+          ),
+        );
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toContain("Bybit API 400 on /v5/position/trading-stop");
+      expect(outcome.reason).toContain("position not found");
+    }
   });
 });

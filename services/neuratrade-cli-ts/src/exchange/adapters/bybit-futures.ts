@@ -472,6 +472,12 @@ export interface BybitClientImpl {
   readonly setPositionMode: (args: {
     mode: "one_way" | "hedge_mode";
   }) => Effect.Effect<void, BybitClientError>;
+  readonly setTradingStop: (args: {
+    symbol: string;
+    positionIdx: number;
+    takeProfit?: string;
+    stopLoss?: string;
+  }) => Effect.Effect<void, BybitClientError>;
 }
 
 export class BybitClient extends Context.Service<
@@ -599,6 +605,17 @@ function makeBybitClientImpl(
         ),
         Effect.as(undefined),
       ),
+    setTradingStop: ({ symbol, positionIdx, takeProfit, stopLoss }) =>
+      post<unknown>("/v5/position/trading-stop", {
+        category: "linear",
+        symbol,
+        positionIdx,
+        ...(takeProfit !== undefined ? { takeProfit } : {}),
+        ...(stopLoss !== undefined ? { stopLoss } : {}),
+        tpTriggerBy: "LastPrice",
+        slTriggerBy: "LastPrice",
+        tpslMode: "Full",
+      }).pipe(Effect.as(undefined)),
   };
 }
 
@@ -926,6 +943,23 @@ export function makeBybitFuturesAdapter(
 
     setPositionMode: (_productType, positionMode) =>
       withError(client.setPositionMode({ mode: positionMode })),
+
+    setTradingStop: (request) =>
+      withError(
+        client.setTradingStop({
+          symbol: toBybitSymbol(request.symbol),
+          positionIdx: bybitPositionIdx(
+            request.side === "long" ? "Buy" : "Sell",
+            false,
+          ),
+          ...(request.takeProfit !== undefined
+            ? { takeProfit: request.takeProfit.toString() }
+            : {}),
+          ...(request.stopLoss !== undefined
+            ? { stopLoss: request.stopLoss.toString() }
+            : {}),
+        }),
+      ),
   };
 }
 

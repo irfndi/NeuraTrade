@@ -145,7 +145,9 @@ export function makeBitgetFuturesAdapter(
       // Account-state safety checks catch reduce-only mismatches, margin-mode
       // conflicts, and leverage mismatches before a signed order is sent.
       const [positions, leverageInfo] = yield* Effect.all([
-        withError(client.getFuturesPositions(finalOrder.symbol, finalOrder.productType)),
+        withError(
+          client.getFuturesPositions(finalOrder.symbol, finalOrder.productType),
+        ),
         withError(
           client.getLeverage({
             symbol: finalOrder.symbol,
@@ -338,6 +340,23 @@ export function makeBitgetFuturesAdapter(
           positionMode,
         }),
       ),
+
+    setTradingStop: (request) =>
+      Effect.gen(function* () {
+        const { symbol: bsymbol, productType } = toBitgetFuturesSymbol(
+          request.symbol,
+          request.productType,
+        );
+        yield* withError(
+          client.setTradingStop({
+            symbol: bsymbol,
+            productType,
+            holdSide: request.side,
+            takeProfit: request.takeProfit?.toString(),
+            stopLoss: request.stopLoss?.toString(),
+          }),
+        );
+      }),
   };
 }
 

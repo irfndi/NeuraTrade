@@ -174,6 +174,7 @@ import {
 import { MarketDataError } from "../market-data/gateway.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
 import { makeParityReplayCommand } from "./parity-replay.js";
+import { tradeCommand } from "./trade.js";
 import {
   exchangeOption,
   symbolOption,
@@ -6097,5 +6098,6 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     flowUniverseCommand,
     flowRecordCommand,
     flowTradeCommand,
+    tradeCommand,
   ]),
 );

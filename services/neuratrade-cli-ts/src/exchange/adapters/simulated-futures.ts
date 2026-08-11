@@ -8,6 +8,7 @@ import {
   type FuturesPosition,
   type ClosePositionRequest,
   type FuturesProductType,
+  type SetTradingStopRequest,
 } from "../futures-adapter.js";
 import { ExchangeError } from "../adapter.js";
 import {
@@ -19,10 +20,60 @@ import { Decimal, money } from "../../utils/money.js";
 interface SimulatedAccountState {
   readonly balances: Readonly<Record<string, Decimal>>;
   readonly positions: Readonly<Record<string, FuturesPosition>>;
+  /** Per-position exchange-side absolute TP/SL, keyed by positionKey. */
+  readonly tpsl: Readonly<Record<string, SimulatedTradingStop | undefined>>;
+}
+
+export interface SimulatedTradingStop {
+  readonly side: "long" | "short";
+  /** Absolute take-profit trigger price. Undefined when not set. */
+  readonly takeProfit?: Decimal;
+  /** Absolute stop-loss trigger price. Undefined when not set. */
+  readonly stopLoss?: Decimal;
 }
 
 function positionKey(symbol: string, productType: FuturesProductType): string {
   return `${productType}:${symbol}`;
+}
+
+/**
+ * Check whether a simulated position's exchange-side TP/SL has been hit at a
+ * given current price. Long positions take profit above entry and stop out
+ * below; short positions are the mirror image.
+ */
+export function checkTpslHit(
+  tpsl: SimulatedTradingStop | undefined,
+  price: Decimal,
+): "tp" | "sl" | null {
+  if (!tpsl) return null;
+  if (tpsl.side === "long") {
+    if (
+      tpsl.takeProfit !== undefined &&
+      price.greaterThanOrEqualTo(tpsl.takeProfit)
+    ) {
+      return "tp";
+    }
+    if (
+      tpsl.stopLoss !== undefined &&
+      price.lessThanOrEqualTo(tpsl.stopLoss)
+    ) {
+      return "sl";
+    }
+  } else {
+    if (
+      tpsl.takeProfit !== undefined &&
+      price.lessThanOrEqualTo(tpsl.takeProfit)
+    ) {
+      return "tp";
+    }
+    if (
+      tpsl.stopLoss !== undefined &&
+      price.greaterThanOrEqualTo(tpsl.stopLoss)
+    ) {
+      return "sl";
+    }
+  }
+  return null;
 }
 
 function midPriceFromOrderBook(
@@ -65,6 +116,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
         ]),
       ),
       positions: {},
+      tpsl: {},
     });
 
     const getState = () => Ref.get(stateRef);
@@ -95,7 +147,35 @@ export function makeSimulatedFuturesExchangeAdapterService(
         } else {
           delete next[key];
         }
-        return { ...state, positions: next };
+        const nextTpsl = { ...state.tpsl };
+        if (!position) {
+          delete nextTpsl[key];
+        }
+        return { ...state, positions: next, tpsl: nextTpsl };
+      });
+
+    const getTpslInternal = (
+      symbol: string,
+      productType: FuturesProductType,
+    ) =>
+      Effect.map(
+        getState(),
+        (state) => state.tpsl[positionKey(symbol, productType)],
+      );
+
+    const setTpsl = (
+      symbol: string,
+      productType: FuturesProductType,
+      tpsl: SimulatedTradingStop | undefined,
+    ) =>
+      Ref.update(stateRef, (state) => {
+        const next = { ...state.tpsl };
+        if (tpsl) {
+          next[positionKey(symbol, productType)] = tpsl;
+        } else {
+          delete next[positionKey(symbol, productType)];
+        }
+        return { ...state, tpsl: next };
       });
 
     const fillPrice = (
@@ -109,7 +189,18 @@ export function makeSimulatedFuturesExchangeAdapterService(
         return money(mid).times(side === "buy" ? 1 + slippage : 1 - slippage);
       });
 
-    const service: FuturesExchangeAdapterService = {
+    const service: FuturesExchangeAdapterService & {
+      checkTpslHit: (
+        symbol: string,
+        productType: FuturesProductType,
+        price: Decimal,
+      ) => Effect.Effect<"tp" | "sl" | null, ExchangeError>;
+    } = {
+      checkTpslHit: (symbol, productType, price) =>
+        Effect.map(
+          getTpslInternal(symbol, productType),
+          (tpsl) => checkTpslHit(tpsl, price),
+        ),
       placeOrder: (request: FuturesOrderRequest) =>
         Effect.gen(function* () {
           if (request.size.lessThanOrEqualTo(0)) {
@@ -284,6 +375,36 @@ export function makeSimulatedFuturesExchangeAdapterService(
             equity: amount,
             usdtEquity: amount,
           };
+        }),
+
+      setTradingStop: (request: SetTradingStopRequest) =>
+        Effect.gen(function* () {
+          const existing = yield* getPositionInternal(
+            request.symbol,
+            request.productType,
+          );
+          if (!existing || existing.side !== request.side) {
+            return yield* Effect.fail(
+              new ExchangeError(
+                `no ${request.side} position for ${request.productType}:${request.symbol}`,
+              ),
+            );
+          }
+          const current = yield* getTpslInternal(
+            request.symbol,
+            request.productType,
+          );
+          yield* setTpsl(request.symbol, request.productType, {
+            side: request.side,
+            takeProfit:
+              request.takeProfit !== undefined
+                ? request.takeProfit
+                : current?.takeProfit,
+            stopLoss:
+              request.stopLoss !== undefined
+                ? request.stopLoss
+                : current?.stopLoss,
+          });
         }),
 
       setLeverage: () => Effect.void,

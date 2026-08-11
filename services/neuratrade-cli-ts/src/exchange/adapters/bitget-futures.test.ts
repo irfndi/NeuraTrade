@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
 import {
+  BitgetApiError,
   type BitgetClientImpl,
   type BitgetFuturesOrderRequest,
   type BitgetFuturesPosition,
@@ -176,6 +177,12 @@ function makeStubClient(
         marginMode: "crossed",
       }),
     cancelFuturesOrder: () => Effect.void,
+    setTradingStop: (args) =>
+      Effect.sync(() => {
+        calls.push(
+          `setTradingStop:${args.symbol}:${args.holdSide}:tp=${args.takeProfit ?? ""}:sl=${args.stopLoss ?? ""}`,
+        );
+      }),
   };
 }
 
@@ -448,5 +455,95 @@ describe("BitgetFuturesExchangeAdapter", () => {
     expect(calls).toContain("setLeverage:BTCUSDT:5");
     expect(calls).toContain("setMarginMode:BTCUSDT:crossed");
     expect(calls).toContain("setPositionMode:USDT-FUTURES:one_way");
+  });
+
+  it("attaches TP+SL with the correct hold side", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.setTradingStop!({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "long",
+          takeProfit: money(72000),
+          stopLoss: money(68000),
+        });
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:long:tp=72000:sl=68000");
+  });
+
+  it("sends only the take-profit leg when stop-loss is omitted", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.setTradingStop!({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "long",
+          takeProfit: money(72000),
+        });
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:long:tp=72000:sl=");
+  });
+
+  it("sends only the stop-loss leg when take-profit is omitted", async () => {
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.setTradingStop!({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "short",
+          stopLoss: money(75000),
+        });
+      }),
+    );
+
+    expect(calls).toContain("setTradingStop:BTCUSDT:short:tp=:sl=75000");
+  });
+
+  it("maps Bitget client errors to ExchangeError on setTradingStop", async () => {
+    const failingClient: BitgetClientImpl = {
+      ...makeStubClient(),
+      setTradingStop: () =>
+        Effect.fail(
+          new BitgetApiError({
+            status: 400,
+            endpoint: "/api/v2/mix/order/place-pos-tpsl",
+            body: "45015: invalid price",
+            code: "45015",
+          }),
+        ),
+    };
+    const failingLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(failingClient),
+    );
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.setTradingStop!({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "long",
+          takeProfit: money(72000),
+        });
+      }).pipe(Effect.provide(failingLayer)),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      const message = exit.cause.toString();
+      expect(message).toContain("Bitget API 400");
+      expect(message).toContain("45015");
+    }
   });
 });

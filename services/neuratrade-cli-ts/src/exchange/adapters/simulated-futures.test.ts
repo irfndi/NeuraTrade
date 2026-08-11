@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Effect, Layer } from "effect";
-import { makeSimulatedFuturesExchangeAdapterService } from "./simulated-futures.js";
+import { makeSimulatedFuturesExchangeAdapterService, checkTpslHit } from "./simulated-futures.js";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
@@ -282,5 +282,96 @@ describe("SimulatedFuturesExchangeAdapter", () => {
         initialBalance.available.toNumber() * 0.99,
       );
     }
+  });
+
+  it("records TP/SL for an open position", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+        yield* (adapter.setTradingStop as NonNullable<typeof adapter.setTradingStop>)({
+          symbol: "BTC/USDT:USDT",
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          side: "long",
+          takeProfit: money(70000),
+          stopLoss: money(60000),
+        });
+        const svc = adapter as typeof adapter & {
+          checkTpslHit: (
+            symbol: string,
+            productType: string,
+            price: import("../../utils/money.js").Decimal,
+          ) => Effect.Effect<"tp" | "sl" | null>;
+        };
+        const tpHit = yield* svc.checkTpslHit("BTC/USDT:USDT", "USDT-FUTURES", money(70001));
+        const slHit = yield* svc.checkTpslHit("BTC/USDT:USDT", "USDT-FUTURES", money(59999));
+        const noHit = yield* svc.checkTpslHit("BTC/USDT:USDT", "USDT-FUTURES", money(65000));
+        return { tpHit, slHit, noHit };
+      }),
+    );
+
+    expect(result.tpHit).toBe("tp");
+    expect(result.slHit).toBe("sl");
+    expect(result.noHit).toBeNull();
+  });
+
+  it("fails when no position exists", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* (
+          adapter.setTradingStop?.({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "long",
+            takeProfit: money(70000),
+          }) ?? Effect.void
+        ).pipe(Effect.result);
+      }),
+    );
+
+    expect(result._tag).toBe("Failure");
+  });
+
+  it("detects TP vs SL hits for long and short positions", () => {
+    const longTpsl = {
+      side: "long" as const,
+      takeProfit: money(70000),
+      stopLoss: money(60000),
+    };
+    expect(checkTpslHit(longTpsl, money(70001))).toBe("tp");
+    expect(checkTpslHit(longTpsl, money(59999))).toBe("sl");
+    expect(checkTpslHit(longTpsl, money(65000))).toBeNull();
+
+    const shortTpsl = {
+      side: "short" as const,
+      takeProfit: money(60000),
+      stopLoss: money(70000),
+    };
+    expect(checkTpslHit(shortTpsl, money(59999))).toBe("tp");
+    expect(checkTpslHit(shortTpsl, money(70001))).toBe("sl");
+    expect(checkTpslHit(shortTpsl, money(65000))).toBeNull();
+  });
+
+  it("handles TP-only and SL-only", () => {
+    const tpOnly = { side: "long" as const, takeProfit: money(70000) };
+    expect(checkTpslHit(tpOnly, money(70001))).toBe("tp");
+    expect(checkTpslHit(tpOnly, money(60000))).toBeNull();
+
+    const slOnly = { side: "long" as const, stopLoss: money(60000) };
+    expect(checkTpslHit(slOnly, money(59999))).toBe("sl");
+    expect(checkTpslHit(slOnly, money(70000))).toBeNull();
+
+    expect(checkTpslHit(undefined, money(70000))).toBeNull();
   });
 });

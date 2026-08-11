@@ -459,6 +459,13 @@ export interface BitgetClientImpl {
     orderId?: string;
     clientOid?: string;
   }) => Effect.Effect<void, BitgetClientError>;
+  readonly setTradingStop: (args: {
+    symbol: string;
+    productType: BitgetProductType;
+    holdSide: "long" | "short";
+    takeProfit?: string;
+    stopLoss?: string;
+  }) => Effect.Effect<void, BitgetClientError>;
 }
 
 export class BitgetClient extends Context.Service<
@@ -1287,6 +1294,49 @@ function makeBitgetClientImpl(
     ).pipe(Effect.map(() => undefined));
   };
 
+  // Attach / update exchange-side take-profit and stop-loss orders on an
+  // already-open position. The Bitget v2 endpoint is
+  // "POST /api/v2/mix/order/place-pos-tpsl" (Place Position TPSL); the trigger
+  // prices are named `stopSurplusTriggerPrice` (take-profit) and
+  // `stopLossTriggerPrice` (stop-loss), NOT `presetTakeProfitPrice` /
+  // `presetStopLossPrice` (those are the place-order preset fields). Prices
+  // are absolute trigger prices. Only the provided leg is sent so the other
+  // remains unchanged.
+  const setTradingStop = (args: {
+    symbol: string;
+    productType: BitgetProductType;
+    holdSide: "long" | "short";
+    takeProfit?: string;
+    stopLoss?: string;
+  }): Effect.Effect<void, BitgetClientError> => {
+    const { symbol: bsymbol, productType } = toBitgetFuturesSymbol(
+      args.symbol,
+      args.productType,
+    );
+    const marginCoin = marginCoinForProductType(productType, bsymbol);
+    const bodyObj: Record<string, unknown> = {
+      symbol: bsymbol,
+      productType,
+      marginCoin,
+      holdSide: args.holdSide,
+    };
+    if (args.takeProfit !== undefined) {
+      bodyObj.stopSurplusTriggerPrice = args.takeProfit;
+    }
+    if (args.stopLoss !== undefined) {
+      bodyObj.stopLossTriggerPrice = args.stopLoss;
+    }
+    const endpoint = "/api/v2/mix/order/place-pos-tpsl";
+    const body = JSON.stringify(bodyObj);
+    const headers = authHeaders(credentials, "POST", endpoint, body, isDemo);
+    return fetchBitget<unknown>(
+      baseUrl,
+      endpoint,
+      { method: "POST", headers, body },
+      rateLimiter,
+    ).pipe(Effect.map(() => undefined));
+  };
+
   const placeFuturesOrder = (
     order: BitgetFuturesOrderRequest,
   ): Effect.Effect<BitgetFuturesOrder, BitgetClientError> => {
@@ -1408,6 +1458,7 @@ function makeBitgetClientImpl(
     placeFuturesOrder,
     getFuturesOrder,
     cancelFuturesOrder,
+    setTradingStop,
   };
 }
 

@@ -72,6 +72,25 @@ export interface ClosePositionRequest {
 }
 
 /**
+ * Exchange-side take-profit / stop-loss attachment for an open position.
+ *
+ * Prices are ABSOLUTE (not percentages). The exchange holds the TP/SL orders
+ * so they fire even if this client disconnects — this is the "Model B" manual
+ * trading model, distinct from polling-in-a-loop closes.
+ */
+export interface SetTradingStopRequest {
+  readonly symbol: string;
+  readonly productType: FuturesProductType;
+  readonly marginMode: FuturesMarginMode;
+  /** The position leg the TP/SL attaches to. */
+  readonly side: "long" | "short";
+  /** Absolute take-profit trigger price. Omit to leave TP unchanged. */
+  readonly takeProfit?: Money;
+  /** Absolute stop-loss trigger price. Omit to leave SL unchanged. */
+  readonly stopLoss?: Money;
+}
+
+/**
  * Port for placing orders and querying balances/positions on a futures exchange.
  *
  * Implementations may be simulated (paper trading) or live (real money).
@@ -122,6 +141,17 @@ export interface FuturesExchangeAdapterService {
   readonly cancelOpenOrders?: (
     symbol: string,
     productType: FuturesProductType,
+  ) => Effect.Effect<void, ExchangeError>;
+
+  /**
+   * Attach exchange-side take-profit / stop-loss orders to an open position.
+   * The exchange holds these orders so they fire even if the client
+   * disconnects. Optional: implementations without exchange-side TP/SL (e.g.
+   * calling adapters) omit this member, and engines must treat absence as
+   * "no built-in TP/SL; fall back to polling closes".
+   */
+  readonly setTradingStop?: (
+    request: SetTradingStopRequest,
   ) => Effect.Effect<void, ExchangeError>;
 }
 
