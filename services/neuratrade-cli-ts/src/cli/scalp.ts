@@ -702,10 +702,9 @@ export function buildBacktestComposerConfig(
  * leave the bound open (earliest/latest available candle). An inverted or
  * equal (zero-width) range is rejected.
  */
-function resolveBacktestCandleRange(args: ResolvedBacktestArgs): {
-  from?: Date;
-  to?: Date;
-} {
+function resolveBacktestCandleRange(args: ResolvedBacktestArgs):
+  | { ok: true; range: { from?: Date; to?: Date } }
+  | { ok: false; error: string } {
   const start = args.start ?? args.startDate;
   const end = args.end ?? args.endDate;
   const range: { from?: Date; to?: Date } = {};
@@ -714,11 +713,12 @@ function resolveBacktestCandleRange(args: ResolvedBacktestArgs): {
   if (end && end.trim().length > 0) range.to = new Date(`${end}T00:00:00Z`);
 
   if (range.from && range.to && range.from.getTime() >= range.to.getTime()) {
-    throw new Error(
-      `backtest range is inverted or empty: start (${start}) must be before end (${end})`,
-    );
+    return {
+      ok: false,
+      error: `backtest range is inverted or empty: start (${start}) must be before end (${end})`,
+    };
   }
-  return range;
+  return { ok: true, range };
 }
 
 export function backtestProgram(args: ResolvedBacktestArgs) {
@@ -728,13 +728,17 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
     const engine = yield* BacktestEngine;
 
     const candleRange = resolveBacktestCandleRange(args);
+    if (!candleRange.ok) {
+      return yield* Effect.fail(new Error(candleRange.error));
+    }
+    const { from, to } = candleRange.range;
 
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
       symbol: args.symbol,
       timeframe: args.timeframe,
-      from: candleRange.from,
-      to: candleRange.to,
+      from,
+      to,
     });
 
     const htfCandles =
@@ -743,8 +747,8 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
             exchange: args.exchange,
             symbol: args.symbol,
             timeframe: args.htfTimeframe,
-            from: candleRange.from,
-            to: candleRange.to,
+            from,
+            to,
           })
         : [];
 
