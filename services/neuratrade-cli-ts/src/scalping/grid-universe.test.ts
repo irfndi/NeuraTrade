@@ -9,6 +9,8 @@ import {
 import type { Candle, Tick } from "../market-data/types.js";
 import {
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  GATE_ADX_GATES,
+  GATE_TARGETS,
   MIN_UNIVERSE_24H_VOLUME_USDT,
   passesTimeSplitGate,
   runMarketUniverseScan,
@@ -361,6 +363,42 @@ describe("accountScaledTargetFillsPerDay", () => {
   });
 });
 
+describe("DEFAULT_GRID_UNIVERSE_SEARCH_SPACE", () => {
+  it("can express the mainnet-validated BTC/SOL grid-shape values", () => {
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridStepPct).toContain(1.0);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridStepPct).toContain(1.25);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridMaxGrids).toContain(1.5);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridMaxGrids).toContain(2);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(24);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(36);
+  });
+
+  it("keeps BTC/SOL-style configs reachable by the walk-forward grid search", () => {
+    const searchSpace = DEFAULT_GRID_UNIVERSE_SEARCH_SPACE;
+    const btc = {
+      gridStepPct: 1.0,
+      gridMaxGrids: 1.5,
+      gridPauseAfterLossBars: 24,
+    };
+    const sol = {
+      gridStepPct: 1.25,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 36,
+    };
+    for (const config of [btc, sol]) {
+      expect(searchSpace.gridStepPct as readonly number[]).toContain(
+        config.gridStepPct,
+      );
+      expect(searchSpace.gridMaxGrids as readonly number[]).toContain(
+        config.gridMaxGrids,
+      );
+      expect(searchSpace.gridPauseAfterLossBars as readonly number[]).toContain(
+        config.gridPauseAfterLossBars,
+      );
+    }
+  });
+});
+
 describe("selectUniversePortfolio", () => {
   it("picks the highest-edge entries first", () => {
     const a = entry("A", 0.2, 10);
@@ -466,6 +504,11 @@ describe("gateScoredEligibility (stage-4)", () => {
     searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
   };
 
+  it("sweeps the mainnet-validated target and ADX dials", () => {
+    expect(GATE_TARGETS).toContain(4);
+    expect(GATE_ADX_GATES).toContain(26);
+  });
+
   /**
    * 54720 exact-15m-spaced candles ending ~1 bar before the test run.
    * `wick` = doji flats alternating with balanced both-wick bars at price
@@ -517,7 +560,7 @@ describe("gateScoredEligibility (stage-4)", () => {
    * grid step (the fast-tier fill floor) and both time-split halves stay
    * profitable. Verified empirically 2026-08-09: readiness null, fast keeps.
    */
-  function fastCandles(): Candle[] {
+  function fastCandles(dipPct = 1.0): Candle[] {
     const end = Date.now() - BAR_MS;
     const rows: Candle[] = [];
     let price = 100;
@@ -538,7 +581,7 @@ describe("gateScoredEligibility (stage-4)", () => {
               ...base,
               open,
               high: open * (1 + 0.05 / 100),
-              low: open * (1 - 1.0 / 100),
+              low: open * (1 - dipPct / 100),
               close,
             }
           : { ...base, open, high: close, low: open, close },
@@ -601,7 +644,7 @@ describe("gateScoredEligibility (stage-4)", () => {
     // sweep keeps the first best combo → target 1, ADX 24.
     expect(gated.validatedTargetRatio).toBe(1);
     expect(gated.validatedChopGateAdx).toBe(24);
-  });
+  }, 300_000);
 
   it("drops a walk-forward survivor when no target×ADX combo clears the gates", () => {
     const candles = gateCandles(false);
@@ -609,11 +652,11 @@ describe("gateScoredEligibility (stage-4)", () => {
     expect(entry.passed).toBe(true);
 
     expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
-  });
+  }, 300_000);
 
   it(
     "fast tier: a walk-forward survivor failing the readiness board becomes eligible on the light criteria",
-    // Two full 4-combo gate sweeps over 54,720 candles (readiness + fast)
+    // Two full 9-combo gate sweeps over 54,720 candles (readiness + fast)
     // run ~3s each; the 5s default is too tight.
     () => {
     const candles = fastCandles();
@@ -635,7 +678,7 @@ describe("gateScoredEligibility (stage-4)", () => {
 
     // ...but tier=fast accepts it via strict time-split + walk-forward +
     // the fills/day floor, and the row still carries the swept config
-    // (target/ADX from the 4-combo GATE sweep).
+    // (target/ADX from the widened GATE sweep).
     const gated = gateScoredEligibility(entry, candles, {
       ...GATE_OPTIONS,
       tier: "fast",
@@ -647,9 +690,9 @@ describe("gateScoredEligibility (stage-4)", () => {
     expect(validatedChopGateAdx).toBeDefined();
     if (validatedTargetRatio === undefined || validatedChopGateAdx === undefined)
       return;
-    expect([1, 3]).toContain(validatedTargetRatio);
-    expect([24, 28]).toContain(validatedChopGateAdx);
-  }, 30_000);
+    expect(GATE_TARGETS as readonly number[]).toContain(validatedTargetRatio);
+    expect(GATE_ADX_GATES as readonly number[]).toContain(validatedChopGateAdx);
+  }, 300_000);
 
   it("fast tier: REJECTS a walk-forward survivor whose structural BE win rate exceeds 0.40", () => {
     // Same series/sweep as the fast-accept test, but with the ETH-1.25/1/0/1/24
@@ -668,7 +711,7 @@ describe("gateScoredEligibility (stage-4)", () => {
       { ...GATE_OPTIONS, tier: "fast" },
     );
     expect(ethProfile).toBeNull();
-  }, 30_000);
+  }, 300_000);
 
   it("fast tier: ACCEPTS the same survivor with a BTC/SOL-style BE <= 0.40", () => {
     const candles = fastCandles();
@@ -684,7 +727,43 @@ describe("gateScoredEligibility (stage-4)", () => {
       { ...GATE_OPTIONS, tier: "fast" },
     );
     expect(btcProfile).not.toBeNull();
-  }, 30_000);
+  }, 300_000);
+
+  it("fast tier: accepts BTC/SOL-shaped walk-forward params now expressible by the search", () => {
+    const candles = fastCandles();
+    const base = walkForwardEntry("REACHABLE/USDT:USDT", candles);
+    const btc = gateScoredEligibility(
+      {
+        ...base,
+        bestParams: {
+          gridStepPct: 1,
+          gridMaxGrids: 1.5,
+          gridPauseAfterLossBars: 24,
+        },
+        walkForward: { ...base.walkForward, avgWinPct: 3, avgLossPct: 2 },
+      },
+      candles,
+      { ...GATE_OPTIONS, tier: "fast" },
+    );
+    expect(btc).not.toBeNull();
+
+    const solCandles = fastCandles(1.3);
+    const solBase = walkForwardEntry("REACHABLE-SOL/USDT:USDT", solCandles);
+    const sol = gateScoredEligibility(
+      {
+        ...solBase,
+        bestParams: {
+          gridStepPct: 1.25,
+          gridMaxGrids: 2,
+          gridPauseAfterLossBars: 36,
+        },
+        walkForward: { ...solBase.walkForward, avgWinPct: 4, avgLossPct: 2 },
+      },
+      solCandles,
+      { ...GATE_OPTIONS, tier: "fast" },
+    );
+    expect(sol).not.toBeNull();
+  }, 300_000);
 
   it("fast tier: threshold is inclusive at exactly 0.40", () => {
     const candles = fastCandles();
@@ -699,7 +778,7 @@ describe("gateScoredEligibility (stage-4)", () => {
     );
     // BE = 0.8 / (1.2 + 0.8) = 0.40 — accepted (<= threshold).
     expect(boundary).not.toBeNull();
-  }, 30_000);
+  }, 300_000);
 
   it("respects a custom maxBreakevenWinRate", () => {
     const candles = fastCandles();
@@ -715,7 +794,7 @@ describe("gateScoredEligibility (stage-4)", () => {
       { ...GATE_OPTIONS, tier: "fast", maxBreakevenWinRate: 0.6 },
     );
     expect(overridden).not.toBeNull();
-  }, 30_000);
+  }, 300_000);
 });
 
 

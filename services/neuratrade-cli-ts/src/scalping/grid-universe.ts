@@ -65,14 +65,14 @@ export const DEFAULT_PER_SYMBOL_FILL_CAP = 10;
  * survivor (the walk-forward fixes step/grids/pause; the gate re-checks the
  * target/ADX dials around them).
  */
-export const GATE_TARGETS = [1, 3] as const;
+export const GATE_TARGETS = [1, 3, 4] as const;
 
 /**
  * Stage-4 gate-scored eligibility sweep: chop-gate ADX dials validated per
  * survivor (matches the manifest sweep in
  * scripts/gate-scored-grid-search-2026-08-06.ts).
  */
-export const GATE_ADX_GATES = [24, 28] as const;
+export const GATE_ADX_GATES = [24, 26, 28] as const;
 
 /**
  * Deep-history target for gate-scored candidates: ~55k 15m bars (~2 years)
@@ -154,8 +154,11 @@ export const DEFAULT_GRID_UNIVERSE_SEARCH_SPACE = {
   // funnel could never surface them, so 'no profitable demo config' was
   // only proven for <=0.5% steps.
   gridStepPct: [0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 1.25],
-  gridMaxGrids: [1, 2, 3],
-  gridPauseAfterLossBars: [0, 6, 24],
+  // 1.5 grids and 36 pause added 2026-08-11: the only mainnet-validated
+  // BTC/SOL configs include these values, so the funnel must be able to
+  // express them before concluding no survivor exists.
+  gridMaxGrids: [1, 1.5, 2, 3],
+  gridPauseAfterLossBars: [0, 6, 24, 36],
 } as const;
 
 export interface GridUniverseOptions {
