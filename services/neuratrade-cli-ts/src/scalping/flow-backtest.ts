@@ -95,6 +95,13 @@ export interface FlowBacktestOptions {
   readonly testDays: number;
   /** Number of rolling walk-forward windows. */
   readonly walkForwardSteps: number;
+  /**
+   * z-score normalization: 'per-symbol' = rolling z vs each symbol's own
+   * history; 'cross-sectional' = z across the universe at each boundary.
+   */
+  readonly zMode: "per-symbol" | "cross-sectional";
+  /** ATR stop multiplier; null disables the ATR stop (pure time/OFI exits). */
+  readonly stopMultiplier: number | null;
 }
 
 export const defaultFlowBacktestOptions: FlowBacktestOptions = {
@@ -109,6 +116,8 @@ export const defaultFlowBacktestOptions: FlowBacktestOptions = {
   trainDays: 75,
   testDays: 21,
   walkForwardSteps: 3,
+  zMode: "per-symbol",
+  stopMultiplier: ATR_STOP_MULT,
 };
 
 // ---------------------------------------------------------------------------
@@ -263,6 +272,10 @@ export interface BarContext {
   readonly close: number;
   readonly atr15: number;
   readonly vwap1h: number;
+  /** Window return (close/firstClose - 1), raw — for cross-sectional z. */
+  readonly rawRet: number;
+  /** Window volume sum, raw — for cross-sectional z. */
+  readonly rawVolume: number;
   /** Signed OFI over the trailing 15m window (sum of per-bar deltas). */
   readonly ofiRaw: number;
   /** Fractional OI change over the trailing 15m window. */
@@ -436,6 +449,8 @@ export function computeContexts(
       close: closes[i],
       atr15,
       vwap1h,
+      rawRet: ret,
+      rawVolume: volSum,
       ofiRaw: ofiSum,
       dOiRaw,
       fundingRaw,
@@ -489,6 +504,19 @@ export function computeFlowSignal(
   symbol = "SYNTH",
 ): readonly FlowSignal[] {
   const ctxs = computeContexts(candles, oiSeries, fundingSeries);
+  return computeSignalsFromContexts(ctxs, options, symbol);
+}
+
+/**
+ * Signal loop over pre-computed contexts (shared by the per-symbol and
+ * cross-sectional paths). A signal at boundary t uses the context of the
+ * last bar strictly before t and executes at the first bar after t.
+ */
+export function computeSignalsFromContexts(
+  ctxs: readonly BarContext[],
+  options: FlowBacktestOptions = defaultFlowBacktestOptions,
+  symbol = "SYNTH",
+): readonly FlowSignal[] {
   const signals: FlowSignal[] = [];
   const { entry: entryTh, funding: fundingCap } = options.thresholds;
 
@@ -547,6 +575,10 @@ export function computeFlowSignal(
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Trade engine (one symbol, one hold time, bars restricted to a window)
+// ---------------------------------------------------------------------------
 // Trade engine (one symbol, one hold time, bars restricted to a window)
 // ---------------------------------------------------------------------------
 
@@ -598,10 +630,15 @@ function runSymbolEngine(
           const atr = sig.atr15 > 0 ? sig.atr15 : ctx.atr15;
           if (atr > 0) {
             const side = sig.side;
+            const stopMult = opts.stopMultiplier;
             const stop =
-              side === "LONG"
-                ? ctx.open - ATR_STOP_MULT * atr
-                : ctx.open + ATR_STOP_MULT * atr;
+              stopMult === null
+                ? side === "LONG"
+                  ? -Infinity
+                  : Infinity
+                : side === "LONG"
+                  ? ctx.open - stopMult * atr
+                  : ctx.open + stopMult * atr;
             pos = {
               side,
               entryPrice: ctx.open,
@@ -847,17 +884,102 @@ function aggregateTrades(
  * would cross a train/test boundary are purged. Every hold time in the grid
  * runs its own full simulation; the report carries all of them.
  */
+
+/**
+ * Replace each context's per-symbol rolling z with the z across the
+ * universe at the same boundary timestamp (the proposal's stated
+ * cross-sectional normalization — the untested variant).
+ */
+function applyCrossSectionalZ(
+  prepared: readonly { series: FlowSymbolSeries; ctxs: readonly BarContext[] }[],
+): readonly { series: FlowSymbolSeries; ctxs: readonly BarContext[] }[] {
+  const byTs = new Map<
+    number,
+    { ret: number[]; oi: number[]; ofi: number[]; vol: number[]; fund: number[] }
+  >();
+  for (const p of prepared) {
+    for (const c of p.ctxs) {
+      let g = byTs.get(c.ts);
+      if (!g) {
+        g = { ret: [], oi: [], ofi: [], vol: [], fund: [] };
+        byTs.set(c.ts, g);
+      }
+      g.ret.push(c.rawRet);
+      g.oi.push(c.dOiRaw);
+      g.ofi.push(c.ofiRaw);
+      g.vol.push(c.rawVolume);
+      g.fund.push(c.fundingRaw);
+    }
+  }
+  const zCache = new Map<
+    number,
+    { zRet: number; zOi: number; zOfi: number; zVol: number; zFund: number }
+  >();
+  for (const [ts, g] of byTs) {
+    const z = (xs: readonly number[]): ((x: number) => number) => {
+      const n = xs.length;
+      if (n < 2) return () => 0;
+      const mean = xs.reduce((a, b) => a + b, 0) / n;
+      const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
+      if (sd < 1e-12) return () => 0;
+      return (x: number) => (x - mean) / sd;
+    };
+    const zRet = z(g.ret);
+    const zOi = z(g.oi);
+    const zOfi = z(g.ofi);
+    const zVol = z(g.vol);
+    const zFund = z(g.fund);
+    zCache.set(ts, {
+      zRet: zRet(0),
+      zOi: zOi(0),
+      zOfi: zOfi(0),
+      zVol: zVol(0),
+      zFund: zFund(0),
+    });
+  }
+  // NOTE: the z above is computed with x=0 because cross-sectional z of a
+  // single ctx needs its own value — recompute properly below.
+  return prepared.map((p) => ({
+    series: p.series,
+    ctxs: p.ctxs.map((c) => {
+      const raw = byTs.get(c.ts);
+      if (!raw || raw.ret.length < 2) return c;
+      const zf = (xs: readonly number[], x: number) => {
+        const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+        const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length);
+        if (sd < 1e-12) return 0;
+        return (x - mean) / sd;
+      };
+      return {
+        ...c,
+        zReturn: zf(raw.ret, c.rawRet),
+        zOi: zf(raw.oi, c.dOiRaw),
+        zOfi: zf(raw.ofi, c.ofiRaw),
+        zVolume: zf(raw.vol, c.rawVolume),
+        zFunding: zf(raw.fund, c.fundingRaw),
+      };
+    }),
+  }));
+}
+
 export function runFlowBacktest(
   data: FlowBacktestData,
 ): FlowBacktestReport {
   const opts = data.options;
 
   // Per-symbol contexts + signals (computed once; windows filter them).
-  const prepared = data.series.map((s) => {
-    const ctxs = computeContexts(s.candles, s.oi, s.funding);
-    const signals = computeFlowSignal(s.candles, s.oi, s.funding, opts, s.symbol);
-    return { series: s, ctxs, signals };
-  });
+  const baseCtxs = data.series.map((s) => ({
+    series: s,
+    ctxs: computeContexts(s.candles, s.oi, s.funding),
+  }));
+  const prepared = (opts.zMode === "cross-sectional"
+    ? applyCrossSectionalZ(baseCtxs)
+    : baseCtxs
+  ).map((p) => ({
+    series: p.series,
+    ctxs: p.ctxs,
+    signals: computeSignalsFromContexts(p.ctxs, opts, p.series.symbol),
+  }));
 
   const allTs = prepared.flatMap((p) => p.ctxs.map((c) => c.ts));
   if (allTs.length === 0) {
@@ -868,8 +990,12 @@ export function runFlowBacktest(
       portfolio: emptyHoldTime(0),
     };
   }
-  const t0 = Math.min(...allTs);
-  const t1 = Math.max(...allTs);
+  let t0 = Number.POSITIVE_INFINITY;
+  let t1 = Number.NEGATIVE_INFINITY;
+  for (const t of allTs) {
+    if (t < t0) t0 = t;
+    if (t > t1) t1 = t;
+  }
   const plan = planWalkForward(t0, t1, opts);
   const maxHoldMs = Math.max(...opts.holdTimes) * MS_PER_HOUR;
 
@@ -906,7 +1032,8 @@ export function runFlowBacktest(
       prepared.forEach((p, si) => {
         const winSignals = keptByWindow[wi][si];
         if (winSignals.length === 0) return;
-        const firstEntry = Math.min(...winSignals.map((s) => s.entryTs));
+        let firstEntry = Number.POSITIVE_INFINITY;
+        for (const s of winSignals) if (s.entryTs < firstEntry) firstEntry = s.entryTs;
         const firstBarIdx = p.ctxs.findIndex((c) => c.ts >= firstEntry);
         if (firstBarIdx < 0) return;
         const ctxs = p.ctxs.slice(firstBarIdx);

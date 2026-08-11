@@ -5581,6 +5581,18 @@ export const flowBacktestCommand = Command.make(
     holdTimes: flowHoldTimesOption,
     fee: flowFeeOption,
     spreadBps: flowSpreadBpsOption,
+    zMode: Options.text("z-mode").pipe(
+      Options.withDefault("per-symbol"),
+      Options.withDescription(
+        "z-score normalization: per-symbol (rolling) or cross-sectional (across the universe at each boundary)",
+      ),
+    ),
+    stopMult: Options.float("stop-mult").pipe(
+      Options.withDefault(defaultFlowBacktestOptions.stopMultiplier ?? 0),
+      Options.withDescription(
+        "ATR stop multiplier; 0 disables the ATR stop (pure time/OFI exits)",
+      ),
+    ),
   },
   (args) =>
     Effect.gen(function* () {
@@ -5593,6 +5605,13 @@ export const flowBacktestCommand = Command.make(
         .split(",")
         .map((s) => Number.parseFloat(s.trim()))
         .filter((n) => Number.isFinite(n) && n > 0);
+      if (args.zMode !== "per-symbol" && args.zMode !== "cross-sectional") {
+        return yield* Effect.fail(
+          new MarketDataRepositoryError(
+            `Invalid --z-mode '${args.zMode}': expected per-symbol or cross-sectional`,
+          ),
+        );
+      }
       if (holdTimes.length === 0) {
         return yield* Effect.fail(
           new MarketDataRepositoryError(
@@ -5620,6 +5639,8 @@ export const flowBacktestCommand = Command.make(
         trainDays: defaultFlowBacktestOptions.trainDays,
         testDays: defaultFlowBacktestOptions.testDays,
         walkForwardSteps: defaultFlowBacktestOptions.walkForwardSteps,
+        zMode: args.zMode,
+        stopMultiplier: args.stopMult > 0 ? args.stopMult : null,
       };
 
       const series: FlowSymbolSeries[] = [];
