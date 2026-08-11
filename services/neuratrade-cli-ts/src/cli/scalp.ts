@@ -1392,6 +1392,18 @@ export const optimizeCommand = Command.make(
     chopGateAdx: chopGateAdxOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
+    start: Options.text("start").pipe(
+      Options.withDefault(""),
+      Options.withDescription(
+        "Inclusive backtest start date (YYYY-MM-DD). Empty = earliest available candle.",
+      ),
+    ),
+    end: Options.text("end").pipe(
+      Options.withDefault(""),
+      Options.withDescription(
+        "Inclusive backtest end date (YYYY-MM-DD). Empty = latest available candle.",
+      ),
+    ),
   },
   (args) =>
     Effect.gen(function* () {
@@ -1409,7 +1421,8 @@ export const optimizeCommand = Command.make(
         Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            yield* Console.error(`optimize failed: ${err.reason}`);
+            const msg = err instanceof Error ? err.message : err.reason;
+            yield* Console.error(`optimize failed: ${msg}`);
             return [];
           }),
         ),
@@ -1428,10 +1441,18 @@ function optimizeProgram(args: OptimizeArgs) {
     const repo = yield* MarketDataRepository;
     const engine = yield* BacktestEngine;
 
+    const candleRange = resolveBacktestCandleRange(args);
+    if (!candleRange.ok) {
+      return yield* Effect.fail(new Error(candleRange.error));
+    }
+    const { from, to } = candleRange.range;
+
     const candles = yield* repo.getCandles({
       exchange: args.exchange,
       symbol: args.symbol,
       timeframe: args.timeframe,
+      from,
+      to,
     });
 
     if (candles.length === 0) {
