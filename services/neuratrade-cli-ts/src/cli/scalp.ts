@@ -5516,6 +5516,18 @@ export const flowBacktestCommand = Command.make(
         )) !== null;
       for (const symbol of symbols) {
         const canonical = wireToCanonicalSymbol(symbol);
+        // OI/funding rows are stored under multiple canonical forms
+        // (e.g. "BTC/USDT" and "BTC/USDT:USDT") depending on which recorder
+        // wrote them; the raw wire symbol ("BTCUSDT") never matches. Query
+        // all variants so the flow honesty gates see real OI/funding data.
+        const symbolVariants = [
+          symbol,
+          canonical,
+          canonical.endsWith(":USDT") ? canonical : `${canonical}:USDT`,
+        ];
+        const variantPlaceholders = symbolVariants
+          .map(() => "?")
+          .join(",");
         const candleRows = yield* sqlite.queryAll<{
           open: number;
           high: number;
@@ -5546,9 +5558,9 @@ export const flowBacktestCommand = Command.make(
               oiValue: number | null;
             }>(
               `SELECT ts, oi, oi_value AS oiValue FROM open_interest_history
-               WHERE exchange IN ('bybit','bybit-futures') AND symbol = ? AND ts BETWEEN ? AND ?
+               WHERE exchange IN ('bybit','bybit-futures') AND symbol IN (${variantPlaceholders}) AND ts BETWEEN ? AND ?
                ORDER BY ts ASC`,
-              [symbol, start.getTime(), end.getTime()],
+              [...symbolVariants, start.getTime(), end.getTime()],
             )
           : [];
         const fundingRows = hasFundingTable
@@ -5557,9 +5569,9 @@ export const flowBacktestCommand = Command.make(
               timestamp: string;
             }>(
               `SELECT funding_rate AS fundingRate, timestamp FROM funding_rates
-               WHERE exchange IN ('bybit','bybit-futures') AND symbol = ? AND timestamp >= ? AND timestamp <= ?
+               WHERE exchange IN ('bybit','bybit-futures') AND symbol IN (${variantPlaceholders}) AND timestamp >= ? AND timestamp <= ?
                ORDER BY timestamp ASC`,
-              [symbol, start.toISOString(), end.toISOString()],
+              [...symbolVariants, start.toISOString(), end.toISOString()],
             )
           : [];
         totalCandles += candleRows.length;
