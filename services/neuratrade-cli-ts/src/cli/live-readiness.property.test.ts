@@ -26,13 +26,11 @@ const candidate: LiveGridConfiguration = {
   maxDailyLossPct: 2,
 };
 
-type RiskCap = "maxPositionSizePct" | "maxDrawdownPct" | "maxDailyLossPct";
-
 describe("validated live grid profile properties", () => {
   it("rejects every non-finite risk cap", () => {
     fc.assert(
       fc.property(
-        fc.constantFrom<RiskCap>(
+        fc.constantFrom(
           "maxPositionSizePct",
           "maxDrawdownPct",
           "maxDailyLossPct",

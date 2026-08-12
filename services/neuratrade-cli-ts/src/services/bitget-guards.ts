@@ -235,7 +235,6 @@ function checkNotionalAndLimits(
 function checkBalance(
   ctx: BitgetGuardContext,
   order: BitgetOrderRequest,
-  referencePrice: string,
 ): Effect.Effect<void, BitgetGuardError> {
   return Effect.gen(function* () {
     const feeRate = ctx.feeRate ?? "0.001";
@@ -294,7 +293,7 @@ export function validateOrder(
     const instrument = yield* requireInstrument(ctx);
     const normalized = yield* normalizeSizeAndPrice(instrument, ctx.order);
     yield* checkNotionalAndLimits(instrument, normalized, referencePrice);
-    yield* checkBalance(ctx, normalized, referencePrice);
+    yield* checkBalance(ctx, normalized);
     return normalized;
   });
 }

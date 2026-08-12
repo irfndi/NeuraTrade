@@ -160,7 +160,7 @@ describe("live execution market guard", () => {
 
     expect(validateLiveGridConfiguration(config)).toBeUndefined();
     expect(
-      validateLiveGridConfiguration({ ...config, gridStepPct: 0.5 }),
+      validateLiveGridConfiguration({ ...config, gridStepPct: 1 }),
     ).toContain("validated readiness cohort");
     expect(
       validateLiveGridConfiguration({ ...config, maxPositionSizePct: 51 }),
@@ -197,9 +197,9 @@ describe("live execution market guard", () => {
       { symbol: "ETH/USDT:USDT" },
       { timeframe: "5m" },
       { productType: "SPOT" },
-      { gridStepPct: 0.5 },
-      { gridMaxGrids: 2 },
-      { gridPauseAfterLossBars: 0 },
+      { gridStepPct: 1 },
+      { gridMaxGrids: 1.5 },
+      { gridPauseAfterLossBars: 24 },
       { feePct: 0.06 },
       { slippageBps: 2 },
       { trendFilterPeriod: 96 },

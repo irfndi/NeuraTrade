@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { runWalkForward, type WalkForwardResult } from "./walk-forward.js";
+import { runWalkForward } from "./walk-forward.js";
 import type { BacktestResult } from "./backtest.js";
 import type { CandleLike } from "./types.js";
 import type { SelectArgs, SelectResult } from "../cli/scalp.js";

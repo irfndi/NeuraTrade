@@ -357,9 +357,7 @@ function demoDrawdown(trades: readonly RawTrade[]): string {
 }
 
 /** Cohort-union prospective evidence (≥50 fills across the cohort symbols). */
-function computeProspective(
-  trades: readonly RawTrade[],
-): ProspectiveEvidence {
+function computeProspective(trades: readonly RawTrade[]): ProspectiveEvidence {
   const complete = trades.filter(completeTrade);
   const pValues = complete.map(
     (trade) => trade.realized_pnl_pct_decimal ?? "0",
@@ -453,7 +451,8 @@ function buildInput(
   const datasetCutoff = firstProvenance?.dataset_cutoff_at ?? "";
   const provenanceFingerprint =
     firstProvenance?.strategy_config_fingerprint ?? "";
-  const earliest = firstProvenance?.entry_opened_at ?? "1970-01-01T00:00:00.000Z";
+  const earliest =
+    firstProvenance?.entry_opened_at ?? "1970-01-01T00:00:00.000Z";
   const latest = trades.at(-1)?.closed_at ?? "1970-01-01T00:00:00.000Z";
   return {
     prospectiveEvidence: prospective,
@@ -578,22 +577,22 @@ function executeReadiness(
       };
     });
     // Merged board: each gate passes iff it passes for EVERY cohort symbol.
-    const mergedGates: ReadinessGate[] = cohort[0]?.gates.map((gate) => {
-      const failed = cohort.filter(
-        (member) => !member.gates.find((g) => g.id === gate.id)?.passed,
-      );
-      return {
-        id: gate.id,
-        passed: failed.length === 0,
-        reasons: failed.flatMap((member) =>
-          (
-            member.gates.find((g) => g.id === gate.id)?.reasons ?? []
-          ).map((reason) =>
-            cohort.length > 1 ? `${member.symbol}: ${reason}` : reason,
+    const mergedGates: ReadinessGate[] =
+      cohort[0]?.gates.map((gate) => {
+        const failed = cohort.filter(
+          (member) => !member.gates.find((g) => g.id === gate.id)?.passed,
+        );
+        return {
+          id: gate.id,
+          passed: failed.length === 0,
+          reasons: failed.flatMap((member) =>
+            (member.gates.find((g) => g.id === gate.id)?.reasons ?? []).map(
+              (reason) =>
+                cohort.length > 1 ? `${member.symbol}: ${reason}` : reason,
+            ),
           ),
-        ),
-      };
-    }) ?? [];
+        };
+      }) ?? [];
     const failedGateIds: readonly ReadinessGateId[] = mergedGates
       .filter((gate) => !gate.passed)
       .map((gate) => gate.id);
@@ -606,7 +605,8 @@ function executeReadiness(
       (merged, member) => ({
         valid: merged.valid && member.metrics.provenance.valid,
         queriedRows: merged.queriedRows + member.metrics.provenance.queriedRows,
-        expectedRows: merged.expectedRows + member.metrics.provenance.expectedRows,
+        expectedRows:
+          merged.expectedRows + member.metrics.provenance.expectedRows,
       }),
       { valid: true, queriedRows: 0, expectedRows: 0 },
     );

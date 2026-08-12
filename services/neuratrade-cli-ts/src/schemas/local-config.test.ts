@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Result, pipe } from "effect";
+import { Result } from "effect";
 import {
-  LocalConfigSchema,
   decodeLocalConfigEither,
   type LocalConfig,
 } from "./local-config";

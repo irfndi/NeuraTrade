@@ -493,4 +493,68 @@ describe("runGridWalkForward", () => {
     expect(result.windows.length).toBeGreaterThan(0);
     expect(result.profitableWindowsPct).toBeGreaterThan(0);
   });
+
+  it("reports trade-weighted avg win/loss on a mixed series (both sides present)", () => {
+    // Seeded random walk with real intrabar wicks — genuine wins AND losses.
+    const candles = makeRandomWalkCandles(900, 7);
+    const result = runGridWalkForward(candles, {
+      trainWindow: 200,
+      testWindow: 150,
+      initialCapital: 20,
+      searchSpace: {
+        gridStepPct: [0.3],
+        gridMaxGrids: [2],
+        gridPauseAfterLossBars: [0],
+      },
+      baseOptions: {
+        feePct: 0.04,
+        slippageBps: 1,
+        trendFilterPeriod: 0,
+        leverage: 1,
+      },
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    // Both sides trade on the wick-rich series: averages must exist and be
+    // positive — these feed the funnel's structural-asymmetry gate.
+    expect(result.avgWinPct).toBeGreaterThan(0);
+    expect(result.avgLossPct).toBeGreaterThan(0);
+    for (const window of result.windows) {
+      if (window.testTrades === 0) continue;
+      if (window.avgWinPct !== undefined) {
+        expect(window.avgWinPct).toBeGreaterThan(0);
+      }
+      if (window.avgLossPct !== undefined) {
+        expect(window.avgLossPct).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("reports only the loss side on a monotonic downtrend (extreme asymmetry)", () => {
+    // -0.5%/bar downtrend: the grid only ever takes long entries (no bar
+    // reaches the sell level) and every long hits its stop — the walk-
+    // forward must expose this as avgLoss only, so the asymmetry gate can
+    // reject the config instead of trusting aggregate return.
+    const candles = makeTrendingDownCandles(900);
+    const result = runGridWalkForward(candles, {
+      trainWindow: 200,
+      testWindow: 150,
+      initialCapital: 20,
+      searchSpace: {
+        gridStepPct: [0.3],
+        gridMaxGrids: [2],
+        gridPauseAfterLossBars: [0],
+      },
+      baseOptions: {
+        feePct: 0.04,
+        slippageBps: 1,
+        trendFilterPeriod: 0,
+        leverage: 1,
+      },
+    });
+
+    expect(result.totalTrades).toBeGreaterThan(0);
+    expect(result.avgWinPct).toBeUndefined();
+    expect(result.avgLossPct ?? 0).toBeGreaterThan(0);
+  });
 });

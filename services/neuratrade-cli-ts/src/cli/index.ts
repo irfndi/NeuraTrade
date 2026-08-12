@@ -1,5 +1,5 @@
 import { Command } from "./kit/kit.ts";
-import { Console, Effect } from "effect";
+import { Console } from "effect";
 import { gatewayCommand } from "./gateway.ts";
 import { statusCommand } from "./status.ts";
 import { healthCommand } from "./health.ts";

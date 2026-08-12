@@ -138,7 +138,7 @@ describe("TelegramApi Effect service", () => {
     const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
-      const failureOption = Cause.failureOption(exit.cause);
+      const failureOption = Cause.findErrorOption(exit.cause);
       expect(failureOption._tag).toBe("Some");
       if (failureOption._tag === "Some") {
         const failure = failureOption.value as ApiClientError;
@@ -170,7 +170,7 @@ describe("TelegramApi Effect service", () => {
     const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
-      const failureOption = Cause.failureOption(exit.cause);
+      const failureOption = Cause.findErrorOption(exit.cause);
       expect(failureOption._tag).toBe("Some");
       if (failureOption._tag === "Some") {
         const failure = failureOption.value as ApiClientError;
@@ -229,7 +229,7 @@ describe("BackendApiClient admin guard", () => {
     const exit = await Effect.runPromiseExit(Effect.provide(program, layer));
     expect(exit._tag).toBe("Failure");
     if (exit._tag === "Failure") {
-      const failureOption = Cause.failureOption(exit.cause);
+      const failureOption = Cause.findErrorOption(exit.cause);
       expect(failureOption._tag).toBe("Some");
       if (failureOption._tag === "Some") {
         const failure = failureOption.value as ApiClientError;

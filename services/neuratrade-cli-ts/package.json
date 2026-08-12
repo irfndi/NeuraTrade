@@ -4,6 +4,7 @@
   "description": "TypeScript/Effect-TS port of the NeuraTrade gateway CLI",
   "main": "./dist/index.js",
   "scripts": {
+    "prepare": "effect-tsgo patch --oxlint",
     "start": "bun run index.ts",
     "build": "tsc --noEmit && bun build index.ts --outdir ./dist --target bun",
     "build:bun": "bun build index.ts --outdir ./dist --target bun",
@@ -20,18 +21,20 @@
     "tail:cf": "alchemy tail"
   },
   "dependencies": {
-    "@effect/platform-bun": "4.0.0-beta.102",
+    "@effect/platform-bun": "4.0.0-beta.105",
     "decimal.js": "^10.6.0",
-    "effect": "4.0.0-beta.102",
+    "effect": "4.0.0-beta.105",
     "ky": "^2.0.2",
     "zod": "^4.4.3",
-    "alchemy": "2.0.0-beta.67",
-    "@effect/platform-node": "4.0.0-beta.102"
+    "alchemy": "2.0.0-beta.70",
+    "@effect/platform-node": "4.0.0-beta.105"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.35.0",
     "@types/bun": "1.3.14",
-    "@types/decimal.js": "^7.4.3",
-    "fast-check": "^3.22.0",
+    "fast-check": "^4.9.0",
+    "oxlint": "1.77.0",
+    "oxlint-tsgolint": "7.0.2001",
     "typescript": "7.0.2"
   },
   "keywords": [

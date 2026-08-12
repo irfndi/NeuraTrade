@@ -20,10 +20,7 @@ import {
   requireBitgetCredentials,
 } from "../services/bitget-config.ts";
 import { validateFuturesOrder } from "../services/bitget-futures-guards.ts";
-import {
-  BitgetFuturesSafetyError,
-  validateLiveOrderSafety,
-} from "../services/bitget-futures-safety.ts";
+import { validateLiveOrderSafety } from "../services/bitget-futures-safety.ts";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -143,7 +140,9 @@ export function handleErr(err: unknown): Effect.Effect<never, Error> {
   // there, which made every adapter rejection print as an empty failure.
   const details =
     err instanceof Error
-      ? "reason" in err && typeof err.reason === "string" && err.reason.length > 0
+      ? "reason" in err &&
+        typeof err.reason === "string" &&
+        err.reason.length > 0
         ? err.reason
         : err.message
       : err && typeof err === "object"

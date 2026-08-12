@@ -1,6 +1,6 @@
 import { Context } from "grammy";
 import { Effect } from "effect";
-import { Api, isApiError, extractApiError } from "./api";
+import { Api, ApiException, isApiError, extractApiError } from "./api";
 
 export const formatOpportunitiesMessage = (opps: any[]) => {
   if (!opps || opps.length === 0) {
@@ -35,23 +35,27 @@ export const handleStart = (api: Api) => async (ctx: Context) => {
 
   // Check if user exists (with proper error handling)
   const userResult = await Effect.runPromise(
-    Effect.catchAll(api.getUserByChatId(chatIdStr), (error) => {
-      if (isApiError(error)) {
-        if (error.type === "auth_failed") {
-          console.error(
-            "[Start] Authentication failed - ADMIN_API_KEY mismatch",
-          );
-          // Return special marker for auth error
-          return Effect.succeed({ _authError: true as const });
+    Effect.catchIf(
+      api.getUserByChatId(chatIdStr),
+      (_error): _error is ApiException => true,
+      (error) => {
+        if (isApiError(error)) {
+          if (error.type === "auth_failed") {
+            console.error(
+              "[Start] Authentication failed - ADMIN_API_KEY mismatch",
+            );
+            // Return special marker for auth error
+            return Effect.succeed({ _authError: true as const });
+          }
+          if (error.type === "not_found") {
+            // User doesn't exist, this is expected for new users
+            return Effect.succeed(null);
+          }
         }
-        if (error.type === "not_found") {
-          // User doesn't exist, this is expected for new users
-          return Effect.succeed(null);
-        }
-      }
-      console.error("[Start] Unexpected error checking user:", error);
-      return Effect.succeed(null);
-    }),
+        console.error("[Start] Unexpected error checking user:", error);
+        return Effect.succeed(null);
+      },
+    ),
   );
 
   // Handle authentication configuration error
@@ -241,12 +245,15 @@ export const handleStatus = (api: Api) => async (ctx: Context) => {
   // Success case - get notification preferences
   const preference = userId
     ? await Effect.runPromise(
-        Effect.catchAll(api.getNotificationPreference(String(userId)), () =>
-          Effect.succeed({
-            enabled: true,
-            profit_threshold: 0.5,
-            alert_frequency: "Every 5 minutes",
-          }),
+        Effect.catchIf(
+          api.getNotificationPreference(String(userId)),
+          (_error): _error is ApiException => true,
+          () =>
+            Effect.succeed({
+              enabled: true,
+              profit_threshold: 0.5,
+              alert_frequency: "Every 5 minutes",
+            }),
         ),
       )
     : {
@@ -278,21 +285,30 @@ export const handleSettings = (api: Api) => async (ctx: Context) => {
 
   // Fetch user for subscription tier (with improved error logging)
   const userResult = await Effect.runPromise(
-    Effect.catchAll(api.getUserByChatId(String(chatId)), (error) => {
-      if (isApiError(error) && error.type === "auth_failed") {
-        console.error("[Settings] Authentication failed - check ADMIN_API_KEY");
-      }
-      return Effect.succeed(null);
-    }),
+    Effect.catchIf(
+      api.getUserByChatId(String(chatId)),
+      (_error): _error is ApiException => true,
+      (error) => {
+        if (isApiError(error) && error.type === "auth_failed") {
+          console.error(
+            "[Settings] Authentication failed - check ADMIN_API_KEY",
+          );
+        }
+        return Effect.succeed(null);
+      },
+    ),
   );
 
   const preference = await Effect.runPromise(
-    Effect.catchAll(api.getNotificationPreference(String(userId)), () =>
-      Effect.succeed({
-        enabled: true,
-        profit_threshold: 0.5,
-        alert_frequency: "Immediate (Periodic Scan 5m)",
-      }),
+    Effect.catchIf(
+      api.getNotificationPreference(String(userId)),
+      (_error): _error is ApiException => true,
+      () =>
+        Effect.succeed({
+          enabled: true,
+          profit_threshold: 0.5,
+          alert_frequency: "Immediate (Periodic Scan 5m)",
+        }),
     ),
   );
 
@@ -325,8 +341,10 @@ export const handleStop = (api: Api) => async (ctx: Context) => {
   }
 
   await Effect.runPromise(
-    Effect.catchAll(api.setNotificationPreference(String(userId), false), () =>
-      Effect.succeed(null),
+    Effect.catchIf(
+      api.setNotificationPreference(String(userId), false),
+      (_error): _error is ApiException => true,
+      () => Effect.succeed(null),
     ),
   );
 
@@ -346,8 +364,10 @@ export const handleResume = (api: Api) => async (ctx: Context) => {
   }
 
   await Effect.runPromise(
-    Effect.catchAll(api.setNotificationPreference(String(userId), true), () =>
-      Effect.succeed(null),
+    Effect.catchIf(
+      api.setNotificationPreference(String(userId), true),
+      (_error): _error is ApiException => true,
+      () => Effect.succeed(null),
     ),
   );
 
@@ -384,14 +404,18 @@ export const handleMode = (api: Api) => async (ctx: Context) => {
   try {
     // Get current mode from API
     const modeResult = await Effect.runPromise(
-      Effect.catchAll(api.getTradingMode(String(chatId)), (error) => {
-        console.error("[Mode] Failed to get mode:", error);
-        return Effect.succeed({
-          mode: "dry",
-          confirmations: 0,
-          required_confirmations: 2,
-        });
-      }),
+      Effect.catchIf(
+        api.getTradingMode(String(chatId)),
+        (_error): _error is ApiException => true,
+        (error) => {
+          console.error("[Mode] Failed to get mode:", error);
+          return Effect.succeed({
+            mode: "dry",
+            confirmations: 0,
+            required_confirmations: 2,
+          });
+        },
+      ),
     );
 
     const mode = modeResult.mode || "dry";
@@ -451,12 +475,16 @@ export const handleModeAction = (api: Api) => async (ctx: Context) => {
     } else if (action === "live") {
       // Attempt to switch to live mode
       const result = await Effect.runPromise(
-        Effect.catchAll(api.setTradingMode(String(chatId), "live"), (error) => {
-          return Effect.succeed({
-            success: false,
-            error: String(error),
-          });
-        }),
+        Effect.catchIf(
+          api.setTradingMode(String(chatId), "live"),
+          (_error): _error is ApiException => true,
+          (error) => {
+            return Effect.succeed({
+              success: false,
+              error: String(error),
+            });
+          },
+        ),
       );
 
       if (result.success === false) {
@@ -478,8 +506,9 @@ export const handleModeAction = (api: Api) => async (ctx: Context) => {
     } else if (action === "confirm") {
       // Add confirmation
       const result = await Effect.runPromise(
-        Effect.catchAll(
+        Effect.catchIf(
           api.addTradingModeConfirmation(String(chatId)),
+          (_error): _error is ApiException => true,
           (error) => {
             return Effect.succeed({
               confirmations: 0,

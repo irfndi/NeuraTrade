@@ -168,7 +168,9 @@ describe("real-money-readiness CLI contract", () => {
     db.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
     db.close();
 
-    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], { home });
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
+      home,
+    });
 
     expect(result.exitCode).toBe(2);
     expect(result.report.status).toBe("ERROR");
@@ -197,7 +199,9 @@ describe("real-money-readiness CLI contract", () => {
     `);
     db.close();
 
-    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], { home });
+    const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
+      home,
+    });
 
     expect(result.exitCode).toBe(2);
     expect(result.report.status).toBe("ERROR");

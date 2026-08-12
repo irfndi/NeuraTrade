@@ -551,7 +551,7 @@ export function createApiClient(
  * via `Effect.tryPromise`, so a bug in the Effect wrapper cannot
  * regress the Promise-based path.
  */
-export class TelegramApi extends Context.Tag("TelegramApi")<
+export class TelegramApi extends Context.Service<
   TelegramApi,
   {
     getUserByChatId: (
@@ -642,7 +642,7 @@ export class TelegramApi extends Context.Tag("TelegramApi")<
       ApiClientError
     >;
   }
->() {}
+>()("TelegramApi") {}
 
 /**
  * Build the TelegramApi Layer from a BackendApiClient. The Layer

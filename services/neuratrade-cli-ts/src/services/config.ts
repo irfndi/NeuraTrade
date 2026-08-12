@@ -481,11 +481,7 @@ function applyRuntimeOverrides(
 // Merge: env overrides (highest priority)
 // ---------------------------------------------------------------------------
 
-function applyEnvOverrides(
-  base: ResolvedConfig,
-  local: LocalConfigData,
-  home: string,
-): ResolvedConfig {
+function applyEnvOverrides(base: ResolvedConfig): ResolvedConfig {
   let result = { ...base };
 
   // Server port: env(SERVER_PORT | PORT | BACKEND_HOST_PORT) → current
@@ -655,7 +651,7 @@ export const resolvedConfigEffect = (
     }
 
     // 4. Apply env overrides (highest priority)
-    result = applyEnvOverrides(result, local, home);
+    result = applyEnvOverrides(result);
 
     return result;
   });

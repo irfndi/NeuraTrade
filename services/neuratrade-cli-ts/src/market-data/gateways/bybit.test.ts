@@ -185,7 +185,9 @@ describe("Bybit gateway", () => {
     expect(requestedUrl).toContain("symbol=BTCUSDT");
     expect(requestedUrl).toContain("interval=15");
     expect(requestedUrl).toContain("limit=200");
-    expect(requestedUrl).toContain("start=1735689600000");
+    // startTime is a BACKWARD cursor (paging OLDER), so it is sent as `end`,
+    // not `start` (verified 2026-08-10: `start` returns the same newest window).
+    expect(requestedUrl).toContain("end=1735689600000");
   });
 
   it("fetchOrderBook parses depth", async () => {

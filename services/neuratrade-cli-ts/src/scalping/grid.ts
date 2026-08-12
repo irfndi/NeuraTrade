@@ -490,7 +490,11 @@ export function runGridWalkForward(
       initialCapital: runningCapital,
     });
 
-    runningCapital *= 1 + testResult.totalReturnPct / 100;
+    // Cap a single window's compounding contribution to ±100% so an all-in
+    // sizing artifact in one outlier window cannot blow the aggregate return
+    // up to non-physical values (observed 9e17%) that corrupt ranking.
+    const boundedWindowReturn = Math.max(-100, Math.min(100, testResult.totalReturnPct));
+    runningCapital *= 1 + boundedWindowReturn / 100;
     aggregateMaxDrawdown = Math.max(
       aggregateMaxDrawdown,
       testResult.maxDrawdownPct,

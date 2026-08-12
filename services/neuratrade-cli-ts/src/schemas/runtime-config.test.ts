@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Result } from "effect";
 import {
-  RuntimeConfigSchema,
   decodeRuntimeConfigEither,
   type RuntimeConfig,
 } from "./runtime-config";

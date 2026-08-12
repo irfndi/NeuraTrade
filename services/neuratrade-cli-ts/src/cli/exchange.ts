@@ -2,7 +2,7 @@ import { Command, Options } from "./kit/kit.ts";
 import { BunServices } from "@effect/platform-bun";
 import { Console, Effect, Layer } from "effect";
 import { BinanceLiveExchangeAdapterLive } from "../exchange/adapters/binance-live.js";
-import { ExchangeAdapter, ExchangeError } from "../exchange/adapter.js";
+import { ExchangeAdapter } from "../exchange/adapter.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 
 const apiKeyOption = Options.text("api-key").pipe(

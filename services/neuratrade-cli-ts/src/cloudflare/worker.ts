@@ -87,13 +87,12 @@ function runScan(kv: {
       .pipe(Effect.catch(() => Effect.succeed([] as readonly string[])));
     const futuresSet = new Set(futuresSymbols);
     const canonical = (symbol: string) =>
-      symbol.includes(":")
-        ? symbol.slice(0, symbol.lastIndexOf(":"))
-        : symbol;
+      symbol.includes(":") ? symbol.slice(0, symbol.lastIndexOf(":")) : symbol;
     const survivors =
       futuresSet.size > 0
         ? result.survivors.filter(
-            (e) => futuresSet.has(e.symbol) || futuresSet.has(canonical(e.symbol)),
+            (e) =>
+              futuresSet.has(e.symbol) || futuresSet.has(canonical(e.symbol)),
           )
         : result.survivors;
 

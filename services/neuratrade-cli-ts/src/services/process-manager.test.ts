@@ -4,9 +4,9 @@ import * as os from "os";
 import * as nodePath from "path";
 import { Effect, Layer } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
-import { Path, PathLive } from "./path.ts";
-import { PidFile, PidFileLive } from "./pid.ts";
-import { Logger, LoggerLive } from "./logger.ts";
+import { PathLive } from "./path.ts";
+import { PidFileLive } from "./pid.ts";
+import { LoggerLive } from "./logger.ts";
 import {
   ProcessManager,
   ProcessManagerLive,
@@ -37,8 +37,8 @@ function testLayer(homeDir: string): Layer.Layer<ProcessManager> {
   return Layer.provide(ProcessManagerLive, fullLayer);
 }
 
-async function run<A>(
-  effect: Effect.Effect<A, unknown, ProcessManager>,
+async function run<A, E = never>(
+  effect: Effect.Effect<A, E, ProcessManager>,
   home: string,
 ): Promise<A> {
   return Effect.runPromise(effect.pipe(Effect.provide(testLayer(home))));

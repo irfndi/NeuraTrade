@@ -16,13 +16,21 @@ export interface ApiError {
   code?: string;
 }
 
-// Custom error class that preserves both ApiError info and stack trace
-export class ApiException extends Error {
+// Custom error class that preserves both ApiError info and stack trace.
+// Implements the ApiError shape directly so type guards and handlers can
+// read .type/.message without unwrapping.
+export class ApiException extends Error implements ApiError {
+  readonly type: ApiErrorType;
+  readonly status?: number;
+  readonly code?: string;
   readonly apiError: ApiError;
 
   constructor(apiError: ApiError) {
     super(apiError.message);
     this.name = "ApiException";
+    this.type = apiError.type;
+    this.status = apiError.status;
+    this.code = apiError.code;
     this.apiError = apiError;
     // Preserve stack trace
     if (Error.captureStackTrace) {
@@ -106,6 +114,13 @@ export const extractApiError = (error: unknown): ApiError | null => {
     return null;
   }
 
+  // ApiException - extract the wrapped apiError before the direct shape
+  // check, since ApiException implements ApiError and would otherwise be
+  // returned as-is instead of unwrapped.
+  if (error instanceof ApiException) {
+    return error.apiError;
+  }
+
   // Direct ApiError check
   if (
     typeof error === "object" &&
@@ -114,11 +129,6 @@ export const extractApiError = (error: unknown): ApiError | null => {
     typeof (error as ApiError).type === "string"
   ) {
     return error as ApiError;
-  }
-
-  // ApiException - extract the wrapped apiError
-  if (error instanceof ApiException) {
-    return error.apiError;
   }
 
   // Check cache first (populated by isApiError)
@@ -177,7 +187,8 @@ export const createApi = (config: TelegramConfigPartial) => {
     init: RequestInit = {},
     requireAdmin = false,
   ) =>
-    Effect.tryPromise(async () => {
+    Effect.tryPromise({
+      try: async () => {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(init.headers as Record<string, string> | undefined),
@@ -244,6 +255,14 @@ export const createApi = (config: TelegramConfigPartial) => {
       }
 
       return payload as T;
+      },
+      catch: (error) =>
+        error instanceof ApiException
+          ? error
+          : new ApiException({
+              type: "unknown",
+              message: error instanceof Error ? error.message : String(error),
+            }),
     });
 
   // Internal endpoints - no auth required (restricted to trusted internal callers)

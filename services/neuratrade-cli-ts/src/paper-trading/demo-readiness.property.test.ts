@@ -100,7 +100,7 @@ describe("evaluateDemoSoak property coverage", () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 0, max: 49 }),
-        fc.constantFrom<FillCorruption>(
+        fc.constantFrom(
           "simulated",
           "missing-entry-id",
           "missing-exit-id",

@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "options": {
+    "typeAware": true
+  },
+  "plugins": ["effecttsgo"],
+  "rules": {
+    "effecttsgo/duplicate-package": "off",
+    "effecttsgo/any-unknown-in-error-context": "off"
+  }
+}

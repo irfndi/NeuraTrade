@@ -193,6 +193,22 @@ class InMemRepo implements PaperTradingRepositoryService {
     return Effect.void;
   }
 
+  getFlowTradeState() {
+    return Effect.succeed(null);
+  }
+
+  saveFlowTradeState() {
+    return Effect.void;
+  }
+
+  clearFlowTradeState() {
+    return Effect.void;
+  }
+
+  getOpenInterest() {
+    return Effect.succeed([]);
+  }
+
   replaceWatchlist() {
     return Effect.void;
   }

@@ -840,7 +840,15 @@ export function runMarketUniverseScan(
   // Public API pacing: sequential scans burst past the rate limit without a
   // delay between every request (observed HTTP 429 mid-scan).
   const REQUEST_DELAY_MS = 250;
-  // Tail-fetch concurrency: the sequential 250ms pacing is the binding
+  // Scale the inter-request delay by the per-cycle request budget: production's
+  // 900-request budget keeps the full 250ms throttle intact, while a tiny
+  // budget (tests / one-off discovery) implies a constrained fast pass where
+  // the pacing would otherwise dominate runtime.
+  const requestDelayMs = Math.min(
+    REQUEST_DELAY_MS,
+    options.deepFetchBudgetPerCycle ?? DEEP_FETCH_REQUESTS_PER_CYCLE,
+  );
+  // Tail-fetch concurrency: the sequential pacing is the binding
   // constraint on batch size, not the rate limit — 2 workers keep the batch
   // ~2x faster while staying well under Bitget's public limit.
   const TAIL_CONCURRENCY = 2;
@@ -928,7 +936,7 @@ export function runMarketUniverseScan(
 
     const fetchBatch = (symbol: string, startTime: Date | undefined) =>
       Effect.gen(function* () {
-        yield* Effect.sleep(REQUEST_DELAY_MS);
+        yield* Effect.sleep(requestDelayMs);
         return yield* gateway.fetchOHLCV(
           options.exchange,
           symbol,

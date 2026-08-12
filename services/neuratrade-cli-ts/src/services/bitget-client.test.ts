@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { Cause, Effect, Layer } from "effect";
-import * as crypto from "crypto";
 import {
   BitgetApiError,
   BitgetAuthError,

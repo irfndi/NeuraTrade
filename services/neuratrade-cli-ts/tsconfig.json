@@ -15,5 +15,14 @@
     "types": ["bun-types"]
   },
   "include": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "plugins": [
+    {
+      "name": "@effect/tsgo/lsp",
+      "allowedDuplicatedPackages": ["@distilled.cloud/core"],
+      "diagnosticSeverity": {
+        "anyUnknownInErrorContext": "off"
+      }
+    }
+  ]
 }

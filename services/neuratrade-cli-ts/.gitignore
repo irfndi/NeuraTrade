@@ -1,1 +1,5 @@
 .alchemy/
+
+# Scratch sweep research artifacts (grid parameter sweeps)
+sweep*.json
+sweep*.stderr.txt

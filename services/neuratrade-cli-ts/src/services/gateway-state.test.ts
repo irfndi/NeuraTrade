@@ -4,7 +4,7 @@ import * as os from "os";
 import * as nodePath from "path";
 import { Effect } from "effect";
 import { BunFileSystem } from "@effect/platform-bun";
-import { Path, PathLive } from "./path.ts";
+import { PathLive } from "./path.ts";
 import { GatewayState, GatewayStateLive } from "./gateway-state.ts";
 import type { GatewayState as GatewayStateType } from "../schemas/gateway-state.ts";
 

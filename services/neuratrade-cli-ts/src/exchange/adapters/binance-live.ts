@@ -5,7 +5,7 @@ import {
   ExchangeError,
   type ExchangeAdapterService,
 } from "../adapter.js";
-import type { Balance, OrderFill, OrderRequest, Position } from "../types.js";
+
 
 const TESTNET_BASE_URL = "https://testnet.binance.vision";
 const LIVE_BASE_URL = "https://api.binance.com";

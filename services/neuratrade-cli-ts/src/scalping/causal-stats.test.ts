@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  computeSymbolStats,
-  makeCausalSymbolStats,
-  type SymbolStatistics,
-} from "./symbol-stats.js";
+import { computeSymbolStats, makeCausalSymbolStats } from "./symbol-stats.js";
 import type { CandleLike } from "./types.js";
 
 function candle(

@@ -32,8 +32,12 @@ const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 
 // Promoted readiness candidate per docs/superpowers/specs/2026-08-06-readiness-gate-status.md
 // and the readiness fingerprint (src/scalping/grid-candidate.ts VALIDATED_BTC_GRID_CANDIDATE):
-// step 1%, grids 1.5, target ratio 3, pause 24, chop-gate ADX 28, trend filter 0,
+// step 0.5%, grids 2, target ratio 2, pause 0, chop-gate ADX 15, trend filter 0,
 // fee 0.02% maker, slippage 1bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
+// NOTE: grid-max-grids is integer-only in the CLI (Options.integer), so a candidate
+// with fractional grids must be expressed as the nearest integer here or the process
+// fails to parse. Config MUST match the validated candidate exactly or the live gate
+// rejects it ("live grid must use a validated readiness cohort candidate").
 // The args below MUST match the manifest exactly — the provenance gate rejects
 // fills whose fingerprint differs.
 // STOPPED BY DEFAULT (pm2 start <id> only): the demo account has ~$50 USDT and is used
@@ -85,15 +89,15 @@ module.exports = {
         "--max-daily-loss-pct",
         "2",
         "--grid-step-pct",
-        "1",
+        "0.5",
         "--grid-max-grids",
-        "1.5",
+        "2",
         "--grid-pause-after-loss-bars",
-        "24",
+        "0",
         "--target-ratio",
-        "3",
+        "2",
         "--chop-gate-adx",
-        "28",
+        "15",
         "--no-watchlist",
         "--iterations",
         "0",
@@ -165,15 +169,15 @@ module.exports = {
         "--max-daily-loss-pct",
         "2",
         "--grid-step-pct",
-        "1",
+        "0.5",
         "--grid-max-grids",
-        "1.5",
+        "2",
         "--grid-pause-after-loss-bars",
-        "24",
+        "0",
         "--target-ratio",
-        "3",
+        "2",
         "--chop-gate-adx",
-        "28",
+        "15",
         "--no-watchlist",
         "--iterations",
         "0",

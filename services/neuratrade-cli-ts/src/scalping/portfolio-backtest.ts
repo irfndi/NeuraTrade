@@ -1,9 +1,4 @@
-import type {
-  CandleLike,
-  ComposerConfig,
-  Direction,
-  FundingRate,
-} from "./types.js";
+import type { CandleLike, ComposerConfig, FundingRate } from "./types.js";
 import { composeSignal } from "./composer.js";
 import { calculateATR } from "./indicators.js";
 import { computeExitLevels } from "./exit-engine.js";
