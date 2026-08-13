@@ -95,7 +95,7 @@ export function parseRealMoneyReadinessArgs(
   argv: readonly string[],
 ): ParseResult {
   const values: ParsedValues = {
-    exchange: "bitget-futures",
+    exchange: "bybit-futures",
     symbols: [],
     timeframe: "15m",
   };
@@ -493,7 +493,7 @@ function buildInput(
             trade.candidate_lock_at !== null &&
             trade.dataset_cutoff_at !== null &&
             trade.entry_opened_at !== null &&
-            trade.execution_environment === "bitget-demo",
+            trade.execution_environment === "bybit-demo",
         ),
       fingerprint: provenanceFingerprint,
       expectedFingerprint,
@@ -685,7 +685,7 @@ export function helpText(): string {
     "Current public-data evidence is expected to FAIL until demo and parity gates qualify.",
     "",
     "Options:",
-    "  --exchange <text>   Candle exchange (default: bitget-futures)",
+    "  --exchange <text>   Candle exchange (default: bybit-futures)",
     "  --symbol <text>     Cohort symbol (repeatable; default: BTC+SOL cohort)",
     "  --timeframe <text>  Candidate timeframe (default: 15m)",
   ].join("\n");

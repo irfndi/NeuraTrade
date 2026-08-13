@@ -99,7 +99,7 @@ export function strategyManifestFor(
 ): StrategyManifest {
   return {
     schema: READINESS_SCHEMA_VERSION,
-    exchange: "bitget-demo",
+    exchange: "bybit-demo",
     symbol: candidate.symbol,
     timeframe: candidate.timeframe,
     gridStepPct: String(candidate.gridStepPct),

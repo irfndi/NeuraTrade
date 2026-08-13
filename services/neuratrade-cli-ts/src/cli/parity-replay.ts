@@ -375,7 +375,7 @@ function replayOptions(
     targetRatio: c.targetRatio,
     chopGateAdxThreshold: c.chopGateAdx,
     isLive: false,
-    executionEnvironment: "bitget-demo",
+    executionEnvironment: "bybit-demo",
     replayBars: window.length,
   };
 }

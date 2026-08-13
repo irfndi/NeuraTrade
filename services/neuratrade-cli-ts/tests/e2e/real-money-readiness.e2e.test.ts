@@ -70,7 +70,7 @@ async function makeSchemaHome(): Promise<string> {
       strategy_config_fingerprint TEXT, cohort_id TEXT, candidate_lock_at DATETIME,
       dataset_cutoff_at DATETIME, entry_opened_at DATETIME, execution_environment TEXT
     );
-    INSERT INTO exchanges VALUES (1, 'bitget-futures');
+    INSERT INTO exchanges VALUES (1, 'bybit-futures');
     INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
   `);
   db.close();
@@ -266,7 +266,7 @@ describe("real-money-readiness CLI", () => {
           strategy_config_fingerprint TEXT, cohort_id TEXT, candidate_lock_at DATETIME,
           dataset_cutoff_at DATETIME, entry_opened_at DATETIME, execution_environment TEXT
         );
-        INSERT INTO exchanges VALUES (1, 'bitget-futures');
+        INSERT INTO exchanges VALUES (1, 'bybit-futures');
         INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
       `);
       // A trade whose fingerprint does not match the audited candidate is
@@ -279,9 +279,9 @@ describe("real-money-readiness CLI", () => {
           exit_fee_decimal, realized_pnl_pct_decimal, opened_at, closed_at,
           strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
           entry_opened_at, execution_environment)
-         VALUES (?, 'bitget-futures', 'BTC/USDT:USDT', '15m', 'live', 'entry-1', 'exit-1',
+         VALUES (?, 'bybit-futures', 'BTC/USDT:USDT', '15m', 'live', 'entry-1', 'exit-1',
                  '0.01', '0.01', '0.1', '0.1', '0.1',
-                 ?, ?, ?, 'cohort-e2e', ?, ?, ?, 'bitget-demo')`,
+                 ?, ?, ?, 'cohort-e2e', ?, ?, ?, 'bybit-demo')`,
       ).run(
         "tampered-trade-1",
         "2026-08-01T00:00:00.000Z",
@@ -340,7 +340,7 @@ describe("real-money-readiness CLI", () => {
           strategy_config_fingerprint TEXT, cohort_id TEXT, candidate_lock_at DATETIME,
           dataset_cutoff_at DATETIME, entry_opened_at DATETIME, execution_environment TEXT
         );
-        INSERT INTO exchanges VALUES (1, 'bitget-futures');
+        INSERT INTO exchanges VALUES (1, 'bybit-futures');
         INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
         INSERT INTO trading_pairs VALUES (2, 'SOL/USDT:USDT');
       `);
@@ -354,9 +354,9 @@ describe("real-money-readiness CLI", () => {
           exit_fee_decimal, realized_pnl_pct_decimal, opened_at, closed_at,
           strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
           entry_opened_at, execution_environment)
-         VALUES (?, 'bitget-futures', ?, '15m', 'live', 'entry-1', 'exit-1',
+         VALUES (?, 'bybit-futures', ?, '15m', 'live', 'entry-1', 'exit-1',
                  '0.01', '0.01', '0.1', '0.1', '0.1',
-                 ?, ?, ?, 'cohort-e2e', ?, ?, ?, 'bitget-demo')`,
+                 ?, ?, ?, 'cohort-e2e', ?, ?, ?, 'bybit-demo')`,
       );
       insert.run(
         "btc-trade-1",
@@ -388,7 +388,7 @@ describe("real-money-readiness CLI", () => {
           "--symbol",
           "SOL/USDT:USDT",
           "--exchange",
-          "bitget-futures",
+          "bybit-futures",
           "--timeframe",
           "15m",
         ],

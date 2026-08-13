@@ -94,7 +94,7 @@ export interface GridPaperTradingOptions {
   readonly productType?: FuturesProductType;
   /** Futures margin mode required for live orders. */
   readonly marginMode?: FuturesMarginMode;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
   /** Exchange contract size constraints (minQty, qtyStep, minTradeUSDT) for
    *  this symbol, populated by the CLI from BitgetClient.getContracts on the
    *  live path and by tests directly. When set, entry sizing rounds the order
@@ -142,7 +142,7 @@ function adoptedGridState(
   state: GridPaperState,
   position: FuturesPosition,
   strategyFingerprint: string,
-  executionEnvironment: "bitget-demo" | "bitget-live",
+  executionEnvironment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live",
   now: Date,
 ): GridPaperState {
   return {
@@ -248,7 +248,7 @@ function liquidationPrice(
 
 function strategyManifestFor(
   options: GridPaperTradingOptions,
-  executionEnvironment: "bitget-demo" | "bitget-live",
+  executionEnvironment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live",
 ): StrategyManifest {
   return {
     ...DEFAULT_STRATEGY_MANIFEST,
@@ -354,7 +354,13 @@ export function runGridPaperTradingIteration(
 
     const executionEnvironment =
       options.executionEnvironment ??
-      (options.isLive ? "bitget-live" : "bitget-demo");
+      (options.isLive
+        ? options.exchange === "bybit-futures"
+          ? "bybit-live"
+          : "bitget-live"
+        : options.exchange === "bybit-futures"
+          ? "bybit-demo"
+          : "bitget-demo");
     const strategyFingerprint = fingerprintStrategyManifest(
       strategyManifestFor(options, executionEnvironment),
     );

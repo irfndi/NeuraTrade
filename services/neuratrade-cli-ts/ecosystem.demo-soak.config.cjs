@@ -1,10 +1,10 @@
-// pm2 process definition for the Bitget PAPTRADING demo soak.
+// pm2 process definition for the Bybit testnet demo soak.
 // Run: pm2 start ecosystem.demo-soak.config.cjs
 // - neuratrade-universe-watch: continuously re-scans the universe and upserts
 //   survivors into the DB watchlist (self-maintaining symbol selection).
-// - neuratrade-demo-soak: runs the grid universe survivors (DB-backed watchlist
-//   / grid-whitelist.json) against the Bitget demo matching engine (PAPTRADING=1)
-//   at a 15-minute cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
+// - neuratrade-btc/sol/eth-candidate: runs each readiness-cohort candidate
+//   against the Bybit testnet matching engine (BYBIT_USE_TESTNET=true) at a
+//   15-minute cadence, forever, persisting fills to ~/.neuratrade/data/neuratrade.db.
 //   The whitelist is produced by `scalp grid-universe-scan --output grid-whitelist.json`.
 // Log rotation: every app uses pm2's built-in rotation (max_size 50M, retain 5) on
 // its out_file/error_file — prevents unbounded log growth (a crash era wrote ~400KB/hr).
@@ -40,11 +40,11 @@ const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 // rejects it ("live grid must use a validated readiness cohort candidate").
 // The args below MUST match the manifest exactly — the provenance gate rejects
 // fills whose fingerprint differs.
-// STOPPED BY DEFAULT (pm2 start <id> only): the demo account has ~$50 USDT and is used
-// by neuratrade-demo-soak; the readiness cohort needs a DEDICATED funded demo account
-// (bd: BTC candidate soak issue). Start with:
+// STOPPED BY DEFAULT (pm2 start <id> only): the Bybit testnet sub-account has
+// ~$50 USDT and is used by neuratrade-bybit-soak; the readiness cohort needs a
+// DEDICATED funded testnet account (bd: BTC candidate soak issue). Start with:
 //   pm2 start ecosystem.demo-soak.config.cjs --only neuratrade-btc-candidate
-// and raise --capital after funding (defaults here match the ~$50 demo balance).
+// and raise --capital after funding (defaults here match the ~$50 testnet balance).
 const cliTsDir = __dirname;
 const neuratradeHome = (
   rootEnv.NEURATRADE_HOME || `${process.env.HOME}/.neuratrade`
@@ -61,7 +61,7 @@ module.exports = {
         "scalp",
         "paper-trade",
         "--exchange",
-        "bitget-futures",
+        "bybit-futures",
         "--symbol",
         "BTC/USDT:USDT",
         "--timeframe",
@@ -209,7 +209,7 @@ module.exports = {
         "scalp",
         "paper-trade",
         "--exchange",
-        "bitget-futures",
+        "bybit-futures",
         "--symbol",
         "SOL/USDT:USDT",
         "--timeframe",
@@ -241,11 +241,11 @@ module.exports = {
         "--grid-max-grids",
         "2",
         "--grid-pause-after-loss-bars",
-        "36",
+        "0",
         "--target-ratio",
         "4",
         "--chop-gate-adx",
-        "26",
+        "28",
         "--no-watchlist",
         "--iterations",
         "0",
@@ -269,10 +269,13 @@ module.exports = {
       time: true,
     },
     {
-      // ETH readiness cohort candidate (2026-08-13, src/scalping/grid-candidate.ts
-      // VALIDATED_ETH_GRID_CANDIDATE): step 0.75% / grids 2 / pause 48 / target
-      // ratio 4 / chop-gate ADX 28, fee 0.02% maker / slippage 1bp / leverage 1.
-      // Fastest fill clock in the cohort (~17.3 fills/mo) — the primary
+      // ETH readiness cohort candidate (2026-08-13, re-fitted on clean Bybit
+      // mainnet 15m data via scripts/verify-cohort-on-bybit.ts; see
+      // src/scalping/grid-candidate.ts VALIDATED_ETH_GRID_CANDIDATE):
+      // step 0.75% / grids 3 / pause 24 / target ratio 3 / chop-gate ADX 20,
+      // fee 0.02% maker / slippage 1bp / leverage 1. The bitget-fitted
+      // pause-48/target-4/adx-28 config was bitget-overfit and failed Bybit.
+      // Fastest fill clock in the cohort (~17 fills/mo) — the primary
       // accelerator toward the 50-fill cohort-union gate. Args MUST match the
       // manifest exactly (provenance gate rejects fingerprint mismatches).
       name: "neuratrade-eth-candidate",
@@ -283,7 +286,7 @@ module.exports = {
         "scalp",
         "paper-trade",
         "--exchange",
-        "bitget-futures",
+        "bybit-futures",
         "--symbol",
         "ETH/USDT:USDT",
         "--timeframe",
@@ -313,13 +316,13 @@ module.exports = {
         "--grid-step-pct",
         "0.75",
         "--grid-max-grids",
-        "2",
+        "3",
         "--grid-pause-after-loss-bars",
-        "48",
+        "24",
         "--target-ratio",
-        "4",
+        "3",
         "--chop-gate-adx",
-        "28",
+        "20",
         "--no-watchlist",
         "--iterations",
         "0",

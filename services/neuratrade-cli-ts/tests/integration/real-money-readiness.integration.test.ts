@@ -46,7 +46,7 @@ describe("real-money readiness SQLite integration", () => {
     const repository = new PaperTradingRepositorySQLite(db);
     const trade = {
       id: "integration-provenance-1",
-      exchange: "bitget-futures",
+      exchange: "bybit-futures",
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       side: "long" as const,
@@ -71,7 +71,7 @@ describe("real-money readiness SQLite integration", () => {
       candidateLockAt: new Date("2026-07-01T00:00:00.000Z"),
       datasetCutoffAt: new Date("2026-07-31T23:45:00.000Z"),
       entryOpenedAt: new Date("2026-08-01T00:00:00.000Z"),
-      executionEnvironment: "bitget-demo" as const,
+      executionEnvironment: "bybit-demo" as const,
     };
     await Effect.runPromise(repository.ensureTables());
     await Effect.runPromise(repository.recordGridTrade(trade));
@@ -91,7 +91,7 @@ describe("real-money readiness SQLite integration", () => {
     expect(rows[0]?.entryOpenedAt?.toISOString()).toBe(
       trade.entryOpenedAt.toISOString(),
     );
-    expect(rows[0]?.executionEnvironment).toBe("bitget-demo");
+    expect(rows[0]?.executionEnvironment).toBe("bybit-demo");
     db.close();
   });
 
@@ -100,7 +100,7 @@ describe("real-money readiness SQLite integration", () => {
     const repository = new PaperTradingRepositorySQLite(db);
     await Effect.runPromise(repository.ensureTables());
     const state = {
-      exchange: "bitget-futures",
+      exchange: "bybit-futures",
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       capital: money("100"),
@@ -113,7 +113,7 @@ describe("real-money readiness SQLite integration", () => {
       candidateLockAt: new Date("2026-07-01T00:00:00.000Z"),
       datasetCutoffAt: new Date("2026-07-31T23:45:00.000Z"),
       entryOpenedAt: new Date("2026-08-01T00:00:00.000Z"),
-      executionEnvironment: "bitget-demo" as const,
+      executionEnvironment: "bybit-demo" as const,
       gridStepPct: 1,
       gridMaxGrids: 2,
       gridPauseAfterLossBars: 0,
@@ -129,7 +129,7 @@ describe("real-money readiness SQLite integration", () => {
     };
     await Effect.runPromise(repository.saveGridState(state));
     const loaded = await Effect.runPromise(
-      repository.getGridState("bitget-futures", "BTC/USDT:USDT", "15m"),
+      repository.getGridState("bybit-futures", "BTC/USDT:USDT", "15m"),
     );
 
     expect(loaded?.strategyConfigFingerprint).toBe("c".repeat(64));
@@ -143,7 +143,7 @@ describe("real-money readiness SQLite integration", () => {
     expect(loaded?.entryOpenedAt?.toISOString()).toBe(
       "2026-08-01T00:00:00.000Z",
     );
-    expect(loaded?.executionEnvironment).toBe("bitget-demo");
+    expect(loaded?.executionEnvironment).toBe("bybit-demo");
     db.close();
   });
 
@@ -180,7 +180,7 @@ describe("real-money readiness SQLite integration", () => {
     await Effect.runPromise(repository.ensureTables());
     const trade = {
       id: "integration-provenance-missing",
-      exchange: "bitget-futures",
+      exchange: "bybit-futures",
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       side: "long" as const,

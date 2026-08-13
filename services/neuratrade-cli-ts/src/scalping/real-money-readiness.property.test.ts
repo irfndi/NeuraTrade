@@ -109,7 +109,7 @@ function baseInput(): RealMoneyReadinessInput {
     evaluatedAt: "2026-08-02T00:00:00.000Z",
     manifest: {
       schema: "real-money-readiness/v1",
-      exchange: "bitget-demo",
+      exchange: "bybit-demo",
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       gridStepPct: "1",
@@ -170,7 +170,7 @@ describe("real-money readiness fingerprint properties", () => {
       fc.property(
         fc.record({
           schema: fc.constant("real-money-readiness/v1"),
-          exchange: fc.constant("bitget-demo"),
+          exchange: fc.constant("bybit-demo"),
           symbol: fc.constant("BTC/USDT:USDT"),
           timeframe: fc.constant("15m"),
           gridStepPct: fc.integer({ min: 1, max: 2 }).map(String),

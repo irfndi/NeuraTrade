@@ -1310,7 +1310,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | null;
+          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
@@ -1652,7 +1652,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | null;
+          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -2088,7 +2088,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | null;
+          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;

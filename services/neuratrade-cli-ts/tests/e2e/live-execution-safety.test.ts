@@ -153,7 +153,7 @@ describe("live execution safety", () => {
 
       expect(result.exitCode).not.toBe(0);
       expect(result.output).toContain(
-        "live execution is disabled until BITGET_USE_SANDBOX=true is configured",
+        "live execution is disabled until the demo/testnet account is enabled",
       );
     } finally {
       await rm(home, { recursive: true, force: true });

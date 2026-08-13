@@ -63,7 +63,10 @@ import {
   type BitgetContract,
 } from "../services/bitget-client.js";
 import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
-import { BybitConfigLive } from "../services/bybit-config.js";
+import {
+  BybitConfig,
+  BybitConfigLive,
+} from "../services/bybit-config.js";
 import { RateLimiterLive } from "../services/rate-limiter.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import {
@@ -2725,9 +2728,26 @@ export function validateLiveSandboxMode(
   sandbox: boolean,
 ): string | undefined {
   if (live && !sandbox) {
-    return "live execution is disabled until BITGET_USE_SANDBOX=true is configured for the demo gate";
+    return "live execution is disabled until the demo/testnet account is enabled (BITGET_USE_SANDBOX=true or BYBIT_USE_TESTNET=true)";
   }
   return undefined;
+}
+
+/**
+ * Resolve the execution environment recorded on grid fills. Bybit is the live
+ * engine (clever-cabin-fyv) and its demo mode is BYBIT_USE_TESTNET=true
+ * (api-testnet.bybit.com); Bitget's demo mode is BITGET_USE_SANDBOX=true.
+ */
+export function executionEnvironmentFor(
+  exchange: string,
+  live: boolean,
+  demoAccount: boolean,
+): "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" {
+  const isBybit = exchange === "bybit-futures";
+  if (isBybit) {
+    return live && !demoAccount ? "bybit-live" : "bybit-demo";
+  }
+  return live && !demoAccount ? "bitget-live" : "bitget-demo";
 }
 
 export function validateLiveExecutionStrategy(
@@ -2913,15 +2933,25 @@ function bitgetContractSpecs(
 function paperTradeProgram(args: PaperTradeArgs) {
   return Effect.gen(function* () {
     const strategyType = args.strategyType ?? "signal";
-    // Sandbox is a property of the resolved Bitget client configuration, not
-    // free-floating environment state: BitgetClientLiveConfig derives isDemo
-    // from the exact same BitgetConfig.useSandbox value, so validation
-    // relaxation and demo routing can never disagree.
+    // Sandbox/testnet is a property of the resolved venue's client
+    // configuration, not free-floating environment state:
+    // BitgetClientLiveConfig derives isDemo from BitgetConfig.useSandbox and
+    // BybitFuturesExchangeAdapterLive derives testnet from
+    // BybitConfig.useTestnet, so validation relaxation and demo routing can
+    // never disagree.
     const useSandbox = yield* BitgetConfig.pipe(
       Effect.map((config) => config.useSandbox),
       Effect.provide(BitgetConfigLive),
       Effect.orDie,
     );
+    const useTestnet = yield* BybitConfig.pipe(
+      Effect.map((config) => config.useTestnet),
+      Effect.provide(BybitConfigLive),
+      Effect.orDie,
+    );
+    const resolvedExchange = resolveFuturesMarketExchange(args.exchange, true);
+    const isDemoAccount =
+      resolvedExchange === "bybit-futures" ? useTestnet : useSandbox;
     const liveMarketError = validateLiveExecutionMarket(
       args.live,
       args.futures,
@@ -2929,7 +2959,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
     }
-    const liveSandboxError = validateLiveSandboxMode(args.live, useSandbox);
+    const liveSandboxError = validateLiveSandboxMode(args.live, isDemoAccount);
     if (liveSandboxError !== undefined) {
       return yield* Effect.fail(new Error(liveSandboxError));
     }
@@ -2944,7 +2974,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.live,
       strategyType,
       args.entries,
-      useSandbox,
+      isDemoAccount,
     );
     if (liveGridWatchlistError !== undefined) {
       return yield* Effect.fail(new Error(liveGridWatchlistError));
@@ -2954,7 +2984,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
     if (args.live && strategyType === "grid") {
       const liveGridError = validateLiveGridConfiguration(
         {
-          exchange: resolveFuturesMarketExchange(args.exchange, true),
+          exchange: resolvedExchange,
           symbol: args.symbol,
           timeframe: args.timeframe,
           productType,
@@ -2976,8 +3006,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
           maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
         },
         // args.live && strategyType === "grid" are guaranteed by the
-        // enclosing if; only multi-symbol sandbox runs get relaxed guards.
-        (args.entries?.length ?? 0) > 0 && useSandbox,
+        // enclosing if; only multi-symbol demo/testnet runs get relaxed guards.
+        (args.entries?.length ?? 0) > 0 && isDemoAccount,
       );
       if (liveGridError !== undefined) {
         return yield* Effect.fail(new Error(liveGridError));
@@ -3143,8 +3173,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
     ): GridPaperTradingOptions => {
       const contractSpecs = contractSpecsFor(symbol);
       const rowOverrides = gridOverridesFromWatchlistRow(gridParams, args);
+      const resolvedGridExchange = resolveFuturesMarketExchange(exchange, true);
       const options: MutableGridPaperTradingOptions = {
-        exchange: resolveFuturesMarketExchange(exchange, true),
+        exchange: resolvedGridExchange,
         symbol,
         timeframe: args.timeframe,
         gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
@@ -3165,8 +3196,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         chopGateAdxThreshold: rowOverrides.chopGateAdxThreshold,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
         isLive: args.live,
-        executionEnvironment:
-          args.live && !useSandbox ? "bitget-live" : "bitget-demo",
+        executionEnvironment: executionEnvironmentFor(
+          resolvedGridExchange,
+          args.live,
+          resolvedGridExchange === "bybit-futures" ? useTestnet : useSandbox,
+        ),
         productType,
         marginMode,
       };

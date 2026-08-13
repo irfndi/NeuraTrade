@@ -1,5 +1,5 @@
 export const VALIDATED_BTC_GRID_CANDIDATE = {
-  exchange: "bitget-futures",
+  exchange: "bybit-futures",
   symbol: "BTC/USDT:USDT",
   timeframe: "15m",
   productType: "USDT-FUTURES",
@@ -35,54 +35,54 @@ export const VALIDATED_BTC_GRID_CANDIDATE = {
   maxDailyLossPct: 2,
 } as const;
 
-// SOL cohort candidate (2026-08-07, gate-scored 15m fast space, pooled
-// stress-LB): best-margin SOL config — windows 53.8%, ret +6.86%, dd 13.39%,
-// OOS 39 (~8 fills/mo), confLB +0.00133, stressLB +0.00325. Adds ~8 fills/mo
-// to the cohort clock (BTC+SOL ≈ 15/mo → 50 fills ≈ 3.3 months).
+// SOL cohort candidate (re-fitted 2026-08-13 on clean Bybit mainnet 15m data
+// via scripts/verify-cohort-on-bybit.ts): the bitget-fitted pause-36/adx-26
+// config did NOT transfer cross-venue (confLB -0.00049 on Bybit, high
+// variance/overfit). Bybit-passing alternate: step 1.25 / grids 2 / pause 0 /
+// target 4 / adx 28 — confLB +0.00041, stressLB +0.00231. Bybit is the live
+// engine (clever-cabin-fyv), so the candidate is locked to Bybit-validated
+// args. Adds ~8 fills/mo to the cohort clock.
 export const VALIDATED_SOL_GRID_CANDIDATE = {
-  exchange: "bitget-futures",
+  exchange: "bybit-futures",
   symbol: "SOL/USDT:USDT",
   timeframe: "15m",
   productType: "USDT-FUTURES",
   gridStepPct: 1.25,
   gridMaxGrids: 2,
-  gridPauseAfterLossBars: 36,
-  feePct: 0.02,
-  slippageBps: 1,
-  trendFilterPeriod: 0,
-  onlyWithTrend: false,
-  targetRatio: 4,
-  chopGateAdx: 26,
-  leverage: 1,
-  maxPositionSizePct: 50,
-  maxDrawdownPct: 5,
-  maxDailyLossPct: 2,
-} as const;
-
-// ETH cohort candidate (2026-08-13, gate-scored 15m fast space, pooled
-// stress-LB via scripts/grid-cohort-sweep.ts): the ETH sweep over the full
-// 24-month bitget history (70,873 15m candles) found two passing families at
-// step 0.75. This one is chosen for robustness margin: confLB +0.00099 and
-// stressLB +0.00194 thicken the adverse-selection + taker-stop margin well
-// above zero (the rival grids-3/pause-0/target-3/adx-20 fit returned +15.19%
-// but only confLB +0.00019, too thin to survive minor data perturbation).
-// windows 53.8%, ret +5.23%, dd 13.40%, OOS 85 (~17.3 fills/mo, the fastest
-// clock in the cohort), stressWorst +2.95%. Adds ~17 fills/mo toward the
-// cohort's 50-fill gate.
-export const VALIDATED_ETH_GRID_CANDIDATE = {
-  exchange: "bitget-futures",
-  symbol: "ETH/USDT:USDT",
-  timeframe: "15m",
-  productType: "USDT-FUTURES",
-  gridStepPct: 0.75,
-  gridMaxGrids: 2,
-  gridPauseAfterLossBars: 48,
+  gridPauseAfterLossBars: 0,
   feePct: 0.02,
   slippageBps: 1,
   trendFilterPeriod: 0,
   onlyWithTrend: false,
   targetRatio: 4,
   chopGateAdx: 28,
+  leverage: 1,
+  maxPositionSizePct: 50,
+  maxDrawdownPct: 5,
+  maxDailyLossPct: 2,
+} as const;
+
+// ETH cohort candidate (re-fitted 2026-08-13 on clean Bybit mainnet 15m data
+// via scripts/verify-cohort-on-bybit.ts): the bitget-fitted pause-48/target-4/
+// adx-28 config was bitget-overfit (win 46.2%, ret -6.57%, dd 18.87% on
+// Bybit). Bybit-passing alternate: step 0.75 / grids 3 / pause 24 / target 3 /
+// adx 20 — confLB +0.00036, stressLB +0.00102. Bybit is the live engine
+// (clever-cabin-fyv), so the candidate is locked to Bybit-validated args.
+// Adds ~17 fills/mo toward the cohort's 50-fill gate (fastest clock).
+export const VALIDATED_ETH_GRID_CANDIDATE = {
+  exchange: "bybit-futures",
+  symbol: "ETH/USDT:USDT",
+  timeframe: "15m",
+  productType: "USDT-FUTURES",
+  gridStepPct: 0.75,
+  gridMaxGrids: 3,
+  gridPauseAfterLossBars: 24,
+  feePct: 0.02,
+  slippageBps: 1,
+  trendFilterPeriod: 0,
+  onlyWithTrend: false,
+  targetRatio: 3,
+  chopGateAdx: 20,
   leverage: 1,
   maxPositionSizePct: 50,
   maxDrawdownPct: 5,

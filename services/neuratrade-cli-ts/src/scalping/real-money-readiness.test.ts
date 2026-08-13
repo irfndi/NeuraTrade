@@ -109,7 +109,7 @@ function passingInput(): RealMoneyReadinessInput {
     evaluatedAt: "2026-08-02T00:00:00.000Z",
     manifest: {
       schema: "real-money-readiness/v1",
-      exchange: "bitget-demo",
+      exchange: "bybit-demo",
       symbol: "BTC/USDT:USDT",
       timeframe: "15m",
       gridStepPct: "1",

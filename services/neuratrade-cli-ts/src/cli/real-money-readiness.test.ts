@@ -46,7 +46,7 @@ function makeSeededHome(tradeCount: number, tamper = false): string {
       strategy_config_fingerprint TEXT, cohort_id TEXT, candidate_lock_at DATETIME,
       dataset_cutoff_at DATETIME, entry_opened_at DATETIME, execution_environment TEXT
     );
-    INSERT INTO exchanges VALUES (1, 'bitget-futures');
+    INSERT INTO exchanges VALUES (1, 'bybit-futures');
     INSERT INTO trading_pairs VALUES (1, 'BTC/USDT:USDT');
   `);
   const expectedFingerprint = fingerprintStrategyManifest(
@@ -60,8 +60,8 @@ function makeSeededHome(tradeCount: number, tamper = false): string {
       exit_fee_decimal, realized_pnl_pct_decimal, opened_at, closed_at,
       strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
       entry_opened_at, execution_environment)
-     VALUES (?, 'bitget-futures', 'BTC/USDT:USDT', '15m', 'live', ?, ?,
-             '0.01', '0.01', '0.1', '0.1', '0.1', ?, ?, ?, 'cohort-unit', ?, ?, ?, 'bitget-demo')`,
+     VALUES (?, 'bybit-futures', 'BTC/USDT:USDT', '15m', 'live', ?, ?,
+             '0.01', '0.01', '0.1', '0.1', '0.1', ?, ?, ?, 'cohort-unit', ?, ?, ?, 'bybit-demo')`,
   );
   for (let index = 0; index < tradeCount; index += 1) {
     insert.run(
@@ -92,7 +92,7 @@ describe("real-money-readiness CLI contract", () => {
     const defaults = parseRealMoneyReadinessArgs([]);
     const explicit = parseRealMoneyReadinessArgs([
       "--exchange",
-      "bitget-futures",
+      "bybit-futures",
       "--symbol",
       "BTC/USDT:USDT",
       "--timeframe",
@@ -102,7 +102,7 @@ describe("real-money-readiness CLI contract", () => {
     expect(defaults).toEqual({
       kind: "ok",
       args: {
-        exchange: "bitget-futures",
+        exchange: "bybit-futures",
         symbols: [],
         timeframe: "15m",
       },
@@ -110,7 +110,7 @@ describe("real-money-readiness CLI contract", () => {
     expect(explicit).toEqual({
       kind: "ok",
       args: {
-        exchange: "bitget-futures",
+        exchange: "bybit-futures",
         symbols: ["BTC/USDT:USDT"],
         timeframe: "15m",
       },
@@ -125,7 +125,7 @@ describe("real-money-readiness CLI contract", () => {
     ).toEqual({
       kind: "ok",
       args: {
-        exchange: "bitget-futures",
+        exchange: "bybit-futures",
         symbols: ["BTC/USDT:USDT", "SOL/USDT:USDT"],
         timeframe: "15m",
       },
@@ -282,10 +282,10 @@ describe("real-money-readiness CLI contract", () => {
        exit_fee_decimal, realized_pnl_pct_decimal, opened_at, closed_at,
        strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
        entry_opened_at, execution_environment)
-      VALUES ('legacy-1', 'bitget-futures', 'BTC/USDT:USDT', '15m', 'live',
+      VALUES ('legacy-1', 'bybit-futures', 'BTC/USDT:USDT', '15m', 'live',
               'legacy-entry', 'legacy-exit', '0.01', '0.01', '0.1', '0.1', '0.1',
               '2026-07-01T00:00:00.000Z', '2026-07-02T00:00:00.000Z',
-              NULL, NULL, NULL, NULL, NULL, 'bitget-demo')`);
+              NULL, NULL, NULL, NULL, NULL, 'bybit-demo')`);
     db.close();
 
     const result = runRealMoneyReadiness(["--symbol", "BTC/USDT:USDT"], {
@@ -351,7 +351,7 @@ describe("real-money-readiness CLI contract", () => {
       JSON.stringify({
         protocolVersion: "execution-parity/v1",
         generatedAt: "2026-08-01T00:00:00.000Z",
-        exchange: "bitget-futures",
+        exchange: "bybit-futures",
         symbol: "BTC/USDT:USDT",
         timeframe: "15m",
         barCount: 500,

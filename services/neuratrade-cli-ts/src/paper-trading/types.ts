@@ -119,7 +119,7 @@ export interface GridPaperState {
   readonly candidateLockAt?: Date;
   readonly datasetCutoffAt?: Date;
   readonly entryOpenedAt?: Date;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
@@ -164,5 +164,5 @@ export interface GridPaperTrade {
   readonly candidateLockAt?: Date;
   readonly datasetCutoffAt?: Date;
   readonly entryOpenedAt?: Date;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live";
+  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
 }

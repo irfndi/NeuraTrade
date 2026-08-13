@@ -144,7 +144,7 @@ describe("PaperTradingRepositorySQLite", () => {
       candidateLockAt: new Date("2026-07-01T00:00:00.000Z"),
       datasetCutoffAt: new Date("2026-07-31T23:45:00.000Z"),
       entryOpenedAt: new Date("2026-08-01T00:00:00.000Z"),
-      executionEnvironment: "bitget-demo",
+      executionEnvironment: "bybit-demo",
     };
 
     await Effect.runPromise(repository.ensureTables());
