@@ -177,7 +177,10 @@ function orderSizeContracts(
   capital: Decimal,
   maxPositionPct: number,
   entryPrice: Decimal,
-  options?: { readonly leverage: number; readonly contractSpecs?: ContractSizeSpec },
+  options?: {
+    readonly leverage: number;
+    readonly contractSpecs?: ContractSizeSpec;
+  },
 ): GridOrderSizing {
   if (entryPrice.lessThanOrEqualTo(0)) {
     return { size: money(0), leverage: options?.leverage ?? 1 };
@@ -406,8 +409,7 @@ export function runGridPaperTradingIteration(
     // with trendFilterPeriod 0 the engine used to fetch just 2 candles ->
     // ADX was always 0 and the validated ADX gate never fired live. Fetch
     // an ADX warmup (14*2+2 bars) whenever the chop gate is enabled.
-    const adxWarmup =
-      (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
+    const adxWarmup = (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
     const requiredCandles =
       replayBars > 0
         ? replayBars + options.trendFilterPeriod + 5
@@ -659,6 +661,13 @@ export function runGridPaperTradingIteration(
       state.capital,
     );
 
+    /** Result of closing a grid position leg. */
+    interface GridCloseTradeResult {
+      readonly trade: GridPaperTrade;
+      readonly capitalAfter: Decimal;
+      readonly peakCapital: Decimal;
+    }
+
     const closeTrade = (
       side: GridPaperPositionSide,
       entryPrice: Decimal,
@@ -671,11 +680,7 @@ export function runGridPaperTradingIteration(
       openedAt: Date,
       entryEvidence: GridFillEvidence | null,
       exitFill: FuturesOrderFill | null,
-    ): {
-      readonly trade: GridPaperTrade;
-      readonly capitalAfter: Decimal;
-      readonly peakCapital: Decimal;
-    } => {
+    ): GridCloseTradeResult => {
       const pricePnl =
         side === "long"
           ? exitPrice.minus(entryPrice).div(entryPrice)
@@ -765,8 +770,7 @@ export function runGridPaperTradingIteration(
             s.entryPrice,
           ).size;
           const closeSize =
-            (s.entryFillSource === "live" ||
-              s.entryFillSource === "adopted") &&
+            (s.entryFillSource === "live" || s.entryFillSource === "adopted") &&
             s.entryFilledQty?.greaterThan(0) === true
               ? s.entryFilledQty
               : size;
@@ -806,8 +810,7 @@ export function runGridPaperTradingIteration(
           s.maxPositionPct,
           s.leverage,
           s.updatedAt,
-          (s.entryFillSource === "live" ||
-            s.entryFillSource === "adopted") &&
+          (s.entryFillSource === "live" || s.entryFillSource === "adopted") &&
             s.entryOrderId &&
             s.entryFilledQty &&
             s.entryFee

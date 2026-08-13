@@ -80,8 +80,14 @@ function rmDir(dir: string): void {
   }
 }
 
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
 /** Write a JSON file at the given path. */
-function writeJson(filePath: string, data: unknown): void {
+function writeJson(filePath: string, data: JsonValue): void {
   fs.mkdirSync(nodePath.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }

@@ -21,6 +21,7 @@ import {
 } from "../services/bitget-config.ts";
 import { validateFuturesOrder } from "../services/bitget-futures-guards.ts";
 import { validateLiveOrderSafety } from "../services/bitget-futures-safety.ts";
+import type { ExchangeError } from "../exchange/adapter.ts";
 
 // ---------------------------------------------------------------------------
 // Options
@@ -135,17 +136,27 @@ function parsePositionMode(raw: string): BitgetPositionMode {
   );
 }
 
-export function handleErr(err: unknown): Effect.Effect<never, Error> {
+/** A tag-bearing, non-`Error` failure artifact surfaced by futures commands. */
+interface TaggedErrorCarrier {
+  readonly _tag: string;
+  readonly status?: number;
+  readonly body?: string;
+  readonly reason?: string;
+}
+
+export function handleErr(
+  err: Error | string | ExchangeError | TaggedErrorCarrier,
+): Effect.Effect<never, Error> {
   // ExchangeError carries its message in .reason; Error.message is empty
   // there, which made every adapter rejection print as an empty failure.
   const details =
     err instanceof Error
       ? "reason" in err &&
-        typeof err.reason === "string" &&
-        err.reason.length > 0
-        ? err.reason
+        err.reason !== undefined &&
+        String(err.reason).length > 0
+        ? String(err.reason)
         : err.message
-      : err && typeof err === "object"
+      : err instanceof Object
         ? "_tag" in err
           ? `${String(err._tag)}: ${JSON.stringify(err)}`
           : JSON.stringify(err)

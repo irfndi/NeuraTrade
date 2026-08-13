@@ -73,7 +73,8 @@ describe("universe-watch fetch handler", () => {
   });
 
   it("stores a valid seed and reads it back", async () => {
-    const env = fakeEnv() as never;
+    const mock = fakeEnv();
+    const env = mock as never;
     const put = await worker.fetch(
       new Request("https://universe-watch.example/seed", {
         method: "PUT",
@@ -86,10 +87,7 @@ describe("universe-watch fetch handler", () => {
       env,
     );
     expect(put.status).toBe(200);
-    const store = env as unknown as {
-      watchlist: { get: (k: string) => Promise<string | null> };
-    };
-    expect(await store.watchlist.get("seed-symbols")).toBe(
+    expect(await mock.watchlist.get("seed-symbols")).toBe(
       '["BTC/USDT","ETH/USDT"]',
     );
   });

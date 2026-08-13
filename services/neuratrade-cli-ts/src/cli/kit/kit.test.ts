@@ -453,6 +453,19 @@ describe("kit: property tests", () => {
     /^[a-z][a-z0-9]{0,7}(-[a-z0-9]{1,6}){0,2}$/,
   );
 
+  // A generated option value can be any of the scalar kinds the CLI parses.
+  type SpecValue = string | number | boolean;
+
+  // A parsed option value is either a scalar, an optional wrapper, or (before a
+  // default is applied) undefined.
+  type ExpectedValue = SpecValue | Option.Option<SpecValue> | undefined;
+
+  interface BuiltCommand {
+    readonly cmd: AnyCommand;
+    readonly argv: string[];
+    readonly expected: Record<string, ExpectedValue>;
+  }
+
   interface GeneratedSpec {
     readonly key: string;
     readonly flag: string;
@@ -460,8 +473,8 @@ describe("kit: property tests", () => {
     readonly required: boolean;
     readonly optional: boolean;
     readonly choices: ReadonlyArray<string>;
-    readonly providedValue: unknown;
-    readonly defaultValue: unknown;
+    readonly providedValue: SpecValue | undefined;
+    readonly defaultValue: SpecValue | undefined;
     readonly hasDefault: boolean;
   }
 
@@ -498,8 +511,8 @@ describe("kit: property tests", () => {
       .map((r) => {
         const required = r.required && !r.optional;
         const hasDefault = !required && !r.optional;
-        let providedValue: unknown;
-        let defaultValue: unknown;
+        let providedValue: SpecValue | undefined;
+        let defaultValue: SpecValue | undefined;
         switch (r.kind) {
           case "text":
             providedValue = r.textValue;
@@ -535,14 +548,10 @@ describe("kit: property tests", () => {
         };
       });
 
-  function buildCommand(specs: ReadonlyArray<GeneratedSpec>): {
-    cmd: AnyCommand;
-    argv: string[];
-    expected: Record<string, unknown>;
-  } {
+  function buildCommand(specs: ReadonlyArray<GeneratedSpec>): BuiltCommand {
     const options: Record<string, ReturnType<typeof Options.text>> = {};
     const argv: string[] = [];
-    const expected: Record<string, unknown> = {};
+    const expected: Record<string, ExpectedValue> = {};
     for (const spec of specs) {
       // biome-ignore lint/suspicious/noExplicitAny: dynamic spec construction
       let opt: any;
@@ -571,11 +580,10 @@ describe("kit: property tests", () => {
       options[spec.key] = opt;
 
       if (spec.providedValue !== undefined) {
+        const provided = spec.providedValue;
         argv.push(`--${spec.flag}`);
-        if (spec.kind !== "boolean") argv.push(String(spec.providedValue));
-        expected[spec.key] = spec.optional
-          ? Option.some(spec.providedValue)
-          : spec.providedValue;
+        if (spec.kind !== "boolean") argv.push(String(provided));
+        expected[spec.key] = spec.optional ? Option.some(provided) : provided;
       } else if (spec.optional) {
         expected[spec.key] = Option.none();
       } else if (spec.hasDefault) {
@@ -616,7 +624,7 @@ describe("kit: property tests", () => {
           if (outcome._tag !== "execute") return false;
           const parsed = Effect.runSync(outcome.run() as Effect.Effect<any>);
           for (const [key, want] of Object.entries(expected)) {
-            const got = (parsed as Record<string, unknown>)[key];
+            const got = (parsed as Record<string, ExpectedValue>)[key];
             if (Option.isOption(want as Option.Option<unknown>)) {
               const wantOpt = want as Option.Option<unknown>;
               const gotOpt = got as Option.Option<unknown>;

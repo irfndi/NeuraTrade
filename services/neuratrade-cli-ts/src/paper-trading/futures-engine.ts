@@ -102,13 +102,8 @@ export interface FuturesPaperTradingIterationResult {
   readonly note: string;
 }
 
-function calculateFuturesNotionalValue(
-  capital: Decimal,
-  entryPrice: Decimal,
-  stopDistancePct: Money,
-  currentVolatility: number,
-  options: FuturesPaperTradingOptions,
-): {
+/** Result of risk-aware notional sizing for a futures paper trade. */
+interface FuturesNotionalSizing {
   notional: Decimal;
   size: Decimal;
   leverage: number;
@@ -119,7 +114,15 @@ function calculateFuturesNotionalValue(
    *  contract specs are present; passed to the risk guard so it can fail
    *  closed locally for paths that bypass this sizing. */
   minOrderableNotional?: number;
-} {
+}
+
+function calculateFuturesNotionalValue(
+  capital: Decimal,
+  entryPrice: Decimal,
+  stopDistancePct: Money,
+  currentVolatility: number,
+  options: FuturesPaperTradingOptions,
+): FuturesNotionalSizing {
   // Risk-based notional sizing: riskPerTradePct of capital / stopDistancePct.
   const maxNotionalByRiskCap = capital.times(
     (options.maxPositionSizePct ?? 100) / 100,
@@ -138,10 +141,7 @@ function calculateFuturesNotionalValue(
     // number of concurrent positions in a single trade, so a simultaneous
     // stop-out of every position cannot breach the hard daily stop.
     if (options.maxDailyLossPct !== undefined && options.maxDailyLossPct > 0) {
-      const maxConcurrentTrades = Math.max(
-        1,
-        options.maxConcurrentTrades ?? 1,
-      );
+      const maxConcurrentTrades = Math.max(1, options.maxConcurrentTrades ?? 1);
       const perTradeRiskCap = capital.times(
         options.maxDailyLossPct / 100 / maxConcurrentTrades,
       );
@@ -183,9 +183,7 @@ function calculateFuturesNotionalValue(
       money(spec.minTradeUSDT),
       money(spec.minQty).times(entryPrice),
     );
-    const allocation = capital.times(
-      (options.maxPositionSizePct ?? 100) / 100,
-    );
+    const allocation = capital.times((options.maxPositionSizePct ?? 100) / 100);
 
     notional = orderableQty(
       notional.div(entryPrice),
@@ -795,9 +793,7 @@ function midPriceMoney(orderBook: OrderBook): Money {
   if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
     return money(orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0);
   }
-  return money(orderBook.bids[0].price)
-    .plus(orderBook.asks[0].price)
-    .div(2);
+  return money(orderBook.bids[0].price).plus(orderBook.asks[0].price).div(2);
 }
 
 function toOrderBookMetrics(orderBook: OrderBook) {

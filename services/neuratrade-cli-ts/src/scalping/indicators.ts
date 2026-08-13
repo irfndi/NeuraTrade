@@ -1,5 +1,12 @@
 import type { CandleLike } from "./types.js";
 
+/** Result of the ADX directional-movement indicator pass. */
+export interface ADXResult {
+  readonly adx: number | null;
+  readonly plusDI: number | null;
+  readonly minusDI: number | null;
+}
+
 export function calculateSMA(
   values: readonly number[],
   period: number,
@@ -153,7 +160,7 @@ export function calculateATR(
 export function calculateADX(
   candles: readonly CandleLike[],
   period = 14,
-): { adx: number | null; plusDI: number | null; minusDI: number | null } {
+): ADXResult {
   if (candles.length < period * 2 + 1) {
     return { adx: null, plusDI: null, minusDI: null };
   }

@@ -198,10 +198,10 @@ describe("runGridBacktest", () => {
       expect(t.exitBar).toBeGreaterThanOrEqual(t.entryBar);
       expect(t.entryPrice).toBeGreaterThan(0);
       expect(t.exitPrice).toBeGreaterThan(0);
-      expect(typeof t.pnlPct).toBe("number");
+      expect(t.pnlPct).toBeTypeOf("number");
       expect(t.win).toBe(t.pnlPct > 0);
       expect(["long", "short"]).toContain(t.side);
-      expect(typeof t.isLiquidation).toBe("boolean");
+      expect(t.isLiquidation).toBeTypeOf("boolean");
     }
     const wins = result.trades.filter((t) => t.win).length;
     expect(wins / result.trades.length).toBeCloseTo(result.winRate / 100, 2);

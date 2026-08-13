@@ -1,4 +1,5 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
+import * as S from "effect/Schema";
 
 import { MarketDataGateway } from "../market-data/gateway.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
@@ -174,17 +175,18 @@ export default {
       } catch {
         return Response.json({ error: "Invalid JSON body" }, { status: 400 });
       }
+      const decoded = S.decodeUnknownOption(S.Array(S.String))(symbols);
       if (
-        !Array.isArray(symbols) ||
-        symbols.some((s) => typeof s !== "string" || s.trim().length === 0)
+        Option.isNone(decoded) ||
+        decoded.value.some((s) => s.trim().length === 0)
       ) {
         return Response.json(
           { error: "seed must be a JSON array of symbol strings" },
           { status: 400 },
         );
       }
-      await env.watchlist.put(SEED_KEY, JSON.stringify(symbols));
-      return Response.json({ seed: symbols.length });
+      await env.watchlist.put(SEED_KEY, JSON.stringify(decoded.value));
+      return Response.json({ seed: decoded.value.length });
     }
 
     return new Response("Not Found", { status: 404 });

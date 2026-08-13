@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import type { CandleLike } from "../scalping/types.js";
 import {
   READINESS_COHORT_CANDIDATES,
@@ -33,6 +34,11 @@ export interface RealMoneyReadinessCliOptions {
   readonly now?: Date;
   readonly testFactory?: boolean;
   readonly parityFixture?: "golden";
+}
+
+export interface RealMoneyReadinessResult {
+  readonly report: RealMoneyReadinessReport;
+  readonly exitCode: number;
 }
 
 export interface ParsedRealMoneyReadinessArgs {
@@ -78,14 +84,17 @@ type ParseResult =
   | { readonly kind: "ok"; readonly args: ParsedRealMoneyReadinessArgs }
   | { readonly kind: "error"; readonly message: string };
 
+/** Mutable accumulator for the `--exchange`/`--symbol`/`--timeframe` CLI tokens. */
+type ParsedValues = {
+  exchange: string;
+  symbols: string[];
+  timeframe: string;
+};
+
 export function parseRealMoneyReadinessArgs(
   argv: readonly string[],
 ): ParseResult {
-  const values: {
-    exchange: string;
-    symbols: string[];
-    timeframe: string;
-  } = {
+  const values: ParsedValues = {
     exchange: "bitget-futures",
     symbols: [],
     timeframe: "15m",
@@ -182,16 +191,16 @@ function databasePath(home: string): string {
   return join(home, "data", "neuratrade.db");
 }
 
-interface ExecutionParityArtifactCheck {
-  readonly name: string;
-  readonly passed: boolean;
-  readonly detail: string;
-}
+const executionParityCheckSchema = z.object({
+  name: z.string(),
+  passed: z.boolean(),
+  detail: z.string(),
+});
 
-interface ExecutionParityArtifactFile {
-  readonly protocolVersion?: string;
-  readonly checks?: readonly unknown[];
-}
+const executionParityArtifactSchema = z.object({
+  protocolVersion: z.string().optional(),
+  checks: z.array(z.unknown()).optional(),
+});
 
 function absentExecutionParity(): ExecutionParityEvidence {
   return { passed: false, protocolVersion: "execution-parity/v1", checks: [] };
@@ -218,23 +227,19 @@ function readExecutionParityFile(home: string): ExecutionParityEvidence {
   const filePath = join(home, "data", "execution-parity.json");
   try {
     if (!existsSync(filePath)) return absentExecutionParity();
-    const parsed = JSON.parse(
-      readFileSync(filePath, "utf8"),
-    ) as Partial<ExecutionParityArtifactFile>;
-    const checks = (Array.isArray(parsed.checks) ? parsed.checks : []).filter(
-      (check): check is ExecutionParityArtifactCheck =>
-        typeof check === "object" &&
-        check !== null &&
-        typeof (check as ExecutionParityArtifactCheck).name === "string" &&
-        typeof (check as ExecutionParityArtifactCheck).passed === "boolean" &&
-        typeof (check as ExecutionParityArtifactCheck).detail === "string",
-    );
+    const raw = JSON.parse(readFileSync(filePath, "utf8"));
+    const parsed = executionParityArtifactSchema.safeParse(raw);
+    if (!parsed.success) return absentExecutionParity();
+    const checks = (parsed.data.checks ?? []).flatMap((check) => {
+      const checkResult = executionParityCheckSchema.safeParse(check);
+      return checkResult.success ? [checkResult.data] : [];
+    });
     return {
       passed: checks.length > 0 && checks.every((check) => check.passed),
       protocolVersion:
-        typeof parsed.protocolVersion === "string" &&
-        parsed.protocolVersion.length > 0
-          ? parsed.protocolVersion
+        parsed.data.protocolVersion !== undefined &&
+        parsed.data.protocolVersion.length > 0
+          ? parsed.data.protocolVersion
           : "execution-parity/v1",
       checks,
     };
@@ -693,7 +698,7 @@ export function versionText(): string {
 export function runRealMoneyReadiness(
   argv: readonly string[],
   options: RealMoneyReadinessCliOptions = {},
-): { readonly report: RealMoneyReadinessReport; readonly exitCode: number } {
+): RealMoneyReadinessResult {
   const commandArgs = options.testFactory
     ? argv.filter((token) => token !== "--parity-fixture" && token !== "golden")
     : argv;

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  selectFlowUniverse,
-  type FlowInstrument,
-} from "./flow-universe.js";
+import { selectFlowUniverse, type FlowInstrument } from "./flow-universe.js";
 
 const now = Date.now();
 const MS_PER_DAY = 86_400_000;
@@ -51,10 +48,7 @@ describe("selectFlowUniverse", () => {
 
   it("drops symbols younger than minAgeDays", () => {
     const volumes = { OLDUSDT: 100, NEWUSDT: 90 };
-    const symbols = [
-      instrument("OLDUSDT", 200),
-      instrument("NEWUSDT", 5),
-    ];
+    const symbols = [instrument("OLDUSDT", 200), instrument("NEWUSDT", 5)];
 
     const universe = selectFlowUniverse(volumes, symbols);
 
@@ -79,10 +73,7 @@ describe("selectFlowUniverse", () => {
 
   it("carries always-include majors even below the cutoff", () => {
     const volumes = { BTCUSDT: 1, DOGEUSDT: 1 };
-    const symbols = [
-      instrument("BTCUSDT", 2000),
-      instrument("DOGEUSDT", 2000),
-    ];
+    const symbols = [instrument("BTCUSDT", 2000), instrument("DOGEUSDT", 2000)];
 
     const universe = selectFlowUniverse(volumes, symbols, undefined, {
       topN: 1,

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Bot } from "grammy";
-import type { QuestDiagnosticsResponse } from "../api/types";
+import type { PortfolioPosition, QuestDiagnosticsResponse } from "../api/types";
 import { registerStatusCommand } from "./status";
 
 type CommandHandler = (ctx: MockContext) => Promise<void> | void;
@@ -35,7 +34,7 @@ interface StatusApiMock {
     checks: Array<{ name: string; status: string }>;
   }>;
   getTradingMode(chatId: string): Promise<{
-    mode: string;
+    mode: "dry" | "live";
     confirmations: number;
     required_confirmations: number;
   }>;
@@ -43,7 +42,7 @@ interface StatusApiMock {
     total_equity: string;
     exposure: string;
     open_orders?: number;
-    positions: unknown[];
+    positions: PortfolioPosition[];
   }>;
   getAIStatus(userId: string): Promise<{
     selected_model: string;
@@ -58,7 +57,7 @@ interface StatusApiMock {
       timestamp: string;
       level: string;
       source?: string;
-      message?: string;
+      message: string;
     }>;
   }>;
   getQuestDiagnostics(chatId: string): Promise<QuestDiagnosticsResponse>;
@@ -213,7 +212,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(555, 999);
     await runCommand(bot, "status", ctx);
 
@@ -262,7 +261,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext();
     await runCommand(bot, "status", ctx);
 
@@ -299,7 +298,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(666, 777);
     await runCommand(bot, "status", ctx);
 
@@ -336,7 +335,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(667, 778);
     await runCommand(bot, "status", ctx);
 
@@ -378,7 +377,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(777, 888);
     await runCommand(bot, "status", ctx);
 
@@ -402,7 +401,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(900, 901);
     await runCommand(bot, "status", ctx);
 
@@ -422,7 +421,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(901, 902);
     await runCommand(bot, "status", ctx);
 
@@ -453,7 +452,7 @@ describe("Status command", () => {
       },
     });
 
-    registerStatusCommand(bot as unknown as Bot, api as unknown as never);
+    registerStatusCommand(bot, api);
     const ctx = createContext(778, 889);
     await runCommand(bot, "status", ctx);
 

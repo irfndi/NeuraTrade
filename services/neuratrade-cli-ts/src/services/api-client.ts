@@ -127,9 +127,25 @@ export interface BacktestResponse {
   readonly run_id: string;
   readonly status: string;
   readonly mode: string;
-  readonly summary: Record<string, unknown>;
+  readonly summary: BacktestSummary;
   readonly gate_summary: ReadonlyArray<unknown>;
 }
+
+/** JSON-serializable value accepted as an API request body. */
+type JsonPrimitive = string | number | boolean | null;
+interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+type JsonValue = JsonPrimitive | JsonObject | readonly JsonValue[];
+
+/** Backtest summary metrics payload returned by the backend. */
+type BacktestSummary = Record<string, JsonValue>;
+
+/** Outbound request headers (all header values are strings). */
+type RequestHeaders = Record<string, string>;
+
+/** Request body shapes accepted by the backend API client. */
+type ApiRequestBody = BacktestRequest | { readonly user_id: string };
 
 export interface HealthResponse {
   readonly status: string;
@@ -183,11 +199,11 @@ function apiRequest(
   method: string,
   endpoint: string,
   timeoutMs: number,
-  body?: unknown,
+  body?: ApiRequestBody,
 ): Effect.Effect<Response, ApiClientError> {
   return Effect.gen(function* () {
     const url = `${baseUrl}${endpoint}`;
-    const headers: Record<string, string> = {
+    const headers: RequestHeaders = {
       "Content-Type": "application/json",
     };
     if (apiKey !== "") {
@@ -304,9 +320,7 @@ export const ApiClientLive = (
     getPortfolio: (chatId: string) => {
       const endpoint = `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`;
       return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
-        Effect.flatMap((res) =>
-          parseJson<PortfolioResponse>(res, endpoint),
-        ),
+        Effect.flatMap((res) => parseJson<PortfolioResponse>(res, endpoint)),
       );
     },
 
@@ -315,9 +329,7 @@ export const ApiClientLive = (
       return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
         // Same endpoint and response schema as getPortfolio; this caller
         // picks out the equity/available subset.
-        Effect.flatMap((res) =>
-          parseJson<PortfolioResponse>(res, endpoint),
-        ),
+        Effect.flatMap((res) => parseJson<PortfolioResponse>(res, endpoint)),
         Effect.map((payload) => ({
           total_balance: payload.total_equity,
           available: payload.available_balance ?? "0",

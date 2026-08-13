@@ -804,24 +804,27 @@ export function resolveBacktestArgs(
     chopGateAdx: 0,
   };
 
-  const merged = { ...base } as ResolvedBacktestArgs;
+  const filled: Array<
+    [
+      keyof ResolvedBacktestArgs,
+      ResolvedBacktestArgs[keyof ResolvedBacktestArgs],
+    ]
+  > = [];
   for (const key of Object.keys(cliArgs) as Array<keyof ResolvedBacktestArgs>) {
     const cliValue = cliArgs[key];
     const defaultValue = cliDefaults[key];
     // Undefined base values count as absent: a profile that never set the key
     // must not block the CLI fill.
-    const hasBaseValue =
-      Object.prototype.hasOwnProperty.call(merged, key) &&
-      (merged as unknown as Record<string, unknown>)[key] !== undefined;
+    const hasBaseValue = base[key] !== undefined;
     // If the profile did not provide a value, always fill from CLI (even when
     // it equals the built-in default). If the profile did provide a value, only
     // override when the user explicitly changed the CLI value.
     if (!hasBaseValue || cliValue !== defaultValue) {
-      (merged as unknown as Record<string, unknown>)[key] = cliValue;
+      filled.push([key, cliValue]);
     }
   }
 
-  return merged;
+  return { ...base, ...Object.fromEntries(filled) } as ResolvedBacktestArgs;
 }
 
 /**

@@ -1,17 +1,42 @@
-import type { Bot } from "grammy";
-import type { BackendApiClient } from "../../api/client";
 import type {
   DoctorCheckResponse,
+  DoctorResponse,
+  LogsResponse,
   OperatorLogEntry,
   PortfolioPosition,
+  PortfolioResponse,
   QuestProgress,
+  QuestsResponse,
 } from "../../api/types";
 import {
   formatDoctorDiagnosticsMessage,
   formatQuestProgressMessage,
 } from "../../messages";
+import type { DoctorCheck } from "../../messages/types";
 import { getChatId } from "./helpers";
 import { logger } from "../../utils/logger";
+
+/** Minimal grammY context the /quests /portfolio /logs /doctor handlers read and reply through. */
+export interface MonitoringCommandContext {
+  chat?: { id?: number | string };
+  reply(text: string): Promise<unknown>;
+}
+
+/** Minimal bot surface the /quests /portfolio /logs /doctor handlers depend on. */
+export interface MonitoringCommandBot {
+  command(
+    name: string,
+    handler: (ctx: MonitoringCommandContext) => Promise<void> | void,
+  ): void;
+}
+
+/** Minimal backend API surface the /quests /portfolio /logs /doctor handlers depend on. */
+export interface MonitoringCommandApi {
+  getQuests(chatId: string): Promise<QuestsResponse>;
+  getPortfolio(chatId: string): Promise<PortfolioResponse>;
+  getLogs(chatId: string, limit: number): Promise<LogsResponse>;
+  getDoctor(chatId: string): Promise<DoctorResponse>;
+}
 
 function formatQuestRows(quests: readonly QuestProgress[]): string {
   if (quests.length === 0) {
@@ -73,7 +98,7 @@ function formatPortfolioMessage(input: {
     lines.push(`Exposure: ${input.exposure}`);
   }
 
-  if (typeof input.openOrders === "number") {
+  if (input.openOrders !== undefined) {
     lines.push(`Open Orders: ${input.openOrders}`);
   }
 
@@ -145,13 +170,7 @@ function normalizeDoctorStatus(
   return "critical";
 }
 
-function mapDoctorCheck(check: DoctorCheckResponse): {
-  name: string;
-  status: "healthy" | "warning" | "critical";
-  message?: string;
-  latencyMs?: number;
-  details?: Readonly<Record<string, string>>;
-} {
+function mapDoctorCheck(check: DoctorCheckResponse): DoctorCheck {
   return {
     name: check.name,
     status: normalizeDoctorStatus(check.status),
@@ -162,8 +181,8 @@ function mapDoctorCheck(check: DoctorCheckResponse): {
 }
 
 export function registerMonitoringCommands(
-  bot: Bot,
-  api: BackendApiClient,
+  bot: MonitoringCommandBot,
+  api: MonitoringCommandApi,
 ): void {
   bot.command("quests", async (ctx) => {
     const chatId = getChatId(ctx);

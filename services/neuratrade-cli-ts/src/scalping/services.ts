@@ -152,7 +152,7 @@ export interface StrategyLibraryImpl {
   /** Merge a template's execution overrides into base backtest args. */
   readonly buildBacktestArgsFromTemplate: (
     templateName: StrategyTemplateName,
-    baseArgs: ResolvedBacktestArgs,
+    baseArgs: Partial<ResolvedBacktestArgs>,
   ) => Effect.Effect<ResolvedBacktestArgs, Error>;
   /** Merge a template's composer-config overrides into a base config. */
   readonly buildComposerConfigFromTemplate: (

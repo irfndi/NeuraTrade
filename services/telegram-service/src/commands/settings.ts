@@ -40,7 +40,10 @@ export function registerSettingsCommands(
     try {
       await api.setNotificationPreference(String(userId), false);
     } catch (error) {
-      logger.warn("Settings operation failed", { error, userId });
+      logger.warn("Settings operation failed", {
+        error: error instanceof Error ? error : String(error),
+        userId,
+      });
     }
 
     const msg =
@@ -61,7 +64,10 @@ export function registerSettingsCommands(
     try {
       await api.setNotificationPreference(String(userId), true);
     } catch (error) {
-      logger.warn("Settings operation failed", { error, userId });
+      logger.warn("Settings operation failed", {
+        error: error instanceof Error ? error : String(error),
+        userId,
+      });
     }
 
     const msg =

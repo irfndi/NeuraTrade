@@ -53,10 +53,7 @@ export function checkTpslHit(
     ) {
       return "tp";
     }
-    if (
-      tpsl.stopLoss !== undefined &&
-      price.lessThanOrEqualTo(tpsl.stopLoss)
-    ) {
+    if (tpsl.stopLoss !== undefined && price.lessThanOrEqualTo(tpsl.stopLoss)) {
       return "sl";
     }
   } else {
@@ -154,10 +151,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
         return { ...state, positions: next, tpsl: nextTpsl };
       });
 
-    const getTpslInternal = (
-      symbol: string,
-      productType: FuturesProductType,
-    ) =>
+    const getTpslInternal = (symbol: string, productType: FuturesProductType) =>
       Effect.map(
         getState(),
         (state) => state.tpsl[positionKey(symbol, productType)],
@@ -197,9 +191,8 @@ export function makeSimulatedFuturesExchangeAdapterService(
       ) => Effect.Effect<"tp" | "sl" | null, ExchangeError>;
     } = {
       checkTpslHit: (symbol, productType, price) =>
-        Effect.map(
-          getTpslInternal(symbol, productType),
-          (tpsl) => checkTpslHit(tpsl, price),
+        Effect.map(getTpslInternal(symbol, productType), (tpsl) =>
+          checkTpslHit(tpsl, price),
         ),
       placeOrder: (request: FuturesOrderRequest) =>
         Effect.gen(function* () {

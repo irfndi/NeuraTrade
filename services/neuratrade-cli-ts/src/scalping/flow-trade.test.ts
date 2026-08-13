@@ -143,7 +143,7 @@ class FakeAdapter implements FuturesExchangeAdapterService {
 
   placeOrder = (request: FuturesOrderRequest) => {
     const self = this;
-    return Effect.gen(function* () {
+    return Effect.sync(() => {
       const size = Number(request.size.toFixed(8));
       self.orders.push({
         side: request.side,
@@ -172,7 +172,7 @@ class FakeAdapter implements FuturesExchangeAdapterService {
   };
   closePosition = (request: ClosePositionRequest) => {
     const self = this;
-    return Effect.gen(function* () {
+    return Effect.sync(() => {
       self.closed.push({ side: request.side, size: Number(request.size) });
       const pos = self.positions.get(request.symbol);
       if (!pos) return null;
@@ -222,10 +222,9 @@ class FakeRiskGuard implements RiskGuardService {
   check = (ctx: RiskContext) =>
     this.blocked
       ? Effect.fail(
-          new RiskError(
-            `risk blocked: capital ${ctx.capital} below minimum`,
-            ["capital below minimum"],
-          ),
+          new RiskError(`risk blocked: capital ${ctx.capital} below minimum`, [
+            "capital below minimum",
+          ]),
         )
       : Effect.void;
 }
@@ -400,7 +399,11 @@ function run(
   );
 }
 
-const SPEC: ContractSizeSpec = { minQty: 0.001, qtyStep: 0.001, minTradeUSDT: 5 };
+const SPEC: ContractSizeSpec = {
+  minQty: 0.001,
+  qtyStep: 0.001,
+  minTradeUSDT: 5,
+};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -411,8 +414,12 @@ describe("flow-trade engine", () => {
     const { gateway, repo } = longFixture();
     const adapter = new FakeAdapter();
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
 
@@ -436,8 +443,12 @@ describe("flow-trade engine", () => {
     repo.oi = series.oi;
     const adapter = new FakeAdapter();
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
 
@@ -451,8 +462,12 @@ describe("flow-trade engine", () => {
     const { gateway, repo } = longFixture();
     const adapter = new FakeAdapter();
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions({ threshold: 100 }), // impossibly high → NONE
     );
 
@@ -465,8 +480,12 @@ describe("flow-trade engine", () => {
     const { gateway, repo } = longFixture();
     const adapter = new FakeAdapter();
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions({ contractSpecs: SPEC }),
     );
 
@@ -486,15 +505,20 @@ describe("flow-trade engine", () => {
     const killSwitch = new FakeKillSwitch();
 
     const opened = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(opened.action).toBe("opened");
     const stop = opened.state.stopPrice!;
 
     // Next iteration: flat series below the stop → market close.
-    const lastTs = gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
+    const lastTs =
+      gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
     const fall = Array.from({ length: 60 }, (_, i) => ({
       open: stop * 0.995,
       high: stop * 0.995,
@@ -507,8 +531,12 @@ describe("flow-trade engine", () => {
     repo.oi = [];
 
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(result.action).toBe("closed");
@@ -524,15 +552,20 @@ describe("flow-trade engine", () => {
     const killSwitch = new FakeKillSwitch();
 
     const opened = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions({ holdMinutes: 0 }), // exitAt = entry time → fires next iteration
     );
     expect(opened.action).toBe("opened");
 
     // Candles far in the future (well past exitAt) trending up from the
     // current price: stop not hit, OFI sign unchanged → the time exit fires.
-    const lastTs = gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
+    const lastTs =
+      gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
     const base = gateway.candles[gateway.candles.length - 1]!.close;
     const later: CandleLike[] = [];
     let price = base;
@@ -554,8 +587,12 @@ describe("flow-trade engine", () => {
     repo.oi = []; // no OI → zOi = 0 → no emergency exit
 
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions({ holdMinutes: 0 }),
     );
     expect(result.action).toBe("closed");
@@ -569,8 +606,12 @@ describe("flow-trade engine", () => {
     const killSwitch = new FakeKillSwitch();
 
     const opened = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(opened.action).toBe("opened");
@@ -579,7 +620,8 @@ describe("flow-trade engine", () => {
     // bearish candle flow (OFI sign flips vs the entry's positive OFI) and a
     // hard OI collapse in the final 15m window (|z_dOI| ≫ 1.5). The series
     // spans 60 bars so the z-score history has enough prior samples.
-    const lastTs = gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
+    const lastTs =
+      gateway.candles[gateway.candles.length - 1]!.timestamp.getTime();
     const crash: CandleLike[] = [];
     let price = gateway.candles[gateway.candles.length - 1]!.close;
     for (let i = 0; i < 60; i++) {
@@ -611,8 +653,12 @@ describe("flow-trade engine", () => {
     repo.oi = [...series.oi, ...crashOi];
 
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(result.action).toBe("closed");
@@ -628,8 +674,12 @@ describe("flow-trade engine", () => {
     killSwitch.reason = "operator stop";
 
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(result.action).toBe("hold");
@@ -645,8 +695,12 @@ describe("flow-trade engine", () => {
     const killSwitch = new FakeKillSwitch();
 
     const opened = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(opened.action).toBe("opened");
@@ -655,8 +709,12 @@ describe("flow-trade engine", () => {
     adapter.positions.delete("TESTUSDT");
 
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(result.action).toBe("hold");
@@ -671,8 +729,12 @@ describe("flow-trade engine", () => {
     const killSwitch = new FakeKillSwitch();
 
     const opened = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), killSwitch, new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      killSwitch,
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(opened.action).toBe("opened");
@@ -681,8 +743,12 @@ describe("flow-trade engine", () => {
     // persisted state and continues the SAME position instead of re-entering.
     const adapter2 = new FakeAdapter();
     const result2 = await run(
-      repo, gateway, adapter2,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter2,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions(),
     );
     expect(result2.action).toBe("hold");
@@ -696,8 +762,12 @@ describe("flow-trade engine", () => {
     const { gateway, repo } = longFixture();
     const adapter = new FakeAdapter();
     const result = await run(
-      repo, gateway, adapter,
-      new FakeRiskGuard(), new FakeKillSwitch(), new FakeCircuitBreaker(),
+      repo,
+      gateway,
+      adapter,
+      new FakeRiskGuard(),
+      new FakeKillSwitch(),
+      new FakeCircuitBreaker(),
       baseOptions({ threshold: 100 }),
     );
     expect(result.state.side).toBeNull();

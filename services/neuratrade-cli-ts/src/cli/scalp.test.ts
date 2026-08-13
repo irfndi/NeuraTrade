@@ -64,6 +64,7 @@ import {
 } from "../market-data/repository.js";
 import { BacktestEngine } from "../scalping/services.js";
 import type { Candle } from "../market-data/types.js";
+import type { BacktestOptions } from "../scalping/backtest.js";
 import { backtestProgram, buildBacktestComposerConfig } from "./scalp.js";
 
 describe("scalp CLI option surface", () => {
@@ -99,10 +100,14 @@ describe("scalp CLI option surface", () => {
   });
 
   it("accepts an integral --grid-max-grids", () => {
-    const outcome = evaluate(scalpCommand, ["backtest", "--grid-max-grids", "4"], {
-      name: "neuratrade",
-      version: "test",
-    });
+    const outcome = evaluate(
+      scalpCommand,
+      ["backtest", "--grid-max-grids", "4"],
+      {
+        name: "neuratrade",
+        version: "test",
+      },
+    );
     expect(outcome._tag).toBe("execute");
   });
 });
@@ -336,7 +341,12 @@ describe("watchlist grid overrides (soak reproduction)", () => {
 
   it("clamps allocatedWeight to [0.01, 1] with legacy 0 as full allocation", () => {
     const zero = gridOverridesFromWatchlistRow(
-      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0 },
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        allocatedWeight: 0,
+      },
       baseArgs,
     );
     // Legacy rows (pre-allocated_weight) load 0 = UNSET -> full allocation:
@@ -344,13 +354,23 @@ describe("watchlist grid overrides (soak reproduction)", () => {
     expect(zero.maxPositionPct).toBe(50); // 1 * 0.5 * 100
 
     const tiny = gridOverridesFromWatchlistRow(
-      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0.01 },
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        allocatedWeight: 0.01,
+      },
       baseArgs,
     );
     expect(tiny.maxPositionPct).toBeCloseTo(0.5, 6); // 0.01 * 0.5 * 100
 
     const over = gridOverridesFromWatchlistRow(
-      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 3 },
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        allocatedWeight: 3,
+      },
       baseArgs,
     );
     expect(over.maxPositionPct).toBe(50); // 1 * 0.5 * 100
@@ -364,7 +384,12 @@ describe("watchlist grid overrides (soak reproduction)", () => {
 
   it("keeps the CLI base position when maxPositionSizePct is unset", () => {
     const overrides = gridOverridesFromWatchlistRow(
-      { gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 6, allocatedWeight: 0.4 },
+      {
+        gridStepPct: 0.5,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 6,
+        allocatedWeight: 0.4,
+      },
       { targetRatio: 1, chopGateAdx: 0, maxPositionSizePct: Option.none() },
     );
     expect(overrides.maxPositionPct).toBeCloseTo(40, 6); // 0.4 * 1.0 * 100
@@ -1296,9 +1321,7 @@ describe("walk-forward command", () => {
     );
 
     expect(result).toBeDefined();
-    expect(
-      (result as unknown as { windows: unknown[] }).windows.length,
-    ).toBeGreaterThan(0);
+    expect(result.windows.length).toBeGreaterThan(0);
   });
 });
 
@@ -1417,9 +1440,7 @@ describe("backtestProgram fill-model option forwarding", () => {
     });
 
     await Effect.runPromise(
-      backtestProgram(
-        args as unknown as Parameters<typeof backtestProgram>[0],
-      ).pipe(
+      backtestProgram(args).pipe(
         Effect.provide(
           Layer.mergeAll(
             MarketDataRepositorySQLiteLive(db),
@@ -1487,9 +1508,7 @@ describe("backtestProgram fill-model option forwarding", () => {
       start: "2026-01-16",
     });
     await Effect.runPromise(
-      backtestProgram(
-        args as unknown as Parameters<typeof backtestProgram>[0],
-      ).pipe(
+      backtestProgram(args).pipe(
         Effect.provide(
           Layer.mergeAll(
             MarketDataRepositorySQLiteLive(db),
@@ -1547,11 +1566,7 @@ describe("backtestProgram fill-model option forwarding", () => {
 
     const run = (args: Partial<OptimizeArgs>) =>
       Effect.runPromise(
-        backtestProgram(
-          makeOptimizeArgs(args) as unknown as Parameters<
-            typeof backtestProgram
-          >[0],
-        ).pipe(
+        backtestProgram(makeOptimizeArgs(args)).pipe(
           Effect.provide(
             Layer.mergeAll(
               MarketDataRepositorySQLiteLive(db),
@@ -1564,13 +1579,13 @@ describe("backtestProgram fill-model option forwarding", () => {
       );
 
     // start after end → rejected.
-    await expect(run({ start: "2026-01-16", end: "2026-01-15" })).rejects.toThrow(
-      /range is inverted or empty/,
-    );
+    await expect(
+      run({ start: "2026-01-16", end: "2026-01-15" }),
+    ).rejects.toThrow(/range is inverted or empty/);
     // start == end → rejected.
-    await expect(run({ start: "2026-01-15", end: "2026-01-15" })).rejects.toThrow(
-      /range is inverted or empty/,
-    );
+    await expect(
+      run({ start: "2026-01-15", end: "2026-01-15" }),
+    ).rejects.toThrow(/range is inverted or empty/);
     db.close();
   });
 });
@@ -1592,10 +1607,14 @@ describe("backtestProgram funding-rate wiring", () => {
       };
     });
 
-  function makeEngine(captured: {
-    fundingRates?: unknown;
-    composerConfig?: unknown;
-  }): Layer.Layer<BacktestEngine> {
+  interface CapturedBacktestOptions {
+    fundingRates?: BacktestOptions["fundingRates"];
+    composerConfig?: BacktestOptions["composerConfig"];
+  }
+
+  function makeEngine(
+    captured: CapturedBacktestOptions,
+  ): Layer.Layer<BacktestEngine> {
     return Layer.succeed(BacktestEngine, {
       runBacktest: (options) => {
         captured.fundingRates = options.fundingRates;
@@ -1630,19 +1649,13 @@ describe("backtestProgram funding-rate wiring", () => {
         const repo = yield* MarketDataRepository;
         yield* repo.ensureTables();
         yield* repo.saveCandles(candles);
-        yield* repo.saveFundingRates(
-          "binance",
-          "BTC/USDT",
-          fundingRates,
-        );
+        yield* repo.saveFundingRates("binance", "BTC/USDT", fundingRates);
       }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
     );
 
-    const captured: { fundingRates: unknown } = { fundingRates: undefined };
+    const captured: CapturedBacktestOptions = { fundingRates: undefined };
     await Effect.runPromise(
-      backtestProgram(
-        makeOptimizeArgs() as unknown as Parameters<typeof backtestProgram>[0],
-      ).pipe(
+      backtestProgram(makeOptimizeArgs()).pipe(
         Effect.provide(
           Layer.mergeAll(
             MarketDataRepositorySQLiteLive(db),
@@ -1668,11 +1681,9 @@ describe("backtestProgram funding-rate wiring", () => {
       }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
     );
 
-    const captured: { fundingRates: unknown } = { fundingRates: undefined };
+    const captured: CapturedBacktestOptions = { fundingRates: undefined };
     await Effect.runPromise(
-      backtestProgram(
-        makeOptimizeArgs() as unknown as Parameters<typeof backtestProgram>[0],
-      ).pipe(
+      backtestProgram(makeOptimizeArgs()).pipe(
         Effect.provide(
           Layer.mergeAll(
             MarketDataRepositorySQLiteLive(db),
@@ -1698,13 +1709,13 @@ describe("backtestProgram funding-rate wiring", () => {
       }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
     );
 
-    const captured: { fundingRates?: unknown; composerConfig?: unknown } = {};
+    const captured: CapturedBacktestOptions = {};
     await Effect.runPromise(
       backtestProgram(
         makeOptimizeArgs({
           useFunding: true,
           fundingBiasThreshold: 0.00005,
-        }) as unknown as Parameters<typeof backtestProgram>[0],
+        }),
       ).pipe(
         Effect.provide(
           Layer.mergeAll(

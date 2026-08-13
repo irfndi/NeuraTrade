@@ -9,14 +9,39 @@ import { Command, Options } from "./kit/kit.ts";
 import { Console, Effect } from "effect";
 import {
   BitgetClient,
+  type BitgetClientError,
   toBitgetSymbol,
 } from "../services/bitget-client.ts";
 import {
   BitgetConfig,
+  type BitgetConfigError,
   requireBitgetCredentials,
 } from "../services/bitget-config.ts";
 import { validateOrder } from "../services/bitget-guards.ts";
 import { bitgetFuturesCommand } from "./bitget-futures.ts";
+
+// ---------------------------------------------------------------------------
+// Shared error formatting
+// ---------------------------------------------------------------------------
+
+/** Union of all failures a `bitget` command effect can carry. */
+type BitgetCommandError = BitgetClientError | BitgetConfigError | Error;
+
+function formatBitgetError(error: BitgetCommandError): string {
+  if ("_tag" in error) return `${error._tag}: ${JSON.stringify(error)}`;
+  return error.message;
+}
+
+function logAndFail(
+  label: string,
+): (error: BitgetCommandError) => Effect.Effect<void, Error> {
+  return (error) => {
+    const detail = formatBitgetError(error);
+    return Console.log(`❌ ${label} failed: ${detail}`).pipe(
+      Effect.flatMap(() => Effect.fail(new Error(detail))),
+    );
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Options
@@ -100,21 +125,7 @@ const verifyCommand = Command.make("verify", {}, () =>
     if (balances.length > 5) {
       yield* Console.log(`     ... and ${balances.length - 5} more`);
     }
-  }).pipe(
-    Effect.catch((err: unknown) => {
-      const details =
-        err instanceof Error
-          ? err.message
-          : err && typeof err === "object"
-            ? "_tag" in err
-              ? `${String(err._tag)}: ${JSON.stringify(err)}`
-              : JSON.stringify(err)
-            : String(err);
-      return Console.log(`❌ verify failed: ${details}`).pipe(
-        Effect.flatMap(() => Effect.fail(new Error(details))),
-      );
-    }),
-  ),
+  }).pipe(Effect.catch(logAndFail("verify"))),
 ).pipe(Command.withDescription("Verify Bitget credentials and read balances"));
 
 // ---------------------------------------------------------------------------
@@ -133,14 +144,7 @@ const balanceCommand = Command.make("balance", {}, () =>
         `  ${b.asset}: available=${b.available} frozen=${b.frozen}`,
       );
     }
-  }).pipe(
-    Effect.catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      return Console.log(`❌ balance failed: ${message}`).pipe(
-        Effect.flatMap(() => Effect.fail(new Error(message))),
-      );
-    }),
-  ),
+  }).pipe(Effect.catch(logAndFail("balance"))),
 ).pipe(Command.withDescription("Show Bitget spot account balances"));
 
 // ---------------------------------------------------------------------------
@@ -159,14 +163,7 @@ const tickerCommand = Command.make(
       yield* Console.log(`  bid:   ${ticker.bidPrice} x ${ticker.bidQty}`);
       yield* Console.log(`  ask:   ${ticker.askPrice} x ${ticker.askQty}`);
       yield* Console.log(`  vol24: ${ticker.volume24h}`);
-    }).pipe(
-      Effect.catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        return Console.log(`❌ ticker failed: ${message}`).pipe(
-          Effect.flatMap(() => Effect.fail(new Error(message))),
-        );
-      }),
-    ),
+    }).pipe(Effect.catch(logAndFail("ticker"))),
 ).pipe(Command.withDescription("Fetch Bitget ticker for a symbol"));
 
 // ---------------------------------------------------------------------------
@@ -186,14 +183,7 @@ const instrumentsCommand = Command.make("instruments", {}, () =>
     if (instruments.length > 20) {
       yield* Console.log(`  ... and ${instruments.length - 20} more`);
     }
-  }).pipe(
-    Effect.catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      return Console.log(`❌ instruments failed: ${message}`).pipe(
-        Effect.flatMap(() => Effect.fail(new Error(message))),
-      );
-    }),
-  ),
+  }).pipe(Effect.catch(logAndFail("instruments"))),
 ).pipe(Command.withDescription("List Bitget spot trading instruments"));
 
 // ---------------------------------------------------------------------------
@@ -278,14 +268,7 @@ const orderPlaceCommand = Command.make(
       yield* Console.log(`  symbol:    ${order.symbol}`);
       yield* Console.log(`  side:      ${order.side}`);
       yield* Console.log(`  status:    ${order.status}`);
-    }).pipe(
-      Effect.catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        return Console.log(`❌ place order failed: ${message}`).pipe(
-          Effect.flatMap(() => Effect.fail(new Error(message))),
-        );
-      }),
-    ),
+    }).pipe(Effect.catch(logAndFail("place order"))),
 ).pipe(Command.withDescription("Place a Bitget spot order"));
 
 // ---------------------------------------------------------------------------
@@ -316,14 +299,7 @@ const orderStatusCommand = Command.make(
       yield* Console.log(
         `  filled: ${order.filledSize} / ${order.filledAmount}`,
       );
-    }).pipe(
-      Effect.catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        return Console.log(`❌ order status failed: ${message}`).pipe(
-          Effect.flatMap(() => Effect.fail(new Error(message))),
-        );
-      }),
-    ),
+    }).pipe(Effect.catch(logAndFail("order status"))),
 ).pipe(Command.withDescription("Query a Bitget order status"));
 
 // ---------------------------------------------------------------------------
@@ -347,14 +323,7 @@ const orderCancelCommand = Command.make(
         clientOid: clientOid.trim() || undefined,
       });
       yield* Console.log("✅ Order cancel request sent");
-    }).pipe(
-      Effect.catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        return Console.log(`❌ cancel order failed: ${message}`).pipe(
-          Effect.flatMap(() => Effect.fail(new Error(message))),
-        );
-      }),
-    ),
+    }).pipe(Effect.catch(logAndFail("cancel order"))),
 ).pipe(Command.withDescription("Cancel a Bitget order"));
 
 // ---------------------------------------------------------------------------

@@ -66,6 +66,13 @@ export function normalizeOptionalFeePct(
   return normalizeFeePct(feePct);
 }
 
+export interface EntryFillResult {
+  readonly entryPrice: number;
+  readonly appliedFeePct: number;
+  readonly fillType: "maker" | "taker";
+  readonly filled: boolean;
+}
+
 export function resolveEntryFill(
   rawEntry: number,
   next: CandleLike,
@@ -75,12 +82,7 @@ export function resolveEntryFill(
   entryOrderType: "market" | "limit",
   entryLimitOffsetBps: number,
   slippageBps: number,
-): {
-  entryPrice: number;
-  appliedFeePct: number;
-  fillType: "maker" | "taker";
-  filled: boolean;
-} {
+): EntryFillResult {
   if (entryOrderType === "market") {
     return {
       entryPrice: applySlippage(
@@ -501,13 +503,19 @@ export function composerSweepCandidate(
 /**
  * Assess whether a backtest result looks too good to be true.
  */
+export interface RealismAssessment {
+  readonly ok: boolean;
+  readonly errors: readonly string[];
+  readonly warnings: readonly string[];
+}
+
 export function assessBacktestRealism(
   result: BacktestResult,
   options: {
     readonly entryOrderType?: "market" | "limit";
     readonly strict?: boolean;
   } = {},
-): { ok: boolean; errors: string[]; warnings: string[] } {
+): RealismAssessment {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -1833,6 +1841,11 @@ function computeBenchmark(candles: readonly CandleLike[]): number {
   return first === 0 ? 0 : ((last - first) / first) * 100;
 }
 
+interface FundingCharge {
+  readonly funding: number;
+  readonly newLastFundingTime: Date;
+}
+
 function chargeFunding(
   position: BacktestPosition,
   lastFundingTime: Date,
@@ -1841,7 +1854,7 @@ function chargeFunding(
   fundingIntervalMs: number,
   isFutures: boolean,
   fundingRates?: readonly FundingRate[],
-): { funding: number; newLastFundingTime: Date } {
+): FundingCharge {
   if (!isFutures) {
     return { funding: 0, newLastFundingTime: lastFundingTime };
   }
@@ -1883,10 +1896,15 @@ function chargeFunding(
   return { funding, newLastFundingTime };
 }
 
+export interface SplitCandles {
+  readonly is: readonly CandleLike[];
+  readonly oos: readonly CandleLike[];
+}
+
 export function splitCandlesByOos(
   candles: readonly CandleLike[],
   oosPct: number,
-): { is: readonly CandleLike[]; oos: readonly CandleLike[] } {
+): SplitCandles {
   const sorted = [...candles].sort(
     (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
   );

@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { TelegramConfigPartial } from "./config";
 
 // Error types for API classification
@@ -15,6 +15,26 @@ export interface ApiError {
   message: string;
   code?: string;
 }
+
+/**
+ * Schema that decodes an ApiError-shaped payload from the error-capture
+ * boundary. Parsing replaces hand-rolled runtime typeof/field checks while
+ * keeping the result strongly typed.
+ */
+const ApiErrorSchema = Schema.Struct({
+  type: Schema.Literals([
+    "auth_failed",
+    "not_found",
+    "server_error",
+    "network_error",
+    "unknown",
+  ]),
+  message: Schema.String,
+  status: Schema.optional(Schema.Number),
+  code: Schema.optional(Schema.String),
+});
+
+const decodeOptionApiError = Schema.decodeUnknownOption(ApiErrorSchema);
 
 // Custom error class that preserves both ApiError info and stack trace.
 // Implements the ApiError shape directly so type guards and handlers can
@@ -42,136 +62,63 @@ export class ApiException extends Error implements ApiError {
 // WeakMap to cache extracted ApiErrors - avoids mutation
 const extractedApiErrors = new WeakMap<object, ApiError>();
 
-// Type guard for ApiError - also handles Effect's wrapped errors
-// Uses immutable extraction with caching to avoid mutation
-export const isApiError = (
-  error: unknown,
-  visited: WeakSet<object> = new WeakSet(),
-): error is ApiError => {
-  // Direct ApiError check
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "type" in error &&
-    "message" in error &&
-    typeof (error as ApiError).type === "string"
-  ) {
-    return true;
-  }
-
-  // Check for ApiException
-  if (error instanceof ApiException) {
-    return true;
-  }
-
-  // Check for Effect's wrapped error (UnknownException with cause)
-  if (typeof error === "object" && error !== null && "cause" in error) {
-    // Prevent infinite recursion with circular references
-    if (visited.has(error)) {
-      return false;
-    }
-    visited.add(error);
-
-    const cause = (error as { cause: unknown }).cause;
-
-    // The cause might be an Error with message containing our ApiError JSON
-    if (cause instanceof Error && cause.message) {
-      try {
-        const parsed = JSON.parse(cause.message);
-        if (
-          parsed &&
-          typeof parsed.type === "string" &&
-          typeof parsed.message === "string"
-        ) {
-          // Cache the parsed ApiError instead of mutating
-          extractedApiErrors.set(error, parsed as ApiError);
-          return true;
-        }
-      } catch {
-        // Not JSON, continue
-      }
-    }
-
-    // Check for ApiException in cause
-    if (cause instanceof ApiException) {
-      extractedApiErrors.set(error, cause.apiError);
-      return true;
-    }
-
-    // Recursive check with visited set to prevent infinite loops
-    if (typeof cause === "object" && cause !== null) {
-      return isApiError(cause, visited);
-    }
-  }
-
-  return false;
-};
-
-// Extract ApiError from potentially wrapped errors (immutable)
-// This function unwraps nested error structures to find ApiError
-export const extractApiError = (error: unknown): ApiError | null => {
-  if (error == null) {
+/**
+ * Extract ApiError from a potentially wrapped throwable (immutable).
+ *
+ * `cause` is the raw value captured at the error I/O boundary (an Error, an
+ * Effect-style wrapper with a nested `cause`, or a primitive such as null or
+ * undefined). It is decoded here with a schema rather than hand-rolled
+ * runtime typeof checks.
+ */
+export const extractApiError = (cause: unknown): ApiError | null => {
+  if (cause == null) {
     return null;
   }
 
   // ApiException - extract the wrapped apiError before the direct shape
   // check, since ApiException implements ApiError and would otherwise be
   // returned as-is instead of unwrapped.
-  if (error instanceof ApiException) {
-    return error.apiError;
+  if (cause instanceof ApiException) {
+    return cause.apiError;
   }
 
-  // Direct ApiError check
-  if (
-    typeof error === "object" &&
-    "type" in error &&
-    "message" in error &&
-    typeof (error as ApiError).type === "string"
-  ) {
-    return error as ApiError;
+  const isObject = cause instanceof Object;
+
+  // Direct ApiError shape (schema-decoded at the boundary)
+  if (isObject) {
+    const direct = decodeOptionApiError(cause);
+    if (Option.isSome(direct)) {
+      return direct.value;
+    }
   }
 
-  // Check cache first (populated by isApiError)
-  if (typeof error === "object") {
-    const cached = extractedApiErrors.get(error);
+  // Check cache first (populated by extractApiError/isApiError)
+  if (isObject) {
+    const cached = extractedApiErrors.get(cause);
     if (cached) {
       return cached;
     }
   }
 
-  // Follow Effect-style or generic error chaining via `cause`
-  if (
-    typeof error === "object" &&
-    "cause" in error &&
-    (error as { cause: unknown }).cause !== error // Prevent self-reference
-  ) {
-    const cause = (error as { cause: unknown }).cause;
-    const extractedFromCause = extractApiError(cause);
+  // Follow Effect-style or generic error chaining via `cause`, preventing
+  // self-references from recursing forever.
+  if (isObject && "cause" in cause && cause.cause !== cause) {
+    const extractedFromCause = extractApiError(cause.cause);
     if (extractedFromCause) {
       // Cache the result for future lookups
-      extractedApiErrors.set(error, extractedFromCause);
+      extractedApiErrors.set(cause, extractedFromCause);
       return extractedFromCause;
     }
   }
 
   // Try to parse Error.message as JSON-encoded ApiError
-  if (error instanceof Error && error.message) {
+  if (cause instanceof Error && cause.message) {
     try {
-      const parsed = JSON.parse(error.message);
-      if (
-        parsed &&
-        typeof parsed.type === "string" &&
-        typeof parsed.message === "string"
-      ) {
-        const apiError: ApiError = {
-          type: parsed.type as ApiErrorType,
-          message: parsed.message,
-          status: typeof parsed.status === "number" ? parsed.status : undefined,
-          code: typeof parsed.code === "string" ? parsed.code : undefined,
-        };
+      const decoded = decodeOptionApiError(JSON.parse(cause.message));
+      if (Option.isSome(decoded)) {
         // Cache the result
-        extractedApiErrors.set(error, apiError);
-        return apiError;
+        extractedApiErrors.set(cause, decoded.value);
+        return decoded.value;
       }
     } catch {
       // Not JSON or not ApiError-shaped; fall through
@@ -181,6 +128,11 @@ export const extractApiError = (error: unknown): ApiError | null => {
   return null;
 };
 
+// Type guard for ApiError - also handles Effect's wrapped errors by decoding
+// the raw throwable at the boundary (see extractApiError).
+export const isApiError = (cause: unknown): cause is ApiError =>
+  extractApiError(cause) !== null;
+
 export const createApi = (config: TelegramConfigPartial) => {
   const apiFetch = <T>(
     path: string,
@@ -189,72 +141,74 @@ export const createApi = (config: TelegramConfigPartial) => {
   ) =>
     Effect.tryPromise({
       try: async () => {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        ...(init.headers as Record<string, string> | undefined),
-      };
-
-      if (requireAdmin) {
-        headers["X-API-Key"] = config.adminApiKey;
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(`${config.apiBaseUrl}${path}`, {
-          ...init,
+        const headers: Record<string, string> = {};
+        headers["Content-Type"] = "application/json";
+        Object.assign(
           headers,
-        });
-      } catch (networkError) {
-        console.error(
-          `[API] Network error for ${path}:`,
-          networkError instanceof Error ? networkError.message : networkError,
+          init.headers as Record<string, string> | undefined,
         );
-        // Throw ApiException to preserve stack trace and error info
-        throw new ApiException({
-          type: "network_error",
-          message: "Network error: Unable to connect to backend API",
-        });
-      }
 
-      const payload = await response
-        .json()
-        .catch(() => ({ message: "Failed to parse response" }));
-
-      if (!response.ok) {
-        // Classify error type based on status code
-        const errorType: ApiErrorType =
-          response.status === 401
-            ? "auth_failed"
-            : response.status === 404
-              ? "not_found"
-              : response.status >= 500
-                ? "server_error"
-                : "unknown";
-
-        const message =
-          payload?.error ||
-          payload?.message ||
-          `API request failed (${response.status})`;
-
-        // Log authentication failures with context for debugging
-        if (errorType === "auth_failed") {
-          console.error(
-            `[API] Authentication failed for ${path} - check ADMIN_API_KEY configuration`,
-          );
-        } else {
-          console.error(`[API] ${errorType}: ${response.status} for ${path}`);
+        if (requireAdmin) {
+          headers["X-API-Key"] = config.adminApiKey;
         }
 
-        // Throw ApiException to preserve stack trace and error info
-        throw new ApiException({
-          type: errorType,
-          status: response.status,
-          message,
-          code: payload?.code,
-        });
-      }
+        let response: Response;
+        try {
+          response = await fetch(`${config.apiBaseUrl}${path}`, {
+            ...init,
+            headers,
+          });
+        } catch (networkError) {
+          console.error(
+            `[API] Network error for ${path}:`,
+            networkError instanceof Error ? networkError.message : networkError,
+          );
+          // Throw ApiException to preserve stack trace and error info
+          throw new ApiException({
+            type: "network_error",
+            message: "Network error: Unable to connect to backend API",
+          });
+        }
 
-      return payload as T;
+        const payload = await response
+          .json()
+          .catch(() => ({ message: "Failed to parse response" }));
+
+        if (!response.ok) {
+          // Classify error type based on status code
+          const errorType: ApiErrorType =
+            response.status === 401
+              ? "auth_failed"
+              : response.status === 404
+                ? "not_found"
+                : response.status >= 500
+                  ? "server_error"
+                  : "unknown";
+
+          const message =
+            payload?.error ||
+            payload?.message ||
+            `API request failed (${response.status})`;
+
+          // Log authentication failures with context for debugging
+          if (errorType === "auth_failed") {
+            console.error(
+              `[API] Authentication failed for ${path} - check ADMIN_API_KEY configuration`,
+            );
+          } else {
+            console.error(`[API] ${errorType}: ${response.status} for ${path}`);
+          }
+
+          // Throw ApiException to preserve stack trace and error info
+          throw new ApiException({
+            type: errorType,
+            status: response.status,
+            message,
+            code: payload?.code,
+          });
+        }
+
+        return payload as T;
       },
       catch: (error) =>
         error instanceof ApiException

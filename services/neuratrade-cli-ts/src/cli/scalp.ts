@@ -171,7 +171,6 @@ import {
   fetch24hrVolumes,
   fetchInstruments,
 } from "../market-data/gateways/bybit.js";
-import { MarketDataError } from "../market-data/gateway.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
 import { makeParityReplayCommand } from "./parity-replay.js";
 import { tradeCommand } from "./trade.js";
@@ -679,22 +678,21 @@ export function buildBacktestComposerConfig(
     connorsRsi2: weights.connorsRsi2 / activeSum,
   };
 
-  return {
-    weights: normalized,
-    thresholds: {
-      ...defaultComposerConfig.thresholds,
-      regimeMode,
-      volumeMinRatio,
-      volumeLookback,
-      minConfluence,
-      entryCandleConfirm,
-      momentumConfirmBars,
-      adxMin,
-      ...(breakoutLookback > 0 ? { breakoutLookback } : {}),
-      ...(fundingBiasThreshold !== undefined ? { fundingBiasThreshold } : {}),
-      ...(useFunding !== undefined ? { useFunding } : {}),
-    },
+  const thresholds = {
+    ...defaultComposerConfig.thresholds,
+    regimeMode,
+    volumeMinRatio,
+    volumeLookback,
+    minConfluence,
+    entryCandleConfirm,
+    momentumConfirmBars,
+    adxMin,
   };
+  if (breakoutLookback > 0) thresholds.breakoutLookback = breakoutLookback;
+  if (fundingBiasThreshold !== undefined)
+    thresholds.fundingBiasThreshold = fundingBiasThreshold;
+  if (useFunding !== undefined) thresholds.useFunding = useFunding;
+  return { weights: normalized, thresholds } satisfies ComposerConfig;
 }
 
 /**
@@ -703,15 +701,20 @@ export function buildBacktestComposerConfig(
  * leave the bound open (earliest/latest available candle). An inverted or
  * equal (zero-width) range is rejected.
  */
-function resolveBacktestCandleRange(args: ResolvedBacktestArgs):
+function resolveBacktestCandleRange(
+  args: ResolvedBacktestArgs,
+):
   | { ok: true; range: { from?: Date; to?: Date } }
   | { ok: false; error: string } {
   const start = args.start ?? args.startDate;
   const end = args.end ?? args.endDate;
-  const range: { from?: Date; to?: Date } = {};
-  if (start && start.trim().length > 0)
-    range.from = new Date(`${start}T00:00:00Z`);
-  if (end && end.trim().length > 0) range.to = new Date(`${end}T00:00:00Z`);
+  const startDate =
+    start && start.trim().length > 0
+      ? new Date(`${start}T00:00:00Z`)
+      : undefined;
+  const endDate =
+    end && end.trim().length > 0 ? new Date(`${end}T00:00:00Z`) : undefined;
+  const range = { from: startDate, to: endDate };
 
   if (range.from && range.to && range.from.getTime() >= range.to.getTime()) {
     return {
@@ -1257,17 +1260,19 @@ export interface OptimizeArgs extends ResolvedBacktestArgs {
   readonly selectBy: "return" | "sharpe" | "calmar";
 }
 
-function mergeOptimizeArgs(
-  args: OptimizeArgs,
-  profile: StrategyProfile,
+function resolveOptimizeArgs(
+  args: Partial<OptimizeArgs>,
+  profile: Option.Option<StrategyProfile>,
 ): OptimizeArgs {
-  const overrides = findSymbolOverride(profile, args.symbol) ?? {};
+  if (Option.isNone(profile)) return args as OptimizeArgs;
+  const overrides = findSymbolOverride(profile.value, args.symbol ?? "") ?? {};
+  const resolved = profile.value;
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] =>
     (overrides[key] !== undefined
       ? overrides[key]
-      : profile.defaults[key]) as StrategyProfileParams[K];
+      : resolved.defaults[key]) as StrategyProfileParams[K];
 
   const base: Partial<OptimizeArgs> = {
     atrRiskReward: get("atrRiskReward"),
@@ -1285,7 +1290,7 @@ function mergeOptimizeArgs(
     momentumConfirmBars: get("momentumConfirmBars"),
   };
 
-  return { ...base, ...args };
+  return { ...base, ...args } as OptimizeArgs;
 }
 
 export const optimizeCommand = Command.make(
@@ -1413,9 +1418,7 @@ export const optimizeCommand = Command.make(
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
-      const programArgs = Option.isSome(profile)
-        ? mergeOptimizeArgs(args as unknown as OptimizeArgs, profile.value)
-        : (args as unknown as OptimizeArgs);
+      const programArgs = resolveOptimizeArgs(args, profile);
 
       const result = yield* optimizeProgram(programArgs).pipe(
         Effect.provide(repoLayer),
@@ -1609,8 +1612,12 @@ export interface ScanArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
   readonly minOosTrades: number;
 }
 
-function mergeScanArgs(args: ScanArgs, profile: StrategyProfile): ScanArgs {
-  const defaults = profile.defaults;
+function resolveScanArgs(
+  args: Partial<ScanArgs>,
+  profile: Option.Option<StrategyProfile>,
+): ScanArgs {
+  if (Option.isNone(profile)) return args as ScanArgs;
+  const defaults = profile.value.defaults;
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] => defaults[key];
@@ -1640,7 +1647,7 @@ function mergeScanArgs(args: ScanArgs, profile: StrategyProfile): ScanArgs {
     momentumConfirmBars: get("momentumConfirmBars"),
   };
 
-  return { ...base, ...args };
+  return { ...base, ...args } as ScanArgs;
 }
 
 export const scanCommand = Command.make(
@@ -1763,9 +1770,7 @@ export const scanCommand = Command.make(
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
-      const mergedArgs = Option.isSome(profile)
-        ? mergeScanArgs(args as unknown as ScanArgs, profile.value)
-        : (args as unknown as ScanArgs);
+      const mergedArgs = resolveScanArgs(args, profile);
 
       const watchlistPath = Option.match(mergedArgs.saveWatchlist, {
         onNone: () => undefined as string | undefined,
@@ -2286,11 +2291,7 @@ export function gridOverridesFromWatchlistRow(
     readonly chopGateAdx?: number;
     readonly maxPositionSizePct: Option.Option<number>;
   },
-): {
-  readonly targetRatio: number;
-  readonly chopGateAdxThreshold: number;
-  readonly maxPositionPct: number;
-} {
+) {
   const basePositionFraction =
     Option.getOrElse(args.maxPositionSizePct, () => 100) / 100;
   // Legacy watchlist rows (written before the allocated_weight column
@@ -2330,17 +2331,19 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly entries?: readonly WatchlistEntry[];
 }
 
-function mergePaperTradeArgs(
-  args: PaperTradeArgs,
-  profile: StrategyProfile,
+function resolvePaperTradeArgs(
+  args: Partial<PaperTradeArgs>,
+  profile: Option.Option<StrategyProfile>,
 ): PaperTradeArgs {
-  const overrides = findSymbolOverride(profile, args.symbol) ?? {};
+  if (Option.isNone(profile)) return args as PaperTradeArgs;
+  const overrides = findSymbolOverride(profile.value, args.symbol ?? "") ?? {};
+  const resolved = profile.value;
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] =>
     (overrides[key] !== undefined
       ? overrides[key]
-      : profile.defaults[key]) as StrategyProfileParams[K];
+      : resolved.defaults[key]) as StrategyProfileParams[K];
 
   const base: Partial<PaperTradeArgs> = {
     minConfidence: get("minConfidence"),
@@ -2369,7 +2372,7 @@ function mergePaperTradeArgs(
     momentumConfirmBars: get("momentumConfirmBars"),
   };
 
-  return { ...base, ...args };
+  return { ...base, ...args } as PaperTradeArgs;
 }
 
 export interface SoakArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
@@ -2390,8 +2393,12 @@ export interface SoakArgs extends Omit<ResolvedBacktestArgs, "symbol"> {
   readonly profile: string;
 }
 
-function mergeSoakArgs(args: SoakArgs, profile: StrategyProfile): SoakArgs {
-  const defaults = profile.defaults;
+function resolveSoakArgs(
+  args: Partial<SoakArgs>,
+  profile: Option.Option<StrategyProfile>,
+): SoakArgs {
+  if (Option.isNone(profile)) return args as SoakArgs;
+  const defaults = profile.value.defaults;
   const get = <K extends keyof StrategyProfileParams>(
     key: K,
   ): StrategyProfileParams[K] => defaults[key];
@@ -2424,13 +2431,23 @@ function mergeSoakArgs(args: SoakArgs, profile: StrategyProfile): SoakArgs {
     momentumConfirmBars: get("momentumConfirmBars"),
   };
 
-  return { ...base, ...args };
+  return { ...base, ...args } as SoakArgs;
 }
 
 type MutablePartialRiskLimits = {
   -readonly [
     K in keyof import("../risk/guards.js").RiskLimits
   ]?: import("../risk/guards.js").RiskLimits[K];
+};
+
+type MutableFuturesPaperTradingOptions = {
+  -readonly [
+    K in keyof FuturesPaperTradingOptions
+  ]?: FuturesPaperTradingOptions[K];
+};
+
+type MutableGridPaperTradingOptions = {
+  -readonly [K in keyof GridPaperTradingOptions]?: GridPaperTradingOptions[K];
 };
 
 function loadWatchlist(
@@ -2571,9 +2588,7 @@ export const paperTradeCommand = Command.make(
       const paperRepoLayer = PaperTradingRepositorySQLiteLive(db);
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
-      const mergedArgs = Option.isSome(profile)
-        ? mergePaperTradeArgs(args as unknown as PaperTradeArgs, profile.value)
-        : (args as unknown as PaperTradeArgs);
+      const mergedArgs = resolvePaperTradeArgs(args, profile);
 
       const watchlist = yield* Option.match(mergedArgs.watchlist, {
         onNone: () =>
@@ -2861,11 +2876,8 @@ function fetchBitgetContracts(
     return yield* client.getContracts(productType);
   }).pipe(
     Effect.provide(bitgetClientLayer),
-    Effect.mapError((err: unknown) => {
-      const detail =
-        typeof err === "object" && err !== null && "body" in err
-          ? String((err as { body?: unknown }).body ?? "")
-          : String(err);
+    Effect.mapError((err) => {
+      const detail = "body" in err ? err.body : String(err);
       return new Error(
         `failed to fetch Bitget contracts: ${detail.length > 0 ? detail : String(err)}`,
       );
@@ -3074,7 +3086,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       overrides?: Partial<FuturesPaperTradingOptions>,
     ): FuturesPaperTradingOptions => {
       const contractSpecs = contractSpecsFor(symbol);
-      return {
+      const options: MutableFuturesPaperTradingOptions = {
         exchange: resolveFuturesMarketExchange(exchangeOverride, true),
         symbol,
         timeframe: args.timeframe,
@@ -3119,8 +3131,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
         maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2),
         maxConcurrentTrades: 1,
         notionalFloor: 5,
-        ...(contractSpecs !== undefined ? { contractSpecs } : {}),
       };
+      if (contractSpecs !== undefined) options.contractSpecs = contractSpecs;
+      return options as FuturesPaperTradingOptions;
     };
 
     const makeGridOptions = (
@@ -3130,7 +3143,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
     ): GridPaperTradingOptions => {
       const contractSpecs = contractSpecsFor(symbol);
       const rowOverrides = gridOverridesFromWatchlistRow(gridParams, args);
-      return {
+      const options: MutableGridPaperTradingOptions = {
         exchange: resolveFuturesMarketExchange(exchange, true),
         symbol,
         timeframe: args.timeframe,
@@ -3156,8 +3169,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
           args.live && !useSandbox ? "bitget-live" : "bitget-demo",
         productType,
         marginMode,
-        ...(contractSpecs !== undefined ? { contractSpecs } : {}),
       };
+      if (contractSpecs !== undefined) options.contractSpecs = contractSpecs;
+      return options as GridPaperTradingOptions;
     };
 
     const spotAdapterLayer = args.live
@@ -3220,8 +3234,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         Effect.provide(futuresAdapterLayer),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const tag =
-              "tag" in err && typeof err.tag === "string" ? err.tag : "";
+            const tag = err._tag;
             // Safety-critical errors must propagate so the loop stops and the
             // process exits for the operator; only transient network/IO errors
             // are safe to skip and retry on the next cadence.
@@ -3235,12 +3248,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
             const state = yield* paperRepo
               .getGridState(opts.exchange, opts.symbol, opts.timeframe)
               .pipe(Effect.orElseSucceed(() => null));
-            const reason =
-              "reason" in err && typeof err.reason === "string"
-                ? err.reason
-                : err instanceof Error
-                  ? err.message
-                  : String(err);
+            const reason = err.reason;
             yield* Console.error(
               `grid iteration skipped (network/IO error): ${reason}`,
             );
@@ -3515,9 +3523,7 @@ export const soakCommand = Command.make(
       const db = sqlite.database;
 
       const profile = yield* loadProfileIfNeeded(path.homeDir, args.profile);
-      const mergedArgs = Option.isSome(profile)
-        ? mergeSoakArgs(args as unknown as SoakArgs, profile.value)
-        : (args as unknown as SoakArgs);
+      const mergedArgs = resolveSoakArgs(args, profile);
 
       const liveMarketError = validateLiveExecutionMarket(
         mergedArgs.live,
@@ -3645,7 +3651,7 @@ export const soakCommand = Command.make(
           useFutures && exchange === "binance" ? "bitget-futures" : exchange;
 
         if (useFutures) {
-          const opts: FuturesPaperTradingOptions = {
+          const opts: MutableFuturesPaperTradingOptions = {
             exchange: futuresExchange,
             symbol,
             timeframe: mergedArgs.timeframe,
@@ -3683,17 +3689,17 @@ export const soakCommand = Command.make(
             marginMode: entry?.marginMode ?? marginModeParsed,
             productType: entry?.productType ?? productTypeParsed,
             volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
-            ...(contracts !== undefined
-              ? {
-                  contractSpecs: bitgetContractSpecs(
-                    contracts,
-                    symbol,
-                    entry?.productType ?? productTypeParsed,
-                  ),
-                }
-              : {}),
           };
-          return runFuturesPaperTradingIteration(opts).pipe(
+          if (contracts !== undefined) {
+            opts.contractSpecs = bitgetContractSpecs(
+              contracts,
+              symbol,
+              entry?.productType ?? productTypeParsed,
+            );
+          }
+          return runFuturesPaperTradingIteration(
+            opts as FuturesPaperTradingOptions,
+          ).pipe(
             Effect.provide(futuresAdapterLayer),
             Effect.provide(layers),
             Effect.map((r): IterationResult => ({
@@ -4481,22 +4487,24 @@ export function extractExplicitOverrides(
   args: Partial<ResolvedBacktestArgs>,
 ): Partial<ResolvedBacktestArgs> {
   const defaults = cliDefaultArgs();
-  const overrides: Partial<ResolvedBacktestArgs> = {};
+  const overrides: Record<
+    string,
+    ResolvedBacktestArgs[keyof ResolvedBacktestArgs]
+  > = {};
   for (const key of Object.keys(args) as Array<keyof ResolvedBacktestArgs>) {
     const value = args[key];
     const defaultValue = defaults[key];
     if (value !== defaultValue) {
-      (overrides as Record<string, unknown>)[key] = value;
+      overrides[key] = value;
     }
   }
   // Behavioral flags are always explicit so profiles preserve user intent.
   if (args.observedPrice !== undefined)
-    (overrides as Record<string, unknown>).observedPrice = args.observedPrice;
-  if (args.realistic !== undefined)
-    (overrides as Record<string, unknown>).realistic = args.realistic;
+    overrides.observedPrice = args.observedPrice;
+  if (args.realistic !== undefined) overrides.realistic = args.realistic;
   if (args.strictRealism !== undefined)
-    (overrides as Record<string, unknown>).strictRealism = args.strictRealism;
-  return overrides;
+    overrides.strictRealism = args.strictRealism;
+  return overrides as Partial<ResolvedBacktestArgs>;
 }
 
 export function loadSelectWatchlist(
@@ -4740,8 +4748,8 @@ const libraryStrategyCommand = Command.make(
   },
   (args) =>
     Effect.gen(function* () {
-      const template = args.strategy as StrategyTemplateName;
-      const baseArgs = args as unknown as ResolvedBacktestArgs;
+      const template = args.strategy;
+      const baseArgs = args as ResolvedBacktestArgs;
       const library = yield* StrategyLibrary;
       const merged = yield* library.buildBacktestArgsFromTemplate(
         template,
@@ -4802,10 +4810,7 @@ export const walkForwardCommand = Command.make(
       const sqlite = yield* SqliteClient;
       const repoLayer = MarketDataRepositorySQLiteLive(sqlite.database);
 
-      const resolvedArgs = args as unknown as Omit<
-        ResolvedBacktestArgs,
-        "minTrades"
-      >;
+      const resolvedArgs = args as Omit<ResolvedBacktestArgs, "minTrades">;
       const selectArgs: SelectArgs = {
         ...resolvedArgs,
         universe: "",
@@ -5594,9 +5599,7 @@ export const flowBacktestCommand = Command.make(
           canonical,
           canonical.endsWith(":USDT") ? canonical : `${canonical}:USDT`,
         ];
-        const variantPlaceholders = symbolVariants
-          .map(() => "?")
-          .join(",");
+        const variantPlaceholders = symbolVariants.map(() => "?").join(",");
         const candleRows = yield* sqlite.queryAll<{
           open: number;
           high: number;
@@ -5890,7 +5893,6 @@ export const flowTradeCommand = Command.make(
   },
   (args) =>
     Effect.gen(function* () {
-      const path = yield* Path;
       const sqlite = yield* SqliteClient;
       const db = sqlite.database;
 
@@ -6018,8 +6020,7 @@ function flowTradeProgram(args: FlowTradeArgs) {
       ).pipe(
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const tag =
-              "tag" in err && typeof err.tag === "string" ? err.tag : "";
+            const tag = err._tag;
             // Safety-critical errors must propagate so the loop stops and the
             // process exits for the operator; only transient network/IO
             // errors are safe to skip and retry on the next cadence.
@@ -6033,12 +6034,7 @@ function flowTradeProgram(args: FlowTradeArgs) {
             const current = yield* repo
               .getFlowTradeState(args.exchange, args.symbol)
               .pipe(Effect.orElseSucceed(() => null));
-            const reason =
-              "reason" in err && typeof err.reason === "string"
-                ? err.reason
-                : err instanceof Error
-                  ? err.message
-                  : String(err);
+            const reason = err.reason;
             yield* Console.error(
               `flow-trade iteration skipped (network/IO error): ${reason}`,
             );

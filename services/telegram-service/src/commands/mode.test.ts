@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { Bot } from "grammy";
 import { registerModeCommand } from "./mode";
 import { ApiClientError } from "../api/client";
 
@@ -65,7 +64,7 @@ describe("Mode command", () => {
       },
     };
 
-    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    registerModeCommand(bot, api);
     const ctx = createContext("/mode confirm");
     await runCommand(bot, "mode", ctx);
 
@@ -94,7 +93,7 @@ describe("Mode command", () => {
       },
     };
 
-    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    registerModeCommand(bot, api);
     const ctx = createContext("/mode confirm");
     await runCommand(bot, "mode", ctx);
 
@@ -128,7 +127,7 @@ describe("Mode command", () => {
       },
     };
 
-    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    registerModeCommand(bot, api);
     const ctx = createContext("/mode live");
     await runCommand(bot, "mode", ctx);
 
@@ -162,7 +161,7 @@ describe("Mode command", () => {
       },
     };
 
-    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    registerModeCommand(bot, api);
     const ctx = createContext("/mode live");
     await runCommand(bot, "mode", ctx);
 
@@ -185,6 +184,7 @@ describe("Mode command", () => {
       async setTradingMode() {
         return {
           success: false,
+          mode: "dry",
           error:
             "scalping live paper proof not met: closed_trades_below_live_trial_minimum",
         };
@@ -197,7 +197,7 @@ describe("Mode command", () => {
       },
     };
 
-    registerModeCommand(bot as unknown as Bot, api as unknown as never);
+    registerModeCommand(bot, api);
     const ctx = createContext("/mode live");
     await runCommand(bot, "mode", ctx);
 

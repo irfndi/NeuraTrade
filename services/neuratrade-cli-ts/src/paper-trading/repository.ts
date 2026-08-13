@@ -611,7 +611,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         // watchlist table created by an older schema, so check pragma and
         // ALTER in any contract column that is still missing. Guarded per
         // column and re-runnable: only missing columns are touched.
-        const watchlistContractColumns: Record<string, string> = {
+        const watchlistContractColumns = {
           target_ratio: "REAL NOT NULL DEFAULT 1",
           chop_gate_adx: "REAL NOT NULL DEFAULT 0",
           oos_trades: "INTEGER NOT NULL DEFAULT 0",
@@ -619,7 +619,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           edge_per_trade_pct: "REAL NOT NULL DEFAULT 0",
           volatility: "REAL NOT NULL DEFAULT 0",
           allocated_weight: "REAL NOT NULL DEFAULT 0",
-        };
+        } satisfies Record<string, string>;
         const existingWatchlistColumns = new Set(
           (
             this.db.query("PRAGMA table_info(watchlist)").all() as Array<{
@@ -627,9 +627,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             }>
           ).map((c) => c.name),
         );
-        for (const [column, type] of Object.entries(
-          watchlistContractColumns,
-        )) {
+        for (const [column, type] of Object.entries(watchlistContractColumns)) {
           if (!existingWatchlistColumns.has(column)) {
             addColumn(`ALTER TABLE watchlist ADD COLUMN ${column} ${type}`);
           }
@@ -1978,7 +1976,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     return Effect.try({
       try: () => {
         this.db
-          .query("DELETE FROM flow_trade_state WHERE exchange = ? AND symbol = ?")
+          .query(
+            "DELETE FROM flow_trade_state WHERE exchange = ? AND symbol = ?",
+          )
           .run(exchange, symbol);
       },
       catch: (err) =>

@@ -81,7 +81,9 @@ function parseArgs(argv: readonly string[]): Args {
 const args = parseArgs(process.argv.slice(2));
 const home =
   process.env.NEURATRADE_HOME ?? join(process.env.HOME!, ".neuratrade");
-const db = new Database(join(home, "data", "neuratrade.db"), { readonly: true });
+const db = new Database(join(home, "data", "neuratrade.db"), {
+  readonly: true,
+});
 
 const candleRows = db
   .query(
@@ -103,7 +105,9 @@ const candleRows = db
 db.close();
 
 if (candleRows.length === 0) {
-  console.error(`No candles for ${args.exchange}:${args.symbol}:${args.timeframe}`);
+  console.error(
+    `No candles for ${args.exchange}:${args.symbol}:${args.timeframe}`,
+  );
   process.exit(1);
 }
 
@@ -117,7 +121,9 @@ const candles: Candle[] = candleRows.map((r) => ({
   close: r.close_price,
   volume: r.volume,
   timestamp: new Date(
-    r.timestamp.endsWith("Z") ? r.timestamp : r.timestamp.replace(" ", "T") + "Z",
+    r.timestamp.endsWith("Z")
+      ? r.timestamp
+      : r.timestamp.replace(" ", "T") + "Z",
   ),
 }));
 
@@ -142,19 +148,41 @@ interface WindowResult {
 const windows: WindowResult[] = [];
 if (args.fullStart || args.fullEnd) {
   const w = inRange(args.fullStart, args.fullEnd);
-  if (w.length) windows.push({ name: "full", candles: w, days: daysBetween(w[0], w[w.length - 1]) });
+  if (w.length)
+    windows.push({
+      name: "full",
+      candles: w,
+      days: daysBetween(w[0], w[w.length - 1]),
+    });
 }
 const rec = inRange(args.recentStart, args.recentEnd);
-if (rec.length) windows.push({ name: "recent", candles: rec, days: daysBetween(rec[0], rec[rec.length - 1]) });
+if (rec.length)
+  windows.push({
+    name: "recent",
+    candles: rec,
+    days: daysBetween(rec[0], rec[rec.length - 1]),
+  });
 // OOS split
 const oosTrain = inRange(args.oosTrainEnd ? "" : "", args.oosTrainEnd);
 const oosTest = inRange(args.oosTestStart, args.oosEnd);
 if (oosTrain.length && oosTest.length) {
-  windows.push({ name: "oos-train", candles: oosTrain, days: daysBetween(oosTrain[0], oosTrain[oosTrain.length - 1]) });
-  windows.push({ name: "oos-test", candles: oosTest, days: daysBetween(oosTest[0], oosTest[oosTest.length - 1]) });
+  windows.push({
+    name: "oos-train",
+    candles: oosTrain,
+    days: daysBetween(oosTrain[0], oosTrain[oosTrain.length - 1]),
+  });
+  windows.push({
+    name: "oos-test",
+    candles: oosTest,
+    days: daysBetween(oosTest[0], oosTest[oosTest.length - 1]),
+  });
 }
 if (windows.length === 0) {
-  windows.push({ name: "full", candles, days: daysBetween(candles[0], candles[candles.length - 1]) });
+  windows.push({
+    name: "full",
+    candles,
+    days: daysBetween(candles[0], candles[candles.length - 1]),
+  });
 }
 
 interface Row {
@@ -163,7 +191,8 @@ interface Row {
   pause: number;
   gate: number;
   target: number;
-  [k: string]: unknown;
+  /** Window-name keys (full/recent/oos-*) map to per-window metrics. */
+  [windowName: string]: number | Metric;
 }
 
 interface Metric {
@@ -193,7 +222,11 @@ function runMetrics(cs: Candle[], opts: GridOptions): Metric {
 const rows: Row[] = [];
 let tested = 0;
 const total =
-  args.steps.length * args.grids.length * args.pauses.length * args.gates.length * args.targets.length;
+  args.steps.length *
+  args.grids.length *
+  args.pauses.length *
+  args.gates.length *
+  args.targets.length;
 
 for (const step of args.steps) {
   for (const grids of args.grids) {
@@ -231,7 +264,9 @@ console.log(
   `${args.symbol} ${args.timeframe}: ${windows.map((w) => `${w.name}=${w.candles.length}cd/${w.days.toFixed(0)}d`).join(" ")}`,
 );
 // Print a compact table: for each window, show fills/d, win%, PF, ret%, exp/fill.
-const headerWin = windows.map(() => "fills/d win%  PF   ret%   exp/fill").join("  ");
+const headerWin = windows
+  .map(() => "fills/d win%  PF   ret%   exp/fill")
+  .join("  ");
 console.log(
   `${"step".padStart(5)} ${"grids".padStart(5)} ${"pause".padStart(5)} ${"gate".padStart(4)} ${"tgt".padStart(4)} ${headerWin}`,
 );
@@ -248,5 +283,20 @@ for (const r of rows) {
 }
 
 mkdirSync(dirname(args.out), { recursive: true });
-await Bun.write(args.out, JSON.stringify({ args, windows: windows.map((w) => ({ name: w.name, candles: w.candles.length, days: w.days })), rows }, null, 2));
+await Bun.write(
+  args.out,
+  JSON.stringify(
+    {
+      args,
+      windows: windows.map((w) => ({
+        name: w.name,
+        candles: w.candles.length,
+        days: w.days,
+      })),
+      rows,
+    },
+    null,
+    2,
+  ),
+);
 console.log(`\nWrote ${args.out}`);

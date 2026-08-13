@@ -11,6 +11,10 @@ import { ProcessManager, ProcessError } from "./process-manager.ts";
 import { HealthCheck } from "./health-check.ts";
 import { GatewayStateLive } from "./gateway-state.ts";
 import {
+  decodeGatewayState,
+  type GatewayState,
+} from "../schemas/gateway-state.ts";
+import {
   GatewayOrchestrator,
   GatewayOrchestratorLive,
 } from "./gateway-orchestrator.ts";
@@ -32,9 +36,10 @@ function rmDir(dir: string): void {
   }
 }
 
-function readState(home: string): Record<string, unknown> {
+function readState(home: string): GatewayState {
   const p = nodePath.join(home, "pids", "gateway-state.json");
-  return JSON.parse(fs.readFileSync(p, "utf-8")) as Record<string, unknown>;
+  const raw: unknown = JSON.parse(fs.readFileSync(p, "utf-8"));
+  return Effect.runSync(decodeGatewayState(raw));
 }
 
 function makeConfig(overrides?: Partial<ResolvedConfig>): ResolvedConfig {

@@ -1,9 +1,19 @@
-import type { Bot } from "grammy";
 import { logger } from "../utils/logger";
 
 export interface TelegramMenuCommand {
   command: string;
   description: string;
+}
+
+/**
+ * The minimal bot surface this registration helper depends on. Narrowing to
+ * this interface (instead of the full grammY `Bot`) lets callers and tests
+ * provide only the API operation that is actually used.
+ */
+export interface CommandMenuBot {
+  api: {
+    setMyCommands(commands: readonly TelegramMenuCommand[]): Promise<unknown>;
+  };
 }
 
 export const TELEGRAM_COMMAND_MENU: readonly TelegramMenuCommand[] = [
@@ -55,7 +65,9 @@ export const TELEGRAM_COMMAND_MENU: readonly TelegramMenuCommand[] = [
   { command: "resume", description: "Enable notifications" },
 ] as const;
 
-export async function registerTelegramCommandMenu(bot: Bot): Promise<void> {
+export async function registerTelegramCommandMenu(
+  bot: CommandMenuBot,
+): Promise<void> {
   try {
     await bot.api.setMyCommands([...TELEGRAM_COMMAND_MENU]);
     logger.info("Telegram command menu registered", {

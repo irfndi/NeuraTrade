@@ -26,15 +26,26 @@ import { RateLimiterLive } from "./rate-limiter.ts";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function startMock(handler: (req: Request) => Response | Promise<Response>): {
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
+/** A running ephemeral HTTP mock server. */
+interface MockServer {
   stop: () => void;
   url: string;
-} {
+}
+
+function startMock(
+  handler: (req: Request) => Response | Promise<Response>,
+): MockServer {
   const server = Bun.serve({ port: 0, fetch: handler });
   return { stop: () => server.stop(), url: `http://localhost:${server.port}` };
 }
 
-function json(body: unknown, status = 200): Response {
+function json(body: JsonValue, status = 200): Response {
   return Response.json(body, { status });
 }
 
@@ -51,15 +62,27 @@ function provideClient(baseUrl: string) {
   );
 }
 
-async function runOk<A>(program: Effect.Effect<A, unknown, BitgetClient>, baseUrl: string): Promise<A> {
+async function runOk<A>(
+  program: Effect.Effect<A, unknown, BitgetClient>,
+  baseUrl: string,
+): Promise<A> {
   return Effect.runPromise(
-    program.pipe(Effect.provide(provideClient(baseUrl))) as Effect.Effect<A, never>,
+    program.pipe(Effect.provide(provideClient(baseUrl))) as Effect.Effect<
+      A,
+      never
+    >,
   );
 }
 
-async function runFail<A>(program: Effect.Effect<A, unknown, BitgetClient>, baseUrl: string): Promise<unknown> {
+async function runFail<A>(
+  program: Effect.Effect<A, unknown, BitgetClient>,
+  baseUrl: string,
+): Promise<unknown> {
   const exit = await Effect.runPromiseExit(
-    program.pipe(Effect.provide(provideClient(baseUrl))) as Effect.Effect<A, unknown>,
+    program.pipe(Effect.provide(provideClient(baseUrl))) as Effect.Effect<
+      A,
+      unknown
+    >,
   );
   if (exit._tag === "Failure") {
     return Cause.squash(exit.cause);
@@ -109,7 +132,12 @@ describe("authHeaders", () => {
 
 describe("isBitgetUnsupportedInstrumentError", () => {
   const apiError = (code: string, body: string) =>
-    new BitgetApiError({ status: 400, body, endpoint: "/single-position", code });
+    new BitgetApiError({
+      status: 400,
+      body,
+      endpoint: "/single-position",
+      code,
+    });
 
   it.each([
     // bare generic demo-proxy message -> unsupported instrument
@@ -241,7 +269,10 @@ describe("strict response parsing", () => {
     try {
       const program = Effect.gen(function* () {
         const client = yield* BitgetClient;
-        return yield* client.getFuturesPositions("BTC/USDT:USDT", "USDT-FUTURES");
+        return yield* client.getFuturesPositions(
+          "BTC/USDT:USDT",
+          "USDT-FUTURES",
+        );
       });
       const err = await runFail(program, mock.url);
       expect(err).toBeInstanceOf(BitgetApiError);
@@ -296,7 +327,9 @@ describe("strict response parsing", () => {
   });
 
   it("fails a place-order ack that carries neither orderId nor clientOid", async () => {
-    const mock = startMock(() => json({ code: "00000", data: { symbol: "BTCUSDT" } }));
+    const mock = startMock(() =>
+      json({ code: "00000", data: { symbol: "BTCUSDT" } }),
+    );
     try {
       const program = Effect.gen(function* () {
         const client = yield* BitgetClient;

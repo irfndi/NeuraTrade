@@ -186,9 +186,153 @@ export interface QuestProgress {
   readonly time_remaining?: string;
 }
 
+export interface QuestRuntimeState {
+  readonly cadence_mode?: string;
+  readonly risk_lock_active?: boolean;
+  readonly risk_lock_source?: string;
+  readonly execution_stage?: string;
+  readonly execution_last_progress_at?: string;
+  readonly execution_in_progress_age_seconds?: number;
+}
+
+export interface AiRuntimeState {
+  readonly status?: string;
+  readonly error_rate?: number;
+  readonly circuit_active?: boolean;
+  readonly provider_chain_usable?: number;
+  readonly provider_chain_configured?: number;
+  readonly last_success_provider?: string;
+}
+
+export interface TopCandidateRejection {
+  readonly symbol?: string;
+  readonly reason?: string;
+}
+
+export interface ChatRuntimeState {
+  readonly ai_runtime?: AiRuntimeState;
+  readonly state_drift_active?: boolean;
+  readonly state_drift_positions?: number;
+  readonly entry_gate_reason_current?: string;
+  readonly entry_gate_type?: string;
+  readonly risk_lock_source?: string;
+  readonly entry_attempt_block_reason?: string;
+  readonly next_unblock_condition_current?: string;
+  readonly account_tier?: string;
+  readonly effective_min_confidence?: number;
+  readonly effective_max_capital_pct?: number;
+  readonly effective_max_concurrent_positions?: number;
+  readonly managed_open_positions_effective?: number;
+  readonly candidate_universe_count?: number;
+  readonly candidate_ranked_count?: number;
+  readonly candidate_viable_count?: number;
+  readonly top_candidate_rejections?: readonly TopCandidateRejection[];
+  readonly progress_blocked?: boolean;
+  readonly progress_block_reason?: string;
+  readonly rollout_stage_current?: string;
+  readonly rollout_status_current?: string;
+  readonly rollout_gate_reason_current?: string;
+  readonly entry_attempts_1h?: number;
+  readonly last_entry_attempt_at?: string;
+  readonly minutes_since_entry_attempt?: number;
+  readonly drift_deadlock_cycles?: number;
+  readonly drift_signature?: string;
+  readonly execution_stage?: string;
+  readonly execution_last_progress_at?: string;
+  readonly execution_in_progress_age_seconds?: number;
+  readonly recovery_mode?: string;
+  readonly recovery_clean_cycles_current?: number;
+  readonly recovery_clean_cycles_required?: number;
+  readonly recovery_cycles_to_entry?: number;
+  readonly recovery_entry_allowed?: boolean;
+  readonly recovery_gate_eval_at?: string;
+  readonly last_drift_repair_at?: string;
+  readonly last_clean_reconcile_at?: string;
+  readonly last_startup_reconcile?: string;
+  readonly last_spot_unwind?: string;
+  readonly provider_chain_usable?: number;
+  readonly provider_chain_configured?: number;
+}
+
+export interface HeartbeatState {
+  readonly mode?: string;
+}
+
 export interface QuestsResponse {
   readonly quests: readonly QuestProgress[];
   readonly updated_at?: string;
+}
+
+/** Runtime state of the autonomous trading loop, nested under quest diagnostics. */
+export interface QuestRuntimeState {
+  readonly cadence_mode?: string;
+  readonly risk_lock_active?: boolean;
+  readonly risk_lock_source?: string;
+  readonly execution_stage?: string;
+  readonly execution_last_progress_at?: string;
+  readonly execution_in_progress_age_seconds?: number;
+}
+
+/** AI runtime state nested under chat runtime state. */
+export interface AiRuntimeState {
+  readonly status?: string;
+  readonly error_rate?: number;
+  readonly circuit_active?: boolean;
+  readonly provider_chain_usable?: number;
+  readonly provider_chain_configured?: number;
+  readonly last_success_provider?: string;
+}
+
+/** A single candidate rejection recorded in the chat runtime state. */
+export interface TopCandidateRejection {
+  readonly symbol?: string;
+  readonly reason?: string;
+}
+
+/** Chat-scoped runtime state nested under quest diagnostics. */
+export interface ChatRuntimeState {
+  readonly state_drift_active?: boolean;
+  readonly state_drift_positions?: number;
+  readonly entry_gate_reason_current?: string;
+  readonly entry_gate_type?: string;
+  readonly risk_lock_source?: string;
+  readonly entry_attempt_block_reason?: string;
+  readonly next_unblock_condition_current?: string;
+  readonly account_tier?: string;
+  readonly effective_min_confidence?: number;
+  readonly effective_max_capital_pct?: number;
+  readonly effective_max_concurrent_positions?: number;
+  readonly managed_open_positions_effective?: number;
+  readonly candidate_universe_count?: number;
+  readonly candidate_ranked_count?: number;
+  readonly candidate_viable_count?: number;
+  readonly top_candidate_rejections?: readonly TopCandidateRejection[];
+  readonly progress_blocked?: boolean;
+  readonly progress_block_reason?: string;
+  readonly rollout_stage_current?: string;
+  readonly rollout_status_current?: string;
+  readonly rollout_gate_reason_current?: string;
+  readonly entry_attempts_1h?: number;
+  readonly last_entry_attempt_at?: string;
+  readonly minutes_since_entry_attempt?: number;
+  readonly drift_deadlock_cycles?: number;
+  readonly drift_signature?: string;
+  readonly recovery_mode?: string;
+  readonly recovery_clean_cycles_current?: number;
+  readonly recovery_clean_cycles_required?: number;
+  readonly recovery_cycles_to_entry?: number;
+  readonly recovery_entry_allowed?: boolean;
+  readonly recovery_gate_eval_at?: string;
+  readonly last_drift_repair_at?: string;
+  readonly last_clean_reconcile_at?: string;
+  readonly last_startup_reconcile?: string;
+  readonly last_spot_unwind?: string;
+  readonly ai_runtime?: AiRuntimeState;
+}
+
+/** Heartbeat state nested under quest diagnostics. */
+export interface HeartbeatState {
+  readonly mode?: string;
 }
 
 export interface QuestDiagnosticsResponse {
@@ -225,9 +369,7 @@ export interface QuestDiagnosticsResponse {
   readonly candidate_universe_count?: number;
   readonly candidate_ranked_count?: number;
   readonly candidate_viable_count?: number;
-  readonly top_candidate_rejections?: readonly Readonly<
-    Record<string, unknown>
-  >[];
+  readonly top_candidate_rejections?: readonly TopCandidateRejection[];
   readonly progress_blocked?: boolean;
   readonly progress_block_reason?: string;
   readonly rollout_stage_current?: "shadow" | "paper" | "live" | string;
@@ -252,11 +394,9 @@ export interface QuestDiagnosticsResponse {
   readonly last_clean_reconcile_at?: string;
   readonly provider_chain_configured?: number;
   readonly provider_chain_usable?: number;
-  readonly quest_runtime?: Readonly<Record<string, unknown>>;
-  readonly chat_runtime?: Readonly<Record<string, unknown>> & {
-    readonly ai_runtime?: Readonly<Record<string, unknown>>;
-  };
-  readonly heartbeat?: Readonly<Record<string, unknown>>;
+  readonly quest_runtime?: QuestRuntimeState;
+  readonly chat_runtime?: ChatRuntimeState;
+  readonly heartbeat?: HeartbeatState;
   readonly timestamp?: string;
 }
 
@@ -439,11 +579,24 @@ export const API_ENDPOINTS = {
     `/api/v1/alerts/${encodeURIComponent(alertId)}`,
 } as const;
 
+/**
+ * A single value held in an alert condition. Alerts carry arbitrary
+ * JSON-like conditions, so the value is a recursive JSON-compatible type
+ * rather than an untyped escape hatch.
+ */
+export type AlertConditionValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly AlertConditionValue[]
+  | { readonly [key: string]: AlertConditionValue };
+
 export interface UserAlert {
   readonly id: string;
   readonly user_id: string;
   readonly alert_type: string;
-  readonly conditions: Record<string, unknown>;
+  readonly conditions: Record<string, AlertConditionValue>;
   readonly is_active: boolean;
   readonly created_at: string;
 }
@@ -455,7 +608,7 @@ export interface GetAlertsResponse {
 
 export interface CreateAlertRequest {
   readonly alert_type: string;
-  readonly conditions: Record<string, unknown>;
+  readonly conditions: Record<string, AlertConditionValue>;
 }
 
 export interface CreateAlertResponse {

@@ -699,9 +699,7 @@ describe("MarketDataRepositorySQLite", () => {
     );
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toContain(
-      "same exchange, symbol, and timeframe",
-    );
+    expect(result.reason).toContain("same exchange, symbol, and timeframe");
 
     // Nothing persisted for the mixed batch.
     const count = (

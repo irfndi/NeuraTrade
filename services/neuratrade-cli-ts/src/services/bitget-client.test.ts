@@ -15,15 +15,26 @@ import { RateLimiterLive } from "./rate-limiter.ts";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function startMock(handler: (req: Request) => Response | Promise<Response>): {
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
+/** A running ephemeral HTTP mock server. */
+interface MockServer {
   stop: () => void;
   url: string;
-} {
+}
+
+function startMock(
+  handler: (req: Request) => Response | Promise<Response>,
+): MockServer {
   const server = Bun.serve({ port: 0, fetch: handler });
   return { stop: () => server.stop(), url: `http://localhost:${server.port}` };
 }
 
-function json(body: unknown, status = 200): Response {
+function json(body: JsonValue, status = 200): Response {
   return Response.json(body, { status });
 }
 

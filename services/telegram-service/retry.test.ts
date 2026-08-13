@@ -1,9 +1,13 @@
 import { test, expect, describe, mock } from "bun:test";
 import { withRetry, RetryResult, DEFAULT_RETRY_CONFIG } from "./retry";
-import { TelegramErrorCode, TelegramErrorInfo } from "./telegram-errors";
+import {
+  TelegramErrorCode,
+  ClassifiableError,
+  TelegramErrorInfo,
+} from "./telegram-errors";
 
 // Mock error classifier for testing
-const mockErrorClassifier = (error: unknown): TelegramErrorInfo => {
+const mockErrorClassifier = (error: ClassifiableError): TelegramErrorInfo => {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
   if (errorMessage.includes("RATE_LIMITED")) {

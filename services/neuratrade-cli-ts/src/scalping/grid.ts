@@ -320,8 +320,7 @@ export function runGridBacktest(
       // per the option contract); winning target exits and liquidations must
       // not suppress subsequent entries, or the funnel evidence would
       // conflate loss-pauses with a genuine edge.
-      paused =
-        isLiquidation || net >= 0 ? 0 : options.gridPauseAfterLossBars;
+      paused = isLiquidation || net >= 0 ? 0 : options.gridPauseAfterLossBars;
     };
 
     const targetRatio = options.targetRatio ?? 1;
@@ -493,7 +492,10 @@ export function runGridWalkForward(
     // Cap a single window's compounding contribution to ±100% so an all-in
     // sizing artifact in one outlier window cannot blow the aggregate return
     // up to non-physical values (observed 9e17%) that corrupt ranking.
-    const boundedWindowReturn = Math.max(-100, Math.min(100, testResult.totalReturnPct));
+    const boundedWindowReturn = Math.max(
+      -100,
+      Math.min(100, testResult.totalReturnPct),
+    );
     runningCapital *= 1 + boundedWindowReturn / 100;
     aggregateMaxDrawdown = Math.max(
       aggregateMaxDrawdown,
@@ -531,8 +533,7 @@ export function runGridWalkForward(
       testReturnPct: testResult.totalReturnPct,
       testMaxDrawdownPct: testResult.maxDrawdownPct,
       testTrades: testResult.totalTrades,
-      avgWinPct:
-        windowWins > 0 ? (windowWinPct / windowWins) * 100 : undefined,
+      avgWinPct: windowWins > 0 ? (windowWinPct / windowWins) * 100 : undefined,
       avgLossPct:
         windowLosses > 0 ? (windowLossPct / windowLosses) * 100 : undefined,
     });

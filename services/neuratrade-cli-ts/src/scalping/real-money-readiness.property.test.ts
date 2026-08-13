@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as fc from "fast-check";
+import * as S from "effect/Schema";
 import {
   DEFAULT_READINESS_THRESHOLDS,
   evaluateRealMoneyReadiness,
@@ -284,7 +285,7 @@ describe("real-money readiness fingerprint properties", () => {
 
   it("rejects any threshold override that weakens or malforms a default", () => {
     const numericKeys = Object.entries(DEFAULT_READINESS_THRESHOLDS)
-      .filter(([, value]) => typeof value === "number")
+      .filter(([, value]) => S.is(S.Number)(value))
       .map(([key]) => key) as Array<keyof ReadinessThresholds>;
     fc.assert(
       fc.property(

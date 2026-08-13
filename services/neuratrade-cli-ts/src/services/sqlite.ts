@@ -12,6 +12,16 @@ import { Path } from "./path.ts";
 import { RuntimeConfig } from "./config.ts";
 
 // ---------------------------------------------------------------------------
+// Result contract
+// ---------------------------------------------------------------------------
+
+/** Result of a single `INSERT`/`UPDATE`/`DELETE` statement execution. */
+export interface SqlExecResult {
+  readonly changes: number;
+  readonly lastInsertRowId: number;
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -149,16 +159,13 @@ function runSql(
   db: Database,
   sql: string,
   params: ReadonlyArray<SQLQueryBindings>,
-): { readonly changes: number; readonly lastInsertRowId: number } {
+): SqlExecResult {
   const result = (
     db.run as (sql: string, ...bindings: Array<SQLQueryBindings>) => Changes
   )(sql, ...(params as Array<SQLQueryBindings>));
   return {
     changes: result.changes,
-    lastInsertRowId:
-      typeof result.lastInsertRowid === "bigint"
-        ? Number(result.lastInsertRowid)
-        : result.lastInsertRowid,
+    lastInsertRowId: Number(result.lastInsertRowid),
   };
 }
 

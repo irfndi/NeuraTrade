@@ -142,7 +142,9 @@ ON CONFLICT(date) DO UPDATE SET
           return;
         }
         const pnlPct = (realizedPnl / startOfDayCapital) * 100;
-        this.db.query(this.accumulateSQL).run(todayKey(), pnlPct, this.maxDailyLossPct);
+        this.db
+          .query(this.accumulateSQL)
+          .run(todayKey(), pnlPct, this.maxDailyLossPct);
       },
       catch: (err) =>
         new CircuitBreakerError(

@@ -1,10 +1,28 @@
 type LogLevel = "info" | "warn" | "error";
 
+/**
+ * A single value attached to a log entry's context. Log context is rendered
+ * through JSON serialization, so values are JSON-compatible primitives plus
+ * the errors that callers commonly attach for diagnostics.
+ */
+export type LogContextValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | Error
+  | readonly LogContextValue[]
+  | { readonly [key: string]: LogContextValue };
+
+/** Structured context attached to a log entry. */
+export type LogContext = Record<string, LogContextValue>;
+
 interface LogEntry {
   timestamp: string;
   level: LogLevel;
   message: string;
-  context?: Record<string, unknown>;
+  context?: LogContext;
   error?: {
     name: string;
     message: string;
@@ -37,7 +55,7 @@ function log(
   level: LogLevel,
   message: string,
   error?: Error,
-  context?: Record<string, unknown>,
+  context?: LogContext,
 ): void {
   const entry: LogEntry = {
     timestamp: new Date().toISOString(),
@@ -69,43 +87,35 @@ function log(
 }
 
 export interface Logger {
-  info(message: string, context?: Record<string, unknown>): void;
-  warn(message: string, context?: Record<string, unknown>): void;
-  error(
-    message: string,
-    error?: Error,
-    context?: Record<string, unknown>,
-  ): void;
+  info(message: string, context?: LogContext): void;
+  warn(message: string, context?: LogContext): void;
+  error(message: string, error?: Error, context?: LogContext): void;
 }
 
 export const logger: Logger = {
-  info(message: string, context?: Record<string, unknown>): void {
+  info(message: string, context?: LogContext): void {
     log("info", message, undefined, context);
   },
-  warn(message: string, context?: Record<string, unknown>): void {
+  warn(message: string, context?: LogContext): void {
     log("warn", message, undefined, context);
   },
-  error(
-    message: string,
-    error?: Error,
-    context?: Record<string, unknown>,
-  ): void {
+  error(message: string, error?: Error, context?: LogContext): void {
     log("error", message, error, context);
   },
 };
 
-export function createLogger(context: Record<string, unknown> = {}): Logger {
+export function createLogger(context: LogContext = {}): Logger {
   return {
-    info(message: string, additionalContext?: Record<string, unknown>): void {
+    info(message: string, additionalContext?: LogContext): void {
       log("info", message, undefined, { ...context, ...additionalContext });
     },
-    warn(message: string, additionalContext?: Record<string, unknown>): void {
+    warn(message: string, additionalContext?: LogContext): void {
       log("warn", message, undefined, { ...context, ...additionalContext });
     },
     error(
       message: string,
       error?: Error,
-      additionalContext?: Record<string, unknown>,
+      additionalContext?: LogContext,
     ): void {
       log("error", message, error, { ...context, ...additionalContext });
     },

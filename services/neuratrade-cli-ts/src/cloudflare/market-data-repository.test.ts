@@ -55,10 +55,7 @@ describe("CloudflareMarketDataRepositoryLive", () => {
       // (effect's Context tag typing is stricter than the runtime contract).
       Effect.provide(
         effect as Effect.Effect<A, E, never>,
-        Layer.provide(
-          CloudflareMarketDataRepositoryLive(seeds),
-          gateway,
-        ),
+        Layer.provide(CloudflareMarketDataRepositoryLive(seeds), gateway),
       ) as Effect.Effect<A, E, never>,
     );
 
@@ -195,11 +192,7 @@ describe("CloudflareMarketDataRepositoryLive", () => {
     const counts = await runWith(
       Effect.gen(function* () {
         const repo = yield* MarketDataRepository;
-        return yield* repo.listSymbolsByCandleCount(
-          "bitget-futures",
-          "15m",
-          2,
-        );
+        return yield* repo.listSymbolsByCandleCount("bitget-futures", "15m", 2);
       }),
       Layer.succeed(MarketDataGateway, {
         ...baseGateway,

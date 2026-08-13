@@ -21,10 +21,21 @@ const rows = db
      WHERE e.name='bitget-futures' AND tp.symbol='BTC/USDT:USDT' AND o.timeframe='15m'
      ORDER BY o.timestamp ASC`,
   )
-  .all() as Array<{ open: number; high: number; low: number; close: number; volume: number; ts: string }>;
+  .all() as Array<{
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ts: string;
+}>;
 db.close();
 const candles: CandleLike[] = rows.map((r) => ({
-  open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume,
+  open: r.open,
+  high: r.high,
+  low: r.low,
+  close: r.close,
+  volume: r.volume,
   timestamp: new Date(Date.parse(r.ts)),
 }));
 
@@ -44,8 +55,7 @@ const FAMILIES: [number, number][] = [
   [3, 0.5],
 ];
 const familyId = Number.parseInt(process.argv[2] ?? "0", 10);
-const [leverage, positionFraction] =
-  FAMILIES[familyId] ?? FAMILIES[0];
+const [leverage, positionFraction] = FAMILIES[familyId] ?? FAMILIES[0];
 
 // Structural grid to sweep for this family.
 const gridStepPct = [0.25, 0.5, 0.75, 1.0];
@@ -55,9 +65,17 @@ const targetRatio = [1, 2, 3, 4];
 const chopGateAdx = [0, 12, 20, 28];
 
 const results: Array<{
-  gridStepPct: number; gridMaxGrids: number; gridPauseAfterLossBars: number;
-  targetRatio: number; chopGateAdx: number; leverage: number; positionFraction: number;
-  totalReturnPct: number; maxDrawdownPct: number; totalTrades: number; profitFactor: number;
+  gridStepPct: number;
+  gridMaxGrids: number;
+  gridPauseAfterLossBars: number;
+  targetRatio: number;
+  chopGateAdx: number;
+  leverage: number;
+  positionFraction: number;
+  totalReturnPct: number;
+  maxDrawdownPct: number;
+  totalTrades: number;
+  profitFactor: number;
   score: number;
 }> = [];
 
@@ -87,13 +105,22 @@ for (const gs of gridStepPct)
             r.totalTrades < MIN_TRADES ||
             r.totalReturnPct <= MIN_RETURN ||
             r.profitFactor < MIN_PF
-          ) continue;
+          )
+            continue;
           results.push({
-            gridStepPct: gs, gridMaxGrids: gm, gridPauseAfterLossBars: gp,
-            targetRatio: tr, chopGateAdx: cg, leverage, positionFraction,
-            totalReturnPct: r.totalReturnPct, maxDrawdownPct: r.maxDrawdownPct,
-            totalTrades: r.totalTrades, profitFactor: r.profitFactor,
-            score: r.totalReturnPct - 1.0 * r.maxDrawdownPct + 0.02 * r.totalTrades,
+            gridStepPct: gs,
+            gridMaxGrids: gm,
+            gridPauseAfterLossBars: gp,
+            targetRatio: tr,
+            chopGateAdx: cg,
+            leverage,
+            positionFraction,
+            totalReturnPct: r.totalReturnPct,
+            maxDrawdownPct: r.maxDrawdownPct,
+            totalTrades: r.totalTrades,
+            profitFactor: r.profitFactor,
+            score:
+              r.totalReturnPct - 1.0 * r.maxDrawdownPct + 0.02 * r.totalTrades,
           });
         }
 

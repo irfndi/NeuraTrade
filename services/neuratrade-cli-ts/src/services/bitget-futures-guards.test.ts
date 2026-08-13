@@ -322,6 +322,8 @@ describe("BitgetFuturesGuards", () => {
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.reason).toContain("not a multiple of the quantity step");
+    expect(result.error.reason).toContain(
+      "not a multiple of the quantity step",
+    );
   });
 });

@@ -270,13 +270,15 @@ for (const [label, recent, cfg] of recentSets) {
 // the conservative complement to the optimistic "touched = filled" assumption;
 // the live demo (real fills) is the definitive test, this is the key-free bound.
 console.log("\n=== Realistic maker-fill stress (BTC 15m winner) ===");
-function walkWindows(cfg: typeof winner): {
+interface WalkWindowStats {
   wins: number;
   n: number;
   meanRet: number;
   worstDD: number;
   trades: number;
-} {
+}
+
+function walkWindows(cfg: typeof winner): WalkWindowStats {
   let wWins = 0;
   let wN = 0;
   let wRet = 0;

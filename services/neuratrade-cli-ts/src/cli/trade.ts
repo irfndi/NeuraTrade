@@ -131,7 +131,10 @@ function makeTradeDbLayer(home?: string) {
 function makeAdapterLayer(db: Database) {
   const base = Layer.mergeAll(BunServices.layer, MarketDataGatewayLive);
   const repoLayer = MarketDataRepositorySQLiteLive(db);
-  const marketDataLayer = Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
+  const marketDataLayer = Layer.provide(
+    MarketDataGatewayRepositoryLive,
+    repoLayer,
+  );
   const bybitConfig = Layer.provide(BybitConfigLive, base);
   const bybitClient = Layer.provide(
     BybitClientLiveConfig,
@@ -232,8 +235,9 @@ const tradeOpenCommand = Command.make(
               marginMode,
               side,
             };
-            const tpslWithTp: SetTradingStopRequest =
-              Option.isSome(tp) ? { ...tpsl, takeProfit: tp.value } : tpsl;
+            const tpslWithTp: SetTradingStopRequest = Option.isSome(tp)
+              ? { ...tpsl, takeProfit: tp.value }
+              : tpsl;
             const tpslWithSl: SetTradingStopRequest = Option.isSome(sl)
               ? { ...tpslWithTp, stopLoss: sl.value }
               : tpslWithTp;
@@ -293,8 +297,9 @@ const tradeTpslCommand = Command.make(
           marginMode: parseMarginMode(args.marginMode),
           side,
         };
-        const tpslWithTp: SetTradingStopRequest =
-          Option.isSome(tp) ? { ...tpsl, takeProfit: tp.value } : tpsl;
+        const tpslWithTp: SetTradingStopRequest = Option.isSome(tp)
+          ? { ...tpsl, takeProfit: tp.value }
+          : tpsl;
         const tpslWithSl: SetTradingStopRequest = Option.isSome(sl)
           ? { ...tpslWithTp, stopLoss: sl.value }
           : tpslWithTp;
@@ -396,7 +401,9 @@ const tradeCloseCommand = Command.make(
       });
     return wrapTrade(body);
   },
-).pipe(Command.withDescription("Close the open futures position (market order)"));
+).pipe(
+  Command.withDescription("Close the open futures position (market order)"),
+);
 
 // ---------------------------------------------------------------------------
 // trade namespace

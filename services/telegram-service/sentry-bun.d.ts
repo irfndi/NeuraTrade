@@ -3,6 +3,7 @@
 
 declare module "@sentry/bun" {
   import type { NodeOptions, NodeClient } from "@sentry/node";
+  import type { LogContextValue } from "./src/utils/logger";
   import type {
     Integration,
     Options,
@@ -32,7 +33,7 @@ declare module "@sentry/bun" {
 
   export function init(options: BunOptions): NodeClient | undefined;
   export function captureException(
-    exception: unknown,
+    exception: Error | unknown,
     captureContext?: Partial<ScopeContext>,
   ): string;
   export function captureMessage(
@@ -42,7 +43,7 @@ declare module "@sentry/bun" {
   export function addBreadcrumb(breadcrumb: Breadcrumb): void;
   export function setUser(user: User | null): void;
   export function setTag(key: string, value: string): void;
-  export function setExtra(key: string, value: unknown): void;
+  export function setExtra(key: string, value: LogContextValue): void;
   export function withScope<T>(callback: (scope: Scope) => T): T;
   export function flush(timeout?: number): Promise<boolean>;
   export function close(timeout?: number): Promise<boolean>;

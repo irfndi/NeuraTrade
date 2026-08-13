@@ -16,7 +16,6 @@ import {
   flowRoundTripCostPct,
   runFlowBacktest,
   defaultFlowBacktestOptions,
-  ATR_STOP_MULT,
   QUARTER_HOUR_MS,
   type FlowBacktestOptions,
   type FlowBacktestReport,

@@ -22,14 +22,27 @@ const rows = db
      WHERE e.name = '${c.exchange}' AND tp.symbol = '${c.symbol}' AND o.timeframe = '${c.timeframe}'
      ORDER BY o.timestamp ASC`,
   )
-  .all() as Array<{ open: number; high: number; low: number; close: number; volume: number; ts: string }>;
+  .all() as Array<{
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ts: string;
+}>;
 db.close();
 
 const candles: CandleLike[] = rows.map((r) => ({
-  open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume,
+  open: r.open,
+  high: r.high,
+  low: r.low,
+  close: r.close,
+  volume: r.volume,
   timestamp: new Date(Date.parse(r.ts)),
 }));
-console.log(`Loaded ${candles.length} ${c.symbol} ${c.timeframe} candles: ${candles[0].timestamp.toISOString()} .. ${candles[candles.length - 1].timestamp.toISOString()}`);
+console.log(
+  `Loaded ${candles.length} ${c.symbol} ${c.timeframe} candles: ${candles[0].timestamp.toISOString()} .. ${candles[candles.length - 1].timestamp.toISOString()}`,
+);
 
 const opts = {
   gridStepPct: c.gridStepPct,
@@ -48,7 +61,7 @@ const opts = {
 function run(label: string, src: readonly CandleLike[]) {
   const r = runGridBacktest(src, opts);
   console.log(
-`[${label}] ret=${r.totalReturnPct.toFixed(2)}% trades=${r.totalTrades} win=${(r.winRate).toFixed(1)}% pf=${r.profitFactor.toFixed(2)} dd=${(r.maxDrawdownPct ?? 0).toFixed(2)}%`,
+    `[${label}] ret=${r.totalReturnPct.toFixed(2)}% trades=${r.totalTrades} win=${r.winRate.toFixed(1)}% pf=${r.profitFactor.toFixed(2)} dd=${(r.maxDrawdownPct ?? 0).toFixed(2)}%`,
   );
 }
 
@@ -59,16 +72,20 @@ run("FULL", candles);
 // Disjoint ~60-day windows (5760 15m bars) across the whole span.
 console.log("\n=== DISJOINT 5760-bar (~60d) WINDOWS ===");
 const WINDOW = 5760;
-let pos = 0, n = 0;
+let pos = 0,
+  n = 0;
 for (let start = 0; start + WINDOW <= candles.length; start += WINDOW) {
   const win = candles.slice(start, start + WINDOW);
   if (win.length < WINDOW) break;
-  const first = win[0].close, last = win[win.length - 1].close;
+  const first = win[0].close,
+    last = win[win.length - 1].close;
   const trend = last >= first ? "UP" : "DOWN";
   const r = runGridBacktest(win, opts);
   const marker = r.totalReturnPct > 0 ? " win" : "";
-  const winLabel = `${(r.winRate).toFixed(1)}`;
-  console.log(`[w${n}:${first.toFixed(0)}->${last.toFixed(0)} (${trend})] ret=${r.totalReturnPct.toFixed(2)}% n=${r.totalTrades} win=${winLabel}% pf=${r.profitFactor.toFixed(2)} dd=${(r.maxDrawdownPct ?? 0).toFixed(2)}%${marker}`);
+  const winLabel = `${r.winRate.toFixed(1)}`;
+  console.log(
+    `[w${n}:${first.toFixed(0)}->${last.toFixed(0)} (${trend})] ret=${r.totalReturnPct.toFixed(2)}% n=${r.totalTrades} win=${winLabel}% pf=${r.profitFactor.toFixed(2)} dd=${(r.maxDrawdownPct ?? 0).toFixed(2)}%${marker}`,
+  );
   if (r.totalReturnPct > 0) pos++;
   n++;
 }

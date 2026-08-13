@@ -581,9 +581,7 @@ function midPriceMoney(orderBook: OrderBook): Money {
   if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
     return money(orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0);
   }
-  return money(orderBook.bids[0].price)
-    .plus(orderBook.asks[0].price)
-    .div(2);
+  return money(orderBook.bids[0].price).plus(orderBook.asks[0].price).div(2);
 }
 
 function toOrderBookMetrics(orderBook: OrderBook) {

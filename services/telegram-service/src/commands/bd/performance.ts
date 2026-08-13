@@ -45,7 +45,7 @@ function formatStrategyRows(
     if (row.drawdown) {
       lines.push(`  Drawdown: ${row.drawdown}`);
     }
-    if (typeof row.trades === "number") {
+    if (row.trades !== undefined) {
       lines.push(`  Trades: ${row.trades}`);
     }
   }

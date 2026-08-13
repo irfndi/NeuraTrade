@@ -454,7 +454,10 @@ function runIteration(
         deps.adapter ?? makeSimulatedExchangeAdapter({ USDT: 10_000 }),
       ),
       Effect.provideService(RiskGuard, deps.riskGuard ?? defaultRiskGuard()),
-      Effect.provideService(KillSwitch, deps.killSwitch ?? new InMemoryKillSwitch()),
+      Effect.provideService(
+        KillSwitch,
+        deps.killSwitch ?? new InMemoryKillSwitch(),
+      ),
       Effect.provideService(
         CircuitBreaker,
         deps.circuitBreaker ?? new InMemoryCircuitBreaker(),
@@ -628,7 +631,9 @@ describe("runPaperTradingIteration", () => {
     const adapter = {
       ...makeSimulatedExchangeAdapter({ USDT: 10_000 }),
       placeOrder: () =>
-        Effect.fail(new ExchangeError("no order should be placed on empty book")),
+        Effect.fail(
+          new ExchangeError("no order should be placed on empty book"),
+        ),
     };
 
     const result = await runIteration(makeOptions(), { gateway, adapter });
@@ -702,7 +707,11 @@ describe("runPaperTradingIteration", () => {
         }),
     };
 
-    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+    const result = await runIteration(makeOptions(), {
+      repo,
+      gateway,
+      adapter,
+    });
 
     expect(result.action).toBe("closed");
     expect(result.position).toBeNull();
@@ -737,7 +746,11 @@ describe("runPaperTradingIteration", () => {
       closePosition: () => Effect.succeed(null),
     };
 
-    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+    const result = await runIteration(makeOptions(), {
+      repo,
+      gateway,
+      adapter,
+    });
 
     expect(result.action).toBe("closed");
     expect(result.note).toContain("take_profit");
@@ -781,7 +794,11 @@ describe("runPaperTradingIteration", () => {
       closePosition: () => Effect.succeed(null),
     };
 
-    const result = await runIteration(makeOptions(), { repo, gateway, adapter });
+    const result = await runIteration(makeOptions(), {
+      repo,
+      gateway,
+      adapter,
+    });
 
     expect(result.action).toBe("closed");
     expect(result.note).toContain("signal");

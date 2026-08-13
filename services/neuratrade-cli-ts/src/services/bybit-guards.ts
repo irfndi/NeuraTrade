@@ -179,14 +179,20 @@ function findBalance(
     (b) => b.asset.toUpperCase() === asset.toUpperCase(),
   );
   const available = match?.available ?? "0";
-  return available === "" ? match?.walletBalance ?? "0" : available;
+  return available === "" ? (match?.walletBalance ?? "0") : available;
 }
 
 function requireContract(
   ctx: BybitGuardContext,
 ): Effect.Effect<BybitGuardContract, BybitGuardError> {
-  const orderSymbol = ctx.order.symbol.replace("/", "").split(":")[0].toUpperCase();
-  const contractSymbol = ctx.contract.symbol.replace("/", "").split(":")[0].toUpperCase();
+  const orderSymbol = ctx.order.symbol
+    .replace("/", "")
+    .split(":")[0]
+    .toUpperCase();
+  const contractSymbol = ctx.contract.symbol
+    .replace("/", "")
+    .split(":")[0]
+    .toUpperCase();
   if (orderSymbol !== contractSymbol) {
     return Effect.fail(
       new BybitGuardError({
@@ -324,9 +330,8 @@ function checkBalance(
         ? order.price
         : referencePrice;
     const notional = multiply(order.size, price);
-    const leverage = order.leverage && order.leverage >= 1
-      ? String(order.leverage)
-      : "1";
+    const leverage =
+      order.leverage && order.leverage >= 1 ? String(order.leverage) : "1";
     // USDT-margined linear margin = notional / leverage (+ fee buffer). The
     // available USDT wallet balance must cover the required margin.
     const margin = divide(notional, leverage);

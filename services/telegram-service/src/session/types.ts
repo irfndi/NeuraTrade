@@ -8,11 +8,14 @@ export type SessionStep =
   | "awaiting_liquidation_confirm"
   | "awaiting_exchange_selection";
 
+/** Primitive value types that session data can hold. */
+export type SessionDataValue = string | number | boolean | undefined;
+
 export interface SessionState {
   readonly chatId: string;
   readonly userId?: string;
   readonly step: SessionStep;
-  readonly data: Record<string, unknown>;
+  readonly data: Record<string, SessionDataValue>;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly expiresAt: Date;
@@ -25,7 +28,7 @@ export interface SessionData {
   amount?: number;
   action?: string;
   confirmationCode?: string;
-  [key: string]: unknown;
+  [key: string]: SessionDataValue;
 }
 
 export const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;

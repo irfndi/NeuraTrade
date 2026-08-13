@@ -999,7 +999,6 @@ function buildRegimeComponent(
     return null;
   }
 
-  const midPrice = ob.midPrice;
   const atrPct = regime.atrPct;
 
   // Skip if volatility is excessive (ATR too large relative to price).
@@ -1196,10 +1195,16 @@ function higherTimeframeTrend(
   return lastFast > lastSlow;
 }
 
+/** Aggregated direction vote with the confidence that drove it. */
+interface DirectionVote {
+  readonly direction: Direction;
+  readonly confidence: number;
+}
+
 function aggregateDirection(
   components: SignalComponent[],
   minConfidenceSpread: number,
-): { direction: Direction; confidence: number } {
+): DirectionVote {
   let buyScore = 0;
   let sellScore = 0;
   let totalWeight = 0;

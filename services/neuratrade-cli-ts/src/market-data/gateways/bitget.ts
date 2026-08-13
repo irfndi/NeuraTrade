@@ -12,6 +12,11 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 type MarketType = "spot" | "futures";
 
+/** Candlestick granularity buckets keyed by timeframe. */
+interface GranularityMap {
+  [key: string]: string;
+}
+
 interface NormalizedBitgetSymbol {
   readonly symbol: string;
   readonly productType: BitgetProductType | undefined;
@@ -382,7 +387,7 @@ export function fetchFundingRates(
 }
 
 function bitgetGranularity(timeframe: string, marketType: MarketType): string {
-  const spotMap: Record<string, string> = {
+  const spotMap: GranularityMap = {
     "1m": "1min",
     "5m": "5min",
     "15m": "15min",
@@ -391,7 +396,7 @@ function bitgetGranularity(timeframe: string, marketType: MarketType): string {
     "4h": "4h",
     "1d": "1day",
   };
-  const futuresMap: Record<string, string> = {
+  const futuresMap: GranularityMap = {
     "1m": "1m",
     "5m": "5m",
     "15m": "15m",

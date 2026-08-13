@@ -21,22 +21,31 @@
  */
 
 import { Effect } from "effect";
-import { Decimal, money, toNumber } from "../utils/money.js";
+import { money, toNumber } from "../utils/money.js";
 import type { ExchangeError } from "../exchange/adapter.js";
 import type {
   FuturesExchangeAdapterService,
   FuturesMarginMode,
   FuturesProductType,
 } from "../exchange/futures-adapter.js";
-import type { MarketDataError, MarketDataGatewayService } from "../market-data/gateway.js";
+import type {
+  MarketDataError,
+  MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import type {
   PaperTradingRepositoryError,
   PaperTradingRepositoryService,
 } from "../paper-trading/repository.js";
 import type { ContractSizeSpec } from "../paper-trading/types.js";
 import { orderableQty } from "../paper-trading/types.js";
-import type { CircuitBreakerError, CircuitBreakerService } from "../risk/circuit-breaker.js";
-import type { KillSwitchError, KillSwitchService } from "../risk/kill-switch.js";
+import type {
+  CircuitBreakerError,
+  CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
+import type {
+  KillSwitchError,
+  KillSwitchService,
+} from "../risk/kill-switch.js";
 import type { RiskError, RiskGuardService } from "../risk/guards.js";
 import {
   ATR_STOP_MULT,
@@ -212,7 +221,11 @@ export function iterateFlowTrade(
     // Kill-switch gate BEFORE any action (grid-engine discipline). A sticky
     // killed flag with a clean (flat) state clears only when the switch has
     // been disengaged; otherwise hold and touch nothing.
-    if (state.killed && state.side === null && !(yield* killSwitch.isEngaged())) {
+    if (
+      state.killed &&
+      state.side === null &&
+      !(yield* killSwitch.isEngaged())
+    ) {
       state = { ...state, killed: false, updatedAt: now };
       yield* repo.saveFlowTradeState(state);
     } else if (state.killed || (yield* killSwitch.isEngaged())) {
@@ -280,7 +293,12 @@ export function iterateFlowTrade(
     const ctxs = computeContexts(candles, oi, funding);
     const lastCtx = ctxs[ctxs.length - 1];
     if (!lastCtx) {
-      return { action: "hold", side: state.side, state, note: "no bar context" };
+      return {
+        action: "hold",
+        side: state.side,
+        state,
+        note: "no bar context",
+      };
     }
     const price = lastCtx.close;
     const signals = computeFlowSignal(
@@ -292,8 +310,12 @@ export function iterateFlowTrade(
     );
     const lastSignal = signals[signals.length - 1];
 
-    const holdWith = (next: FlowTradeState, note: string) =>
-      ({ action: "hold" as const, side: next.side, state: next, note });
+    const holdWith = (next: FlowTradeState, note: string) => ({
+      action: "hold" as const,
+      side: next.side,
+      state: next,
+      note,
+    });
 
     // (c) Flat: enter on a signal that clears the threshold.
     if (state.side === null) {
@@ -333,7 +355,9 @@ export function iterateFlowTrade(
 
       // Size = capital × maxPositionSizePct / price, rounded to the adapter's
       // step via the existing contract-spec logic when available.
-      const allocation = money(opts.capital).times(opts.maxPositionSizePct / 100);
+      const allocation = money(opts.capital).times(
+        opts.maxPositionSizePct / 100,
+      );
       const rawQty = allocation.div(price);
       const sizedQty =
         opts.contractSpecs !== undefined
@@ -344,7 +368,11 @@ export function iterateFlowTrade(
       }
 
       yield* adapter.setPositionMode(opts.productType, "one_way");
-      yield* adapter.setMarginMode(opts.symbol, opts.productType, opts.marginMode);
+      yield* adapter.setMarginMode(
+        opts.symbol,
+        opts.productType,
+        opts.marginMode,
+      );
       // price is passed as the sizing reference even for market orders so the
       // bybit adapter does not need a live gateway tick for its notional math.
       const fill = yield* adapter.placeOrder({
@@ -358,8 +386,12 @@ export function iterateFlowTrade(
         leverage: opts.leverage,
       });
 
-      const entryPrice = toNumber(fill.filledPrice) > 0 ? toNumber(fill.filledPrice) : price;
-      const filledQty = toNumber(fill.filledQty) > 0 ? toNumber(fill.filledQty) : toNumber(sizedQty);
+      const entryPrice =
+        toNumber(fill.filledPrice) > 0 ? toNumber(fill.filledPrice) : price;
+      const filledQty =
+        toNumber(fill.filledQty) > 0
+          ? toNumber(fill.filledQty)
+          : toNumber(sizedQty);
       const stopPrice =
         side === "LONG"
           ? entryPrice - ATR_STOP_MULT * atr
@@ -461,7 +493,10 @@ export function iterateFlowTrade(
         exitReason = "emergency";
       }
     }
-    if (exitReason === null && now >= (state.exitAt ?? Number.POSITIVE_INFINITY)) {
+    if (
+      exitReason === null &&
+      now >= (state.exitAt ?? Number.POSITIVE_INFINITY)
+    ) {
       exitReason = "time";
     }
 
@@ -481,7 +516,11 @@ export function iterateFlowTrade(
       return {
         action: "closed",
         side,
-        state: { ...freshFlowTradeState(opts, now), lastPrice: price, updatedAt: now },
+        state: {
+          ...freshFlowTradeState(opts, now),
+          lastPrice: price,
+          updatedAt: now,
+        },
         note,
       };
     }

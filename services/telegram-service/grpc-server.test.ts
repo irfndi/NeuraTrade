@@ -20,7 +20,7 @@ import type {
 interface SentMessage {
   chatId: string;
   text: string;
-  options?: unknown;
+  options?: BotSendMessageOptions;
 }
 
 class MockStreamCall extends EventEmitter {
@@ -47,7 +47,7 @@ class MockStreamCall extends EventEmitter {
 class FakeInterceptingCall implements grpc.ServerInterceptingCallInterface {
   listener?: {
     onReceiveMetadata(metadata: grpc.Metadata): void;
-    onReceiveMessage(message: unknown): void;
+    onReceiveMessage(message: any): void;
     onReceiveHalfClose(): void;
     onCancel(): void;
   };
@@ -64,7 +64,7 @@ class FakeInterceptingCall implements grpc.ServerInterceptingCallInterface {
     this.sentMetadata.push(metadata);
   }
 
-  sendMessage(_message: unknown, callback: () => void): void {
+  sendMessage(_message: any, callback: () => void): void {
     callback();
   }
 
@@ -109,22 +109,49 @@ class FakeInterceptingCall implements grpc.ServerInterceptingCallInterface {
   }
 }
 
-function createBotMock(): { bot: Bot; sentMessages: SentMessage[] } {
+/**
+ * Options the bot mock accepts for sendMessage. Matches the parse-mode
+ * subset the gRPC server actually forwards so the recorded sent messages stay
+ * strongly typed.
+ */
+interface BotSendMessageOptions {
+  parse_mode?: "HTML" | "Markdown" | "MarkdownV2";
+}
+
+/** Result of createBotMock with a properly typed bot under test. */
+interface BotMock {
+  bot: Bot;
+  sentMessages: SentMessage[];
+}
+
+function createBotMock(): BotMock {
   const sentMessages: SentMessage[] = [];
   const bot = {
     api: {
       async sendMessage(
         chatId: string,
         text: string,
-        options?: unknown,
+        options?: BotSendMessageOptions,
       ): Promise<{ message_id: number }> {
         sentMessages.push({ chatId, text, options });
         return { message_id: sentMessages.length };
       },
     },
-  };
+  } as Bot;
 
-  return { bot: bot as unknown as Bot, sentMessages };
+  return { bot, sentMessages };
+}
+
+/** Narrow a stream mock (or a real stream) to the server stream type. */
+function asServerWritableStream(
+  stream:
+    | MockStreamCall
+    | grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent>,
+): grpc.ServerWritableStream<StreamEventsRequest, TelegramEvent> {
+  return stream as grpc.ServerWritableStream<
+    StreamEventsRequest,
+    TelegramEvent
+  >;
 }
 
 function invokeUnary<Req, Res>(
@@ -148,14 +175,17 @@ function invokeUnary<Req, Res>(
   });
 }
 
+/** Result of invokeAuthInterceptor. */
+interface AuthInterceptorResult {
+  call: FakeInterceptingCall;
+  metadataForwarded: boolean;
+}
+
 function invokeAuthInterceptor(
   methodPath: string,
   adminApiKey: string,
   metadata: grpc.Metadata,
-): {
-  call: FakeInterceptingCall;
-  metadataForwarded: boolean;
-} {
+): AuthInterceptorResult {
   const call = new FakeInterceptingCall();
   const intercepted = createAuthInterceptor(adminApiKey)(
     {
@@ -163,7 +193,7 @@ function invokeAuthInterceptor(
       requestStream: false,
       responseStream: false,
       requestDeserialize: (value: Buffer) => value,
-      responseSerialize: (value: unknown) => Buffer.from(String(value)),
+      responseSerialize: (value) => Buffer.from(String(value)),
     },
     call,
   );
@@ -188,12 +218,7 @@ describe("TelegramGrpcServer", () => {
     const server = new TelegramGrpcServer(bot);
 
     const stream = new MockStreamCall("chat-1");
-    server.streamEvents(
-      stream as unknown as grpc.ServerWritableStream<
-        StreamEventsRequest,
-        TelegramEvent
-      >,
-    );
+    server.streamEvents(asServerWritableStream(stream));
 
     const request: SendActionAlertRequest = {
       chatId: "chat-1",
@@ -276,12 +301,7 @@ describe("TelegramGrpcServer", () => {
     const server = new TelegramGrpcServer(bot);
 
     const stream = new MockStreamCall("");
-    server.streamEvents(
-      stream as unknown as grpc.ServerWritableStream<
-        StreamEventsRequest,
-        TelegramEvent
-      >,
-    );
+    server.streamEvents(asServerWritableStream(stream));
 
     expect(stream.ended).toBe(true);
     expect(stream.written).toHaveLength(0);

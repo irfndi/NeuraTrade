@@ -1,9 +1,22 @@
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
+import * as S from "effect/Schema";
 
 export interface ProbeHTTPResult {
   readonly healthy: boolean;
   readonly detail: string;
 }
+
+/** Discriminated failure used to thread probe errors through the fetch result. */
+interface ProbeFailure {
+  readonly _failed: true;
+  readonly error: Error;
+}
+
+/** Health-body JSON shape (status + per-service status strings). */
+const HealthBodySchema = S.Struct({
+  status: S.optional(S.String),
+  services: S.optional(S.Record(S.String, S.String)),
+});
 
 export interface ProbeProcessResult {
   readonly running: boolean;
@@ -71,10 +84,7 @@ function probeHTTPOnce(
           ),
       }).pipe(
         Effect.catch((err) =>
-          Effect.succeed({ _failed: true, error: err } as {
-            _failed: true;
-            error: Error;
-          }),
+          Effect.succeed({ _failed: true, error: err } satisfies ProbeFailure),
         ),
       );
 
@@ -191,10 +201,7 @@ function probeHealthJSONOnce(
           ),
       }).pipe(
         Effect.catch((err) =>
-          Effect.succeed({ _failed: true, error: err } as {
-            _failed: true;
-            error: Error;
-          }),
+          Effect.succeed({ _failed: true, error: err } satisfies ProbeFailure),
         ),
       );
 
@@ -219,24 +226,26 @@ function probeHealthJSONOnce(
         catch: () => new Error("Failed to read response body"),
       }).pipe(Effect.catch(() => Effect.succeed("")));
 
-      let parsed: Record<string, unknown> = {};
+      let decoded: Option.Option<{
+        status?: string;
+        services?: Record<string, string>;
+      }>;
       try {
-        parsed = JSON.parse(textResult) as Record<string, unknown>;
+        decoded = S.decodeUnknownOption(HealthBodySchema)(
+          JSON.parse(textResult),
+        );
       } catch {
-        // ignore parse errors — fall back to empty object
+        // ignore parse errors — fall back to an empty body
+        decoded = Option.none();
       }
 
       const status =
-        typeof parsed.status === "string" ? parsed.status : "unknown";
+        Option.isSome(decoded) && decoded.value.status !== undefined
+          ? decoded.value.status
+          : "unknown";
       const services: Record<string, string> = {};
-      if (
-        parsed.services &&
-        typeof parsed.services === "object" &&
-        !Array.isArray(parsed.services)
-      ) {
-        for (const [key, value] of Object.entries(parsed.services)) {
-          services[key] = String(value);
-        }
+      if (Option.isSome(decoded) && decoded.value.services !== undefined) {
+        Object.assign(services, decoded.value.services);
       }
 
       return { ok: true, status, services };

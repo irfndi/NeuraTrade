@@ -37,11 +37,8 @@ export interface Pipeable {
   ): E;
 }
 
-function pipeImpl(
-  this: unknown,
-  ...fns: ReadonlyArray<(value: never) => unknown>
-): unknown {
-  return fns.reduce((acc: unknown, fn) => fn(acc as never), this);
+function pipeImpl<A>(this: A, ...fns: ReadonlyArray<(_: A) => A>): A {
+  return fns.reduce((acc, fn) => fn(acc), this);
 }
 
 const pipeable: Pipeable = { pipe: pipeImpl as Pipeable["pipe"] };
@@ -75,6 +72,12 @@ export interface OptionSpec<
 
 // biome-ignore lint/suspicious/noExplicitAny: erased spec
 export type AnyOptionSpec = OptionSpec<any, any>;
+
+/** A scalar value a CLI option can parse out of argv. */
+export type ParsedScalar = string | number | boolean;
+
+/** A parsed option value: either a raw scalar or an optional wrapper. */
+export type ParsedOptionValue = ParsedScalar | Option.Option<ParsedScalar>;
 
 function makeSpec<A, R extends Requirement>(fields: {
   readonly kind: OptionKind;
@@ -270,10 +273,12 @@ function optionAnnotation(spec: AnyOptionSpec): string {
   return "(required)";
 }
 
-function renderOptionLine(spec: AnyOptionSpec): {
+interface RenderedOptionLine {
   readonly flags: string;
   readonly detail: string;
-} {
+}
+
+function renderOptionLine(spec: AnyOptionSpec): RenderedOptionLine {
   const alias = spec.alias !== undefined ? `-${spec.alias}, ` : "";
   const flags = `${alias}--${spec.name}${optionPlaceholder(spec)}`;
   const annotation = optionAnnotation(spec);
@@ -358,13 +363,16 @@ interface ParsedFlag {
 }
 
 type ParseResult =
-  | { readonly _tag: "ok"; readonly values: Record<string, unknown> }
+  | { readonly _tag: "ok"; readonly values: Record<string, ParsedOptionValue> }
   | { readonly _tag: "err"; readonly message: string };
 
-function flagLookup(command: AnyCommand): {
+/** Name and alias lookups for a command's options. */
+interface FlagLookup {
   readonly byName: ReadonlyMap<string, readonly [string, AnyOptionSpec]>;
   readonly byAlias: ReadonlyMap<string, readonly [string, AnyOptionSpec]>;
-} {
+}
+
+function flagLookup(command: AnyCommand): FlagLookup {
   const byName = new Map<string, readonly [string, AnyOptionSpec]>();
   const byAlias = new Map<string, readonly [string, AnyOptionSpec]>();
   for (const [key, spec] of command.options) {
@@ -493,7 +501,7 @@ function parseCommandOptions(
     };
   }
 
-  const values: Record<string, unknown> = {};
+  const values: Record<string, ParsedOptionValue> = {};
   const provided = new Map<string, string | boolean>();
   for (const flag of flags) provided.set(flag.key, flag.raw);
 
@@ -503,7 +511,7 @@ function parseCommandOptions(
       if (spec.isOptional) {
         values[key] = Option.none();
       } else if (spec.hasDefault) {
-        values[key] = spec.defaultValue;
+        values[key] = spec.defaultValue as ParsedScalar;
       } else if (spec.kind === "boolean") {
         values[key] = false;
       } else {
@@ -515,7 +523,7 @@ function parseCommandOptions(
       continue;
     }
 
-    if (typeof raw === "boolean") {
+    if (raw === true || raw === false) {
       values[key] = spec.isOptional ? Option.some(raw) : raw;
       continue;
     }
@@ -643,7 +651,9 @@ export function evaluate(
     readonly token: string;
     readonly valueToken?: string;
   }> = [];
-  let firstBadPositional: { readonly token: string; readonly at: AnyCommand } | undefined;
+  let firstBadPositional:
+    | { readonly token: string; readonly at: AnyCommand }
+    | undefined;
   let i = 0;
   while (i < argv.length) {
     const token = argv[i];
@@ -729,7 +739,7 @@ export function evaluate(
   }
 
   // Parse options from the root down so parent-level errors surface first.
-  let leafValues: Record<string, unknown> = {};
+  let leafValues: Record<string, ParsedOptionValue> = {};
   for (const command of path) {
     const parsed = parseCommandOptions(command, buckets.get(command) ?? []);
     if (parsed._tag === "err") {
@@ -794,11 +804,15 @@ const run =
       switch (outcome._tag) {
         case "help":
         case "version":
-          return Console.log(outcome.text) as unknown as Effect.Effect<A, E, R>;
+          return Console.log(outcome.text) as Effect.Effect<
+            never,
+            never,
+            never
+          >;
         case "error":
           return Console.error(outcome.message).pipe(
             Effect.andThen(Effect.fail(new Error(outcome.message))),
-          ) as unknown as Effect.Effect<A, E, R>;
+          ) as Effect.Effect<never, never, never>;
         case "execute":
           return outcome.run() as Effect.Effect<A, E, R>;
       }

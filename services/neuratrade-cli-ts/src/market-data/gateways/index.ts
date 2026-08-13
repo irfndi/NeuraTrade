@@ -116,9 +116,7 @@ export const MarketDataGatewayLive = Layer.succeed(MarketDataGateway, {
       if (exchange.toLowerCase() === "bitget") {
         // Spot has no funding rates; never fall through to another venue.
         return Effect.fail(
-          new MarketDataError(
-            "Funding rates not supported for bitget spot",
-          ),
+          new MarketDataError("Funding rates not supported for bitget spot"),
         );
       }
       if (exchange.toLowerCase() === "bitget-futures") {

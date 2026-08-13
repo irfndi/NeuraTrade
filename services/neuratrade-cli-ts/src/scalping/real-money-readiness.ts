@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as S from "effect/Schema";
 import {
   VALIDATED_BTC_GRID_CANDIDATE,
   type ValidatedGridCandidate,
@@ -263,6 +264,15 @@ export interface RealMoneyReadinessReport {
 
 type DecimalLike = string;
 
+/** A JSON-serializable manifest value (strategies are canonicalized recursively). */
+type ManifestValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly ManifestValue[]
+  | { readonly [key: string]: ManifestValue };
+
 const decimalSyntax = /^[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?$/;
 
 function normalizeDecimal(value: DecimalLike): string {
@@ -295,28 +305,24 @@ function decimalValue(value: string): number | null {
   }
 }
 
-function stableValue(value: unknown): string {
-  if (typeof value === "string") {
+function stableValue(value: ManifestValue): string {
+  if (S.is(S.String)(value)) {
     return JSON.stringify(
       decimalSyntax.test(value) ? normalizeDecimal(value) : value,
     );
   }
-  if (typeof value === "number") {
+  if (S.is(S.Number)(value)) {
     if (!Number.isFinite(value)) throw new Error("non-finite manifest value");
     return JSON.stringify(value);
   }
-  if (typeof value === "boolean" || value === null)
-    return JSON.stringify(value);
+  if (S.is(S.Boolean)(value) || value === null) return JSON.stringify(value);
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableValue(item)).join(",")}]`;
   }
-  if (typeof value === "object") {
-    const entries = Object.entries(value).sort(([left], [right]) =>
-      left < right ? -1 : left > right ? 1 : 0,
-    );
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableValue(item)}`).join(",")}}`;
-  }
-  throw new Error("unsupported manifest value");
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableValue(item)}`).join(",")}}`;
 }
 
 export function canonicalizeStrategyManifest(
@@ -366,12 +372,14 @@ function above(value: string, threshold: string): boolean {
   return actual !== null && limit !== null && actual > limit;
 }
 
-function resolveThresholds(
-  overrides: Partial<ReadinessThresholds> | undefined,
-): {
+interface ResolvedThresholds {
   readonly thresholds: ReadinessThresholds;
   readonly errors: readonly string[];
-} {
+}
+
+function resolveThresholds(
+  overrides: Partial<ReadinessThresholds> | undefined,
+): ResolvedThresholds {
   const overridesToApply = overrides ?? {};
   const thresholds = {
     ...DEFAULT_READINESS_THRESHOLDS,
@@ -383,16 +391,16 @@ function resolveThresholds(
   >) {
     const requested = thresholds[key];
     const baseline = DEFAULT_READINESS_THRESHOLDS[key];
-    if (typeof requested === "number" && !Number.isFinite(requested)) {
+    if (S.is(S.Number)(requested) && !Number.isFinite(requested)) {
       errors.push(`threshold override is malformed: ${key}`);
     } else if (
-      typeof requested === "number" &&
-      typeof baseline === "number" &&
+      S.is(S.Number)(requested) &&
+      S.is(S.Number)(baseline) &&
       requested < baseline
     ) {
       errors.push(`threshold override weakens ${key}`);
     }
-    if (typeof requested === "string" && typeof baseline === "string") {
+    if (S.is(S.String)(requested) && S.is(S.String)(baseline)) {
       const requestedValue = decimalValue(requested);
       const baselineValue = decimalValue(baseline);
       if (requestedValue === null || baselineValue === null) {

@@ -30,16 +30,16 @@ export const CloudflareMarketDataRepositoryLive = (
       const gateway = yield* MarketDataGateway;
 
       const toRepoError = (
-        err: unknown,
+        cause: unknown,
         op: string,
       ): MarketDataRepositoryError =>
         new MarketDataRepositoryError(
           `${op}: ${
-            err instanceof MarketDataError
-              ? err.reason
-              : err instanceof Error
-                ? err.message
-                : String(err)
+            cause instanceof MarketDataError
+              ? cause.reason
+              : cause instanceof Error
+                ? cause.message
+                : String(cause)
           }`,
         );
 
@@ -62,15 +62,13 @@ export const CloudflareMarketDataRepositoryLive = (
           Effect.forEach(
             seedSymbols,
             (symbol) =>
-              gateway
-                .fetchOHLCV(exchange, symbol, timeframe, limit)
-                .pipe(
-                  Effect.map((candles) => ({ symbol, count: candles.length })),
-                  // Per-symbol tolerance: a delisted pair or a rate limit
-                  // must not abort the whole universe scan — failed symbols
-                  // are skipped and the rest still count.
-                  Effect.option,
-                ),
+              gateway.fetchOHLCV(exchange, symbol, timeframe, limit).pipe(
+                Effect.map((candles) => ({ symbol, count: candles.length })),
+                // Per-symbol tolerance: a delisted pair or a rate limit
+                // must not abort the whole universe scan — failed symbols
+                // are skipped and the rest still count.
+                Effect.option,
+              ),
             { concurrency: 4 },
           ).pipe(
             Effect.map((results) =>
@@ -133,6 +131,12 @@ export const CloudflareMarketDataRepositoryLive = (
           Effect.fail(
             new MarketDataRepositoryError(
               "getLatestFundingRateBefore: not implemented on Cloudflare worker",
+            ),
+          ),
+        deleteFundingRates: () =>
+          Effect.fail(
+            new MarketDataRepositoryError(
+              "deleteFundingRates: not implemented on Cloudflare worker",
             ),
           ),
       };

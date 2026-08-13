@@ -38,7 +38,7 @@ const riskIcon = (severity: "warning" | "critical"): string =>
   severity === "critical" ? "🚨" : "⚠️";
 
 const normalizePercent = (input: QuestProgressTemplateInput): number => {
-  if (typeof input.percent === "number") {
+  if (input.percent !== undefined) {
     return input.percent;
   }
 
@@ -65,7 +65,7 @@ const formatDoctorCheck = (check: DoctorCheck): string[] => {
     lines.push(`   ${check.message}`);
   }
 
-  if (typeof check.latencyMs === "number") {
+  if (check.latencyMs !== undefined) {
     lines.push(`   Latency: ${check.latencyMs}ms`);
   }
 
@@ -217,7 +217,7 @@ export const formatPerformanceSummaryMessage = (
     lines.push(`Max Drawdown: ${input.drawdown}`);
   }
 
-  if (typeof input.trades === "number") {
+  if (input.trades !== undefined) {
     lines.push(`Trades: ${input.trades}`);
   }
 

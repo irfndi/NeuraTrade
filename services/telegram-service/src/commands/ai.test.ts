@@ -1,6 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import type { Bot } from "grammy";
-import { registerAICommands } from "./ai";
+import type { AIModelInfo } from "../api/types";
+import { registerAICommands, type AIApi } from "./ai";
+
+const defaultModel: AIModelInfo = {
+  model_id: "test-model",
+  display_name: "Test Model",
+  provider: "test-provider",
+  supports_tools: false,
+  supports_vision: false,
+  supports_reasoning: false,
+  cost: "1.00",
+  tier: "standard",
+  latency_class: "balanced",
+};
+
+/** Build a complete AIApi double, overriding only the methods a test needs. */
+function makeAIApi(overrides: Partial<AIApi> = {}): AIApi {
+  return {
+    getAIModels: async () => ({ models: [], providers: [] }),
+    getAIProviders: async () => ({ providers: [] }),
+    getAIProviderModels: async () => ({ provider: "", models: [] }),
+    selectAIModel: async () => ({ success: false }),
+    getAIStatus: async () => ({}),
+    routeAIModel: async () => ({ model: defaultModel }),
+    ...overrides,
+  };
+}
 
 type CommandHandler = (ctx: MockContext) => Promise<void> | void;
 
@@ -62,7 +87,7 @@ describe("AI commands", () => {
     test(`/ai_status renders '${readiness}' readiness correctly`, async () => {
       const bot = new MockBot();
       let capturedUserId = "";
-      const api = {
+      const api = makeAIApi({
         async getAIStatus(userId: string) {
           capturedUserId = userId;
           return {
@@ -75,9 +100,9 @@ describe("AI commands", () => {
             daily_budget_exceeded: false,
           };
         },
-      };
+      });
 
-      registerAICommands(bot as unknown as Bot, api as unknown as never);
+      registerAICommands(bot, api);
       const ctx = createContext({ chatId: -100123, fromId: 987654 });
       await runCommand(bot, "ai_status", ctx);
 
@@ -101,16 +126,16 @@ describe("AI commands", () => {
       tier: "standard",
       latency_class: "balanced",
     }));
-    const api = {
+    const api = makeAIApi({
       async getAIModels() {
         return {
           models,
           providers: [],
         };
       },
-    };
+    });
 
-    registerAICommands(bot as unknown as Bot, api as unknown as never);
+    registerAICommands(bot, api);
     const ctx = createContext({ chatId: 777, fromId: 777 });
     await runCommand(bot, "ai_models", ctx);
 

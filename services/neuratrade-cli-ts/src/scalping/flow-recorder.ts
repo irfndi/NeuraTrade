@@ -20,7 +20,11 @@
  * Public market data only — no credentials.
  */
 import { Data, Effect } from "effect";
-import { fetch24hrVolumes, fetchInstruments } from "../market-data/gateways/bybit.js";
+import * as S from "effect/Schema";
+import {
+  fetch24hrVolumes,
+  fetchInstruments,
+} from "../market-data/gateways/bybit.js";
 import { selectFlowUniverse } from "./flow-universe.js";
 
 export const FLOW_EXCHANGE = "bybit-futures";
@@ -79,12 +83,19 @@ export class FlowRecorderError extends Data.TaggedError("FlowRecorderError")<{
 // WebSocket seam — Bun's native WebSocket under the hood, fake in tests
 // ---------------------------------------------------------------------------
 
+export type RawWsEventPayload =
+  | string
+  | ArrayBuffer
+  | Uint8Array
+  | Blob
+  | undefined;
+
 export interface FlowWebSocket {
   send(data: string): void;
   close(): void;
   on(
     event: "open" | "message" | "close" | "error",
-    cb: (payload: unknown) => void,
+    cb: (payload: RawWsEventPayload) => void,
   ): void;
 }
 
@@ -142,12 +153,60 @@ export interface FlowRecorderOpts {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
+/** Bybit v5 numeric fields arrive as either a JSON number or a decimal string. */
+const NumberLike = S.Union([S.Number, S.String]);
+
+const TradeWireSchema = S.Struct({
+  s: S.String,
+  S: S.Literals(["Buy", "Sell"]),
+  v: NumberLike,
+  T: NumberLike,
+});
+type TradeWire = typeof TradeWireSchema.Type;
+
+const TickerWireSchema = S.Struct({
+  symbol: S.optional(S.String),
+  lastPrice: NumberLike,
+});
+type TickerWire = typeof TickerWireSchema.Type;
+
+/**
+ * Documented Bybit v5 liquidation shape uses symbol/side/size/price/
+ * bankruptcyPrice/updatedTime; the compact s/S/v/p/bp/T form is accepted as a
+ * fallback. Both are decoded into one wire contract.
+ */
+const LiquidationWireSchema = S.Struct({
+  symbol: S.optional(S.String),
+  side: S.optional(S.String),
+  size: S.optional(NumberLike),
+  price: S.optional(NumberLike),
+  bankruptcyPrice: S.optional(NumberLike),
+  updatedTime: S.optional(NumberLike),
+  s: S.optional(S.String),
+  S: S.optional(S.String),
+  v: S.optional(NumberLike),
+  p: S.optional(NumberLike),
+  bp: S.optional(NumberLike),
+  T: S.optional(NumberLike),
+});
+type LiquidationWire = typeof LiquidationWireSchema.Type;
+
+/** Minimal Bybit v5 frame envelope; `data` stays opaque until topic dispatch. */
+const FrameWireSchema = S.Struct({
+  topic: S.optional(S.String),
+  op: S.optional(S.String),
+  success: S.optional(S.Boolean),
+  ret_msg: S.optional(S.String),
+  data: S.optional(S.Unknown),
+});
+
 function toWireSymbol(symbol: string): string {
   return symbol.replace("/", "").split(":")[0].toUpperCase();
 }
 
-function asNum(value: unknown): number {
-  const n = typeof value === "number" ? value : Number(value);
+/** Coerce a Bybit numeric wire value (number or decimal string) to a number. */
+function asNum(value: number | string | undefined): number {
+  const n = Number(value);
   return Number.isFinite(n) ? n : Number.NaN;
 }
 
@@ -164,25 +223,19 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
-function asArray(data: unknown): unknown[] {
-  if (Array.isArray(data)) return data;
-  if (data === null || typeof data !== "object") return [];
-  return [data];
-}
-
-function describeError(err: unknown): string {
+function describeError<T>(err: T): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function decodeFrame(raw: unknown): unknown {
-  if (typeof raw === "string") return JSON.parse(raw) as unknown;
-  if (raw instanceof ArrayBuffer) {
-    return JSON.parse(new TextDecoder().decode(raw)) as unknown;
+function decodeFrame(payload: RawWsEventPayload): unknown {
+  if (S.is(S.String)(payload)) return JSON.parse(payload);
+  if (payload instanceof ArrayBuffer) {
+    return JSON.parse(new TextDecoder().decode(payload));
   }
-  if (raw instanceof Uint8Array) {
-    return JSON.parse(new TextDecoder().decode(raw)) as unknown;
+  if (payload instanceof Uint8Array) {
+    return JSON.parse(new TextDecoder().decode(payload));
   }
-  return raw;
+  return payload;
 }
 
 interface TradeEvent {
@@ -201,33 +254,29 @@ interface LiquidationEvent {
   readonly ts: number;
 }
 
-function parseTrade(raw: unknown): TradeEvent | null {
-  if (raw === null || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.s !== "string" || r.s.length === 0) return null;
-  if (r.S !== "Buy" && r.S !== "Sell") return null;
-  const size = asNum(r.v);
-  const ts = asNum(r.T);
+function toTradeEvent(raw: TradeWire): TradeEvent | null {
+  const size = asNum(raw.v);
+  const ts = asNum(raw.T);
   if (!Number.isFinite(size) || !Number.isFinite(ts)) return null;
-  return { symbol: toWireSymbol(r.s), side: r.S, size, ts };
+  return { symbol: toWireSymbol(raw.s), side: raw.S, size, ts };
 }
 
-function parseLiquidation(raw: unknown): LiquidationEvent | null {
-  if (raw === null || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  // Documented Bybit v5 shape uses symbol/side/size/price/bankruptcyPrice/
-  // updatedTime; the compact s/S/v/p/bp/T form is accepted as a fallback.
-  const symbol = typeof r.symbol === "string" ? r.symbol : r.s;
-  const side = typeof r.side === "string" ? r.side : r.S;
-  if (typeof symbol !== "string" || symbol.length === 0) return null;
-  if (typeof side !== "string" || side.length === 0) return null;
-  const size = asNum(r.size ?? r.v);
-  const price = asNum(r.price ?? r.p);
-  const ts = asNum(r.updatedTime ?? r.T);
-  if (!Number.isFinite(size) || !Number.isFinite(price) || !Number.isFinite(ts)) {
+function toLiquidationEvent(raw: LiquidationWire): LiquidationEvent | null {
+  const symbol = raw.symbol ?? raw.s;
+  const side = raw.side ?? raw.S;
+  if (symbol === undefined || symbol.length === 0) return null;
+  if (side === undefined || side.length === 0) return null;
+  const size = asNum(raw.size ?? raw.v);
+  const price = asNum(raw.price ?? raw.p);
+  const ts = asNum(raw.updatedTime ?? raw.T);
+  if (
+    !Number.isFinite(size) ||
+    !Number.isFinite(price) ||
+    !Number.isFinite(ts)
+  ) {
     return null;
   }
-  const bankruptcy = asNum(r.bankruptcyPrice ?? r.bp);
+  const bankruptcy = asNum(raw.bankruptcyPrice ?? raw.bp);
   return {
     symbol: toWireSymbol(symbol),
     side,
@@ -270,7 +319,10 @@ class FlowRecorderImpl {
   private readonly aggregateIntervalMs: number;
   private readonly onFlush: ((rows: readonly FlowOfiRow[]) => void) | undefined;
   private readonly onAggregate:
-    | ((rows: readonly FlowOfiRow[], prices: ReadonlyMap<string, number>) => void)
+    | ((
+        rows: readonly FlowOfiRow[],
+        prices: ReadonlyMap<string, number>,
+      ) => void)
     | undefined;
   private readonly onWarn: ((message: string) => void) | undefined;
 
@@ -285,7 +337,8 @@ class FlowRecorderImpl {
   private readonly lastPrices = new Map<string, number>();
   private readonly pendingSaves = new Set<Promise<void>>();
   private pingTimer: ReturnType<typeof setInterval> | undefined = undefined;
-  private aggregateTimer: ReturnType<typeof setInterval> | undefined = undefined;
+  private aggregateTimer: ReturnType<typeof setInterval> | undefined =
+    undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 
   constructor(repo: FlowRecorderRepository, opts: FlowRecorderOpts) {
@@ -314,7 +367,10 @@ class FlowRecorderImpl {
         }
       }
     }, this.pingIntervalMs);
-    this.aggregateTimer = setInterval(() => this.logAggregates(), this.aggregateIntervalMs);
+    this.aggregateTimer = setInterval(
+      () => this.logAggregates(),
+      this.aggregateIntervalMs,
+    );
     this.connect();
   }
 
@@ -413,7 +469,10 @@ class FlowRecorderImpl {
     }
     ws.send(JSON.stringify({ op: "subscribe", args: ["liquidation"] }));
     if (this.ticker) {
-      for (const group of chunk(this.symbols.map((s) => `tickers.${s}`), 10)) {
+      for (const group of chunk(
+        this.symbols.map((s) => `tickers.${s}`),
+        10,
+      )) {
         ws.send(JSON.stringify({ op: "subscribe", args: group }));
       }
     }
@@ -421,49 +480,65 @@ class FlowRecorderImpl {
 
   // -- frame handling -------------------------------------------------------
 
-  private handleFrame(payload: unknown): void {
-    let msg: unknown;
+  private handleFrame(payload: RawWsEventPayload): void {
+    let decoded: unknown;
     try {
-      msg = decodeFrame(payload);
+      decoded = decodeFrame(payload);
     } catch {
       this.warn(
         `Malformed WebSocket frame skipped: ${String(payload).slice(0, 120)}`,
       );
       return;
     }
-    if (msg === null || typeof msg !== "object") {
+    if (!S.is(FrameWireSchema)(decoded)) {
       this.warn("Malformed WebSocket message skipped (not an object)");
       return;
     }
-    const topic = (msg as Record<string, unknown>).topic;
-    if (typeof topic !== "string" || topic.length === 0) {
+    const { topic, op, success, ret_msg, data } = decoded;
+    if (topic === undefined || topic.length === 0) {
       // Ping/pong + subscribe acks have no topic; surface rejected
       // subscriptions instead of failing silently.
-      const m = msg as Record<string, unknown>;
-      if (m.op === "subscribe" && m.success === false) {
+      if (op === "subscribe" && success === false) {
         this.warn(
-          `subscription rejected: ${String(m.ret_msg ?? "unknown error")}`,
+          `subscription rejected: ${String(ret_msg ?? "unknown error")}`,
         );
       }
       return;
     }
-    const data = (msg as Record<string, unknown>).data;
     try {
       if (topic === "liquidation") {
-        this.handleLiquidation(data);
+        if (S.is(S.Array(LiquidationWireSchema))(data)) {
+          this.handleLiquidation(data);
+        } else if (S.is(LiquidationWireSchema)(data)) {
+          this.handleLiquidation([data]);
+        } else {
+          this.warn(
+            `Malformed liquidation message skipped: ${String(data).slice(0, 200)}`,
+          );
+        }
       } else if (topic.startsWith("publicTrade.")) {
-        this.handleTrades(data);
+        if (S.is(S.Array(TradeWireSchema))(data)) {
+          this.handleTrades(data);
+        } else if (S.is(TradeWireSchema)(data)) {
+          this.handleTrades([data]);
+        } else {
+          this.warn(
+            `Malformed trade message skipped: ${String(data).slice(0, 200)}`,
+          );
+        }
       } else if (this.ticker && topic.startsWith("tickers.")) {
-        this.handleTicker(topic.slice("tickers.".length), data);
+        if (S.is(TickerWireSchema)(data)) {
+          this.handleTicker(topic.slice("tickers.".length), data);
+        }
       }
     } catch (err) {
       this.warn(`Error handling ${topic} message: ${describeError(err)}`);
     }
   }
 
-  private handleTrades(data: unknown): void {
-    for (const raw of asArray(data)) {
-      const trade = parseTrade(raw);
+  private handleTrades(data: readonly TradeWire[]): void {
+    for (const raw of data) {
+      const trade = toTradeEvent(raw);
       if (trade === null) {
         this.warn(
           `Malformed trade event skipped: ${JSON.stringify(raw).slice(0, 200)}`,
@@ -495,10 +570,10 @@ class FlowRecorderImpl {
     bucket.trades += 1;
   }
 
-  private handleLiquidation(data: unknown): void {
+  private handleLiquidation(data: readonly LiquidationWire[]): void {
     const rows: FlowLiquidationRow[] = [];
-    for (const raw of asArray(data)) {
-      const liq = parseLiquidation(raw);
+    for (const raw of data) {
+      const liq = toLiquidationEvent(raw);
       if (liq === null) {
         this.warn(
           `Malformed liquidation event skipped: ${JSON.stringify(raw).slice(0, 200)}`,
@@ -516,15 +591,18 @@ class FlowRecorderImpl {
       });
     }
     if (rows.length > 0) {
-      this.trackSave(Effect.runPromise(this.repo.saveLiquidations(rows)), (err) =>
-        this.warn(`Failed to persist flow_liquidations rows: ${describeError(err)}`),
+      this.trackSave(
+        Effect.runPromise(this.repo.saveLiquidations(rows)),
+        (err) =>
+          this.warn(
+            `Failed to persist flow_liquidations rows: ${describeError(err)}`,
+          ),
       );
     }
   }
 
-  private handleTicker(symbol: string, data: unknown): void {
-    if (data === null || typeof data !== "object") return;
-    const price = asNum((data as Record<string, unknown>).lastPrice);
+  private handleTicker(symbol: string, data: TickerWire): void {
+    const price = asNum(data.lastPrice);
     if (Number.isFinite(price)) this.lastPrices.set(symbol, price);
   }
 
@@ -561,7 +639,7 @@ class FlowRecorderImpl {
     );
   }
 
-  private trackSave(save: Promise<void>, onError: (err: unknown) => void): void {
+  private trackSave(save: Promise<void>, onError: (err: Error) => void): void {
     this.pendingSaves.add(save);
     void save.then(
       () => this.pendingSaves.delete(save),

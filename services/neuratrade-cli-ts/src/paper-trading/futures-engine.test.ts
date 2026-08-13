@@ -444,10 +444,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -489,10 +486,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -531,10 +525,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -573,10 +564,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -607,10 +595,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -642,10 +627,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -677,10 +659,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, killSwitch),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -711,10 +690,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker(true)),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -754,10 +730,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
           Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
           Effect.provide(scalpingServiceLayers),
-        ) as Effect.Effect<
-          FuturesPaperTradingIterationResult,
-          never
-        >,
+        ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
       );
     } catch (error) {
       failure = error;
@@ -799,10 +772,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
           Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
           Effect.provide(scalpingServiceLayers),
-        ) as Effect.Effect<
-          FuturesPaperTradingIterationResult,
-          never
-        >,
+        ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
       );
     } catch (error) {
       failure = error;
@@ -847,10 +817,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, circuitBreaker),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("scaled_out");
@@ -889,10 +856,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -954,10 +918,7 @@ describe("runFuturesPaperTradingIteration", () => {
           Effect.provide(scalpingServiceLayers),
           Effect.result,
         ) as Effect.Effect<
-          Result.Result<
-            FuturesPaperTradingIterationResult,
-            unknown
-          >,
+          Result.Result<FuturesPaperTradingIterationResult, unknown>,
           never
         >,
       );
@@ -1001,10 +962,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -1048,16 +1006,15 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
     // 0.0001 BTC x $64,795 = $6.48, above the legacy $5 flat floor.
     expect(result.position?.size.toNumber()).toBeCloseTo(0.0001, 6);
-    expect(result.position?.entryPrice.times(result.position.size).toNumber()).toBeGreaterThan(5);
+    expect(
+      result.position?.entryPrice.times(result.position.size).toNumber(),
+    ).toBeGreaterThan(5);
   });
 
   it("skips the trade (no order) when the min orderable margin exceeds the cap", async () => {
@@ -1104,10 +1061,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");
@@ -1151,10 +1105,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("opened");
@@ -1205,10 +1156,7 @@ describe("runFuturesPaperTradingIteration", () => {
         Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
         Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
         Effect.provide(scalpingServiceLayers),
-      ) as Effect.Effect<
-        FuturesPaperTradingIterationResult,
-        never
-      >,
+      ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
     );
 
     expect(result.action).toBe("hold");

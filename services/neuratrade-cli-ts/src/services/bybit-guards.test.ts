@@ -32,8 +32,14 @@ function run(
   bal: ReadonlyArray<BybitBalance> = balances,
 ): Promise<GuardRunResult> {
   return Effect.runPromise(
-    validateOrder({ order, contract, balances: bal, feeRate: "0.0006" }, price).pipe(
-      Effect.map((normalized): GuardRunResult => ({ ok: true, order: normalized })),
+    validateOrder(
+      { order, contract, balances: bal, feeRate: "0.0006" },
+      price,
+    ).pipe(
+      Effect.map((normalized): GuardRunResult => ({
+        ok: true,
+        order: normalized,
+      })),
       Effect.catch((err): Effect.Effect<GuardRunResult, never> =>
         Effect.succeed({ ok: false, error: err }),
       ),
@@ -44,7 +50,12 @@ function run(
 describe("BybitGuards", () => {
   it("accepts a valid sell order and normalizes size precision", async () => {
     const result = await run(
-      { symbol: "BTCUSDT", side: "sell", orderType: "market", size: "0.00123456" },
+      {
+        symbol: "BTCUSDT",
+        side: "sell",
+        orderType: "market",
+        size: "0.00123456",
+      },
       "65000",
     );
     if (!result.ok) throw new Error(`unexpected error: ${result.error.reason}`);
@@ -91,7 +102,8 @@ describe("BybitGuards", () => {
       "40000",
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.reason).toContain("below min order amt");
+    if (!result.ok)
+      expect(result.error.reason).toContain("below min order amt");
   });
 
   it("rejects a notional above the max order bound", async () => {
@@ -118,7 +130,8 @@ describe("BybitGuards", () => {
       "65000",
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.reason).toContain("insufficient USDT margin");
+    if (!result.ok)
+      expect(result.error.reason).toContain("insufficient USDT margin");
   });
 
   it("accepts a leveraged order whose margin fits the balance", async () => {
@@ -139,11 +152,17 @@ describe("BybitGuards", () => {
 
   it("rejects a zero/negative size after rounding", async () => {
     const result = await run(
-      { symbol: "BTCUSDT", side: "sell", orderType: "market", size: "0.00000001" },
+      {
+        symbol: "BTCUSDT",
+        side: "sell",
+        orderType: "market",
+        size: "0.00000001",
+      },
       "65000",
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.reason).toContain("rounds below qtyStep");
+    if (!result.ok)
+      expect(result.error.reason).toContain("rounds below qtyStep");
   });
 
   it("rejects a limit order without a positive price", async () => {
@@ -152,7 +171,8 @@ describe("BybitGuards", () => {
       "65000",
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.reason).toContain("requires positive price");
+    if (!result.ok)
+      expect(result.error.reason).toContain("requires positive price");
   });
 
   it("normalizes limit price to the tick precision", async () => {

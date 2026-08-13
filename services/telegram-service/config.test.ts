@@ -16,6 +16,10 @@ import {
 } from "./config";
 import { loadConfig } from "./src/config";
 
+interface EnvSnapshot {
+  [key: string]: string | undefined;
+}
+
 describe("Neuratrade config fallback", () => {
   const neuratradeDir = join(
     import.meta.dir,
@@ -23,7 +27,7 @@ describe("Neuratrade config fallback", () => {
   );
   const realConfigPath = join(neuratradeDir, "config.json");
   const originalNeuratradeHome = process.env.NEURATRADE_HOME;
-  let originalEnv: Record<string, string | undefined>;
+  let originalEnv: EnvSnapshot;
 
   beforeAll(() => {
     rmSync(neuratradeDir, { recursive: true, force: true });
@@ -98,7 +102,7 @@ describe("Neuratrade config fallback", () => {
 });
 
 describe("Effect-based loadConfig", () => {
-  const originalEnv: Record<string, string | undefined> = {};
+  const originalEnv: EnvSnapshot = {};
   const isolatedNeuratradeDir = join(
     import.meta.dir,
     ".tmp-effect-config-test",
@@ -169,7 +173,7 @@ describe("Effect-based loadConfig", () => {
     expect(config.port).toBeGreaterThan(0);
     expect(config.port).toBeLessThan(65536);
     expect(config.apiBaseUrl).toBeTruthy();
-    expect(typeof config.adminApiKey).toBe("string");
+    expect(config.adminApiKey).toEqual(expect.any(String));
     expect(config.grpcPort).toBeGreaterThan(0);
     expect(config.grpcBindAddr).toBeTruthy();
   });

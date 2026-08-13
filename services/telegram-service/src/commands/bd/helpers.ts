@@ -1,10 +1,13 @@
-import type { Context } from "grammy";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { Option, Schema } from "effect";
+
 import { logger } from "../../utils/logger";
 
-export function getChatId(ctx: Context): string | null {
+export function getChatId(ctx: {
+  chat?: { id?: number | string };
+}): string | null {
   const chatId = ctx.chat?.id;
   if (!chatId) {
     return null;
@@ -13,7 +16,7 @@ export function getChatId(ctx: Context): string | null {
   return String(chatId);
 }
 
-export function getCommandArgs(ctx: Context): string {
+export function getCommandArgs(ctx: { message?: { text?: string } }): string {
   const text = ctx.message?.text;
   if (!text) {
     return "";
@@ -39,14 +42,33 @@ export function toNonEmptyString(
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
-type JsonObject = Record<string, unknown>;
+/**
+ * Schema for the local NeuraTrade config file. Only the fields this helper
+ * reads and rewrites are declared; the schema rejects structurally invalid
+ * configs at the JSON boundary instead of narrowing them with hand-rolled
+ * runtime checks.
+ */
+const LocalConfigCategory = Schema.Struct({
+  chat_id: Schema.optional(Schema.String),
+});
 
-function asObject(value: unknown): JsonObject | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonObject;
+const LocalConfigSchema = Schema.Struct({
+  telegram: Schema.optional(LocalConfigCategory),
+  services: Schema.optional(
+    Schema.Struct({ telegram: Schema.optional(LocalConfigCategory) }),
+  ),
+});
+
+/** Mutable form of the local config for writing. Decoded by LocalConfigSchema. */
+interface LocalConfigCategoryMutable {
+  chat_id?: string;
 }
+interface LocalConfigMutable {
+  telegram?: LocalConfigCategoryMutable;
+  services?: { telegram?: LocalConfigCategoryMutable };
+}
+
+const decodeLocalConfig = Schema.decodeUnknownOption(LocalConfigSchema);
 
 export async function persistChatIdToLocalConfig(
   chatId: string,
@@ -79,21 +101,14 @@ export async function persistChatIdToLocalConfig(
     return;
   }
 
-  const root = asObject(parsed);
-  if (!root) {
+  const rootOption = decodeLocalConfig(parsed);
+  if (Option.isNone(rootOption)) {
     return;
   }
+  const current = rootOption.value;
 
-  const telegram = asObject(root.telegram) ?? {};
-  const services = asObject(root.services) ?? {};
-  const servicesTelegram = asObject(services.telegram) ?? {};
-
-  const currentChatId =
-    typeof telegram.chat_id === "string" ? telegram.chat_id : "";
-  const currentServicesChatId =
-    typeof servicesTelegram.chat_id === "string"
-      ? servicesTelegram.chat_id
-      : "";
+  const currentChatId = current.telegram?.chat_id ?? "";
+  const currentServicesChatId = current.services?.telegram?.chat_id ?? "";
   if (
     currentChatId === trimmedChatId &&
     currentServicesChatId === trimmedChatId
@@ -101,14 +116,17 @@ export async function persistChatIdToLocalConfig(
     return;
   }
 
-  telegram.chat_id = trimmedChatId;
-  servicesTelegram.chat_id = trimmedChatId;
-  services.telegram = servicesTelegram;
-  root.telegram = telegram;
-  root.services = services;
+  // The decoded result is readonly and keeps only known fields, so update the
+  // raw parsed tree instead to preserve every other config property.
+  const config = parsed as LocalConfigMutable;
+  config.telegram ??= {};
+  config.telegram.chat_id = trimmedChatId;
+  config.services ??= {};
+  config.services.telegram ??= {};
+  config.services.telegram.chat_id = trimmedChatId;
 
   try {
-    await Bun.write(configPath, JSON.stringify(root, null, 2) + "\n");
+    await Bun.write(configPath, JSON.stringify(config, null, 2) + "\n");
     logger.info("Persisted Telegram chat ID to local config", {
       configPath,
       chatId: trimmedChatId,

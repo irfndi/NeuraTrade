@@ -20,7 +20,13 @@ function rmDir(dir: string): void {
   }
 }
 
-function writeJson(filePath: string, data: unknown): void {
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
+function writeJson(filePath: string, data: JsonValue): void {
   fs.mkdirSync(nodePath.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }

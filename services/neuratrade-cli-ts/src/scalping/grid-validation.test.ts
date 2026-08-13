@@ -291,7 +291,9 @@ describe("deterministic grid validation", () => {
     expect(() =>
       bootstrapBlockConfidence(["1", "2", "3", "4", "5", "6"], 0, 5, 10),
     ).toThrow("invalid block-bootstrap input");
-    expect(() => bootstrapBlockConfidence(["1", "2"], 20260802, 5, 10)).not.toThrow();
+    expect(() =>
+      bootstrapBlockConfidence(["1", "2"], 20260802, 5, 10),
+    ).not.toThrow();
     // Fewer samples than one block is no longer an error: the stress path
     // needs degenerate evidence instead of a crash (2026-08-09).
     expect(

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import path from "node:path";
-import type { Bot } from "grammy";
 import { SessionManager } from "../../session";
 import { registerAutonomousCommands } from "./autonomous";
 import { registerLiquidationCommands } from "./liquidation";
@@ -87,11 +86,7 @@ describe("BD command handlers", () => {
       },
     };
 
-    registerAutonomousCommands(
-      bot as unknown as Bot,
-      api as unknown as never,
-      sessions,
-    );
+    registerAutonomousCommands(bot, api, sessions);
 
     const ctx = createContext("/begin");
     await runCommand(bot, "begin", ctx);
@@ -122,11 +117,7 @@ describe("BD command handlers", () => {
       },
     };
 
-    registerLiquidationCommands(
-      bot as unknown as Bot,
-      api as unknown as never,
-      sessions,
-    );
+    registerLiquidationCommands(bot, api, sessions);
 
     const ctx = createContext("/liquidate_all", 888);
     await runCommand(bot, "liquidate_all", ctx);
@@ -163,11 +154,7 @@ describe("BD command handlers", () => {
       },
     };
 
-    registerLiquidationCommands(
-      bot as unknown as Bot,
-      api as unknown as never,
-      sessions,
-    );
+    registerLiquidationCommands(bot, api, sessions);
 
     const ctx = createContext("/liquidate_all CONFIRM", 999);
     await runCommand(bot, "liquidate_all", ctx);
@@ -212,7 +199,7 @@ describe("BD command handlers", () => {
       },
     };
 
-    registerMonitoringCommands(bot as unknown as Bot, api as unknown as never);
+    registerMonitoringCommands(bot, api);
 
     const ctx = createContext("/doctor");
     await runCommand(bot, "doctor", ctx);
@@ -247,7 +234,7 @@ describe("BD command handlers", () => {
       },
     };
 
-    registerMonitoringCommands(bot as unknown as Bot, api as unknown as never);
+    registerMonitoringCommands(bot, api);
 
     const ctx = createContext("/portfolio");
     await runCommand(bot, "portfolio", ctx);

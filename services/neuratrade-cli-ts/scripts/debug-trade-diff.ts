@@ -97,12 +97,8 @@ const isRun = split;
 const oosRun = split.oosResult!;
 
 const cutTime = candles[Math.floor(candles.length * 0.8)].timestamp.getTime();
-const fullIs = full.trades.filter(
-  (t) => new Date(t.entryTime as unknown as string).getTime() < cutTime,
-);
-const fullOos = full.trades.filter(
-  (t) => new Date(t.entryTime as unknown as string).getTime() >= cutTime,
-);
+const fullIs = full.trades.filter((t) => t.entryTime.getTime() < cutTime);
+const fullOos = full.trades.filter((t) => t.entryTime.getTime() >= cutTime);
 console.log(
   `FULL: ${full.totalTrades} trades ret ${full.totalReturnPct.toFixed(2)}% (IS-region entries ${fullIs.length}, OOS-region entries ${fullOos.length})`,
 );
@@ -123,26 +119,20 @@ console.log(
 );
 
 // entry-time diff in the IS region
-const isTimes = new Set(
-  isRun.trades.map((t) => new Date(t.entryTime as unknown as string).getTime()),
-);
-const fullTimes = new Set(
-  fullIs.map((t) => new Date(t.entryTime as unknown as string).getTime()),
-);
-const onlyFull = fullIs.filter(
-  (t) => !isTimes.has(new Date(t.entryTime as unknown as string).getTime()),
-);
+const isTimes = new Set(isRun.trades.map((t) => t.entryTime.getTime()));
+const fullTimes = new Set(fullIs.map((t) => t.entryTime.getTime()));
+const onlyFull = fullIs.filter((t) => !isTimes.has(t.entryTime.getTime()));
 const onlyIs = isRun.trades.filter(
-  (t) => !fullTimes.has(new Date(t.entryTime as unknown as string).getTime()),
+  (t) => !fullTimes.has(t.entryTime.getTime()),
 );
 console.log(
   `IS-region entries only in FULL: ${onlyFull.length}, only in IS-run: ${onlyIs.length}`,
 );
 for (const t of onlyFull.slice(0, 6))
   console.log(
-    `  onlyFULL ${t.side} ${new Date(t.entryTime as unknown as string).toISOString()} pnl ${t.pnlPct.toFixed(2)}`,
+    `  onlyFULL ${t.side} ${t.entryTime.toISOString()} pnl ${t.pnlPct.toFixed(2)}`,
   );
 for (const t of onlyIs.slice(0, 6))
   console.log(
-    `  onlyIS   ${t.side} ${new Date(t.entryTime as unknown as string).toISOString()} pnl ${t.pnlPct.toFixed(2)}`,
+    `  onlyIS   ${t.side} ${t.entryTime.toISOString()} pnl ${t.pnlPct.toFixed(2)}`,
   );

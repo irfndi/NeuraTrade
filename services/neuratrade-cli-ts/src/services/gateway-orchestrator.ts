@@ -211,7 +211,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
           nodePath.join(path.dataDir, "neuratrade.db");
 
         // Build backend env map (mirrors Go backendEnv)
-        const backendEnv: Record<string, string> = {
+        const backendEnv = {
           PORT: backendPort,
           SERVER_PORT: backendPort,
           BACKEND_HOST_PORT: backendPort,
@@ -236,7 +236,7 @@ export const GatewayOrchestratorLive: Layer.Layer<
           ENABLE_AI_ARBITRAGE: String(config.features.enable_ai_arbitrage),
           FEATURES_PAPER_TRADING: String(config.features.paper_trading),
           FEATURES_REAL_TRADING: String(config.features.real_trading),
-        };
+        } satisfies Record<string, string>;
 
         // Endpoints
         const backendEndpoint = `http://${bindHost}:${backendPort}/health`;

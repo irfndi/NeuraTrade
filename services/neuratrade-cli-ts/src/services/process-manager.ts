@@ -226,14 +226,14 @@ export const ProcessManagerLive: Layer.Layer<
         yield* logger.info(`Starting ${name}`, { binary: resolved });
 
         // Prepare environment variables
-        const processEnv: Record<string, string> = {
+        const processEnv = {
           ...Object.fromEntries(
             Object.entries(process.env).filter(
               ([, v]) => v !== undefined,
             ) as Array<[string, string]>,
           ),
           ...env,
-        };
+        } satisfies Record<string, string>;
 
         const logFile = Bun.file(logPath);
         const proc = Bun.spawn([resolved], {

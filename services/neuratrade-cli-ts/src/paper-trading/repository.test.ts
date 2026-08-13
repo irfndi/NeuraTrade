@@ -519,8 +519,8 @@ describe("PaperTradingRepositorySQLite", () => {
       id: string,
       closedAt: string,
       fillSource: "live" | "simulated",
-    ) =>
-      ({
+    ) => {
+      const result = {
         id,
         exchange: "bitget-futures",
         symbol: "BTC/USDT:USDT",
@@ -535,10 +535,15 @@ describe("PaperTradingRepositorySQLite", () => {
         openedAt: new Date("2026-08-01T00:00:00.000Z"),
         closedAt: new Date(closedAt),
         fillSource,
-        ...(fillSource === "live"
-          ? { strategyConfigFingerprint: "repo-fixture" }
-          : {}),
-      }) as const;
+      } as const;
+      if (fillSource === "live") {
+        return {
+          ...result,
+          strategyConfigFingerprint: "repo-fixture",
+        } as const;
+      }
+      return result;
+    };
 
     await Effect.runPromise(
       repository.recordGridTrade(
@@ -618,7 +623,9 @@ describe("PaperTradingRepositorySQLite", () => {
     );
     expect(loaded?.id).toBe("pos-b");
     expect(loaded?.entryPrice.toString()).toBe("71000");
-    const count = db.query("SELECT COUNT(*) AS c FROM paper_positions").get() as {
+    const count = db
+      .query("SELECT COUNT(*) AS c FROM paper_positions")
+      .get() as {
       c: number;
     };
     expect(count.c).toBe(1);
@@ -649,7 +656,9 @@ describe("PaperTradingRepositorySQLite", () => {
     const repository = new PaperTradingRepositorySQLite(db);
     await Effect.runPromise(repository.ensureTables());
 
-    const count = db.query("SELECT COUNT(*) AS c FROM paper_positions").get() as {
+    const count = db
+      .query("SELECT COUNT(*) AS c FROM paper_positions")
+      .get() as {
       c: number;
     };
     expect(count.c).toBe(1);

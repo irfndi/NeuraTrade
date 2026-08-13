@@ -7,6 +7,17 @@ import tickersFixture from "../../../tests/fixtures/bitget/tickers.json";
 import symbolsFixture from "../../../tests/fixtures/bitget/symbols.json";
 import fundingRatesFixture from "../../../tests/fixtures/bitget/funding-rates.json";
 
+/** A Bitget funding page envelope returned by the mocks below. */
+interface FundingPage {
+  code?: string;
+  msg?: string;
+  data?: unknown;
+}
+/** Funding pages keyed by page number. */
+interface FundingPageMap {
+  [key: string]: FundingPage;
+}
+
 describe("Bitget gateway", () => {
   let originalFetch: typeof fetch;
 
@@ -18,12 +29,15 @@ describe("Bitget gateway", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function mockFetch(response: unknown, status = 200) {
-    globalThis.fetch = (async () =>
+  function mockFetch<T>(response: T, status = 200) {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) =>
       new Response(JSON.stringify(response), {
         status,
         headers: { "Content-Type": "application/json" },
-      })) as unknown as typeof fetch;
+      })) as typeof fetch;
   }
 
   it("fetchTick parses spot ticker", async () => {
@@ -88,7 +102,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bitget.fetchOHLCV(
@@ -153,7 +167,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const symbols = await Effect.runPromise(Bitget.fetchDemoSymbols());
 
@@ -171,7 +185,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bitget.fetchOHLCV("BTC/USDT", "5m", 2, undefined, "spot"),
@@ -189,7 +203,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bitget.fetchOHLCV("BTC/USDT:USDT", "1h", 2, undefined, "futures"),
@@ -218,21 +232,37 @@ describe("Bitget gateway", () => {
   it("fetchFundingRates stops paginating once a page predates startTime", async () => {
     const requests: string[] = [];
     const startMs = 1704009600000; // 2023-12-31T08:00:00Z
-    const pages: Record<string, unknown> = {
+    const pages: FundingPageMap = {
       "1": {
         code: "00000",
         msg: "success",
         data: [
-          { symbol: "BTCUSDT", fundingRate: "0.0001", fundingTime: "1704067200000" },
-          { symbol: "BTCUSDT", fundingRate: "0.00009", fundingTime: "1704038400000" },
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.0001",
+            fundingTime: "1704067200000",
+          },
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.00009",
+            fundingTime: "1704038400000",
+          },
         ],
       },
       "2": {
         code: "00000",
         msg: "success",
         data: [
-          { symbol: "BTCUSDT", fundingRate: "0.00008", fundingTime: "1704009600000" },
-          { symbol: "BTCUSDT", fundingRate: "0.00007", fundingTime: "1703980800000" },
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.00008",
+            fundingTime: "1704009600000",
+          },
+          {
+            symbol: "BTCUSDT",
+            fundingRate: "0.00007",
+            fundingTime: "1703980800000",
+          },
         ],
       },
     };
@@ -245,7 +275,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
       Bitget.fetchFundingRates("BTC/USDT:USDT", new Date(startMs)),
@@ -297,7 +327,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
       Bitget.fetchFundingRates("BTC/USDT:USDT"),
@@ -324,7 +354,7 @@ describe("Bitget gateway", () => {
 
   it("fetchFundingRates paginates until an empty page", async () => {
     const requests: string[] = [];
-    const pages: Record<string, unknown> = {
+    const pages: FundingPageMap = {
       "1": {
         code: "00000",
         msg: "success",
@@ -363,7 +393,7 @@ describe("Bitget gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
       Bitget.fetchFundingRates("BTC/USDT:USDT"),

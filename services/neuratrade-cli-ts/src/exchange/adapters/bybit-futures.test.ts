@@ -21,12 +21,14 @@ let lastOrder: BybitOrderRequest | undefined;
 let orderStatus = "Filled";
 let cancelError: string | undefined;
 let openOrders: ReadonlyArray<{ orderId: string }> = [];
-let lastTradingStop: {
-  symbol: string;
-  positionIdx: number;
-  takeProfit?: string;
-  stopLoss?: string;
-} | undefined;
+let lastTradingStop:
+  | {
+      symbol: string;
+      positionIdx: number;
+      takeProfit?: string;
+      stopLoss?: string;
+    }
+  | undefined;
 let tradingStopError: string | undefined;
 
 function makeStubClient(): BybitClientImpl {
@@ -91,8 +93,10 @@ function makeStubClient(): BybitClientImpl {
         qty: lastOrder?.qty ?? "0",
         price: lastOrder?.price ?? "0",
         avgPrice:
-          orderStatus === "Filled" ? lastOrder?.price ?? String(GATEWAY_PRICE) : "0",
-        cumExecQty: orderStatus === "Filled" ? lastOrder?.qty ?? "0" : "0",
+          orderStatus === "Filled"
+            ? (lastOrder?.price ?? String(GATEWAY_PRICE))
+            : "0",
+        cumExecQty: orderStatus === "Filled" ? (lastOrder?.qty ?? "0") : "0",
         cumExecFee: orderStatus === "Filled" ? "0.5" : "0",
       }),
     getOpenOrders: () => Effect.succeed(openOrders as never),
@@ -538,7 +542,9 @@ describe("BybitFuturesExchangeAdapter", () => {
 
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
-      expect(outcome.reason).toContain("Bybit API 400 on /v5/position/trading-stop");
+      expect(outcome.reason).toContain(
+        "Bybit API 400 on /v5/position/trading-stop",
+      );
       expect(outcome.reason).toContain("position not found");
     }
   });

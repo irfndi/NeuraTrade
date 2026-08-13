@@ -30,6 +30,19 @@ interface MutableGatewayState {
   services: Record<string, MutableGatewayServiceState>;
 }
 
+/**
+ * Untyped representation of the persisted gateway-state JSON, as produced
+ * by `JSON.parse`. Parsed into a strongly typed state at the boundary via
+ * `decodeGatewayState`.
+ */
+type RawGatewayStateJson = null | {
+  mode?: unknown;
+  supervised?: unknown;
+  updated_at?: unknown;
+  health_timeout_seconds?: unknown;
+  services?: unknown;
+};
+
 // ---------------------------------------------------------------------------
 // Default state (matches Go readGatewayState zero-value)
 // ---------------------------------------------------------------------------
@@ -79,13 +92,13 @@ export const GatewayState =
 function readRawJson(
   fs: FileSystem.FileSystem,
   filePath: string,
-): Effect.Effect<unknown, never> {
+): Effect.Effect<RawGatewayStateJson, never> {
   return Effect.gen(function* () {
     const exists = yield* fs.exists(filePath);
     if (!exists) return null;
     const content = yield* fs.readFileString(filePath);
     try {
-      return JSON.parse(content) as unknown;
+      return JSON.parse(content) as RawGatewayStateJson;
     } catch {
       return null;
     }
@@ -94,7 +107,7 @@ function readRawJson(
 
 /** Decode raw JSON into a mutable GatewayState, falling back to defaults. */
 function decodeOrFallback(
-  raw: unknown,
+  raw: RawGatewayStateJson,
 ): Effect.Effect<MutableGatewayState, never> {
   if (raw === null || raw === undefined)
     return Effect.succeed(defaultGatewayState());

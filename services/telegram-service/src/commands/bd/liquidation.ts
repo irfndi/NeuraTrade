@@ -1,5 +1,4 @@
-import type { Bot } from "grammy";
-import type { BackendApiClient } from "../../api/client";
+import type { LiquidationResponse } from "../../api/types";
 import type { SessionManager } from "../../session";
 import { getChatId, getCommandArgs } from "./helpers";
 
@@ -18,16 +17,37 @@ function formatLiquidationResult(
     lines.push("", message);
   }
 
-  if (typeof liquidatedCount === "number") {
+  if (liquidatedCount !== undefined) {
     lines.push("", `Positions closed: ${liquidatedCount}`);
   }
 
   return lines.join("\n");
 }
 
+/** Minimal grammY context the /liquidate handlers read and reply through. */
+export interface LiquidationCommandContext {
+  chat?: { id?: number | string };
+  message?: { text?: string };
+  reply(text: string): Promise<unknown>;
+}
+
+/** Minimal bot surface the /liquidate handlers depend on. */
+export interface LiquidationCommandBot {
+  command(
+    name: string,
+    handler: (ctx: LiquidationCommandContext) => Promise<void> | void,
+  ): void;
+}
+
+/** Minimal backend API surface the /liquidate handlers depend on. */
+export interface LiquidationCommandApi {
+  liquidate(chatId: string, symbol: string): Promise<LiquidationResponse>;
+  liquidateAll(chatId: string): Promise<LiquidationResponse>;
+}
+
 export function registerLiquidationCommands(
-  bot: Bot,
-  api: BackendApiClient,
+  bot: LiquidationCommandBot,
+  api: LiquidationCommandApi,
   sessions: SessionManager,
 ): void {
   bot.command("liquidate", async (ctx) => {

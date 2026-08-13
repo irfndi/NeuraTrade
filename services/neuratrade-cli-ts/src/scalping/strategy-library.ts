@@ -366,23 +366,28 @@ function findTemplate(name: StrategyTemplateName): StrategyTemplate {
 
 export function buildBacktestArgsFromTemplate(
   templateName: StrategyTemplateName,
-  baseArgs: ResolvedBacktestArgs,
+  baseArgs: Partial<ResolvedBacktestArgs>,
 ): ResolvedBacktestArgs {
   const template = findTemplate(templateName);
   const overrides = template.executionOverrides;
-  const merged = { ...baseArgs } as Record<string, unknown>;
+  const filled: Array<
+    [
+      keyof ResolvedBacktestArgs,
+      ResolvedBacktestArgs[keyof ResolvedBacktestArgs],
+    ]
+  > = [];
 
   for (const key of Object.keys(overrides) as Array<
     keyof ResolvedBacktestArgs
   >) {
     const value = overrides[key];
     if (value === undefined) continue;
-    if (typeof value === "number" && value === 0) continue;
-    if (typeof value === "string" && value === "") continue;
-    merged[key] = value;
+    if (value === 0) continue;
+    if (value === "") continue;
+    filled.push([key, value]);
   }
 
-  return merged as unknown as ResolvedBacktestArgs;
+  return { ...baseArgs, ...Object.fromEntries(filled) } as ResolvedBacktestArgs;
 }
 
 export function buildComposerConfigFromTemplate(

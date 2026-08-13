@@ -18,8 +18,12 @@ import { selectFlowUniverse } from "../src/scalping/flow-universe.ts";
 
 const MAINNET = "https://api.bybit.com";
 const HOME = process.env.NEURATRADE_HOME ?? `${process.env.HOME}/.neuratrade`;
-const MONTHS = Number(process.argv.find((a) => a.startsWith("--months="))?.split("=")[1] ?? 12);
-const symbolOverride = process.argv.find((a) => a.startsWith("--symbols="))?.split("=")[1];
+const MONTHS = Number(
+  process.argv.find((a) => a.startsWith("--months="))?.split("=")[1] ?? 12,
+);
+const symbolOverride = process.argv
+  .find((a) => a.startsWith("--symbols="))
+  ?.split("=")[1];
 const REQUEST_DELAY_MS = 250;
 const PAGE = 1000;
 
@@ -30,13 +34,19 @@ db.exec("PRAGMA synchronous = NORMAL;");
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-async function withRetry<A>(label: string, run: () => Promise<A>): Promise<A | undefined> {
+async function withRetry<A>(
+  label: string,
+  run: () => Promise<A>,
+): Promise<A | undefined> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await run();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (attempt < 4 && /429|5\d\d|fetch failed|aborted|ETIMEDOUT|ECONN|rate limit/i.test(msg)) {
+      if (
+        attempt < 4 &&
+        /429|5\d\d|fetch failed|aborted|ETIMEDOUT|ECONN|rate limit/i.test(msg)
+      ) {
         await sleep(1000 * 2 ** attempt + Math.random() * 500);
         continue;
       }
@@ -51,7 +61,9 @@ const run = <A>(e: Effect.Effect<A, unknown, never>): Promise<A> =>
 
 /** "BTC/USDT:USDT" | "BTCUSDT" -> "BTCUSDT" */
 function toBitgetSymbol(s: string): string {
-  const base = s.includes("/") ? s.slice(0, s.indexOf("/")) : s.replace(/USDT$/, "");
+  const base = s.includes("/")
+    ? s.slice(0, s.indexOf("/"))
+    : s.replace(/USDT$/, "");
   return `${base}USDT`;
 }
 function canonicalSymbol(raw: string): string {
@@ -60,22 +72,34 @@ function canonicalSymbol(raw: string): string {
 
 // ---- exchange + pair resolution -------------------------------------------
 function ensureExchange(): number {
-  const row = db.query("SELECT id FROM exchanges WHERE name = ?").get("bybit-futures") as { id: number } | undefined;
+  const row = db
+    .query("SELECT id FROM exchanges WHERE name = ?")
+    .get("bybit-futures") as { id: number } | undefined;
   if (row) return row.id;
-  const info = db.query("INSERT INTO exchanges (name, display_name, ccxt_id, status) VALUES ('bybit-futures', 'Bybit Futures', 'bybit', 'active')").run();
+  const info = db
+    .query(
+      "INSERT INTO exchanges (name, display_name, ccxt_id, status) VALUES ('bybit-futures', 'Bybit Futures', 'bybit', 'active')",
+    )
+    .run();
   return Number(info.lastInsertRowid);
 }
 const EX_ID = ensureExchange();
 
 function pairId(symbol: string): number {
   const base = symbol.split("/")[0];
-  const quote = symbol.includes("/") ? symbol.slice(symbol.indexOf("/") + 1, symbol.lastIndexOf(":")) ?? "USDT" : "USDT";
-  const q = db.query("SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?");
+  const quote = symbol.includes("/")
+    ? (symbol.slice(symbol.indexOf("/") + 1, symbol.lastIndexOf(":")) ?? "USDT")
+    : "USDT";
+  const q = db.query(
+    "SELECT id FROM trading_pairs WHERE exchange_id = ? AND symbol = ?",
+  );
   const row = q.get(EX_ID, symbol) as { id: number } | undefined;
   if (row) return row.id;
-  const info = db.query(
-    "INSERT INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency) VALUES (?, ?, ?, ?)",
-  ).run(EX_ID, symbol, base, quote);
+  const info = db
+    .query(
+      "INSERT INTO trading_pairs (exchange_id, symbol, base_currency, quote_currency) VALUES (?, ?, ?, ?)",
+    )
+    .run(EX_ID, symbol, base, quote);
   return Number(info.lastInsertRowid);
 }
 
@@ -109,7 +133,17 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
     let inserted = 0;
     db.transaction(() => {
       for (const c of keep) {
-        const res = insCandle.run(EX_ID, pair, "5m", c.open, c.high, c.low, c.close, c.volume, c.timestamp.toISOString());
+        const res = insCandle.run(
+          EX_ID,
+          pair,
+          "5m",
+          c.open,
+          c.high,
+          c.low,
+          c.close,
+          c.volume,
+          c.timestamp.toISOString(),
+        );
         inserted += Number(res.changes);
       }
     })();
@@ -117,27 +151,50 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
     if (oldestTs < startMs) break;
     startTime = new Date(oldestTs - 1);
     if (saved % 20000 < PAGE) {
-      console.log(`  klines: ${saved} (${new Date(oldestTs).toISOString().slice(0, 10)})`);
+      console.log(
+        `  klines: ${saved} (${new Date(oldestTs).toISOString().slice(0, 10)})`,
+      );
     }
   }
   return saved;
 }
 
-async function fetchOi(symbol: string, startMs: number, endMs: number): Promise<number> {
+async function fetchOi(
+  symbol: string,
+  startMs: number,
+  endMs: number,
+): Promise<number> {
   const bSym = toBitgetSymbol(symbol);
   const windowMs = 30 * 24 * 3600 * 1000;
   let got = 0;
   for (let wStart = startMs; wStart < endMs; wStart += windowMs) {
     await sleep(REQUEST_DELAY_MS);
-    const rows = await withRetry(`oi ${bSym} ${new Date(wStart).toISOString().slice(0, 10)}`, () =>
-      run(Bybit.fetchOpenInterest(symbol, "5m", MAINNET, wStart, Math.min(wStart + windowMs, endMs))),
+    const rows = await withRetry(
+      `oi ${bSym} ${new Date(wStart).toISOString().slice(0, 10)}`,
+      () =>
+        run(
+          Bybit.fetchOpenInterest(
+            symbol,
+            "5m",
+            MAINNET,
+            wStart,
+            Math.min(wStart + windowMs, endMs),
+          ),
+        ),
     );
     if (rows === undefined || rows.length === 0) continue;
     for (let i = 0; i < rows.length; i += 500) {
       const chunk = rows.slice(i, i + 500);
       db.transaction(() => {
         for (const r of chunk) {
-          insOi.run("bybit-futures", symbol, "5m", r.timestamp, r.oi, r.oiValue);
+          insOi.run(
+            "bybit-futures",
+            symbol,
+            "5m",
+            r.timestamp,
+            r.oi,
+            r.oiValue,
+          );
         }
       })();
     }
@@ -149,13 +206,27 @@ async function fetchOi(symbol: string, startMs: number, endMs: number): Promise<
 async function fetchFunding(symbol: string, startMs: number): Promise<number> {
   const bSym = toBitgetSymbol(symbol);
   const rows = await withRetry(`funding ${bSym}`, () =>
-    run(Bybit.fetchFundingRates(symbol, new Date(startMs), new Date(), 200, MAINNET)),
+    run(
+      Bybit.fetchFundingRates(
+        symbol,
+        new Date(startMs),
+        new Date(),
+        200,
+        MAINNET,
+      ),
+    ),
   );
   if (rows === undefined || rows.length === 0) return 0;
   db.transaction(() => {
     for (const r of rows) {
-      if (!(r.timestamp instanceof Date) || Number.isNaN(r.timestamp.getTime())) continue;
-      insFunding.run("bybit-futures", symbol, r.fundingRate, r.timestamp.toISOString());
+      if (!(r.timestamp instanceof Date) || Number.isNaN(r.timestamp.getTime()))
+        continue;
+      insFunding.run(
+        "bybit-futures",
+        symbol,
+        r.fundingRate,
+        r.timestamp.toISOString(),
+      );
     }
   })();
   return rows.length;
@@ -198,15 +269,22 @@ async function main() {
       totalFunding += f;
       console.log(`  funding saved: ${f}`);
     } catch (err) {
-      console.warn(`⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`);
+      console.warn(
+        `⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`,
+      );
     }
   }
 
-  console.log(`\nDONE: ${symbols.length} symbols, ${totalCandles} candles, ${totalOi} OI rows, ${totalFunding} funding rows`);
+  console.log(
+    `\nDONE: ${symbols.length} symbols, ${totalCandles} candles, ${totalOi} OI rows, ${totalFunding} funding rows`,
+  );
   db.close();
 }
 
 await main().catch((err) => {
-  console.error("fetch failed:", err instanceof Error ? err.message : String(err));
+  console.error(
+    "fetch failed:",
+    err instanceof Error ? err.message : String(err),
+  );
   process.exit(1);
 });

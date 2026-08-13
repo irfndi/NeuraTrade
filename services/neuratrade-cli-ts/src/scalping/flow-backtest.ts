@@ -1084,7 +1084,7 @@ export function runFlowBacktest(data: FlowBacktestData): FlowBacktestReport {
 
   // Purge rule: label window [entryTs, entryTs + maxHoldMs] must sit fully
   // inside the test segment — never straddle a train/test boundary.
-  const windowSignalCounts = plan.windows.map((w) => ({
+  const windowSignalCounts = plan.windows.map((_w) => ({
     signals: 0,
     purged: 0,
   }));

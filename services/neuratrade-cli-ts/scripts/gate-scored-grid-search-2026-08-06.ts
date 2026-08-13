@@ -49,20 +49,28 @@ const home =
 const db = new Database(join(home, "data", "neuratrade.db"), {
   readonly: true,
 });
+interface CandleRow {
+  open_price: number;
+  high_price: number;
+  low_price: number;
+  close_price: number;
+  volume: number;
+  timestamp: string;
+}
 const rows = db
-  .query<Record<string, unknown>, string[]>(
+  .query<CandleRow, string[]>(
     `SELECT o.open_price, o.high_price, o.low_price, o.close_price, o.volume, o.timestamp
    FROM ohlcv_data o JOIN exchanges e ON e.id = o.exchange_id JOIN trading_pairs p ON p.id = o.trading_pair_id
    WHERE e.name = ? AND p.symbol = ? AND o.timeframe = ? ORDER BY o.timestamp ASC`,
   )
   .all("bitget-futures", symbol, timeframe);
 const candles = rows.map((r) => ({
-  open: r.open_price as number,
-  high: r.high_price as number,
-  low: r.low_price as number,
-  close: r.close_price as number,
-  volume: r.volume as number,
-  timestamp: new Date(r.timestamp as string),
+  open: r.open_price,
+  high: r.high_price,
+  low: r.low_price,
+  close: r.close_price,
+  volume: r.volume,
+  timestamp: new Date(r.timestamp),
 }));
 console.log(
   `candles: ${candles.length} | last: ${candles.at(-1)!.timestamp.toISOString()}`,

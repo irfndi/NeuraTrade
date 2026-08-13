@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { Bot } from "grammy";
 import { TELEGRAM_COMMAND_MENU, registerTelegramCommandMenu } from "./menu";
 
 describe("Telegram command menu", () => {
@@ -17,7 +16,7 @@ describe("Telegram command menu", () => {
       },
     };
 
-    await registerTelegramCommandMenu(bot as unknown as Bot);
+    await registerTelegramCommandMenu(bot);
 
     expect(registered.length).toBe(TELEGRAM_COMMAND_MENU.length);
     expect(registered.some((c) => c.command === "ai_models")).toBe(true);

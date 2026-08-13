@@ -14,6 +14,15 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  */
 const EXCHANGE = "bybit-futures";
 
+/** Open-interest interval buckets keyed by timeframe. */
+interface OiIntervalMap {
+  [key: string]: string;
+}
+/** Kline interval buckets keyed by timeframe. */
+interface BybitIntervalMap {
+  [key: string]: string;
+}
+
 function getJSON<T>(
   path: string,
   baseUrl = BASE_URL,
@@ -225,11 +234,7 @@ const SYMBOLS_MAX_PAGES = 20;
 
 export function fetchSymbols(
   baseUrl = BASE_URL,
-): Effect.Effect<
-  readonly string[],
-  MarketDataError,
-  never
-> {
+): Effect.Effect<readonly string[], MarketDataError, never> {
   return Effect.gen(function* () {
     const symbols: string[] = [];
     let cursor: string | undefined;
@@ -265,21 +270,13 @@ export function fetchSymbols(
  */
 export function fetchDemoSymbols(
   baseUrl = BASE_URL,
-): Effect.Effect<
-  readonly string[],
-  MarketDataError,
-  never
-> {
+): Effect.Effect<readonly string[], MarketDataError, never> {
   return fetchSymbols(baseUrl);
 }
 
 export function fetch24hrVolumes(
   baseUrl = BASE_URL,
-): Effect.Effect<
-  Readonly<Record<string, number>>,
-  MarketDataError,
-  never
-> {
+): Effect.Effect<Readonly<Record<string, number>>, MarketDataError, never> {
   return Effect.gen(function* () {
     const data = yield* getJSON<{ readonly list: readonly BybitTicker[] }>(
       "/v5/market/tickers?category=linear",
@@ -326,10 +323,8 @@ export function fetchTickers(
         turnover24h: asNumber(
           ticker.quoteVol ?? ticker.quoteVolume ?? ticker.turnover24h,
         ),
-        bid1Price:
-          bid !== undefined && bid !== "" ? asNumber(bid) : undefined,
-        ask1Price:
-          ask !== undefined && ask !== "" ? asNumber(ask) : undefined,
+        bid1Price: bid !== undefined && bid !== "" ? asNumber(bid) : undefined,
+        ask1Price: ask !== undefined && ask !== "" ? asNumber(ask) : undefined,
       });
     }
     return tickers;
@@ -433,7 +428,7 @@ const OI_MAX_PAGES = 50;
  * 5min.
  */
 function oiInterval(timeframe: string): string {
-  const map: Record<string, string> = {
+  const map: OiIntervalMap = {
     "5m": "5min",
     "15m": "15min",
     "30m": "30min",
@@ -595,7 +590,7 @@ export function fetchInstruments(
 }
 
 function bybitInterval(timeframe: string): string {
-  const map: Record<string, string> = {
+  const map: BybitIntervalMap = {
     "1m": "1",
     "5m": "5",
     "15m": "15",

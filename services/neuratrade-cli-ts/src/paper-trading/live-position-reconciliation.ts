@@ -115,8 +115,7 @@ export function reconcileLivePosition(
   }
 
   if (
-    (state.entryFillSource !== "live" &&
-      state.entryFillSource !== "adopted") ||
+    (state.entryFillSource !== "live" && state.entryFillSource !== "adopted") ||
     state.entryOrderId === undefined ||
     state.entryOrderId.length === 0 ||
     state.entryFilledQty === undefined ||

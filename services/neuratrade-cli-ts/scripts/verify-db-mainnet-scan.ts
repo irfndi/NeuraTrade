@@ -32,16 +32,19 @@ import { runGridBacktest, type GridOptions } from "../src/scalping/grid.js";
 const HOME = process.env.NEURATRADE_HOME ?? `${process.env.HOME}/.neuratrade`;
 const mode = process.argv[2] === "gateway" ? "gateway" : "db-mainnet";
 const tierArg = process.argv.indexOf("--tier");
-const tier = tierArg >= 0 ? (process.argv[tierArg + 1] as "readiness" | "fast") : "readiness";
+const tier =
+  tierArg >= 0
+    ? (process.argv[tierArg + 1] as "readiness" | "fast")
+    : "readiness";
 // --no-asymmetry disables the structural-asymmetry gate (maxBreakevenWinRate
 // 1.0) — reproduces the pre-2026-08-11 pipeline for BEFORE numbers.
 const noAsymmetry = process.argv.includes("--no-asymmetry");
 
-const ALLOWED: Record<string, true> = {
-  "BTC/USDT:USDT": true,
-  "SOL/USDT:USDT": true,
-  "ETH/USDT:USDT": true,
-};
+const ALLOWED = new Set<string>([
+  "BTC/USDT:USDT",
+  "SOL/USDT:USDT",
+  "ETH/USDT:USDT",
+]);
 
 const db = new Database(`${HOME}/data/neuratrade.db`, { readonly: true });
 const sqlite = new MarketDataRepositorySQLite(db);
@@ -58,13 +61,18 @@ const repo: MarketDataRepositoryService = {
       return 0;
     }),
   getCandles: (q) => sqlite.getCandles(q),
-  getLatestTick: (symbol: string, timeframe: string) => sqlite.getLatestTick(symbol, timeframe),
+  getLatestTick: (symbol: string, timeframe: string) =>
+    sqlite.getLatestTick(symbol, timeframe),
   listSymbols: (ex, tf, m) => sqlite.listSymbols(ex, tf, m),
-  listSymbolsByCandleCount: (ex, tf, limit) =>
+  listSymbolsByCandleCount: (ex, tf, _limit) =>
     Effect.gen(function* () {
       const out: { symbol: string; count: number }[] = [];
-      for (const symbol of ["BTC/USDT:USDT", "SOL/USDT:USDT", "ETH/USDT:USDT"]) {
-        if (!ALLOWED[symbol]) continue;
+      for (const symbol of [
+        "BTC/USDT:USDT",
+        "SOL/USDT:USDT",
+        "ETH/USDT:USDT",
+      ]) {
+        if (!ALLOWED.has(symbol)) continue;
         const range = yield* sqlite.getCandleRange(ex, symbol, tf);
         if (range.count > 0) out.push({ symbol, count: range.count });
       }
@@ -80,11 +88,10 @@ const repo: MarketDataRepositoryService = {
   getFundingRates: (ex, s, st, en) => sqlite.getFundingRates(ex, s, st, en),
   getLatestFundingRateBefore: (ex, s, t) =>
     sqlite.getLatestFundingRateBefore(ex, s, t),
+  deleteFundingRates: (ex, s) => sqlite.deleteFundingRates(ex, s),
 };
 
-function runScan(
-  options: GridUniverseOptions,
-): Promise<void> {
+function runScan(options: GridUniverseOptions): Promise<void> {
   return Effect.runPromise(
     Effect.provide(
       Effect.provide(
@@ -99,7 +106,11 @@ function runScan(
     );
     for (const e of result.entries) {
       const be = breakevenWinRateFromWalkForward(e.walkForward);
-      const gated = e.gatedDropped ? "drop" : e.validatedTargetRatio !== undefined ? "ok" : "-";
+      const gated = e.gatedDropped
+        ? "drop"
+        : e.validatedTargetRatio !== undefined
+          ? "ok"
+          : "-";
       console.log(
         `${e.symbol.padEnd(15)} ${String(e.candles).padStart(7)}  ` +
           `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
@@ -142,7 +153,9 @@ const base: GridUniverseOptions = {
 };
 
 async function main(): Promise<void> {
-  const gateLabel = noAsymmetry ? "asymmetry gate OFF" : "asymmetry gate ON (BE<=0.40)";
+  const gateLabel = noAsymmetry
+    ? "asymmetry gate OFF"
+    : "asymmetry gate ON (BE<=0.40)";
   console.log(
     `\n=== ${mode === "db-mainnet" ? "AFTER (db-mainnet, conservative fills)" : "BEFORE (gateway/testnet-fed, wick fills)"} — tier=${tier}, ${gateLabel} ===`,
   );

@@ -8,6 +8,7 @@ import * as nodePath from "path";
 import * as os from "os";
 import { Context, Effect, Layer } from "effect";
 import { FileSystem } from "effect";
+import * as S from "effect/Schema";
 import type { LocalConfig as LocalConfigData } from "../schemas/local-config";
 import type { RuntimeConfig as RuntimeConfigData } from "../schemas/runtime-config";
 import { decodeLocalConfig } from "../schemas/local-config";
@@ -307,27 +308,58 @@ function applyLocalOverrides(
 // Merge: runtime overrides (only fields present in the raw JSON)
 // ---------------------------------------------------------------------------
 
-function isNonNullObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+/** Runtime-config JSON shape (only the fields the merge logic inspects). */
+interface RawRuntimeConfigJson {
+  readonly server?: { readonly host?: unknown; readonly port?: unknown };
+  readonly database?: {
+    readonly driver?: unknown;
+    readonly sqlite_path?: unknown;
+  };
+  readonly redis?: { readonly host?: unknown; readonly port?: unknown };
+  readonly ccxt?: {
+    readonly service_url?: unknown;
+    readonly grpc_address?: unknown;
+  };
+  readonly telegram?: {
+    readonly service_url?: unknown;
+    readonly grpc_address?: unknown;
+    readonly use_polling?: unknown;
+    readonly api_base_url?: unknown;
+  };
+  readonly ai?: {
+    readonly provider?: unknown;
+    readonly model?: unknown;
+    readonly base_url?: unknown;
+    readonly temperature?: unknown;
+    readonly max_tokens?: unknown;
+    readonly min_confidence?: unknown;
+    readonly daily_budget?: unknown;
+    readonly routing_mode?: unknown;
+  };
+  readonly features?: unknown;
+  readonly gateway?: unknown;
+}
+
+/** True when `value` is a non-null object (boundary check for parsed JSON). */
+function isJsonObject<T>(value: T): value is Extract<T, object> {
+  return S.is(S.instanceOf(Object))(value);
 }
 
 function applyRuntimeOverrides(
   base: ResolvedConfig,
   runtime: RuntimeConfigData,
-  rawJson: unknown,
+  raw: RawRuntimeConfigJson,
 ): ResolvedConfig {
-  const raw = rawJson as Record<string, unknown>;
   let result = { ...base };
 
   // Server
-  if (isNonNullObject(raw.server)) {
-    const srv = raw.server as Record<string, unknown>;
-    if ("host" in srv)
+  if (isJsonObject(raw.server)) {
+    if ("host" in raw.server)
       result = {
         ...result,
         server: { ...result.server, host: runtime.server.host },
       };
-    if ("port" in srv)
+    if ("port" in raw.server)
       result = {
         ...result,
         server: { ...result.server, port: runtime.server.port },
@@ -335,14 +367,13 @@ function applyRuntimeOverrides(
   }
 
   // Database
-  if (isNonNullObject(raw.database)) {
-    const db = raw.database as Record<string, unknown>;
-    if ("driver" in db)
+  if (isJsonObject(raw.database)) {
+    if ("driver" in raw.database)
       result = {
         ...result,
         database: { ...result.database, driver: runtime.database.driver },
       };
-    if ("sqlite_path" in db)
+    if ("sqlite_path" in raw.database)
       result = {
         ...result,
         database: {
@@ -353,14 +384,13 @@ function applyRuntimeOverrides(
   }
 
   // Redis
-  if (isNonNullObject(raw.redis)) {
-    const r = raw.redis as Record<string, unknown>;
-    if ("host" in r)
+  if (isJsonObject(raw.redis)) {
+    if ("host" in raw.redis)
       result = {
         ...result,
         redis: { ...result.redis, host: runtime.redis.host },
       };
-    if ("port" in r)
+    if ("port" in raw.redis)
       result = {
         ...result,
         redis: { ...result.redis, port: runtime.redis.port },
@@ -368,14 +398,13 @@ function applyRuntimeOverrides(
   }
 
   // CCXT
-  if (isNonNullObject(raw.ccxt)) {
-    const c = raw.ccxt as Record<string, unknown>;
-    if ("service_url" in c)
+  if (isJsonObject(raw.ccxt)) {
+    if ("service_url" in raw.ccxt)
       result = {
         ...result,
         ccxt: { ...result.ccxt, service_url: runtime.ccxt.service_url },
       };
-    if ("grpc_address" in c)
+    if ("grpc_address" in raw.ccxt)
       result = {
         ...result,
         ccxt: { ...result.ccxt, grpc_address: runtime.ccxt.grpc_address },
@@ -383,9 +412,8 @@ function applyRuntimeOverrides(
   }
 
   // Telegram
-  if (isNonNullObject(raw.telegram)) {
-    const t = raw.telegram as Record<string, unknown>;
-    if ("service_url" in t)
+  if (isJsonObject(raw.telegram)) {
+    if ("service_url" in raw.telegram)
       result = {
         ...result,
         telegram: {
@@ -393,7 +421,7 @@ function applyRuntimeOverrides(
           service_url: runtime.telegram.service_url,
         },
       };
-    if ("grpc_address" in t)
+    if ("grpc_address" in raw.telegram)
       result = {
         ...result,
         telegram: {
@@ -401,7 +429,7 @@ function applyRuntimeOverrides(
           grpc_address: runtime.telegram.grpc_address,
         },
       };
-    if ("use_polling" in t)
+    if ("use_polling" in raw.telegram)
       result = {
         ...result,
         telegram: {
@@ -409,7 +437,7 @@ function applyRuntimeOverrides(
           use_polling: runtime.telegram.use_polling,
         },
       };
-    if ("api_base_url" in t)
+    if ("api_base_url" in raw.telegram)
       result = {
         ...result,
         telegram: {
@@ -420,44 +448,43 @@ function applyRuntimeOverrides(
   }
 
   // AI
-  if (isNonNullObject(raw.ai)) {
-    const a = raw.ai as Record<string, unknown>;
-    if ("provider" in a)
+  if (isJsonObject(raw.ai)) {
+    if ("provider" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, provider: runtime.ai.provider },
       };
-    if ("model" in a)
+    if ("model" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, model: runtime.ai.model },
       };
-    if ("base_url" in a)
+    if ("base_url" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, base_url: runtime.ai.base_url },
       };
-    if ("temperature" in a)
+    if ("temperature" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, temperature: runtime.ai.temperature },
       };
-    if ("max_tokens" in a)
+    if ("max_tokens" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, max_tokens: runtime.ai.max_tokens },
       };
-    if ("min_confidence" in a)
+    if ("min_confidence" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, min_confidence: runtime.ai.min_confidence },
       };
-    if ("daily_budget" in a)
+    if ("daily_budget" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, daily_budget: runtime.ai.daily_budget },
       };
-    if ("routing_mode" in a)
+    if ("routing_mode" in raw.ai)
       result = {
         ...result,
         ai: { ...result.ai, routing_mode: runtime.ai.routing_mode },
@@ -465,12 +492,12 @@ function applyRuntimeOverrides(
   }
 
   // Features (whole-object replacement)
-  if (isNonNullObject(raw.features)) {
+  if (isJsonObject(raw.features)) {
     result = { ...result, features: runtime.features };
   }
 
   // Gateway (whole-object replacement)
-  if (isNonNullObject(raw.gateway)) {
+  if (isJsonObject(raw.gateway)) {
     result = { ...result, gateway: runtime.gateway };
   }
 
@@ -647,7 +674,11 @@ export const resolvedConfigEffect = (
       const runtime = yield* decodeRuntimeConfig(runtimeJson).pipe(
         Effect.catch(() => Effect.succeed(defaultRuntimeConfig(home))),
       );
-      result = applyRuntimeOverrides(result, runtime, runtimeJson);
+      result = applyRuntimeOverrides(
+        result,
+        runtime,
+        runtimeJson as RawRuntimeConfigJson,
+      );
     }
 
     // 4. Apply env overrides (highest priority)

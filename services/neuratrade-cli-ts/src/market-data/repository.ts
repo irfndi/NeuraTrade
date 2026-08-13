@@ -2,6 +2,11 @@ import { Context, Effect, Layer } from "effect";
 import { Database } from "bun:sqlite";
 import type { Candle, FundingRate, Tick } from "./types.js";
 
+/** Timeframe unit to milliseconds lookup. */
+interface TimeframeMultiplier {
+  [unit: string]: number;
+}
+
 /**
  * Error raised when market-data persistence fails.
  */
@@ -128,6 +133,11 @@ export interface MarketDataRepositoryService {
     symbol: string,
     timestamp: Date,
   ) => Effect.Effect<FundingRate | null, MarketDataRepositoryError, never>;
+
+  readonly deleteFundingRates: (
+    exchange: string,
+    symbol: string,
+  ) => Effect.Effect<number, MarketDataRepositoryError, never>;
 }
 
 export const MarketDataRepository =
@@ -369,6 +379,28 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
       catch: (err) =>
         new MarketDataRepositoryError(
           `Failed to load latest funding rate: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          err,
+        ),
+    });
+  }
+
+  deleteFundingRates(
+    exchange: string,
+    symbol: string,
+  ): Effect.Effect<number, MarketDataRepositoryError, never> {
+    const db = this.db;
+    return Effect.try({
+      try: () => {
+        const result = db
+          .query("DELETE FROM funding_rates WHERE exchange = ? AND symbol = ?")
+          .run(exchange, symbol);
+        return Number(result.changes);
+      },
+      catch: (err) =>
+        new MarketDataRepositoryError(
+          `Failed to delete funding rates: ${
             err instanceof Error ? err.message : String(err)
           }`,
           err,
@@ -876,12 +908,12 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
 function timeframeToMs(timeframe: string): number {
   const value = Number.parseInt(timeframe, 10);
   const unit = timeframe.slice(-1);
-  const multiplier: Record<string, number> = {
+  const multiplier: TimeframeMultiplier = {
     m: 60_000,
     h: 3_600_000,
     d: 86_400_000,
     w: 604_800_000,
-  };
+  } satisfies Record<string, number>;
   return value * (multiplier[unit] ?? 60_000);
 }
 
@@ -953,7 +985,9 @@ function findTradingPairId(
                 `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders}) AND exchange_id = ?
                  ORDER BY CASE WHEN symbol = ? THEN 0 ELSE 1 END`,
               )
-              .get(...variants, exchangeId, symbol) as { id: number } | undefined)
+              .get(...variants, exchangeId, symbol) as
+              | { id: number }
+              | undefined)
           : (db
               .query(
                 `SELECT id FROM trading_pairs WHERE symbol IN (${placeholders})
@@ -984,7 +1018,9 @@ function tradingPairSymbolVariants(symbol: string): string[] {
   variants.add(symbol);
   if (symbol.includes("/")) {
     // "BTC/USDT:USDT" and "BTC/USDT" both derive from the same market.
-    variants.add(symbol.includes(":") ? symbol.split(":")[0]! : `${symbol}:USDT`);
+    variants.add(
+      symbol.includes(":") ? symbol.split(":")[0]! : `${symbol}:USDT`,
+    );
   } else if (symbol.endsWith("USDT") && !symbol.includes("/")) {
     const canonical = `${symbol.slice(0, -4)}/${symbol.slice(-4)}`;
     variants.add(canonical);

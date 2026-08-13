@@ -1,4 +1,8 @@
-import { TelegramErrorInfo, isRetryableError } from "./telegram-errors";
+import {
+  ClassifiableError,
+  TelegramErrorInfo,
+  isRetryableError,
+} from "./telegram-errors";
 
 /**
  * Configuration for retry behavior
@@ -82,7 +86,7 @@ function sleep(ms: number): Promise<void> {
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
-  errorClassifier: (error: unknown) => TelegramErrorInfo,
+  errorClassifier: (error: ClassifiableError) => TelegramErrorInfo,
   config: Partial<RetryConfig> = {},
 ): Promise<RetryResult<T>> {
   const fullConfig: RetryConfig = { ...DEFAULT_RETRY_CONFIG, ...config };
@@ -97,7 +101,7 @@ export async function withRetry<T>(
         attempts: attempt + 1,
       };
     } catch (error) {
-      lastError = errorClassifier(error);
+      lastError = errorClassifier(error as ClassifiableError);
 
       // Log the error with attempt info
       console.error(
@@ -149,7 +153,7 @@ export async function withRetry<T>(
  */
 export async function withRetryThrow<T>(
   fn: () => Promise<T>,
-  errorClassifier: (error: unknown) => TelegramErrorInfo,
+  errorClassifier: (error: ClassifiableError) => TelegramErrorInfo,
   config: Partial<RetryConfig> = {},
 ): Promise<T> {
   const result = await withRetry(fn, errorClassifier, config);

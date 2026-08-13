@@ -6,17 +6,16 @@ import {
   MarketDataRepository,
   type MarketDataRepositoryService,
 } from "../market-data/repository.js";
-import type { Candle, Tick } from "../market-data/types.js";
+import type { Candle } from "../market-data/types.js";
 import {
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
   GATE_ADX_GATES,
   GATE_TARGETS,
-  MIN_UNIVERSE_24H_VOLUME_USDT,
   passesTimeSplitGate,
   runMarketUniverseScan,
   type GridUniverseOptions,
 } from "./grid-universe.js";
-import { runGridBacktest, type GridOptions } from "./grid.js";
+import type { GridOptions } from "./grid.js";
 import {
   accountScaledTargetFillsPerDay,
   accountSymbolCap,
@@ -175,9 +174,9 @@ describe("passesStage2Screen", () => {
   });
 
   it("rejects moon-shots (ATR% above 10)", () => {
-    expect(
-      passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 0.2 }),
-    ).toBe(false);
+    expect(passesStage2Screen({ adx14: STAGE2_MIN_ADX, atr14Pct: 0.2 })).toBe(
+      false,
+    );
   });
 });
 
@@ -369,8 +368,12 @@ describe("DEFAULT_GRID_UNIVERSE_SEARCH_SPACE", () => {
     expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridStepPct).toContain(1.25);
     expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridMaxGrids).toContain(1.5);
     expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridMaxGrids).toContain(2);
-    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(24);
-    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(36);
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(
+      24,
+    );
+    expect(DEFAULT_GRID_UNIVERSE_SEARCH_SPACE.gridPauseAfterLossBars).toContain(
+      36,
+    );
   });
 
   it("keeps BTC/SOL-style configs reachable by the walk-forward grid search", () => {
@@ -427,7 +430,10 @@ describe("selectUniversePortfolio", () => {
 
   it("never selects entries without a computed edge or fills", () => {
     const a = entry("A", 0.9, 0);
-    const b: GridUniverseEntry = { ...entry("B", 0.8, 10), edgePerTradePct: undefined };
+    const b: GridUniverseEntry = {
+      ...entry("B", 0.8, 10),
+      edgePerTradePct: undefined,
+    };
     expect(selectUniversePortfolio([a, b], 50)).toEqual([b]);
   });
 
@@ -480,7 +486,6 @@ describe("selectUniversePortfolio", () => {
     ).toEqual(["A"]);
   });
 });
-
 
 describe("gateScoredEligibility (stage-4)", () => {
   const BAR_MS = 15 * 60 * 1000;
@@ -543,7 +548,13 @@ describe("gateScoredEligibility (stage-4)", () => {
         const close = dip ? open * (1 - 0.5 / 100) : open * (1 + 0.02 / 100);
         rows.push(
           dip
-            ? { ...base, open, high: open * (1 + 0.05 / 100), low: close, close }
+            ? {
+                ...base,
+                open,
+                high: open * (1 + 0.05 / 100),
+                low: close,
+                close,
+              }
             : { ...base, open, high: close, low: open, close },
         );
         price = close;
@@ -654,11 +665,8 @@ describe("gateScoredEligibility (stage-4)", () => {
     expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
   }, 300_000);
 
-  it(
-    "fast tier: a walk-forward survivor failing the readiness board becomes eligible on the light criteria",
-    // Two full 9-combo gate sweeps over 54,720 candles (readiness + fast)
-    // run ~3s each; the 5s default is too tight.
-    () => {
+  it("fast tier: a walk-forward survivor failing the readiness board becomes eligible on the light criteria", () => {
+    // run ~3s each; the 5s default is too tight. // Two full 9-combo gate sweeps over 54,720 candles (readiness + fast)
     const candles = fastCandles();
     const entry = walkForwardEntry("FAST/USDT:USDT", candles);
     expect(entry.passed).toBe(true);
@@ -688,7 +696,10 @@ describe("gateScoredEligibility (stage-4)", () => {
     const { validatedTargetRatio, validatedChopGateAdx } = gated;
     expect(validatedTargetRatio).toBeDefined();
     expect(validatedChopGateAdx).toBeDefined();
-    if (validatedTargetRatio === undefined || validatedChopGateAdx === undefined)
+    if (
+      validatedTargetRatio === undefined ||
+      validatedChopGateAdx === undefined
+    )
       return;
     expect(GATE_TARGETS as readonly number[]).toContain(validatedTargetRatio);
     expect(GATE_ADX_GATES as readonly number[]).toContain(validatedChopGateAdx);
@@ -797,7 +808,6 @@ describe("gateScoredEligibility (stage-4)", () => {
   }, 300_000);
 });
 
-
 describe("passesTimeSplitGate (regime-concentration guard)", () => {
   const BAR_MS = 15 * 60 * 1000;
   const grid: GridOptions = {
@@ -856,7 +866,9 @@ describe("passesTimeSplitGate (regime-concentration guard)", () => {
     }
     // Last 20%: steady decline (grid long positions bleed).
     for (let i = 400; i < 500; i += 1) {
-      candles.push(declineCandle("T/USDT:USDT", end - (499 - i) * BAR_MS, i - 400));
+      candles.push(
+        declineCandle("T/USDT:USDT", end - (499 - i) * BAR_MS, i - 400),
+      );
     }
     // First half (wicks) is clearly positive; the split must FAIL.
     expect(passesTimeSplitGate(candles, grid)).toBe(false);
@@ -925,17 +937,15 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
     };
   }
 
-  function makeGateway(
-    behavior: {
-      symbols: string[];
-      volumes: Record<string, number>;
-      fetchCalls: Map<string, number>;
-      fail?: { symbol: string; reason: string };
-      flatSymbols?: Set<string>;
-      /** Optional demo-subset bound; defaults to `symbols` (no filtering). */
-      demoSymbols?: string[];
-    },
-  ) {
+  function makeGateway(behavior: {
+    symbols: string[];
+    volumes: Record<string, number>;
+    fetchCalls: Map<string, number>;
+    fail?: { symbol: string; reason: string };
+    flatSymbols?: Set<string>;
+    /** Optional demo-subset bound; defaults to `symbols` (no filtering). */
+    demoSymbols?: string[];
+  }) {
     return Layer.succeed(MarketDataGateway, {
       fetchTick: () => Effect.die("unused"),
       fetchOHLCV: (_ex, symbol, _tf, limit, startTime) => {
@@ -1000,10 +1010,9 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
         }),
       getCandles: (query) =>
         Effect.sync(() => {
-          const all = candlesByKey.get(`${query.symbol}:${query.timeframe}`) ?? [];
-          return query.limit === undefined
-            ? all
-            : all.slice(-query.limit);
+          const all =
+            candlesByKey.get(`${query.symbol}:${query.timeframe}`) ?? [];
+          return query.limit === undefined ? all : all.slice(-query.limit);
         }),
       getLatestTick: () => Effect.succeed(null),
       listSymbols: () => Effect.die("unused"),
@@ -1040,6 +1049,7 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       saveFundingRates: () => Effect.die("unused"),
       getFundingRates: () => Effect.die("unused"),
       getLatestFundingRateBefore: () => Effect.die("unused"),
+      deleteFundingRates: () => Effect.die("unused"),
     };
     return { repo, candlesByKey };
   }
@@ -1085,8 +1095,12 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       "GAMMA/USDT:USDT",
     ]);
     // The candle cache persisted the fetched history (>= minCandles).
-    expect(candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
-    expect(candlesByKey.get("GAMMA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
+    expect(
+      candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0,
+    ).toBeGreaterThanOrEqual(500);
+    expect(
+      candlesByKey.get("GAMMA/USDT:USDT:15m")?.length ?? 0,
+    ).toBeGreaterThanOrEqual(500);
     expect(candlesByKey.has("BETA/USDT:USDT")).toBe(false);
     // Entries carry the funnel metrics.
     for (const entry of result.entries) {
@@ -1138,7 +1152,9 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
     // Warm cache: 1 tail request + the deep-fetch budget (5) for the
     // walk-forward passer = 6 — no full-history pagination (~275 requests).
     expect(fetchCalls.get("ALPHA/USDT:USDT")).toBe(6);
-    expect(candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0).toBeGreaterThanOrEqual(500);
+    expect(
+      candlesByKey.get("ALPHA/USDT:USDT:15m")?.length ?? 0,
+    ).toBeGreaterThanOrEqual(500);
   });
 
   it("caches before screening and skips chop symbols (stage-2)", async () => {
@@ -1157,7 +1173,9 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
     expect(evaluated).toContain("TREND/USDT:USDT");
     expect(evaluated).not.toContain("FLAT/USDT:USDT");
     // The flat symbol was still cached (stage 2 runs after the cache fill).
-    expect((candlesByKey.get("FLAT/USDT:USDT:15m")?.length ?? 0)).toBeGreaterThanOrEqual(500);
+    expect(
+      candlesByKey.get("FLAT/USDT:USDT:15m")?.length ?? 0,
+    ).toBeGreaterThanOrEqual(500);
   });
 
   it("retries transient failures (429) and completes the batch", async () => {
@@ -1166,7 +1184,10 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       symbols: ["ALPHA/USDT"],
       volumes: { ALPHAUSDT: 5_000_000 },
       fetchCalls,
-      fail: { symbol: "ALPHA/USDT:USDT", reason: "Bitget HTTP 429 for /api/v2" },
+      fail: {
+        symbol: "ALPHA/USDT:USDT",
+        reason: "Bitget HTTP 429 for /api/v2",
+      },
     });
     const { repo, candlesByKey } = makeRepo();
 
@@ -1240,9 +1261,7 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
     // the scan timeframe key would mix mainnet-resampled and testnet-native
     // rows in ohlcv_data).
     expect(saveCalls).toBe(0);
-    const entry = result.entries.find(
-      (e) => e.symbol === "MAINNET/USDT:USDT",
-    );
+    const entry = result.entries.find((e) => e.symbol === "MAINNET/USDT:USDT");
     expect(entry).toBeDefined();
     expect(entry?.candles).toBeGreaterThanOrEqual(500);
   });
@@ -1266,7 +1285,11 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       dataSource: "db-mainnet",
       minFillFrequencyPct: 10,
     };
-    const gateway = makeGateway({ symbols: [], volumes: {}, fetchCalls: new Map() });
+    const gateway = makeGateway({
+      symbols: [],
+      volumes: {},
+      fetchCalls: new Map(),
+    });
 
     const wick = await runScan(
       gateway,
@@ -1279,8 +1302,9 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
       { ...baseOptions, fillModel: "conservative" },
     );
 
-    const wickFills = wick.entries.find((e) => e.symbol === "RATIO/USDT:USDT")
-      ?.fillsPerDay;
+    const wickFills = wick.entries.find(
+      (e) => e.symbol === "RATIO/USDT:USDT",
+    )?.fillsPerDay;
     const conservativeFills = conservative.entries.find(
       (e) => e.symbol === "RATIO/USDT:USDT",
     )?.fillsPerDay;

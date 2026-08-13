@@ -296,6 +296,11 @@ function inferBtExitReason(t: GridTrade): "target" | "stop" | "liquidation" {
   if (t.isLiquidation) return "liquidation";
   return t.win ? "target" : "stop";
 }
+interface ParityCheck {
+  match: boolean;
+  note: string;
+}
+type ParityChecks = Record<string, ParityCheck>;
 function report(
   label: string,
   bt: ReturnType<typeof runGridBacktest>,
@@ -315,7 +320,7 @@ function report(
     if (withinTol(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
   }
   const countMatch = btTrades.length === depTrades.length;
-  const checks: Record<string, { match: boolean; note: string }> = {
+  const checks: ParityChecks = {
     "trigger-bar": {
       match: countMatch,
       note: `bt=${btTrades.length} dep=${depTrades.length}`,

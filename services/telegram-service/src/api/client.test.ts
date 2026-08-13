@@ -10,6 +10,16 @@ import {
 const makeTestAdminKey = (): string =>
   `test-admin-key-${Math.random().toString(36).slice(2, 12)}`;
 
+type FetchImplementation = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
+/** Replace the global fetch with a stub that returns a Response or throws. */
+function stubFetch(impl: FetchImplementation): void {
+  globalThis.fetch = impl as typeof fetch;
+}
+
 describe("BackendApiClient fallback behavior", () => {
   const originalFetch = globalThis.fetch;
 
@@ -23,7 +33,7 @@ describe("BackendApiClient fallback behavior", () => {
 
   test("falls back to local backend URL when primary base URL is unreachable", async () => {
     const urls: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    stubFetch(async (input: RequestInfo | URL) => {
       const url = String(input);
       urls.push(url);
       if (url.startsWith("http://127.0.0.1:58080")) {
@@ -41,7 +51,7 @@ describe("BackendApiClient fallback behavior", () => {
           headers: { "Content-Type": "application/json" },
         },
       );
-    }) as typeof fetch;
+    });
 
     const client = new BackendApiClient({
       baseUrl: "http://127.0.0.1:58080",
@@ -76,7 +86,7 @@ describe("TelegramApi Effect service", () => {
 
   test("TelegramApiLive composes with the underlying client", async () => {
     let capturedUrl = "";
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    stubFetch(async (input: RequestInfo | URL) => {
       capturedUrl = String(input);
       return new Response(
         JSON.stringify({
@@ -91,7 +101,7 @@ describe("TelegramApi Effect service", () => {
           headers: { "Content-Type": "application/json" },
         },
       );
-    }) as unknown as typeof fetch;
+    });
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -115,11 +125,13 @@ describe("TelegramApi Effect service", () => {
   });
 
   test("TelegramApi methods surface ApiClientError on HTTP failure", async () => {
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ message: "boom" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      })) as unknown as typeof fetch;
+    stubFetch(
+      async () =>
+        new Response(JSON.stringify({ message: "boom" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -153,9 +165,9 @@ describe("TelegramApi Effect service", () => {
     // Defensive coverage: the wrapper catches non-ApiClientError throws
     // and re-wraps them so the typed error channel is preserved even
     // when the underlying client raises a generic Error.
-    globalThis.fetch = (async () => {
+    stubFetch(async () => {
       throw new Error("network blew up");
-    }) as unknown as typeof fetch;
+    });
 
     const backend = new BackendApiClient({
       baseUrl: "http://example.test",
@@ -195,13 +207,13 @@ describe("BackendApiClient admin guard", () => {
 
   test("fail-fast when requireAdmin is true but adminKey is empty", async () => {
     let fetchCalled = false;
-    globalThis.fetch = (async () => {
+    stubFetch(async () => {
       fetchCalled = true;
       return new Response(JSON.stringify({}), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    });
 
     const client = new BackendApiClient({
       baseUrl: "http://example.test",

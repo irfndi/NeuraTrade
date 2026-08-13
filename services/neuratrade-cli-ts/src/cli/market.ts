@@ -4,7 +4,10 @@ import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
-import { MarketDataGateway } from "../market-data/gateway.js";
+import {
+  MarketDataGateway,
+  type MarketDataError,
+} from "../market-data/gateway.js";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
@@ -173,22 +176,15 @@ interface FetchCandlesArgs {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function failureMessage(err: unknown): string {
-  if (typeof err === "object" && err !== null) {
-    if (
-      "reason" in err &&
-      typeof err.reason === "string" &&
-      err.reason.length > 0
-    ) {
-      return err.reason;
-    }
-    if (
-      "message" in err &&
-      typeof err.message === "string" &&
-      err.message.length > 0
-    ) {
-      return err.message;
-    }
+/** Union of failures the `market` commands surface to the user. */
+type MarketCommandError = MarketDataError | MarketDataRepositoryError | Error;
+
+function failureMessage(err: MarketCommandError): string {
+  if ("reason" in err && err.reason.length > 0) {
+    return err.reason;
+  }
+  if ("message" in err && err.message.length > 0) {
+    return err.message;
   }
   return String(err);
 }
@@ -291,10 +287,19 @@ function fetchCandlesProgram(args: FetchCandlesArgs) {
   });
 }
 
+/** Milliseconds per timeframe unit suffix. */
+interface TimeframeMsPerUnit {
+  readonly m: number;
+  readonly h: number;
+  readonly d: number;
+  readonly w: number;
+  readonly [unit: string]: number;
+}
+
 function timeframeToMs(timeframe: string): number {
   const value = Number.parseInt(timeframe, 10);
   const unit = timeframe.slice(-1);
-  const multiplier: Record<string, number> = {
+  const multiplier: TimeframeMsPerUnit = {
     m: 60_000,
     h: 3_600_000,
     d: 86_400_000,
@@ -541,13 +546,7 @@ function fetchFundingRatesProgram(args: FetchFundingRatesArgs) {
     yield* repo.ensureFundingRatesTable();
 
     if (args.noResume) {
-      const db = (repo as unknown as { db?: Database }).db;
-      if (db) {
-        db.run("DELETE FROM funding_rates WHERE exchange = ? AND symbol = ?", [
-          args.exchange,
-          args.symbol,
-        ]);
-      }
+      yield* repo.deleteFundingRates(args.exchange, args.symbol);
     }
 
     const endTime = args.end ? args.end.getTime() : Date.now();

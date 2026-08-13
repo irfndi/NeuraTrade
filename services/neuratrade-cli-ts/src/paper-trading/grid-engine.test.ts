@@ -256,26 +256,31 @@ function makeFuturesAdapter(): FuturesExchangeAdapterService {
   };
 }
 
+/** A tracked order observed by the mock futures adapter. */
+interface TrackingOrder {
+  side: string;
+  size: number;
+  type: string;
+  price: number | null;
+}
+/** A tracked close observed by the mock futures adapter. */
+interface TrackingClose {
+  side: string;
+  size: number;
+}
+/** Mock futures adapter plus the orders/closes it observed. */
+interface TrackingFuturesAdapterHarness {
+  adapter: FuturesExchangeAdapterService;
+  orders: TrackingOrder[];
+  closes: TrackingClose[];
+}
+
 function makeTrackingFuturesAdapter(
   closeWithFill = true,
   initialPosition: FuturesPosition | null = null,
-): {
-  adapter: FuturesExchangeAdapterService;
-  orders: {
-    side: string;
-    size: number;
-    type: string;
-    price: number | null;
-  }[];
-  closes: { side: string; size: number }[];
-} {
-  const orders: {
-    side: string;
-    size: number;
-    type: string;
-    price: number | null;
-  }[] = [];
-  const closes: { side: string; size: number }[] = [];
+): TrackingFuturesAdapterHarness {
+  const orders: TrackingOrder[] = [];
+  const closes: TrackingClose[] = [];
   let position = initialPosition;
   const adapter: FuturesExchangeAdapterService = {
     placeOrder: (req) =>
@@ -1261,12 +1266,12 @@ describe("grid paper engine", () => {
     const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
 
     await runWithRepo(opts, repo, candles, adapter);
-    let caught: unknown = null;
+    let caught: ExchangeError | null = null;
     for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
       try {
         await runWithRepo(opts, repo, candles, adapter);
       } catch (error) {
-        caught = error;
+        if (error instanceof ExchangeError) caught = error;
       }
     }
 

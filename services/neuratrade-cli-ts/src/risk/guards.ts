@@ -150,8 +150,7 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
         const positionLeverage = Math.max(1, context.leverage ?? 1);
         const positionSizePct =
           context.capital > 0
-            ? (context.positionValue / positionLeverage / context.capital) *
-              100
+            ? (context.positionValue / positionLeverage / context.capital) * 100
             : 0;
         if (positionSizePct > limits.maxPositionSizePct) {
           violations.push(
@@ -198,14 +197,18 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
           // say what product type it is trading — treat unknown as disallowed.
           if (context.productType === undefined) {
             violations.push("product type unknown is not allowed");
-          } else if (!limits.allowedProductTypes.includes(context.productType)) {
-            violations.push(`product type ${context.productType} is not allowed`);
+          } else if (
+            !limits.allowedProductTypes.includes(context.productType)
+          ) {
+            violations.push(
+              `product type ${context.productType} is not allowed`,
+            );
           }
         }
 
         if (
-          typeof limits.maxLeverage === "number" &&
-          typeof context.leverage === "number" &&
+          limits.maxLeverage !== undefined &&
+          context.leverage !== undefined &&
           context.leverage > limits.maxLeverage
         ) {
           violations.push(

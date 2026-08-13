@@ -1,11 +1,33 @@
-import type { Bot } from "grammy";
-import type { BackendApiClient } from "../../api/client";
+import type {
+  BeginAutonomousResponse,
+  PauseAutonomousResponse,
+} from "../../api/types";
 import type { SessionManager } from "../../session";
 import { getChatId, persistChatIdToLocalConfig } from "./helpers";
 
+/** Minimal grammY context the /begin and /pause handlers read and reply through. */
+export interface AutonomousCommandContext {
+  chat?: { id?: number | string };
+  reply(text: string): Promise<unknown>;
+}
+
+/** Minimal bot surface the /begin and /pause handlers depend on. */
+export interface AutonomousCommandBot {
+  command(
+    name: string,
+    handler: (ctx: AutonomousCommandContext) => Promise<void> | void,
+  ): void;
+}
+
+/** Minimal backend API surface the /begin and /pause handlers depend on. */
+export interface AutonomousCommandApi {
+  beginAutonomous(chatId: string): Promise<BeginAutonomousResponse>;
+  pauseAutonomous(chatId: string): Promise<PauseAutonomousResponse>;
+}
+
 export function registerAutonomousCommands(
-  bot: Bot,
-  api: BackendApiClient,
+  bot: AutonomousCommandBot,
+  api: AutonomousCommandApi,
   sessions: SessionManager,
 ): void {
   bot.command("begin", async (ctx) => {

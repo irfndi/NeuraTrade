@@ -1,5 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 
+import type { LogContext, LogContextValue } from "./src/utils/logger";
+
 // Sentry configuration
 const sentryDsn = process.env.SENTRY_DSN || "";
 const sentryEnvironment =
@@ -74,7 +76,7 @@ export async function initializeSentry(): Promise<boolean> {
  */
 export function captureException(
   error: Error | unknown,
-  context?: Record<string, unknown>,
+  context?: LogContext,
 ): void {
   if (!Sentry || !sentryInitialized) {
     console.error("Sentry not initialized, logging error locally:", error);
@@ -98,7 +100,7 @@ export function captureException(
 export function captureMessage(
   message: string,
   level: "debug" | "info" | "warning" | "error" | "fatal" = "info",
-  context?: Record<string, unknown>,
+  context?: LogContext,
 ): void {
   if (!Sentry || !sentryInitialized) {
     console.log(`[${level.toUpperCase()}] ${message}`);
@@ -124,7 +126,7 @@ export function addBreadcrumb(
   category: string,
   message: string,
   level: "debug" | "info" | "warning" | "error" = "info",
-  data?: Record<string, unknown>,
+  data?: LogContext,
 ): void {
   if (!Sentry || !sentryInitialized) {
     return;
@@ -168,7 +170,7 @@ export function setTag(key: string, value: string): void {
 /**
  * Set extra context data on the current scope.
  */
-export function setExtra(key: string, value: unknown): void {
+export function setExtra(key: string, value: LogContextValue): void {
   if (!Sentry || !sentryInitialized) {
     return;
   }

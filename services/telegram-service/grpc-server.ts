@@ -477,6 +477,18 @@ export class TelegramGrpcServer {
   };
 }
 
+/**
+ * Adapt a TelegramGrpcServer handler instance to the gRPC service-server
+ * handlers contract. A single boundary assertion is required because the
+ * class's private fields prevent TypeScript from accepting a direct
+ * structural cast.
+ */
+function toTelegramServiceServer(
+  service: TelegramGrpcServer | TelegramServiceServer,
+): TelegramServiceServer {
+  return service as TelegramServiceServer;
+}
+
 export function createTelegramGrpcServer(
   bot: Bot,
   adminApiKey = config.adminApiKey,
@@ -484,11 +496,10 @@ export function createTelegramGrpcServer(
   const server = new grpc.Server({
     interceptors: [createAuthInterceptor(adminApiKey)],
   });
-  const service = new TelegramGrpcServer(bot);
 
   server.addService(
     TelegramServiceService,
-    service as unknown as TelegramServiceServer,
+    toTelegramServiceServer(new TelegramGrpcServer(bot)),
   );
 
   return server;

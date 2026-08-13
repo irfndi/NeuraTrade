@@ -12,10 +12,29 @@ interface RequestLog {
   readonly apiKey: string | null;
 }
 
-function startBackendFixture(orderResponse: unknown = liveOrderFilledFixture): {
+/** Matches the order-response JSON served by the backend. */
+interface OrderResponseFixture {
+  readonly intent_id: string;
+  readonly order_id: string;
+  readonly client_id: string;
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly side: string;
+  readonly filled_qty: string;
+  readonly filled_price: string;
+  readonly fee: string;
+  readonly status: string;
+  readonly timestamp: string;
+}
+
+interface BackendFixture {
   readonly server: Bun.Server<undefined>;
   readonly requests: RequestLog[];
-} {
+}
+
+function startBackendFixture(
+  orderResponse: OrderResponseFixture = liveOrderFilledFixture,
+): BackendFixture {
   const requests: RequestLog[] = [];
   const server = Bun.serve({
     port: 0,

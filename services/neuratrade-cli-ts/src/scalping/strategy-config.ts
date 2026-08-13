@@ -484,8 +484,38 @@ function isComposerIndicatorName(name: string): name is keyof ComposerWeights {
 export function strategyConfigToComposerConfig(
   config: StrategyConfig,
 ): ComposerConfig {
-  const weights: Record<string, number> = {};
-  const enabled: Record<string, boolean> = {};
+  type MutableComposerWeights = {
+    -readonly [K in keyof ComposerWeights]: number;
+  };
+  type MutableComposerEnabled = {
+    -readonly [K in keyof ComposerWeights]: boolean;
+  };
+  const weights: MutableComposerWeights = {
+    spread: 0,
+    imbalance: 0,
+    volatility: 0,
+    trend: 0,
+    liquidity: 0,
+    rsi: 0,
+    rsiPullback: 0,
+    emaPullback: 0,
+    regime: 0,
+    funding: 0,
+    connorsRsi2: 0,
+  };
+  const enabled: MutableComposerEnabled = {
+    spread: false,
+    imbalance: false,
+    volatility: false,
+    trend: false,
+    liquidity: false,
+    rsi: false,
+    rsiPullback: false,
+    emaPullback: false,
+    regime: false,
+    funding: false,
+    connorsRsi2: false,
+  };
 
   for (const name of composerIndicatorNames) {
     weights[name] = 0;
@@ -568,7 +598,7 @@ export function strategyConfigToComposerConfig(
   };
 
   return {
-    weights: weights as unknown as ComposerWeights,
+    weights: weights as ComposerWeights,
     thresholds,
     enabled: enabled as ComposerEnabled,
   };

@@ -44,7 +44,7 @@ describe("signalAndWait", () => {
     // Very short timeout — sleep won't exit that fast
     const result = await Effect.runPromise(signalAndWait(pid, "SIGTERM", 1));
     // The process may or may not exit within 1ms — we just verify no crash
-    expect(typeof result).toBe("boolean");
+    expect(result).toEqual(expect.any(Boolean));
 
     // Force cleanup
     try {

@@ -6,7 +6,6 @@ import {
   type ExchangeAdapterService,
 } from "../adapter.js";
 
-
 const TESTNET_BASE_URL = "https://testnet.binance.vision";
 const LIVE_BASE_URL = "https://api.binance.com";
 const DEFAULT_TIMEOUT_MS = 30_000;

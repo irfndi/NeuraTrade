@@ -121,9 +121,21 @@ const candidates = [
 ];
 
 function evaluate(src: readonly CandleLike[], label: string): void {
-  const bl = runBacktest({ ...base, candles: src, composerConfig: defaultComposerConfig });
-  const nr = runBacktest({ ...base, candles: src, composerConfig: noRegimeConfig });
-  const ranked = sweepComposerConfigs({ ...base, candles: src }, candidates, defaultComposerConfig);
+  const bl = runBacktest({
+    ...base,
+    candles: src,
+    composerConfig: defaultComposerConfig,
+  });
+  const nr = runBacktest({
+    ...base,
+    candles: src,
+    composerConfig: noRegimeConfig,
+  });
+  const ranked = sweepComposerConfigs(
+    { ...base, candles: src },
+    candidates,
+    defaultComposerConfig,
+  );
   const best = ranked[0];
   const ret = (x: number) => x.toFixed(2);
   console.log(
@@ -140,7 +152,9 @@ function evaluate(src: readonly CandleLike[], label: string): void {
   // net regime-vs-no-regime on the best candidate
   const ddGain = nr.maxDrawdownPct - best.maxDrawdownPct;
   const shGain = best.sharpeRatio - nr.sharpeRatio;
-  console.log(`         regime-vs-no-regime: ddGain=${ddGain.toFixed(2)}pp sharpeGain=${shGain.toFixed(2)}`);
+  console.log(
+    `         regime-vs-no-regime: ddGain=${ddGain.toFixed(2)}pp sharpeGain=${shGain.toFixed(2)}`,
+  );
 }
 
 // 1) Full history.
@@ -161,9 +175,21 @@ for (let start = 0; start + WINDOW <= candles.length; start += WINDOW) {
   const last = win[win.length - 1].close;
   const trend = last >= first ? "UP" : "DOWN";
   const label = `w${nWin}:${first.toFixed(0)}->${last.toFixed(0)} (${trend})`;
-  const r0 = runBacktest({ ...base, candles: win, composerConfig: defaultComposerConfig });
-  const nr = runBacktest({ ...base, candles: win, composerConfig: noRegimeConfig });
-  const ranked = sweepComposerConfigs({ ...base, candles: win }, candidates, defaultComposerConfig);
+  const r0 = runBacktest({
+    ...base,
+    candles: win,
+    composerConfig: defaultComposerConfig,
+  });
+  const nr = runBacktest({
+    ...base,
+    candles: win,
+    composerConfig: noRegimeConfig,
+  });
+  const ranked = sweepComposerConfigs(
+    { ...base, candles: win },
+    candidates,
+    defaultComposerConfig,
+  );
   const best = ranked[0];
   const ddGain = nr.maxDrawdownPct - best.maxDrawdownPct;
   const shGain = best.sharpeRatio - nr.sharpeRatio;
@@ -176,6 +202,8 @@ for (let start = 0; start + WINDOW <= candles.length; start += WINDOW) {
   nWin++;
 }
 if (nWin > 0) {
-  console.log(`\nAvg regime ddGain over ${nWin} windows: ${(ddSum / nWin).toFixed(2)}pp; avg sharpeGain: ${(shSum / nWin).toFixed(3)}`);
+  console.log(
+    `\nAvg regime ddGain over ${nWin} windows: ${(ddSum / nWin).toFixed(2)}pp; avg sharpeGain: ${(shSum / nWin).toFixed(3)}`,
+  );
 }
 console.log("");

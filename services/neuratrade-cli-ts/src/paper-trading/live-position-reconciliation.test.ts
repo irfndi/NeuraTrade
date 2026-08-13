@@ -228,8 +228,7 @@ describe("reconcileLivePosition", () => {
 
     expect(result).toEqual({
       kind: "mismatch",
-      reason:
-        "local long position differs from exchange short position",
+      reason: "local long position differs from exchange short position",
     });
   });
 
@@ -254,8 +253,7 @@ describe("reconcileLivePosition", () => {
 
     expect(result).toEqual({
       kind: "mismatch",
-      reason:
-        "exchange margin mode isolated differs from expected crossed",
+      reason: "exchange margin mode isolated differs from expected crossed",
     });
   });
 
@@ -305,8 +303,7 @@ describe("reconcileLivePosition", () => {
 
     expect(result).toEqual({
       kind: "mismatch",
-      reason:
-        "exchange entry price 70000 differs from expected 71000",
+      reason: "exchange entry price 70000 differs from expected 71000",
     });
   });
 

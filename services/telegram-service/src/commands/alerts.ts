@@ -73,7 +73,10 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
         await ctx.reply(chunk);
       }
     } catch (error) {
-      logger.warn("Alert operation failed", { error, userId });
+      logger.warn("Alert operation failed", {
+        error: error instanceof Error ? error : String(error),
+        userId,
+      });
       await ctx.reply("Unable to fetch alerts. Please try again.");
     }
   });
@@ -112,7 +115,10 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
 
       await ctx.reply(msg);
     } catch (error) {
-      logger.warn("Alert operation failed", { error, userId });
+      logger.warn("Alert operation failed", {
+        error: error instanceof Error ? error : String(error),
+        userId,
+      });
       await ctx.reply("Failed to create alert. Please try again.");
     }
   });
@@ -143,7 +149,7 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
       await ctx.reply(`✅ Alert ${status}.`);
     } catch (error) {
       logger.warn("Alert operation failed", {
-        error,
+        error: error instanceof Error ? error : String(error),
         userId: String(ctx.from?.id),
       });
       await ctx.reply("Failed to update alert. Please try again.");
@@ -175,7 +181,7 @@ export function registerAlertsCommands(bot: Bot, api: BackendApiClient): void {
       await ctx.reply("✅ Alert deleted.");
     } catch (error) {
       logger.warn("Alert operation failed", {
-        error,
+        error: error instanceof Error ? error : String(error),
         userId: String(ctx.from?.id),
       });
       await ctx.reply("Failed to delete alert. Please try again.");

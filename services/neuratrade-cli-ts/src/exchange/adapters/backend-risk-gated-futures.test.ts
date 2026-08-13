@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
+import { z } from "zod";
 import { money } from "../../utils/money.js";
 import { FuturesExchangeAdapter } from "../futures-adapter.js";
 import { BackendRiskGatedFuturesExchangeAdapterLive } from "./backend-risk-gated-futures.js";
 import liveOrderFilledFixture from "../../../tests/fixtures/backend/live-order-filled.json";
 
 const originalFetch = globalThis.fetch;
+
+/** Captured request body for the backend execution gate. */
+const requestBodySchema = z.record(
+  z.string(),
+  z.union([z.string(), z.boolean()]),
+);
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -46,10 +53,7 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
       value: async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init);
         const body: unknown = JSON.parse(await request.text());
-        if (typeof body !== "object" || body === null) {
-          throw new Error("expected a JSON object request body");
-        }
-        requestBody = body as Record<string, string | boolean>;
+        requestBody = requestBodySchema.parse(body);
         return new Response(JSON.stringify(liveOrderFilledFixture), {
           status: 200,
           headers: { "Content-Type": "application/json" },

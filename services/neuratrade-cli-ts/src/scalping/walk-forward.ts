@@ -48,10 +48,16 @@ export interface WalkForwardOptions {
   ) => BacktestResult;
 }
 
+/** Combined equity metrics aggregated across walk-forward windows. */
+interface CombinedEquityMetrics {
+  readonly totalReturnPct: number;
+  readonly maxDrawdownPct: number;
+}
+
 function aggregateCombinedEquity(
   windows: readonly WalkForwardWindowResult[],
   initialCapital: number,
-): { totalReturnPct: number; maxDrawdownPct: number } {
+): CombinedEquityMetrics {
   if (windows.length === 0 || initialCapital <= 0) {
     return { totalReturnPct: 0, maxDrawdownPct: 0 };
   }

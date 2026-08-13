@@ -39,6 +39,17 @@ export interface QualityAssessment {
   readonly concerns: readonly string[];
 }
 
+/**
+ * Value type carried by a signal's open metadata dictionary. Kept concrete so
+ * arbitrary extension keys remain typed without an `unknown` escape hatch.
+ */
+export type ScalpingSignalMetadataValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly ScalpingSignalMetadataValue[];
+
 export interface ScalpingSignal {
   readonly id: string;
   readonly exchange: string;
@@ -51,7 +62,7 @@ export interface ScalpingSignal {
   readonly stopLoss?: number;
   readonly takeProfit?: number;
   readonly attributionWeights: Record<string, number>;
-  readonly metadata: Record<string, unknown>;
+  readonly metadata: Record<string, ScalpingSignalMetadataValue>;
   readonly generatedAt: Date;
 }
 

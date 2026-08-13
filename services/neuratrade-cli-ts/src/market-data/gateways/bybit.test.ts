@@ -42,8 +42,18 @@ const instrumentsFixture = {
   result: {
     category: "linear",
     list: [
-      { symbol: "BTCUSDT", baseCoin: "BTC", quoteCoin: "USDT", status: "Trading" },
-      { symbol: "ETHUSDT", baseCoin: "ETH", quoteCoin: "USDT", status: "Trading" },
+      {
+        symbol: "BTCUSDT",
+        baseCoin: "BTC",
+        quoteCoin: "USDT",
+        status: "Trading",
+      },
+      {
+        symbol: "ETHUSDT",
+        baseCoin: "ETH",
+        quoteCoin: "USDT",
+        status: "Trading",
+      },
       {
         symbol: "SOLUSDT",
         baseCoin: "SOL",
@@ -84,7 +94,11 @@ const fundingFixture = {
   result: {
     category: "linear",
     list: [
-      { symbol: "BTCUSDT", fundingRate: "0.0001", fundingTime: "1704067200000" },
+      {
+        symbol: "BTCUSDT",
+        fundingRate: "0.0001",
+        fundingTime: "1704067200000",
+      },
       {
         symbol: "BTCUSDT",
         fundingRate: "-0.00005",
@@ -106,12 +120,22 @@ describe("Bybit gateway", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function mockFetch(response: unknown, status = 200) {
-    globalThis.fetch = (async () =>
+  /** Bybit v5 envelope shape used by the mocks below. */
+  type MockBybitEnvelope = {
+    retCode?: number;
+    retMsg?: string;
+    result?: unknown;
+  };
+
+  function mockFetch(response: MockBybitEnvelope, status = 200) {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) =>
       new Response(JSON.stringify(response), {
         status,
         headers: { "Content-Type": "application/json" },
-      })) as unknown as typeof fetch;
+      })) as typeof fetch;
   }
 
   it("fetchTick parses ticker", async () => {
@@ -136,7 +160,7 @@ describe("Bybit gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const tick = await Effect.runPromise(Bybit.fetchTick("BTC/USDT:USDT"));
 
@@ -169,7 +193,7 @@ describe("Bybit gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bybit.fetchOHLCV(
@@ -302,7 +326,7 @@ describe("Bybit gateway", () => {
   it("fetchFundingRates stops once a page predates startTime", async () => {
     const requests: string[] = [];
     const start = new Date("2023-12-31T08:00:00Z"); // 1704009600000
-    const pages: Record<string, unknown> = {
+    const pages = {
       first: {
         retCode: 0,
         retMsg: "OK",
@@ -352,7 +376,7 @@ describe("Bybit gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
       Bybit.fetchFundingRates("BTC/USDT:USDT", start),
@@ -367,13 +391,20 @@ describe("Bybit gateway", () => {
 
   it("paginates instruments-info with cursor", async () => {
     const requests: string[] = [];
-    const pages: Record<string, unknown> = {
+    const pages = {
       first: {
         retCode: 0,
         retMsg: "OK",
         result: {
           category: "linear",
-          list: [{ symbol: "BTCUSDT", baseCoin: "BTC", quoteCoin: "USDT", status: "Trading" }],
+          list: [
+            {
+              symbol: "BTCUSDT",
+              baseCoin: "BTC",
+              quoteCoin: "USDT",
+              status: "Trading",
+            },
+          ],
           nextPageCursor: "page2",
         },
       },
@@ -382,7 +413,14 @@ describe("Bybit gateway", () => {
         retMsg: "OK",
         result: {
           category: "linear",
-          list: [{ symbol: "ETHUSDT", baseCoin: "ETH", quoteCoin: "USDT", status: "Trading" }],
+          list: [
+            {
+              symbol: "ETHUSDT",
+              baseCoin: "ETH",
+              quoteCoin: "USDT",
+              status: "Trading",
+            },
+          ],
           nextPageCursor: undefined,
         },
       },
@@ -395,7 +433,7 @@ describe("Bybit gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const symbols = await Effect.runPromise(Bybit.fetchSymbols());
 
@@ -407,7 +445,7 @@ describe("Bybit gateway", () => {
 
   it("fetchOpenInterest parses rows and paginates with cursor", async () => {
     const requests: string[] = [];
-    const pages: Record<string, unknown> = {
+    const pages = {
       first: {
         retCode: 0,
         retMsg: "OK",
@@ -447,7 +485,7 @@ describe("Bybit gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rows = await Effect.runPromise(
       Bybit.fetchOpenInterest("BTC/USDT:USDT"),
@@ -480,7 +518,7 @@ describe("Bybit gateway", () => {
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(Bybit.fetchOpenInterest("BTCUSDT"));
 
@@ -505,7 +543,7 @@ describe("Bybit gateway", () => {
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bybit.fetchOpenInterest("BTCUSDT", "1h", "https://api.bybit.com"),
@@ -560,7 +598,7 @@ describe("Bybit gateway", () => {
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     await Effect.runPromise(
       Bybit.fetchRecentTrades("BTCUSDT", "https://api.bybit.com", 100),

@@ -11,7 +11,7 @@ import {
 import { defaultComposerConfig } from "./composer.js";
 import type { FundingRate } from "../market-data/types.js";
 import type { CandleLike } from "./types.js";
-import type { BacktestTrade } from "./backtest.js";
+import type { BacktestResult, BacktestTrade } from "./backtest.js";
 
 function makeCandles(
   count: number,
@@ -36,6 +36,35 @@ function makeCandles(
     });
   }
   return candles;
+}
+
+/** Build a minimal `BacktestResult` carrying only the given trades. */
+function makeResult(trades: BacktestTrade[]): BacktestResult {
+  return {
+    symbol: "BTC/USDT",
+    totalTrades: trades.length,
+    winningTrades: 0,
+    losingTrades: 0,
+    winRate: 0,
+    totalReturnPct: 0,
+    maxDrawdownPct: 0,
+    sharpeRatio: 0,
+    trades,
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    benchmarkReturnPct: 0,
+    metrics: {
+      profitFactor: 0,
+      expectancy: 0,
+      averageRMultiple: 0,
+      sortinoRatio: 0,
+      calmarRatio: 0,
+      maxConsecutiveLosses: 0,
+      averageTradeDurationHours: 0,
+      timeInMarketPct: 0,
+    },
+    robustnessScore: 0,
+  };
 }
 
 describe("runBacktest", () => {
@@ -420,11 +449,7 @@ describe("runBacktest scale-out and atrRiskReward", () => {
     const finalSum = trades.reduce((s, x) => s + x.netPnl, 0) + 1000;
     expect(finalSum).toBeGreaterThan(0);
 
-    const result = attachMonteCarlo(
-      { trades } as unknown as Parameters<typeof attachMonteCarlo>[0],
-      1000,
-      1000,
-    );
+    const result = attachMonteCarlo(makeResult(trades), 1000, 1000);
     expect(result.monteCarlo).toBeDefined();
     expect(result.monteCarlo!.probabilityOfRuinPct).toBeGreaterThan(0);
   });
@@ -932,14 +957,18 @@ describe("candle timestamp validation", () => {
   });
 
   it("throws when a candle timestamp is not a Date", () => {
-    const candles = makeCandles(60, 100, "up");
-    candles[30] = {
-      ...candles[30],
-      timestamp: "2025-01-01T00:00:00Z" as unknown as Date,
+    // Widen the timestamp field so the fixture can carry an invalid value;
+    // the backtest tolerates the widened type then rejects it at runtime.
+    type BadTimestampCandle = Omit<CandleLike, "timestamp"> & {
+      timestamp: Date | string;
     };
-    expect(() => runBacktest({ ...baseOpts, candles })).toThrow(
-      /invalid candle timestamp/i,
-    );
+    const candles = makeCandles(60, 100, "up") as Array<BadTimestampCandle>;
+    candles[30] = { ...candles[30], timestamp: "2025-01-01T00:00:00Z" };
+    expect(() =>
+      runBacktest({ ...baseOpts, candles } as Parameters<
+        typeof runBacktest
+      >[0]),
+    ).toThrow(/invalid candle timestamp/i);
   });
 });
 

@@ -28,6 +28,7 @@ import type {
   CreateAlertResponse,
   AIProviderModelsResponse,
   AIProvidersResponse,
+  AlertConditionValue,
 } from "./types";
 import { API_ENDPOINTS } from "./types";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./rate-limiter";
@@ -48,6 +49,12 @@ export interface BackendApiClientOptions {
   baseUrl: string;
   adminKey: string;
   rateLimit?: number;
+}
+
+/** Request body for the "update alert" backend endpoint. */
+interface UpdateAlertBody {
+  is_active: boolean;
+  conditions?: Record<string, AlertConditionValue>;
 }
 
 export class BackendApiClient {
@@ -87,7 +94,9 @@ export class BackendApiClient {
       );
       return response;
     } catch (error) {
-      logger.warn("Failed to get notification preference", { error });
+      logger.warn("Failed to get notification preference", {
+        error: error instanceof Error ? error : String(error),
+      });
       return { enabled: true };
     }
   }
@@ -343,12 +352,11 @@ export class BackendApiClient {
   ): Promise<T> {
     await this.rateLimiter.acquireToken();
 
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
+    const headers = new Headers();
+    headers.set("Content-Type", "application/json");
 
     if (options.requireAdmin && this.adminKey) {
-      headers["X-API-Key"] = this.adminKey;
+      headers.set("X-API-Key", this.adminKey);
     }
 
     if (options.requireAdmin && !this.adminKey) {
@@ -431,7 +439,7 @@ export class BackendApiClient {
   async createAlert(
     userId: string,
     alertType: string,
-    conditions: Record<string, unknown>,
+    conditions: Record<string, AlertConditionValue>,
   ): Promise<CreateAlertResponse> {
     const endpoint = API_ENDPOINTS.CREATE_ALERT;
     const body: CreateAlertRequest & { user_id: string } = {
@@ -449,10 +457,10 @@ export class BackendApiClient {
   async updateAlert(
     alertId: string,
     isActive: boolean,
-    conditions?: Record<string, unknown>,
+    conditions?: Record<string, AlertConditionValue>,
   ): Promise<{ status: string; message: string }> {
     const endpoint = API_ENDPOINTS.UPDATE_ALERT(alertId);
-    const body: { is_active: boolean; conditions?: Record<string, unknown> } = {
+    const body: UpdateAlertBody = {
       is_active: isActive,
     };
     if (conditions) {

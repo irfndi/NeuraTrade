@@ -15,7 +15,10 @@ describe("SimulatedExchangeAdapter", () => {
   });
 
   function mockOrderBook(price: number) {
-    globalThis.fetch = (async () =>
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) =>
       new Response(
         JSON.stringify({
           lastUpdateId: 1,
@@ -23,7 +26,7 @@ describe("SimulatedExchangeAdapter", () => {
           asks: [[String(price * 1.001), "1"]],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
-      )) as unknown as typeof fetch;
+      )) as typeof fetch;
   }
 
   it("places a market buy and updates position", async () => {

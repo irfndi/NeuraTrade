@@ -6,6 +6,7 @@
  * query order, and cancel order.
  */
 import { Context, Data, Effect, Layer } from "effect";
+import * as S from "effect/Schema";
 import * as crypto from "crypto";
 import { RateLimiter } from "./rate-limiter.ts";
 import { BitgetConfig } from "./bitget-config.ts";
@@ -52,6 +53,27 @@ export type BitgetClientError =
   | BitgetAuthError
   | BitgetApiError;
 
+/** Raw key/value record from a Bitget API response element (scalar fields). */
+type BitgetApiRecord = Record<
+  string,
+  string | number | boolean | null | undefined
+>;
+
+/** Signed request headers (all header values are strings). */
+type AuthHeaders = Record<string, string>;
+
+/** Request body for a signed Bitget mutation (all values are strings). */
+type BitgetRequestBody = Record<string, string>;
+
+/** Bitget error envelope: `{"code":"40034","msg":...}`. */
+const BitgetEnvelopeSchema = S.Struct({
+  code: S.optional(S.String),
+  msg: S.optional(S.String),
+});
+
+/** Bitget error body carrying only an optional business `code`. */
+const ErrorBodySchema = S.Struct({ code: S.optional(S.String) });
+
 /**
  * Extract the Bitget business code from an error body. Bitget returns JSON
  * bodies (`{"code":"40034","msg":...}`), but some proxies/edges return plain
@@ -61,8 +83,10 @@ export type BitgetClientError =
  */
 function parseBitgetErrorCode(body: string): string | undefined {
   try {
-    const parsed = JSON.parse(body) as { code?: unknown };
-    if (typeof parsed.code === "string") return parsed.code;
+    const decoded = S.decodeUnknownOption(ErrorBodySchema)(JSON.parse(body));
+    if (decoded._tag === "Some" && decoded.value.code !== undefined) {
+      return decoded.value.code;
+    }
   } catch {
     // Not JSON — fall through to the text-prefix heuristic below.
   }
@@ -352,10 +376,10 @@ export function authHeaders(
   body: string,
   isDemo: boolean,
   timestamp = String(Date.now()),
-): Record<string, string> {
+): AuthHeaders {
   const payload = `${timestamp}${method.toUpperCase()}${requestPath}${body}`;
   const signature = sign(credentials.apiSecret, payload);
-  const headers: Record<string, string> = {
+  const headers: AuthHeaders = {
     "Content-Type": "application/json",
     "ACCESS-KEY": credentials.apiKey,
     "ACCESS-SIGN": signature,
@@ -525,9 +549,10 @@ function fetchBitget<T>(
       // constant backoff instead.
       const rawRetryAfter = response.headers.get("Retry-After");
       const retryAfter = Number(rawRetryAfter || "0");
-      const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : 5000;
+      const retryAfterMs =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 5000;
       if (rawRetryAfter && !Number.isFinite(retryAfter)) {
         console.warn(
           `[bitget-client] unparseable Retry-After header ${JSON.stringify(rawRetryAfter)} on ${endpoint}; falling back to ${retryAfterMs}ms`,
@@ -563,23 +588,19 @@ function fetchBitget<T>(
         }),
     });
 
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "code" in parsed &&
-      typeof parsed.code === "string" &&
-      parsed.code !== "00000"
-    ) {
-      const msg =
-        "msg" in parsed && typeof parsed.msg === "string" ? parsed.msg : "";
-      return yield* Effect.fail(
-        new BitgetApiError({
-          status: response.status,
-          body: `${parsed.code}: ${msg}`,
-          endpoint,
-          code: parsed.code,
-        }),
-      );
+    const envelope = S.decodeUnknownOption(BitgetEnvelopeSchema)(parsed);
+    if (envelope._tag === "Some" && envelope.value.code !== "00000") {
+      const code = envelope.value.code;
+      if (code !== undefined) {
+        return yield* Effect.fail(
+          new BitgetApiError({
+            status: response.status,
+            body: `${code}: ${envelope.value.msg ?? ""}`,
+            endpoint,
+            code,
+          }),
+        );
+      }
     }
 
     return parsed as T;
@@ -619,12 +640,13 @@ function strictParse<T>(
 
 /** Present-and-non-empty string field; throws on absent/empty/mistyped. */
 function requiredString(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   key: string,
   endpoint: string,
   aliases: readonly string[] = [],
 ): string {
-  const raw = data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
+  const raw =
+    data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
   if (raw === undefined || raw === null) {
     throw new Error(
       `response missing required field "${key}" (endpoint ${endpoint})`,
@@ -632,22 +654,21 @@ function requiredString(
   }
   const value = String(raw);
   if (value === "") {
-    throw new Error(
-      `response field "${key}" is empty (endpoint ${endpoint})`,
-    );
+    throw new Error(`response field "${key}" is empty (endpoint ${endpoint})`);
   }
   return value;
 }
 
 /** Enum-valued field; throws when absent or outside the allowed set. */
 function requiredEnum<K extends string>(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   key: string,
   endpoint: string,
   allowed: readonly K[],
   aliases: readonly string[] = [],
 ): K {
-  const raw = data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
+  const raw =
+    data[key] ?? data[aliases.find((a) => data[a] !== undefined) ?? ""];
   if (raw === undefined || raw === null) {
     throw new Error(
       `response missing required field "${key}" (endpoint ${endpoint})`,
@@ -662,13 +683,18 @@ function requiredEnum<K extends string>(
   return value as K;
 }
 
-function parseBalances(data: unknown): ReadonlyArray<BitgetBalance> {
+function parseBalances(
+  data: ReadonlyArray<BitgetApiRecord>,
+): ReadonlyArray<BitgetBalance> {
   if (!Array.isArray(data)) return [];
   return data.map((item) => {
-    const record = (item ?? {}) as Record<string, unknown>;
-    const asset = requiredString(record, "asset", "/api/v2/spot/account/assets", [
-      "coin",
-    ]);
+    const record = item ?? {};
+    const asset = requiredString(
+      record,
+      "asset",
+      "/api/v2/spot/account/assets",
+      ["coin"],
+    );
     const available = requiredString(
       record,
       "available",
@@ -686,7 +712,7 @@ function parseBalances(data: unknown): ReadonlyArray<BitgetBalance> {
   });
 }
 
-function parseTicker(data: Record<string, unknown>): BitgetTicker {
+function parseTicker(data: BitgetApiRecord): BitgetTicker {
   return {
     symbol: String(data.symbol ?? ""),
     lastPrice: String(data.lastPr ?? data.close ?? "0"),
@@ -698,10 +724,7 @@ function parseTicker(data: Record<string, unknown>): BitgetTicker {
   };
 }
 
-function parseOrder(
-  data: Record<string, unknown>,
-  endpoint: string,
-): BitgetOrder {
+function parseOrder(data: BitgetApiRecord, endpoint: string): BitgetOrder {
   return {
     orderId: String(data.orderId ?? data.id ?? ""),
     clientOid: String(data.clientOid ?? ""),
@@ -730,7 +753,7 @@ function parseOrder(
  * order state; callers that need side/status/size/price must query getOrder.
  */
 function parsePlacedOrder(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   endpoint: string,
 ): BitgetOrder {
   const orderIdRaw = data.orderId ?? data.id;
@@ -760,7 +783,7 @@ function parsePlacedOrder(
 }
 
 function parsePlacedFuturesOrder(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   endpoint: string,
 ): BitgetFuturesOrder {
   const base = parsePlacedOrder(data, endpoint);
@@ -774,7 +797,7 @@ function parsePlacedFuturesOrder(
   };
 }
 
-function parseInstrument(data: Record<string, unknown>): BitgetInstrument {
+function parseInstrument(data: BitgetApiRecord): BitgetInstrument {
   return {
     symbol: String(data.symbol ?? ""),
     baseCoin: String(data.baseCoin ?? ""),
@@ -793,7 +816,7 @@ function parseInstrument(data: Record<string, unknown>): BitgetInstrument {
   };
 }
 
-function parseContract(data: Record<string, unknown>): BitgetContract {
+function parseContract(data: BitgetApiRecord): BitgetContract {
   return {
     symbol: String(data.symbol ?? ""),
     baseCoin: String(data.baseCoin ?? ""),
@@ -819,9 +842,7 @@ function parseContract(data: Record<string, unknown>): BitgetContract {
   };
 }
 
-function parseFuturesTicker(
-  data: Record<string, unknown>,
-): BitgetFuturesTicker {
+function parseFuturesTicker(data: BitgetApiRecord): BitgetFuturesTicker {
   return {
     symbol: String(data.symbol ?? ""),
     lastPrice: String(data.lastPr ?? data.close ?? "0"),
@@ -839,9 +860,7 @@ function parseFuturesTicker(
   };
 }
 
-function parseFuturesBalance(
-  data: Record<string, unknown>,
-): BitgetFuturesBalance {
+function parseFuturesBalance(data: BitgetApiRecord): BitgetFuturesBalance {
   return {
     marginCoin: String(data.marginCoin ?? ""),
     available: String(data.available ?? "0"),
@@ -852,7 +871,7 @@ function parseFuturesBalance(
 }
 
 function parseFuturesPosition(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   endpoint: string,
 ): BitgetFuturesPosition {
   return {
@@ -879,7 +898,7 @@ function parseFuturesPosition(
 }
 
 function parseFuturesOrder(
-  data: Record<string, unknown>,
+  data: BitgetApiRecord,
   endpoint: string,
 ): BitgetFuturesOrder {
   return {
@@ -941,7 +960,7 @@ function makeBitgetClientImpl(
   > => {
     const endpoint = "/api/v2/spot/account/assets";
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
-    return fetchBitget<{ data: unknown }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       { headers },
@@ -958,7 +977,7 @@ function makeBitgetClientImpl(
     BitgetClientError
   > => {
     const endpoint = "/api/v2/spot/public/symbols";
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       {},
@@ -975,7 +994,7 @@ function makeBitgetClientImpl(
   ): Effect.Effect<BitgetTicker, BitgetClientError> => {
     const bsymbol = toBitgetSymbol(symbol);
     const endpoint = `/api/v2/spot/market/tickers?symbol=${bsymbol}`;
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       {},
@@ -992,7 +1011,7 @@ function makeBitgetClientImpl(
   ): Effect.Effect<BitgetOrder, BitgetClientError> => {
     const endpoint = "/api/v2/spot/trade/place-order";
     const bsymbol = toBitgetSymbol(order.symbol);
-    const bodyObj: Record<string, unknown> = {
+    const bodyObj: BitgetRequestBody = {
       symbol: bsymbol,
       side: order.side,
       orderType: order.orderType,
@@ -1009,7 +1028,7 @@ function makeBitgetClientImpl(
     }
     const body = JSON.stringify(bodyObj);
     const headers = authHeaders(credentials, "POST", endpoint, body, isDemo);
-    return fetchBitget<{ data: Record<string, unknown> }>(
+    return fetchBitget<{ data: BitgetApiRecord }>(
       baseUrl,
       endpoint,
       { method: "POST", headers, body },
@@ -1032,7 +1051,7 @@ function makeBitgetClientImpl(
     if (args.clientOid) params.append("clientOid", args.clientOid);
     const endpoint = `/api/v2/spot/trade/orderInfo?${params.toString()}`;
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
-    return fetchBitget<{ data: Record<string, unknown> }>(
+    return fetchBitget<{ data: BitgetApiRecord }>(
       baseUrl,
       endpoint,
       { headers },
@@ -1050,7 +1069,7 @@ function makeBitgetClientImpl(
     clientOid?: string;
   }): Effect.Effect<void, BitgetClientError> => {
     const bsymbol = toBitgetSymbol(args.symbol);
-    const bodyObj: Record<string, unknown> = { symbol: bsymbol };
+    const bodyObj: BitgetRequestBody = { symbol: bsymbol };
     if (args.orderId) bodyObj.orderId = args.orderId;
     if (args.clientOid) bodyObj.clientOid = args.clientOid;
     const endpoint = "/api/v2/spot/trade/cancel-order";
@@ -1072,7 +1091,7 @@ function makeBitgetClientImpl(
     productType: BitgetProductType = "USDT-FUTURES",
   ): Effect.Effect<ReadonlyArray<BitgetContract>, BitgetClientError> => {
     const endpoint = `/api/v2/mix/market/contracts?productType=${productType}`;
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       {},
@@ -1090,16 +1109,14 @@ function makeBitgetClientImpl(
   ): Effect.Effect<BitgetFuturesTicker, BitgetClientError> => {
     const { symbol: bsymbol } = toBitgetFuturesSymbol(symbol, productType);
     const endpoint = `/api/v2/mix/market/ticker?symbol=${bsymbol}&productType=${productType}`;
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       {},
       rateLimiter,
     ).pipe(
       Effect.flatMap((resp) =>
-        strictParse(endpoint, () =>
-          parseFuturesTicker(resp.data[0] ?? {}),
-        ),
+        strictParse(endpoint, () => parseFuturesTicker(resp.data[0] ?? {})),
       ),
     );
   };
@@ -1109,7 +1126,7 @@ function makeBitgetClientImpl(
   ): Effect.Effect<ReadonlyArray<BitgetFuturesBalance>, BitgetClientError> => {
     const endpoint = `/api/v2/mix/account/accounts?productType=${productType}`;
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       { headers },
@@ -1135,7 +1152,7 @@ function makeBitgetClientImpl(
         ? `/api/v2/mix/position/single-position?symbol=${bsymbol}&productType=${productType}&marginCoin=${marginCoin}`
         : `/api/v2/mix/position/all-position?productType=${productType}&marginCoin=${marginCoin}`;
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
-    return fetchBitget<{ data: ReadonlyArray<Record<string, unknown>> }>(
+    return fetchBitget<{ data: ReadonlyArray<BitgetApiRecord> }>(
       baseUrl,
       endpoint,
       { headers },
@@ -1176,7 +1193,7 @@ function makeBitgetClientImpl(
       args.productType,
     );
     const marginCoin = marginCoinForProductType(productType, bsymbol);
-    const bodyObj: Record<string, unknown> = {
+    const bodyObj: BitgetRequestBody = {
       symbol: bsymbol,
       productType,
       marginCoin,
@@ -1215,7 +1232,7 @@ function makeBitgetClientImpl(
     const endpoint = `/api/v2/mix/account/account?symbol=${bsymbol}&productType=${productType}&marginCoin=${marginCoin}`;
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
     return fetchBitget<{
-      data: Record<string, unknown>;
+      data: BitgetApiRecord;
     }>(baseUrl, endpoint, { headers }, rateLimiter).pipe(
       Effect.map((resp) => {
         const d = resp.data;
@@ -1314,7 +1331,7 @@ function makeBitgetClientImpl(
       args.productType,
     );
     const marginCoin = marginCoinForProductType(productType, bsymbol);
-    const bodyObj: Record<string, unknown> = {
+    const bodyObj: BitgetRequestBody = {
       symbol: bsymbol,
       productType,
       marginCoin,
@@ -1345,7 +1362,7 @@ function makeBitgetClientImpl(
       order.productType,
     );
     const marginCoin = marginCoinForProductType(productType, bsymbol);
-    const bodyObj: Record<string, unknown> = {
+    const bodyObj: BitgetRequestBody = {
       symbol: bsymbol,
       productType,
       marginCoin,
@@ -1369,7 +1386,7 @@ function makeBitgetClientImpl(
     const endpoint = "/api/v2/mix/order/place-order";
     const body = JSON.stringify(bodyObj);
     const headers = authHeaders(credentials, "POST", endpoint, body, isDemo);
-    return fetchBitget<{ data: Record<string, unknown> }>(
+    return fetchBitget<{ data: BitgetApiRecord }>(
       baseUrl,
       endpoint,
       { method: "POST", headers, body },
@@ -1401,7 +1418,7 @@ function makeBitgetClientImpl(
     if (args.clientOid) params.append("clientOid", args.clientOid);
     const endpoint = `/api/v2/mix/order/detail?${params.toString()}`;
     const headers = authHeaders(credentials, "GET", endpoint, "", isDemo);
-    return fetchBitget<{ data: Record<string, unknown> }>(
+    return fetchBitget<{ data: BitgetApiRecord }>(
       baseUrl,
       endpoint,
       { headers },
@@ -1423,7 +1440,7 @@ function makeBitgetClientImpl(
       args.symbol,
       args.productType,
     );
-    const bodyObj: Record<string, unknown> = {
+    const bodyObj: BitgetRequestBody = {
       symbol: bsymbol,
       productType,
     };
@@ -1476,7 +1493,12 @@ export const BitgetClientLive = (
       // trading shares the production host, so the PAPTRADING header IS the
       // routing: a demo request without it would hit the live matching engine.
       const isDemo = config.isDemo === true;
-      return makeBitgetClientImpl(config.credentials, baseUrl, rateLimiter, isDemo);
+      return makeBitgetClientImpl(
+        config.credentials,
+        baseUrl,
+        rateLimiter,
+        isDemo,
+      );
     }),
   );
 

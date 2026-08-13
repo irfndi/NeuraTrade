@@ -25,7 +25,12 @@ import {
   StrategyLibrary,
   StrategyLibraryLive,
 } from "./services.js";
-import type { CandleLike, OHLCVInput, OrderBookMetricsInput } from "./types.js";
+import type {
+  CandleLike,
+  OHLCVInput,
+  OrderBookMetricsInput,
+  ScalpingSignal,
+} from "./types.js";
 
 function makeCandles(
   count: number,
@@ -172,13 +177,9 @@ describe("BacktestEngine", () => {
 describe("SignalComposer", () => {
   // composeSignal stamps each signal with a random UUID and the current time,
   // so per-call outputs differ in `id`/`generatedAt` even for identical inputs.
-  const withoutVolatileFields = (signal: unknown) => {
+  const withoutVolatileFields = (signal: ScalpingSignal | null) => {
     if (signal === null) return null;
-    const {
-      id: _id,
-      generatedAt: _generatedAt,
-      ...rest
-    } = signal as Record<string, unknown>;
+    const { id: _id, generatedAt: _generatedAt, ...rest } = signal;
     return rest;
   };
 
@@ -287,7 +288,9 @@ describe("ExitEngine", () => {
 });
 
 describe("StrategyLibrary", () => {
-  const baseArgs = { regimeMode: "trend" } as unknown as ResolvedBacktestArgs;
+  const baseArgs: Partial<ResolvedBacktestArgs> = {
+    regimeMode: "trend",
+  };
 
   it("listStrategies delegates to the pure library with identical results", async () => {
     const result = await Effect.runPromise(

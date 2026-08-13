@@ -53,7 +53,10 @@ function evaluate(candlesSrc: readonly CandleLike[], label: string): void {
     recordEquityCurve: false,
   } as const;
 
-  const baseline = runBacktest({ ...base, composerConfig: defaultComposerConfig });
+  const baseline = runBacktest({
+    ...base,
+    composerConfig: defaultComposerConfig,
+  });
   const line = `[${label}] baseline return=${baseline.totalReturnPct.toFixed(2)}% sharpe=${baseline.sharpeRatio.toFixed(2)} dd=${baseline.maxDrawdownPct.toFixed(2)}% trades=${baseline.totalTrades} win=${(baseline.winRate * 100).toFixed(1)}% bench=${baseline.benchmarkReturnPct.toFixed(2)}%`;
   console.log(line);
 
@@ -129,7 +132,9 @@ for (const idx of [0, 1, 2]) {
   const start = idx * 500;
   const window = candles.slice(start, start + 500);
   if (window.length < 500) break;
-  console.log(`\nWindow ${idx}: ${window[0].timestamp.toISOString()} .. ${window[window.length - 1].timestamp.toISOString()}`);
+  console.log(
+    `\nWindow ${idx}: ${window[0].timestamp.toISOString()} .. ${window[window.length - 1].timestamp.toISOString()}`,
+  );
   evaluate(window, `w${idx}`);
 }
 console.log("");

@@ -1,22 +1,36 @@
-import type { Bot } from "grammy";
 import { ApiClientError } from "../api/client";
-import type { BackendApiClient } from "../api/client";
+import type {
+  SetTradingModeResponse,
+  TradingModeConfirmationResponse,
+  TradingModeResponse,
+} from "../api/types";
 import { logger } from "../utils/logger";
 
-function isApiErrorWithStatus(
-  error: unknown,
-): error is { status: number; message: string } {
-  if (error instanceof ApiClientError) {
-    return true;
-  }
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  const candidate = error as { status?: unknown; message?: unknown };
-  return (
-    typeof candidate.status === "number" &&
-    typeof candidate.message === "string"
-  );
+/** Minimal bot surface the /mode handler depends on. */
+export interface ModeCommandBot {
+  command(
+    name: string,
+    handler: (ctx: ModeCommandContext) => Promise<void> | void,
+  ): void;
+}
+
+/** Minimal grammY context the /mode handler reads and replies through. */
+export interface ModeCommandContext {
+  chat?: { id?: number | string };
+  message?: { text?: string };
+  reply(text: string): Promise<unknown>;
+}
+
+/** Minimal backend API surface the /mode handler depends on. */
+export interface ModeCommandApi {
+  getTradingMode(chatId: string): Promise<TradingModeResponse>;
+  setTradingMode(
+    chatId: string,
+    mode: "dry" | "live",
+  ): Promise<SetTradingModeResponse>;
+  addTradingModeConfirmation(
+    chatId: string,
+  ): Promise<TradingModeConfirmationResponse>;
 }
 
 function isLiveProofGateMessage(message: string): boolean {
@@ -37,7 +51,7 @@ function liveProofGateReply(): string {
 }
 
 async function handleModeAction(
-  api: BackendApiClient,
+  api: ModeCommandApi,
   chatId: string,
   action: string,
   reply: (text: string) => Promise<unknown>,
@@ -49,7 +63,9 @@ async function handleModeAction(
     currentMode = state.mode;
     requiredConfirmations = state.required_confirmations || 2;
   } catch (error) {
-    logger.warn("Failed to get trading mode", { error });
+    logger.warn("Failed to get trading mode", {
+      error: error instanceof Error ? error : String(error),
+    });
     // Continue with action handling even if state probe fails.
   }
 
@@ -88,7 +104,7 @@ async function handleModeAction(
       result = await api.setTradingMode(chatId, "live");
     } catch (error) {
       if (
-        isApiErrorWithStatus(error) &&
+        error instanceof ApiClientError &&
         error.status === 400 &&
         error.message.toLowerCase().includes("already in live mode")
       ) {
@@ -100,7 +116,7 @@ async function handleModeAction(
         return;
       }
       if (
-        isApiErrorWithStatus(error) &&
+        error instanceof ApiClientError &&
         error.status === 400 &&
         isLiveProofGateMessage(error.message)
       ) {
@@ -108,7 +124,7 @@ async function handleModeAction(
         return;
       }
       if (
-        isApiErrorWithStatus(error) &&
+        error instanceof ApiClientError &&
         error.status === 400 &&
         (error.message.toLowerCase().includes("requires") ||
           error.message.toLowerCase().includes("confirmation"))
@@ -162,7 +178,7 @@ async function handleModeAction(
       result = await api.addTradingModeConfirmation(chatId);
     } catch (error) {
       if (
-        isApiErrorWithStatus(error) &&
+        error instanceof ApiClientError &&
         error.status === 400 &&
         error.message.toLowerCase().includes("already in live mode")
       ) {
@@ -208,7 +224,10 @@ async function handleModeAction(
 /**
  * Register the /mode command for checking and changing trading mode.
  */
-export function registerModeCommand(bot: Bot, api: BackendApiClient): void {
+export function registerModeCommand(
+  bot: ModeCommandBot,
+  api: ModeCommandApi,
+): void {
   // Handle /mode and /mode <action>.
   bot.command("mode", async (ctx) => {
     const chatId = ctx.chat?.id;

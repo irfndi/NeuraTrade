@@ -20,10 +20,21 @@ const rows = db
      WHERE e.name='bitget-futures' AND tp.symbol='BTC/USDT:USDT' AND o.timeframe='15m'
      ORDER BY o.timestamp ASC`,
   )
-  .all() as Array<{ open: number; high: number; low: number; close: number; volume: number; ts: string }>;
+  .all() as Array<{
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ts: string;
+}>;
 db.close();
 const candles: CandleLike[] = rows.map((r) => ({
-  open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume,
+  open: r.open,
+  high: r.high,
+  low: r.low,
+  close: r.close,
+  volume: r.volume,
   timestamp: new Date(Date.parse(r.ts)),
 }));
 
@@ -52,7 +63,10 @@ console.log(
 
 // Disjoint ~60-day windows (5760 15m bars).
 const WINDOW = 5760;
-let pos = 0, n = 0, sumRet = 0, maxWinDD = 0;
+let pos = 0,
+  n = 0,
+  sumRet = 0,
+  maxWinDD = 0;
 for (let start = 0; start + WINDOW <= candles.length; start += WINDOW) {
   const win = candles.slice(start, start + WINDOW);
   if (win.length < WINDOW) break;

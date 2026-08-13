@@ -13,12 +13,15 @@ describe("Binance gateway", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function mockFetch(response: unknown, status = 200) {
-    globalThis.fetch = (async () =>
+  function mockFetch<T>(response: T, status = 200) {
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) =>
       new Response(JSON.stringify(response), {
         status,
         headers: { "Content-Type": "application/json" },
-      })) as unknown as typeof fetch;
+      })) as typeof fetch;
   }
 
   it("fetchTick parses 24hr ticker", async () => {
@@ -170,13 +173,10 @@ describe("Binance gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
-      Binance.fetchFundingRates(
-        "BTC/USDT",
-        new Date("2023-12-31T00:00:00Z"),
-      ),
+      Binance.fetchFundingRates("BTC/USDT", new Date("2023-12-31T00:00:00Z")),
     );
 
     expect(requests).toHaveLength(2);
@@ -202,13 +202,10 @@ describe("Binance gateway", () => {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }) as unknown as typeof fetch;
+    }) as typeof fetch;
 
     const rates = await Effect.runPromise(
-      Binance.fetchFundingRates(
-        "BTC/USDT",
-        new Date("2023-12-31T00:00:00Z"),
-      ),
+      Binance.fetchFundingRates("BTC/USDT", new Date("2023-12-31T00:00:00Z")),
     );
 
     // lastTime <= currentStart on the repeat page -> no infinite loop.

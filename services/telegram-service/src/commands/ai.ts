@@ -1,12 +1,48 @@
-import type { Bot } from "grammy";
 import { ApiClientError } from "../api/client";
-import type { BackendApiClient } from "../api/client";
-import type { AIModelInfo } from "../api/types";
+import type {
+  AIModelInfo,
+  AIModelsResponse,
+  AIProviderModelsResponse,
+  AIProvidersResponse,
+  AIRouteRequest,
+  AIRouteResponse,
+  AIModelSelectResponse,
+  AIStatusResponse,
+} from "../api/types";
 import { logger } from "../utils/logger";
 import { splitIntoTelegramMessages } from "../utils";
 
 const MAX_PROVIDERS_IN_AI_MODELS = 15;
 const MAX_MODELS_PER_PROVIDER = 4;
+
+/** Minimal grammY context the AI handlers read and reply through. */
+export interface AICommandContext {
+  chat?: { id?: number | string };
+  from?: { id?: number | string };
+  match?: string;
+  reply(text: string): Promise<unknown>;
+}
+
+/** Minimal bot surface the /ai_* handlers depend on. */
+export interface AIBot {
+  command(
+    name: string,
+    handler: (ctx: AICommandContext) => Promise<void> | void,
+  ): void;
+}
+
+/** Minimal backend API surface the /ai_* handlers depend on. */
+export interface AIApi {
+  getAIModels(): Promise<AIModelsResponse>;
+  getAIProviders(): Promise<AIProvidersResponse>;
+  getAIProviderModels(providerId: string): Promise<AIProviderModelsResponse>;
+  selectAIModel(
+    userId: string,
+    modelId: string,
+  ): Promise<AIModelSelectResponse>;
+  getAIStatus(chatId: string): Promise<AIStatusResponse>;
+  routeAIModel(request: AIRouteRequest): Promise<AIRouteResponse>;
+}
 
 function resolveTelegramIdentity(ctx: {
   chat?: { id?: string | number };
@@ -23,20 +59,22 @@ function resolveTelegramIdentity(ctx: {
   return null;
 }
 
-function getErrorContext(error: unknown): { status?: number; detail: string } {
+interface ErrorContext {
+  status?: number;
+  detail: string;
+}
+
+function getErrorContext(error: Error): ErrorContext {
   if (error instanceof ApiClientError) {
     return {
       status: error.status,
       detail: `${error.message} (endpoint=${error.endpoint})`,
     };
   }
-  if (error instanceof Error) {
-    return { detail: error.message };
-  }
-  return { detail: String(error) };
+  return { detail: error.message };
 }
 
-export function registerAICommands(bot: Bot, api: BackendApiClient): void {
+export function registerAICommands(bot: AIBot, api: AIApi): void {
   bot.command("ai_models", async (ctx) => {
     try {
       const result = await api.getAIModels();
@@ -95,7 +133,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         await ctx.reply(chunk);
       }
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error("[AI] /ai_models failed", new Error(errorContext.detail), {
         status: errorContext.status,
         chatId: ctx.chat?.id,
@@ -142,7 +180,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
           `Cost: $${result.model?.cost || "N/A"} per 1M tokens`,
       );
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error("[AI] /ai_select failed", new Error(errorContext.detail), {
         status: errorContext.status,
         chatId: ctx.chat?.id,
@@ -245,7 +283,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
 
       await ctx.reply(lines.join("\n"));
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error("[AI] /ai_status failed", new Error(errorContext.detail), {
         status: errorContext.status,
         chatId: ctx.chat?.id,
@@ -290,7 +328,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         await ctx.reply(chunk);
       }
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error(
         "[AI] /ai_providers failed",
         new Error(errorContext.detail),
@@ -355,7 +393,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
         await ctx.reply(chunk);
       }
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error(
         "[AI] /ai_provider_models failed",
         new Error(errorContext.detail),
@@ -435,7 +473,7 @@ export function registerAICommands(bot: Bot, api: BackendApiClient): void {
 
       await ctx.reply(lines.join("\n"));
     } catch (error) {
-      const errorContext = getErrorContext(error);
+      const errorContext = getErrorContext(error as Error);
       logger.error("[AI] /ai_route failed", new Error(errorContext.detail), {
         status: errorContext.status,
         chatId: ctx.chat?.id,

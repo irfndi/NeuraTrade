@@ -97,7 +97,7 @@ export const getEnvWithNeuratradeFallback = (
     if (serviceBaseURL && !serviceBaseURL.includes("api.telegram.org")) {
       return serviceBaseURL;
     }
-    if (typeof neuratradeConfig.server?.port === "number") {
+    if (neuratradeConfig.server?.port !== undefined) {
       const host = neuratradeConfig.server.host || "localhost";
       return `http://${host}:${neuratradeConfig.server.port}`;
     }

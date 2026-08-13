@@ -79,7 +79,9 @@ describe("KillSwitchService", () => {
       (error) => ({ tag: "Left" as const, error }),
     );
     if (outcome.tag !== "Left") {
-      throw new Error("expected kill switch read to fail closed on a missing row");
+      throw new Error(
+        "expected kill switch read to fail closed on a missing row",
+      );
     }
     expect(outcome.error).toBeInstanceOf(KillSwitchError);
   });

@@ -13,10 +13,7 @@ import type { ResolvedBacktestArgs } from "./strategy-profile.js";
  */
 export type PresetName = "conservative" | "balanced" | "aggressive";
 
-const PRESET_DESCRIPTIONS: Record<
-  PresetName,
-  { description: string; highlights: string[] }
-> = {
+const PRESET_DESCRIPTIONS = {
   conservative: {
     description:
       "Wide ATR stops, high confidence filters, small risk per trade. Prioritizes survival over frequency.",
@@ -47,7 +44,7 @@ const PRESET_DESCRIPTIONS: Record<
       "2% risk per trade, 20% max position",
     ],
   },
-};
+} satisfies Record<PresetName, { description: string; highlights: string[] }>;
 
 /**
  * Return the catalog of available presets with a short description and
@@ -187,7 +184,7 @@ function buildPresetArgs(name: PresetName): ResolvedBacktestArgs {
     gridPauseAfterLossBars: 0,
   };
 
-  const specifics: Record<PresetName, Partial<ResolvedBacktestArgs>> = {
+  const specifics = {
     conservative: {
       atrStopMultiplier: 2.5,
       atrTakeProfitMultiplier: 3.5,
@@ -239,7 +236,7 @@ function buildPresetArgs(name: PresetName): ResolvedBacktestArgs {
       observedPrice: false,
       realistic: true,
     },
-  };
+  } satisfies Record<PresetName, Partial<ResolvedBacktestArgs>>;
 
   return { ...common, ...specifics[name] } as ResolvedBacktestArgs;
 }

@@ -34,6 +34,13 @@ export interface TelegramErrorInfo {
 }
 
 /**
+ * A value that can be classified into a structured Telegram error.
+ * Covers recognizable Error instances plus the defensive primitive
+ * cases (string messages, null/undefined) that callers may throw.
+ */
+export type ClassifiableError = Error | string | null | undefined;
+
+/**
  * Check if an error code indicates a retryable error
  */
 export function isRetryableError(code: TelegramErrorCode): boolean {
@@ -136,7 +143,7 @@ export function classifyGrammyError(error: GrammyError): TelegramErrorInfo {
 /**
  * Classify a generic error into a structured error code
  */
-export function classifyError(error: unknown): TelegramErrorInfo {
+export function classifyError(error: ClassifiableError): TelegramErrorInfo {
   if (error instanceof GrammyError) {
     return classifyGrammyError(error);
   }

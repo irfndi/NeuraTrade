@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Effect, Logger as EffectLogger, LogLevel, References } from "effect";
+import {
+  Effect,
+  Logger as EffectLogger,
+  LogLevel,
+  Record,
+  References,
+} from "effect";
 import { Logger, LoggerLive } from "./logger";
 
 /**
@@ -12,12 +18,12 @@ function collectLogs(
 ): Array<{
   logLevel: string;
   message: unknown;
-  annotations: Record<string, unknown>;
+  annotations: Record.ReadonlyRecord<string, unknown>;
 }> {
   const entries: Array<{
     logLevel: string;
     message: unknown;
-    annotations: Record<string, unknown>;
+    annotations: Record.ReadonlyRecord<string, unknown>;
   }> = [];
 
   const collector = EffectLogger.make(({ logLevel, message, fiber }) => {
@@ -161,10 +167,10 @@ describe("Logger service", () => {
     const result = Effect.gen(function* () {
       const logger = yield* Logger;
       expect(logger).toBeDefined();
-      expect(typeof logger.info).toBe("function");
-      expect(typeof logger.warn).toBe("function");
-      expect(typeof logger.error).toBe("function");
-      expect(typeof logger.debug).toBe("function");
+      expect(logger.info).toBeInstanceOf(Function);
+      expect(logger.warn).toBeInstanceOf(Function);
+      expect(logger.error).toBeInstanceOf(Function);
+      expect(logger.debug).toBeInstanceOf(Function);
     }).pipe(Effect.provide(LoggerLive));
 
     Effect.runSync(result);

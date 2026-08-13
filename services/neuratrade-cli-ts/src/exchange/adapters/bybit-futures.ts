@@ -19,6 +19,7 @@
  */
 import { Context, Data, Effect, Layer } from "effect";
 import { createHmac } from "node:crypto";
+import { z } from "zod";
 import { ExchangeError } from "../adapter.js";
 import {
   FuturesExchangeAdapter,
@@ -154,8 +155,8 @@ export interface BybitOrderRequest {
   readonly side: BybitOrderSide;
   readonly orderType: BybitOrderType;
   readonly qty: string;
-  readonly price?: string;
-  readonly reduceOnly?: boolean;
+  price?: string;
+  reduceOnly?: boolean;
 }
 
 export interface BybitOrderAck {
@@ -174,6 +175,170 @@ export interface BybitOrder extends BybitOrderAck {
   readonly cumExecQty: string;
   readonly cumExecFee: string;
 }
+
+/** Normalized order passed to the local BigInt pre-trade guard. */
+interface BybitGuardOrder {
+  symbol: string;
+  side: "buy" | "sell";
+  orderType: "market" | "limit";
+  size: string;
+  leverage: number;
+  price?: string;
+}
+
+/** Input for the trading-stop endpoint. */
+interface BybitTradingStopParams {
+  symbol: string;
+  positionIdx: number;
+  takeProfit?: string;
+  stopLoss?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Boundary parsing (zod)
+// ---------------------------------------------------------------------------
+
+/** Signed POST request payloads are flat JSON: strings, numbers, booleans. */
+export type BybitRequestPayload = Record<
+  string,
+  string | number | boolean | undefined
+>;
+
+/** Headers produced by bybitAuthHeaders. */
+type BybitAuthHeaders = {
+  readonly "Content-Type": "application/json";
+  readonly "X-BAPI-API-KEY": string;
+  readonly "X-BAPI-TIMESTAMP": string;
+  readonly "X-BAPI-RECV-WINDOW": string;
+  readonly "X-BAPI-SIGN": string;
+};
+
+/**
+ * Tolerant string field: non-empty string kept, otherwise the fallback.
+ * Decoded at the response boundary so callers see a typed domain value.
+ */
+const tolerantString = (fallback: string) =>
+  z
+    .string()
+    .transform((value) => (value === "" ? fallback : value))
+    .catch(fallback);
+
+const BybitLotSizeFilterSchema = z.object({
+  minOrderQty: tolerantString("0"),
+  qtyStep: tolerantString("0"),
+  minOrderAmt: tolerantString("0"),
+});
+const BybitPriceFilterSchema = z.object({
+  tickSize: tolerantString("0"),
+});
+const BybitLeverageFilterSchema = z.object({
+  maxLeverage: tolerantString("1"),
+});
+
+const BybitContractSchema = z
+  .object({
+    symbol: tolerantString(""),
+    status: tolerantString(""),
+    lotSizeFilter: BybitLotSizeFilterSchema.catch({
+      minOrderQty: "0",
+      qtyStep: "0",
+      minOrderAmt: "0",
+    }),
+    priceFilter: BybitPriceFilterSchema.catch({
+      tickSize: "0",
+    }),
+    leverageFilter: BybitLeverageFilterSchema.catch({
+      maxLeverage: "1",
+    }),
+  })
+  .transform((contract) => ({
+    symbol: contract.symbol,
+    status: contract.status,
+    minOrderQty: contract.lotSizeFilter.minOrderQty,
+    qtyStep: contract.lotSizeFilter.qtyStep,
+    minOrderAmt: contract.lotSizeFilter.minOrderAmt,
+    tickSize: contract.priceFilter.tickSize,
+    maxLeverage: contract.leverageFilter.maxLeverage,
+  }));
+
+const BybitWalletCoinSchema = z.object({
+  coin: tolerantString(""),
+  equity: tolerantString("0"),
+  walletBalance: tolerantString("0"),
+  availableToWithdraw: tolerantString("0"),
+  usdValue: tolerantString("0"),
+});
+
+const BybitPositionSchema = z.object({
+  symbol: tolerantString(""),
+  side: z.enum(["Buy", "Sell"]).catch("Buy"),
+  size: tolerantString("0"),
+  avgPrice: tolerantString("0"),
+  unrealisedPnl: tolerantString("0"),
+  liqPrice: tolerantString("0"),
+  leverage: tolerantString("1"),
+  tradeMode: z.number().catch(0),
+  positionIdx: z.number().catch(0),
+});
+
+const BybitOrderSchema = z
+  .object({
+    orderId: tolerantString(""),
+    orderLinkId: tolerantString(""),
+    symbol: tolerantString(""),
+    side: z.enum(["Buy", "Sell"]).catch("Buy"),
+    orderType: tolerantString(""),
+    orderStatus: tolerantString(""),
+    qty: tolerantString("0"),
+    price: tolerantString("0"),
+    avgPrice: tolerantString("0"),
+    cumExecQty: tolerantString("0"),
+    cumExecFee: tolerantString("0"),
+  })
+  .transform((order) => ({
+    orderId: order.orderId,
+    clientOrderId: order.orderLinkId,
+    symbol: order.symbol,
+    side: order.side,
+    orderType: order.orderType,
+    orderStatus: order.orderStatus,
+    qty: order.qty,
+    price: order.price,
+    avgPrice: order.avgPrice,
+    cumExecQty: order.cumExecQty,
+    cumExecFee: order.cumExecFee,
+  }));
+
+const BybitOrderAckSchema = z.object({
+  orderId: tolerantString(""),
+  orderLinkId: tolerantString(""),
+});
+
+const BybitContractListSchema = z.object({
+  list: z.array(BybitContractSchema).optional(),
+});
+const BybitWalletBalanceSchema = z.object({
+  list: z
+    .array(
+      z.object({
+        coin: z.array(BybitWalletCoinSchema).optional(),
+      }),
+    )
+    .optional(),
+});
+const BybitPositionListSchema = z.object({
+  list: z.array(BybitPositionSchema).optional(),
+});
+const BybitOrderListSchema = z.object({
+  list: z.array(BybitOrderSchema).optional(),
+});
+
+/** Bybit v5 response envelope: { retCode, retMsg, result }. */
+const BybitEnvelopeSchema = z.object({
+  retCode: z.number(),
+  retMsg: z.string().optional(),
+  result: z.unknown().optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Symbol normalization
@@ -211,7 +376,7 @@ function bybitSign(secret: string, payload: string): string {
 function bybitAuthHeaders(
   credentials: BybitCredentials,
   body: string,
-): Record<string, string> {
+): BybitAuthHeaders {
   const timestamp = String(Date.now());
   const payload = `${timestamp}${credentials.apiKey}${RECV_WINDOW_MS}${body}`;
   return {
@@ -227,17 +392,18 @@ function bybitAuthHeaders(
 // Internal fetch helper
 // ---------------------------------------------------------------------------
 
-function fetchBybit<T>(
+function fetchBybit<A>(
   baseUrl: string,
   method: "GET" | "POST",
   path: string,
   options: {
     readonly query?: Record<string, string | number>;
-    readonly body?: unknown;
+    readonly body?: BybitRequestPayload;
     readonly signed?: boolean;
   },
+  resultSchema: z.ZodType<A>,
   credentials?: BybitCredentials,
-): Effect.Effect<T, BybitClientError> {
+): Effect.Effect<A, BybitClientError> {
   return Effect.gen(function* () {
     const query = new URLSearchParams(
       Object.entries(options.query ?? {}).map(([k, v]) => [k, String(v)]),
@@ -286,9 +452,10 @@ function fetchBybit<T>(
       // constant backoff instead. Mirrors bitget-client.ts fetchBitget.
       const rawRetryAfter = response.headers.get("Retry-After");
       const retryAfter = Number(rawRetryAfter || "0");
-      const retryAfterMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : 5000;
+      const retryAfterMs =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 5000;
       if (rawRetryAfter && !Number.isFinite(retryAfter)) {
         console.warn(
           `[bybit-futures] unparseable Retry-After header ${JSON.stringify(rawRetryAfter)} on ${path}; falling back to ${retryAfterMs}ms`,
@@ -313,8 +480,8 @@ function fetchBybit<T>(
       );
     }
 
-    const parsed = yield* Effect.tryPromise({
-      try: () => Promise.resolve(JSON.parse(responseBody) as unknown),
+    const parsed: unknown = yield* Effect.tryPromise({
+      try: () => Promise.resolve(JSON.parse(responseBody)),
       catch: (error): BybitClientError =>
         new BybitApiError({
           status: response.status,
@@ -323,18 +490,21 @@ function fetchBybit<T>(
         }),
     });
 
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "retCode" in parsed &&
-      typeof parsed.retCode === "number" &&
-      parsed.retCode !== 0
-    ) {
-      const retCode = parsed.retCode;
-      const retMsg =
-        "retMsg" in parsed && typeof parsed.retMsg === "string"
-          ? parsed.retMsg
-          : "";
+    // Decode the Bybit envelope at the response boundary so retCode/retMsg
+    // and the raw result become strongly typed domain values.
+    const envelope = yield* Effect.try({
+      try: () => BybitEnvelopeSchema.parse(parsed),
+      catch: (error): BybitClientError =>
+        new BybitApiError({
+          status: response.status,
+          body: error instanceof Error ? error.message : String(error),
+          endpoint: path,
+        }),
+    });
+
+    if (envelope.retCode !== 0) {
+      const retCode = envelope.retCode;
+      const retMsg = envelope.retMsg ?? "";
       if (retCode === 10004 || retCode === 10006) {
         return yield* Effect.fail(
           new BybitAuthError({ cause: `${retCode}: ${retMsg}` }),
@@ -350,85 +520,8 @@ function fetchBybit<T>(
       );
     }
 
-    const result =
-      parsed !== null && typeof parsed === "object" && "result" in parsed
-        ? parsed.result
-        : undefined;
-    return result as T;
+    return resultSchema.parse(envelope.result);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Response parsers
-// ---------------------------------------------------------------------------
-
-function asString(value: unknown, fallback = ""): string {
-  return typeof value === "string" && value !== "" ? value : fallback;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function parseContract(data: unknown): BybitContract {
-  const rec = asRecord(data);
-  const lot = asRecord(rec.lotSizeFilter);
-  const price = asRecord(rec.priceFilter);
-  const leverage = asRecord(rec.leverageFilter);
-  return {
-    symbol: asString(rec.symbol),
-    status: asString(rec.status),
-    minOrderQty: asString(lot.minOrderQty, "0"),
-    qtyStep: asString(lot.qtyStep, "0"),
-    minOrderAmt: asString(lot.minOrderAmt, "0"),
-    tickSize: asString(price.tickSize, "0"),
-    maxLeverage: asString(leverage.maxLeverage, "1"),
-  };
-}
-
-function parseCoin(data: unknown): BybitWalletCoin {
-  const rec = asRecord(data);
-  return {
-    coin: asString(rec.coin),
-    equity: asString(rec.equity, "0"),
-    walletBalance: asString(rec.walletBalance, "0"),
-    availableToWithdraw: asString(rec.availableToWithdraw, "0"),
-    usdValue: asString(rec.usdValue, "0"),
-  };
-}
-
-function parsePosition(data: unknown): BybitPosition {
-  const rec = asRecord(data);
-  return {
-    symbol: asString(rec.symbol),
-    side: rec.side === "Sell" ? "Sell" : "Buy",
-    size: asString(rec.size, "0"),
-    avgPrice: asString(rec.avgPrice, "0"),
-    unrealisedPnl: asString(rec.unrealisedPnl, "0"),
-    liqPrice: asString(rec.liqPrice, "0"),
-    leverage: asString(rec.leverage, "1"),
-    tradeMode: typeof rec.tradeMode === "number" ? rec.tradeMode : 0,
-    positionIdx: typeof rec.positionIdx === "number" ? rec.positionIdx : 0,
-  };
-}
-
-function parseOrder(data: unknown): BybitOrder {
-  const rec = asRecord(data);
-  return {
-    orderId: asString(rec.orderId),
-    clientOrderId: asString(rec.orderLinkId),
-    symbol: asString(rec.symbol),
-    side: rec.side === "Sell" ? "Sell" : "Buy",
-    orderType: asString(rec.orderType),
-    orderStatus: asString(rec.orderStatus),
-    qty: asString(rec.qty, "0"),
-    price: asString(rec.price, "0"),
-    avgPrice: asString(rec.avgPrice, "0"),
-    cumExecQty: asString(rec.cumExecQty, "0"),
-    cumExecFee: asString(rec.cumExecFee, "0"),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,13 +587,33 @@ function makeBybitClientImpl(
   credentials: BybitCredentials,
   baseUrl: string,
 ): BybitClientImpl {
-  const get = <T>(
+  const get = <A>(
     path: string,
     query: Record<string, string | number> = {},
+    resultSchema: z.ZodType<A>,
     signed = true,
-  ) => fetchBybit<T>(baseUrl, "GET", path, { query, signed }, credentials);
-  const post = <T>(path: string, body: unknown) =>
-    fetchBybit<T>(baseUrl, "POST", path, { body, signed: true }, credentials);
+  ) =>
+    fetchBybit<A>(
+      baseUrl,
+      "GET",
+      path,
+      { query, signed },
+      resultSchema,
+      credentials,
+    );
+  const post = <A>(
+    path: string,
+    body: BybitRequestPayload,
+    resultSchema: z.ZodType<A>,
+  ) =>
+    fetchBybit<A>(
+      baseUrl,
+      "POST",
+      path,
+      { body, signed: true },
+      resultSchema,
+      credentials,
+    );
 
   // Account position mode, kept in sync with setPositionMode so placeOrder
   // can pick the correct hedge-mode leg (0 is only valid for one-way).
@@ -508,97 +621,116 @@ function makeBybitClientImpl(
 
   return {
     getContract: (symbol) =>
-      get<{ list?: ReadonlyArray<unknown> }>("/v5/market/instruments-info", {
-        category: "linear",
-        symbol,
-      }, false).pipe(
-        Effect.map((result) => {
-          const item = result?.list?.[0];
-          return parseContract(item ?? {});
-        }),
+      get(
+        "/v5/market/instruments-info",
+        { category: "linear", symbol },
+        BybitContractListSchema,
+        false,
+      ).pipe(
+        Effect.map(
+          (result) =>
+            result.list?.[0] ?? {
+              symbol: "",
+              status: "",
+              minOrderQty: "0",
+              qtyStep: "0",
+              minOrderAmt: "0",
+              tickSize: "0",
+              maxLeverage: "1",
+            },
+        ),
       ),
     getBalance: () =>
-      get<{ list?: ReadonlyArray<{ coin?: ReadonlyArray<unknown> }> }>(
+      get(
         "/v5/wallet/balance",
         { accountType: "UNIFIED" },
-      ).pipe(
-        Effect.map((result) =>
-          (result?.list?.[0]?.coin ?? []).map((coin) => parseCoin(coin)),
-        ),
-      ),
+        BybitWalletBalanceSchema,
+      ).pipe(Effect.map((result) => result.list?.[0]?.coin ?? [])),
     getPositions: (symbol) =>
-      get<{ list?: ReadonlyArray<unknown> }>("/v5/position/list", {
-        category: "linear",
-        symbol,
-      }).pipe(
-        Effect.map((result) =>
-          (result?.list ?? []).map((position) => parsePosition(position)),
-        ),
-      ),
-    placeOrder: (order) =>
-      post<{ orderId?: string; orderLinkId?: string }>("/v5/order/create", {
+      get(
+        "/v5/position/list",
+        { category: "linear", symbol },
+        BybitPositionListSchema,
+      ).pipe(Effect.map((result) => result.list ?? [])),
+    placeOrder: (order) => {
+      const body: BybitRequestPayload = {
         category: "linear",
         symbol: order.symbol,
         side: order.side,
         orderType: order.orderType,
         qty: order.qty,
-        ...(order.orderType === "Limit" ? { timeInForce: "GTC" } : {}),
-        ...(order.price !== undefined ? { price: order.price } : {}),
         positionIdx:
           positionMode === "hedge_mode"
             ? bybitPositionIdx(order.side, order.reduceOnly === true)
             : 0,
-        ...(order.reduceOnly === true ? { reduceOnly: true } : {}),
-      }).pipe(
+      };
+      if (order.orderType === "Limit") body.timeInForce = "GTC";
+      if (order.price !== undefined) body.price = order.price;
+      if (order.reduceOnly === true) body.reduceOnly = true;
+      return post("/v5/order/create", body, BybitOrderAckSchema).pipe(
         Effect.map((ack) => ({
-          orderId: ack?.orderId ?? "",
-          clientOrderId: ack?.orderLinkId,
+          orderId: ack.orderId,
+          clientOrderId: ack.orderLinkId,
         })),
-      ),
+      );
+    },
     getOrder: ({ symbol, orderId }) =>
-      get<{ list?: ReadonlyArray<unknown> }>("/v5/order/realtime", {
-        category: "linear",
-        symbol,
-        orderId,
-      }).pipe(
-        Effect.map((result) => {
-          const item = result?.list?.[0];
-          return parseOrder(item ?? {});
-        }),
-      ),
-    getOpenOrders: (symbol) =>
-      get<{ list?: ReadonlyArray<unknown> }>("/v5/order/realtime", {
-        category: "linear",
-        symbol,
-      }).pipe(
-        Effect.map((result) =>
-          (result?.list ?? []).map((order) => parseOrder(order)),
+      get(
+        "/v5/order/realtime",
+        { category: "linear", symbol, orderId },
+        BybitOrderListSchema,
+      ).pipe(
+        Effect.map(
+          (result) =>
+            result.list?.[0] ?? {
+              orderId: "",
+              clientOrderId: "",
+              symbol: "",
+              side: "Buy",
+              orderType: "",
+              orderStatus: "",
+              qty: "0",
+              price: "0",
+              avgPrice: "0",
+              cumExecQty: "0",
+              cumExecFee: "0",
+            },
         ),
       ),
+    getOpenOrders: (symbol) =>
+      get(
+        "/v5/order/realtime",
+        { category: "linear", symbol },
+        BybitOrderListSchema,
+      ).pipe(Effect.map((result) => result.list ?? [])),
     cancelOrder: ({ symbol, orderId }) =>
-      post<unknown>("/v5/order/cancel", {
-        category: "linear",
-        symbol,
-        orderId,
-      }).pipe(Effect.as(undefined)),
+      post(
+        "/v5/order/cancel",
+        { category: "linear", symbol, orderId },
+        z.unknown(),
+      ).pipe(Effect.as(undefined)),
     setLeverage: ({ symbol, buyLeverage, sellLeverage }) =>
-      post<unknown>("/v5/position/set-leverage", {
-        category: "linear",
-        symbol,
-        buyLeverage,
-        sellLeverage,
-      }).pipe(Effect.as(undefined)),
+      post(
+        "/v5/position/set-leverage",
+        { category: "linear", symbol, buyLeverage, sellLeverage },
+        z.unknown(),
+      ).pipe(Effect.as(undefined)),
     setMarginMode: ({ symbol, marginMode }) =>
-      post<unknown>("/v5/position/set-margin-mode", {
-        category: "linear",
-        symbol,
-        marginMode: marginMode === "isolated" ? "ISOLATED" : "CROSSED",
-      }).pipe(Effect.as(undefined)),
+      post(
+        "/v5/position/set-margin-mode",
+        {
+          category: "linear",
+          symbol,
+          marginMode: marginMode === "isolated" ? "ISOLATED" : "CROSSED",
+        },
+        z.unknown(),
+      ).pipe(Effect.as(undefined)),
     setPositionMode: ({ mode }) =>
-      post<unknown>("/v5/position/set-mode", {
-        category: "linear",
-        mode: mode === "hedge_mode" ? 3 : 0,
-      }).pipe(
+      post(
+        "/v5/position/set-mode",
+        { category: "linear", mode: mode === "hedge_mode" ? 3 : 0 },
+        z.unknown(),
+      ).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
             positionMode = mode;
@@ -606,17 +738,21 @@ function makeBybitClientImpl(
         ),
         Effect.as(undefined),
       ),
-    setTradingStop: ({ symbol, positionIdx, takeProfit, stopLoss }) =>
-      post<unknown>("/v5/position/trading-stop", {
+    setTradingStop: ({ symbol, positionIdx, takeProfit, stopLoss }) => {
+      const body: BybitRequestPayload = {
         category: "linear",
         symbol,
         positionIdx,
-        ...(takeProfit !== undefined ? { takeProfit } : {}),
-        ...(stopLoss !== undefined ? { stopLoss } : {}),
         tpTriggerBy: "LastPrice",
         slTriggerBy: "LastPrice",
         tpslMode: "Full",
-      }).pipe(Effect.as(undefined)),
+      };
+      if (takeProfit !== undefined) body.takeProfit = takeProfit;
+      if (stopLoss !== undefined) body.stopLoss = stopLoss;
+      return post("/v5/position/trading-stop", body, z.unknown()).pipe(
+        Effect.as(undefined),
+      );
+    },
   };
 }
 
@@ -664,7 +800,7 @@ export function makeBybitFuturesAdapter(
       // Reference price: the order's limit price (tick-normalized) when
       // present, otherwise the market-data gateway's tick for the canonical
       // symbol. Market orders drop the price from the request entirely.
-      const reference = yield* (request.price !== undefined
+      const reference = yield* request.price !== undefined
         ? Effect.succeed(request.price)
         : gateway.fetchTick("bybit-futures", request.symbol).pipe(
             Effect.mapError(
@@ -675,9 +811,11 @@ export function makeBybitFuturesAdapter(
                 ),
             ),
             Effect.map((tick) => money(tick.price)),
-          ));
+          );
       const price =
-        request.type === "limit" ? normalizePrice(reference, tickSize) : reference;
+        request.type === "limit"
+          ? normalizePrice(reference, tickSize)
+          : reference;
 
       const rawQty = request.size;
       let qty = rawQty;
@@ -755,16 +893,17 @@ export function makeBybitFuturesAdapter(
         // real order cannot exceed account balance or violate precision. The
         // Money-based guards above handle floor sizing and margin; this net is
         // belt-and-suspenders before any signed request leaves the process.
+        const guardOrder: BybitGuardOrder = {
+          symbol,
+          side: request.side === "buy" ? "buy" : "sell",
+          orderType: request.type === "market" ? "market" : "limit",
+          size: qty.toString(),
+          leverage: money(leverage).toNumber(),
+        };
+        if (request.type === "limit") guardOrder.price = price.toString();
         yield* validateOrder(
           {
-            order: {
-              symbol,
-              side: request.side === "buy" ? "buy" : "sell",
-              orderType: request.type === "market" ? "market" : "limit",
-              size: qty.toString(),
-              ...(request.type === "limit" ? { price: price.toString() } : {}),
-              leverage: money(leverage).toNumber(),
-            },
+            order: guardOrder,
             contract: {
               symbol: contract.symbol,
               status: contract.status,
@@ -784,7 +923,8 @@ export function makeBybitFuturesAdapter(
           price.toString(),
         ).pipe(
           Effect.mapError(
-            (err) => new ExchangeError(`bybit guard rejected: ${err.reason}`, err),
+            (err) =>
+              new ExchangeError(`bybit guard rejected: ${err.reason}`, err),
           ),
         );
       }
@@ -794,9 +934,9 @@ export function makeBybitFuturesAdapter(
         side: request.side === "buy" ? "Buy" : "Sell",
         orderType: request.type === "market" ? "Market" : "Limit",
         qty: qty.toString(),
-        ...(request.type === "limit" ? { price: price.toString() } : {}),
-        ...(request.reduceOnly === true ? { reduceOnly: true } : {}),
       };
+      if (request.type === "limit") order.price = price.toString();
+      if (request.reduceOnly === true) order.reduceOnly = true;
       const ack = yield* withError(client.placeOrder(order));
       if (!ack.orderId) {
         return yield* Effect.fail(
@@ -806,7 +946,9 @@ export function makeBybitFuturesAdapter(
 
       // The create response is an acknowledgement; query the realtime order
       // for the actual filled size/price/fee before recording the position.
-      const data = yield* withError(client.getOrder({ symbol, orderId: ack.orderId }));
+      const data = yield* withError(
+        client.getOrder({ symbol, orderId: ack.orderId }),
+      );
       const filledQty = money(data.cumExecQty);
       const filledPrice = money(data.avgPrice);
       if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
@@ -820,7 +962,7 @@ export function makeBybitFuturesAdapter(
           status === "New" ||
           status === "Untriggered" ||
           status === "PartiallyFilled";
-        const cleanup = yield* (resting
+        const cleanup = yield* resting
           ? client.cancelOrder({ symbol, orderId }).pipe(
               Effect.mapError(toExchangeError),
               Effect.match({
@@ -829,7 +971,7 @@ export function makeBybitFuturesAdapter(
                   `cancel failed: ${err.reason}; order ${orderId} may still be resting`,
               }),
             )
-          : Effect.succeed(`final state ${status}`));
+          : Effect.succeed(`final state ${status}`);
         return yield* Effect.fail(
           new ExchangeError(
             `futures order ${orderId} not filled (status=${status}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}); ${cleanup}`,
@@ -983,22 +1125,22 @@ export function makeBybitFuturesAdapter(
     setPositionMode: (_productType, positionMode) =>
       withError(client.setPositionMode({ mode: positionMode })),
 
-    setTradingStop: (request) =>
-      withError(
-        client.setTradingStop({
-          symbol: toBybitSymbol(request.symbol),
-          positionIdx: bybitPositionIdx(
-            request.side === "long" ? "Buy" : "Sell",
-            false,
-          ),
-          ...(request.takeProfit !== undefined
-            ? { takeProfit: request.takeProfit.toString() }
-            : {}),
-          ...(request.stopLoss !== undefined
-            ? { stopLoss: request.stopLoss.toString() }
-            : {}),
-        }),
-      ),
+    setTradingStop: (request) => {
+      const stop: BybitTradingStopParams = {
+        symbol: toBybitSymbol(request.symbol),
+        positionIdx: bybitPositionIdx(
+          request.side === "long" ? "Buy" : "Sell",
+          false,
+        ),
+      };
+      if (request.takeProfit !== undefined) {
+        stop.takeProfit = request.takeProfit.toString();
+      }
+      if (request.stopLoss !== undefined) {
+        stop.stopLoss = request.stopLoss.toString();
+      }
+      return withError(client.setTradingStop(stop));
+    },
   };
 }
 

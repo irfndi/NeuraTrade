@@ -262,10 +262,16 @@ describe("live grid fill integration", () => {
       // switch. (A valid orphan position with no local state is deliberately
       // adopted and managed, not kill-switched.)
       const persisted = await Effect.runPromise(
-        repository.getGridState(options.exchange, options.symbol, options.timeframe),
+        repository.getGridState(
+          options.exchange,
+          options.symbol,
+          options.timeframe,
+        ),
       );
       if (persisted === null) {
-        throw new Error("expected a persisted grid state after the flat iteration");
+        throw new Error(
+          "expected a persisted grid state after the flat iteration",
+        );
       }
       await Effect.runPromise(
         repository.saveGridState({

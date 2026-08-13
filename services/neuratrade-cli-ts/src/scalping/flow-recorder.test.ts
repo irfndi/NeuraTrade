@@ -6,6 +6,7 @@ import {
   type FlowOfiRow,
   type FlowRecorderRepository,
   type FlowWebSocket,
+  type RawWsEventPayload,
 } from "./flow-recorder.js";
 
 const MINUTE = 60_000;
@@ -15,7 +16,10 @@ const T0_MINUTE = Math.floor(T0 / MINUTE) * MINUTE;
 /** Scriptable fake WebSocket implementing the recorder's seam. */
 class FakeWebSocket implements FlowWebSocket {
   readonly sent: string[] = [];
-  private readonly handlers = new Map<string, (payload: unknown) => void>();
+  private readonly handlers = new Map<
+    string,
+    (payload: RawWsEventPayload) => void
+  >();
   closed = false;
 
   send(data: string): void {
@@ -29,7 +33,7 @@ class FakeWebSocket implements FlowWebSocket {
 
   on(
     event: "open" | "message" | "close" | "error",
-    cb: (payload: unknown) => void,
+    cb: (payload: RawWsEventPayload) => void,
   ): void {
     this.handlers.set(event, cb);
   }
@@ -39,7 +43,7 @@ class FakeWebSocket implements FlowWebSocket {
     this.handlers.get("open")?.(undefined);
   }
 
-  emitFrame(frame: unknown): void {
+  emitFrame(frame: TestFrame): void {
     this.handlers.get("message")?.(JSON.stringify(frame));
   }
 
@@ -51,6 +55,15 @@ class FakeWebSocket implements FlowWebSocket {
     this.handlers.get("close")?.(undefined);
   }
 }
+
+/** Minimal Bybit v5 frame shape used by the scriptable fake socket. */
+type TestFrame = {
+  readonly topic?: string;
+  readonly op?: string;
+  readonly success?: boolean;
+  readonly ret_msg?: string;
+  readonly data?: unknown;
+};
 
 function fakeFactory(sockets: FakeWebSocket[]) {
   return (_url: string) => {
@@ -100,12 +113,14 @@ class FakeFlowRepo implements FlowRecorderRepository {
   }
 }
 
-function makeHarness(overrides: {
-  symbols?: readonly string[];
-  maxRetries?: number;
-  backoffMs?: number;
-  ticker?: boolean;
-} = {}) {
+function makeHarness(
+  overrides: {
+    symbols?: readonly string[];
+    maxRetries?: number;
+    backoffMs?: number;
+    ticker?: boolean;
+  } = {},
+) {
   const repo = new FakeFlowRepo();
   const sockets: FakeWebSocket[] = [];
   const warns: string[] = [];
@@ -131,9 +146,9 @@ describe("flow recorder", () => {
     ws.emitOpen();
     const subscribes = ws.sent.filter((m) => m.includes('"subscribe"'));
     expect(subscribes.length).toBeGreaterThanOrEqual(2);
-    expect(
-      subscribes.some((m) => m.includes("publicTrade.BTCUSDT")),
-    ).toBe(true);
+    expect(subscribes.some((m) => m.includes("publicTrade.BTCUSDT"))).toBe(
+      true,
+    );
     expect(subscribes.some((m) => m.includes("liquidation"))).toBe(true);
   });
 
@@ -283,8 +298,11 @@ describe("flow recorder", () => {
     expect(repo.ofi).toHaveLength(0);
 
     // A valid frame after the malformed ones still flows through.
-    const { sockets: sockets2, repo: repo2, recorder: recorder2 } =
-      makeHarness();
+    const {
+      sockets: sockets2,
+      repo: repo2,
+      recorder: recorder2,
+    } = makeHarness();
     const ws2 = sockets2[0];
     ws2.emitOpen();
     ws2.emitFrame({

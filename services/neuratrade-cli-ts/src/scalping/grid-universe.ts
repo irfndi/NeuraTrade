@@ -452,10 +452,7 @@ export function resampleCandles(
  * degenerate all-flat series) — callers pass that through (no rejection).
  */
 export function breakevenWinRateFromWalkForward(
-  walkForward: Pick<
-    GridWalkForwardResult,
-    "avgWinPct" | "avgLossPct"
-  >,
+  walkForward: Pick<GridWalkForwardResult, "avgWinPct" | "avgLossPct">,
 ): number | undefined {
   const { avgWinPct, avgLossPct } = walkForward;
   if (avgWinPct === undefined && avgLossPct === undefined) return undefined;
@@ -473,9 +470,16 @@ export function breakevenWinRateFromWalkForward(
  * still does not guarantee a limit fill).
  */
 export function fillModelMultiplier(
-  options: Pick<GridUniverseOptions, "fillModel" | "fillFraction" | "dataSource">,
+  options: Pick<
+    GridUniverseOptions,
+    "fillModel" | "fillFraction" | "dataSource"
+  >,
 ): number {
-  if ((options.fillModel ?? (options.dataSource === "db-mainnet" ? "conservative" : "wick")) === "conservative") {
+  if (
+    (options.fillModel ??
+      (options.dataSource === "db-mainnet" ? "conservative" : "wick")) ===
+    "conservative"
+  ) {
     return Math.max(0, Math.min(1, options.fillFraction ?? 0.5));
   }
   return 1;
@@ -748,7 +752,8 @@ function evaluateUniverseSymbol(
     (modeledFillPct / 100) * barsPerDayForTimeframe(options.timeframe);
   // Approximation: aggregate OOS return spread evenly over OOS trades —
   // ignores compounding and win/loss asymmetry, but ranks candidates fairly.
-  const edgePerTradePct = walkForward.aggregateReturnPct / Math.max(oosTrades, 1);
+  const edgePerTradePct =
+    walkForward.aggregateReturnPct / Math.max(oosTrades, 1);
 
   return {
     symbol,
@@ -886,13 +891,11 @@ export function runMarketUniverseScan(
       // from the testnet gateway's contract list / 24h volumes / demo
       // subset. Zero gateway calls on this path — the testnet demo list
       // would re-contaminate the universe.
-      candidates = (
-        yield* repo.listSymbolsByCandleCount(
-          options.exchange,
-          "5m",
-          Math.ceil((options.minCandles * targetMinutes) / 5),
-        )
-      )
+      candidates = (yield* repo.listSymbolsByCandleCount(
+        options.exchange,
+        "5m",
+        Math.ceil((options.minCandles * targetMinutes) / 5),
+      ))
         .filter((s) => s.count >= options.minCandles)
         .map((s) => s.symbol);
     } else {
@@ -976,8 +979,7 @@ export function runMarketUniverseScan(
             (outcome.failure instanceof Error
               ? outcome.failure.message
               : String(outcome.failure));
-          if (!isTransient(reason))
-            return yield* Effect.fail(outcome.failure);
+          if (!isTransient(reason)) return yield* Effect.fail(outcome.failure);
           attempt += 1;
           if (attempt >= 6) {
             yield* Effect.logWarning(
@@ -1051,10 +1053,7 @@ export function runMarketUniverseScan(
         const latest = range.latest;
         if (latest !== null) {
           const tail = yield* withRetry(symbol, () =>
-            fetchBatch(
-              symbol,
-              new Date(latest.getTime() + timeframeMillis),
-            ),
+            fetchBatch(symbol, new Date(latest.getTime() + timeframeMillis)),
           );
           if (tail.length > 0) yield* repo.saveCandles(tail);
         }
@@ -1111,7 +1110,8 @@ export function runMarketUniverseScan(
         const fetched: Candle[] = [];
         let startTime: Date | undefined;
         let oldest = [...byTimestamp.keys()].sort((a, b) => a - b)[0];
-        if (oldest !== undefined) startTime = new Date(oldest - timeframeMillis);
+        if (oldest !== undefined)
+          startTime = new Date(oldest - timeframeMillis);
         while (byTimestamp.size < DEEP_HISTORY_TARGET) {
           const budget = yield* Ref.get(deepBudget);
           if (budget <= 0) break;

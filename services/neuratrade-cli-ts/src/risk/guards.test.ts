@@ -173,7 +173,9 @@ describe("makeRiskGuard", () => {
         )
         .pipe(Effect.flip),
     );
-    expect(error.violations.some((v) => v.includes("minimum orderable position"))).toBe(true);
+    expect(
+      error.violations.some((v) => v.includes("minimum orderable position")),
+    ).toBe(true);
   });
 
   it("allows a minimum orderable position that fits the cap at leverage", async () => {
@@ -238,9 +240,7 @@ describe("makeRiskGuard", () => {
         )
         .pipe(Effect.flip),
     );
-    expect(
-      overLimit.violations.some((v) => v.includes("drawdown")),
-    ).toBe(true);
+    expect(overLimit.violations.some((v) => v.includes("drawdown"))).toBe(true);
   });
 
   it("allows daily loss exactly at the max and blocks just over", async () => {
@@ -268,9 +268,9 @@ describe("makeRiskGuard", () => {
         )
         .pipe(Effect.flip),
     );
-    expect(
-      overLimit.violations.some((v) => v.includes("daily loss")),
-    ).toBe(true);
+    expect(overLimit.violations.some((v) => v.includes("daily loss"))).toBe(
+      true,
+    );
   });
 
   it("allows position size exactly at the cap and blocks just over", async () => {
@@ -296,9 +296,9 @@ describe("makeRiskGuard", () => {
         )
         .pipe(Effect.flip),
     );
-    expect(
-      overLimit.violations.some((v) => v.includes("position size")),
-    ).toBe(true);
+    expect(overLimit.violations.some((v) => v.includes("position size"))).toBe(
+      true,
+    );
   });
 
   it("allows a minimum orderable floor exactly at the cap and blocks just over", async () => {
@@ -325,7 +325,9 @@ describe("makeRiskGuard", () => {
         .pipe(Effect.flip),
     );
     expect(
-      overLimit.violations.some((v) => v.includes("minimum orderable position")),
+      overLimit.violations.some((v) =>
+        v.includes("minimum orderable position"),
+      ),
     ).toBe(true);
   });
 
