@@ -411,7 +411,10 @@ function liveTestFingerprint(options: GridPaperTradingOptions): string {
     slippageBps: options.slippageBps.toString(),
     trendFilterPeriod: options.trendFilterPeriod.toString(),
     adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
-    capital: options.initialCapital.toString(),
+    targetRatio: (options.targetRatio ?? 1).toString(),
+    onlyWithTrend: (options.onlyWithTrend ?? false).toString(),
+    leverage: (options.leverage ?? 1).toString(),
+    productType: options.productType ?? "USDT-FUTURES",
   });
 }
 
@@ -731,6 +734,7 @@ describe("grid paper engine", () => {
         exchange: "binance",
         symbol: "ETH/USDT",
         timeframe: "15m",
+        initialCapital: 50,
         capital: money(20),
         peakCapital: money(20),
         paused: 0,

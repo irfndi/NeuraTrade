@@ -263,7 +263,16 @@ function strategyManifestFor(
     slippageBps: options.slippageBps.toString(),
     trendFilterPeriod: options.trendFilterPeriod.toString(),
     adxGate: (options.chopGateAdxThreshold ?? 0).toString(),
-    capital: String(options.initialCapital),
+    targetRatio: (options.targetRatio ?? 1).toString(),
+    onlyWithTrend: (options.onlyWithTrend ?? false).toString(),
+    leverage: (options.leverage ?? 1).toString(),
+    productType: options.productType ?? "USDT-FUTURES",
+    // NOTE: capital is intentionally excluded from the persisted fingerprint.
+    // The readiness gate compares the persisted strategy_config_fingerprint
+    // against the capital-free candidate manifest (strategyManifestFor);
+    // including capital here made every fingerprinted fill fail provenance
+    // with "candidate fingerprint mismatch". Distinct-capital resume safety
+    // is enforced explicitly below via state.initialCapital.
   };
 }
 
@@ -369,7 +378,9 @@ export function runGridPaperTradingIteration(
 
     if (
       state.side !== null &&
-      state.strategyConfigFingerprint !== strategyFingerprint
+      (state.strategyConfigFingerprint !== strategyFingerprint ||
+        (state.initialCapital !== undefined &&
+          state.initialCapital !== options.initialCapital))
     ) {
       const reason =
         "READINESS PROVENANCE MISMATCH: refusing to resume grid position";
