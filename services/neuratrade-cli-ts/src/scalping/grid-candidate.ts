@@ -59,14 +59,46 @@ export const VALIDATED_SOL_GRID_CANDIDATE = {
   maxDailyLossPct: 2,
 } as const;
 
+// ETH cohort candidate (2026-08-13, gate-scored 15m fast space, pooled
+// stress-LB via scripts/grid-cohort-sweep.ts): the ETH sweep over the full
+// 24-month bitget history (70,873 15m candles) found two passing families at
+// step 0.75. This one is chosen for robustness margin: confLB +0.00099 and
+// stressLB +0.00194 thicken the adverse-selection + taker-stop margin well
+// above zero (the rival grids-3/pause-0/target-3/adx-20 fit returned +15.19%
+// but only confLB +0.00019, too thin to survive minor data perturbation).
+// windows 53.8%, ret +5.23%, dd 13.40%, OOS 85 (~17.3 fills/mo, the fastest
+// clock in the cohort), stressWorst +2.95%. Adds ~17 fills/mo toward the
+// cohort's 50-fill gate.
+export const VALIDATED_ETH_GRID_CANDIDATE = {
+  exchange: "bitget-futures",
+  symbol: "ETH/USDT:USDT",
+  timeframe: "15m",
+  productType: "USDT-FUTURES",
+  gridStepPct: 0.75,
+  gridMaxGrids: 2,
+  gridPauseAfterLossBars: 48,
+  feePct: 0.02,
+  slippageBps: 1,
+  trendFilterPeriod: 0,
+  onlyWithTrend: false,
+  targetRatio: 4,
+  chopGateAdx: 28,
+  leverage: 1,
+  maxPositionSizePct: 50,
+  maxDrawdownPct: 5,
+  maxDailyLossPct: 2,
+} as const;
+
 export type ValidatedGridCandidate =
   | typeof VALIDATED_BTC_GRID_CANDIDATE
-  | typeof VALIDATED_SOL_GRID_CANDIDATE;
+  | typeof VALIDATED_SOL_GRID_CANDIDATE
+  | typeof VALIDATED_ETH_GRID_CANDIDATE;
 
 /** Readiness cohort (v2): each symbol runs its own validated candidate. */
 export const READINESS_COHORT_CANDIDATES = [
   VALIDATED_BTC_GRID_CANDIDATE,
   VALIDATED_SOL_GRID_CANDIDATE,
+  VALIDATED_ETH_GRID_CANDIDATE,
 ] as const satisfies readonly ValidatedGridCandidate[];
 
 export function candidateForSymbol(

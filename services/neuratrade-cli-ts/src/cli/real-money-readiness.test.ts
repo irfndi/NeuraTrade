@@ -239,7 +239,7 @@ describe("real-money-readiness CLI contract", () => {
     );
   });
 
-  it("merges the BTC+SOL cohort into one gate board (v2)", () => {
+  it("merges the full readiness cohort into one gate board (v2)", () => {
     const home = makeSeededHome(60);
     tempHomes.push(home);
 
@@ -248,22 +248,27 @@ describe("real-money-readiness CLI contract", () => {
       now: new Date("2026-08-02T00:00:00.000Z"),
     });
 
-    // Default = full cohort: both symbols evaluated, one merged board.
+    // Default = full cohort: every symbol evaluated, one merged board.
     expect(result.report.schemaVersion).toBe("real-money-readiness/v2");
-    expect(result.report.cohort).toHaveLength(2);
+    expect(result.report.cohort).toHaveLength(3);
     expect(result.report.cohort?.map((member) => member.symbol)).toEqual([
       "BTC/USDT:USDT",
       "SOL/USDT:USDT",
+      "ETH/USDT:USDT",
     ]);
-    // BTC contributes the seeded fills; SOL has none in the fixture home —
-    // the union prospective still sees the 60 BTC fills.
+    // BTC contributes the seeded fills; SOL/ETH have none in the fixture
+    // home — the union prospective still sees the 60 BTC fills.
     expect(result.report.metrics.prospective.completeTradeCount).toBe(60);
-    // SOL's missing evidence fails the merged board (data-quality etc.).
+    // SOL/ETH missing evidence fails the merged board (data-quality etc.).
     expect(result.report.failedGateIds).toContain("data-quality");
     expect(result.report.cohort?.[1]?.status).toBe("FAIL");
-    // Per-symbol manifests: SOL's fingerprint differs from BTC's.
+    expect(result.report.cohort?.[2]?.status).toBe("FAIL");
+    // Per-symbol manifests: each candidate's fingerprint differs.
     expect(result.report.cohort?.[0]?.expectedFingerprint).not.toBe(
       result.report.cohort?.[1]?.expectedFingerprint,
+    );
+    expect(result.report.cohort?.[1]?.expectedFingerprint).not.toBe(
+      result.report.cohort?.[2]?.expectedFingerprint,
     );
   });
 
