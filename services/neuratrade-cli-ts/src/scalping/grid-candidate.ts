@@ -9,10 +9,16 @@ export const VALIDATED_BTC_GRID_CANDIDATE = {
   // 2024-08..2026-08) after the prior lock (step 1 / grids 1.5 / pause 24 /
   // tr 3 / cg 28) degraded to +1.84% ret / 39.5% dd on the full span. Parallel
   // family sweep (leverage x positionFraction) fit: step 0.5, grids 2,
-  // pause 0, targetRatio 2, chopGateAdx 15, leverage 1, full position → +49.1%
-  // ret, 7.3% dd, pf 1.50, 210 trades, 10/12 disjoint 60d windows profitable
-  // (max single-window dd 5.3%). Higher leverage (2-3x) only scaled dd (>29%)
-  // without improving risk-adjusted return; leverage 1 is optimal.
+  // pause 0, targetRatio 2, chopGateAdx 15, leverage 1, 210 trades, 10/12
+  // disjoint 60d windows profitable (max single-window dd 5.3%). NOTE: the
+  // sweep's "+49.1% ret / 7.3% dd / pf 1.50" headline was measured at FULL
+  // position (positionFraction 1.0); this candidate is LOCKED at
+  // maxPositionSizePct 50 (positionFraction 0.5), so that headline does not
+  // apply to the deployed config. At the locked 0.5 position the same config
+  // backtests to +22.40% single-run total return (210 trades), and the
+  // readiness gate's compounded 13-window figure is +16.39% ret / 2.80% dd /
+  // confLB +0.00082 / stressLB +0.00100. Higher leverage (2-3x) only scaled
+  // dd (>29%) without improving risk-adjusted return; leverage 1 is optimal.
   gridPauseAfterLossBars: 0,
   feePct: 0.02,
   slippageBps: 1,
