@@ -32,7 +32,7 @@ const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 
 // Promoted readiness candidate per docs/superpowers/specs/2026-08-06-readiness-gate-status.md
 // and the readiness fingerprint (src/scalping/grid-candidate.ts VALIDATED_BTC_GRID_CANDIDATE):
-// step 0.5%, grids 2, target ratio 2, pause 0, chop-gate ADX 15, trend filter 0,
+// step 0.5%, grids 3, target ratio 2, pause 48, chop-gate ADX 15, trend filter 0,
 // fee 0.02% maker, slippage 1bp, leverage 1, position fraction 0.5 (--max-position-size-pct 50).
 // NOTE: grid-max-grids is integer-only in the CLI (Options.integer), so a candidate
 // with fractional grids must be expressed as the nearest integer here or the process
@@ -91,9 +91,9 @@ module.exports = {
         "--grid-step-pct",
         "0.5",
         "--grid-max-grids",
-        "2",
+        "3",
         "--grid-pause-after-loss-bars",
-        "0",
+        "48",
         "--target-ratio",
         "2",
         "--chop-gate-adx",
