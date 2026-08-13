@@ -58,7 +58,13 @@ export default Alchemy.Stack(
   "NeuraTradeCli",
   {
     providers: Cloudflare.providers(),
-    state: Cloudflare.state(),
+    // Local state backend instead of Cloudflare.state(): the remote state
+    // store deploys an `alchemy-state-store` Worker backed by a Durable
+    // Object, which shows up on the bill as "Durable Objects Compute
+    // Requests". This app is already a plain Worker + KV and needs no DO;
+    // local file state (like Terraform's local backend) removes that DO
+    // entirely. State lives in .alchemy/ — single-machine only.
+    state: Alchemy.localState(),
   },
   Effect.gen(function* () {
     const worker = yield* UniverseWatch;
