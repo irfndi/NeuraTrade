@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Schedule } from "effect";
 import { Database } from "bun:sqlite";
 import { Decimal, toNumber } from "../utils/money.js";
 import type {
@@ -11,13 +11,52 @@ import type { FlowTradeState } from "../scalping/flow-trade.js";
 
 /**
  * Error raised when paper-trading persistence fails.
+ *
+ * Extends `Error` so consumers (logs, `describeError`, promise rejections)
+ * surface `reason` as `message` instead of the opaque "[object Object]" that
+ * a plain tagged class produced. `_tag` is retained for Effect error-channel
+ * discrimination.
  */
-export class PaperTradingRepositoryError {
+export class PaperTradingRepositoryError extends Error {
   readonly _tag = "PaperTradingRepositoryError" as const;
+  override readonly cause?: unknown;
   constructor(
     readonly reason: string,
-    readonly cause?: unknown,
-  ) {}
+    cause?: unknown,
+  ) {
+    super(reason);
+    this.name = "PaperTradingRepositoryError";
+    this.cause = cause;
+  }
+}
+
+const SQLITE_BUSY_PATTERN = /database is locked|SQLITE_BUSY|busy/i;
+
+function isSqliteBusy(err: unknown): boolean {
+  const message =
+    err instanceof Error
+      ? err.message
+      : err !== null && typeof err === "object" && "reason" in err
+        ? String((err as { reason: unknown }).reason)
+        : "";
+  return SQLITE_BUSY_PATTERN.test(message);
+}
+
+/**
+ * Retries an Effect when it fails with SQLite write contention ("database is
+ * locked" / SQLITE_BUSY). The shared WAL database is written by several pm2
+ * processes concurrently (universe-watch backfills, candle fetches, paper
+ * soaks); a transient lock that outlasts `busy_timeout` must be retried rather
+ * than silently dropped (the flow recorder previously discarded those rows).
+ */
+function retryOnBusy<R, E>(
+  effect: Effect.Effect<R, E, never>,
+): Effect.Effect<R, E, never> {
+  return Effect.retry(effect, {
+    times: 6,
+    schedule: Schedule.exponential("150 millis", 2),
+    while: isSqliteBusy,
+  });
 }
 
 export interface WatchlistEntry {
@@ -2161,62 +2200,66 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   saveFlowOfi(
     rows: readonly FlowOfiRow[],
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
-    return Effect.try({
-      try: () => {
-        // OR REPLACE: the recorder re-flushes the same minute bucket on its
-        // rollover/close passes, and the last flush must win.
-        const insert = this.db.query(
-          `INSERT OR REPLACE INTO flow_ofi_1m
+    return retryOnBusy(
+      Effect.try({
+        try: () => {
+          // OR REPLACE: the recorder re-flushes the same minute bucket on its
+          // rollover/close passes, and the last flush must win.
+          const insert = this.db.query(
+            `INSERT OR REPLACE INTO flow_ofi_1m
              (exchange, symbol, ts, buy_vol, sell_vol, trades)
            VALUES (?, ?, ?, ?, ?, ?)`,
-        );
-        for (const row of rows) {
-          insert.run(
-            row.exchange,
-            row.symbol,
-            row.ts,
-            row.buyVol,
-            row.sellVol,
-            row.trades,
           );
-        }
-      },
-      catch: (err) =>
-        new PaperTradingRepositoryError(
-          `Failed to save flow OFI rows: ${err instanceof Error ? err.message : String(err)}`,
-          err,
-        ),
-    });
+          for (const row of rows) {
+            insert.run(
+              row.exchange,
+              row.symbol,
+              row.ts,
+              row.buyVol,
+              row.sellVol,
+              row.trades,
+            );
+          }
+        },
+        catch: (err) =>
+          new PaperTradingRepositoryError(
+            `Failed to save flow OFI rows: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      }),
+    );
   }
 
   saveLiquidations(
     rows: readonly LiquidationRow[],
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
-    return Effect.try({
-      try: () => {
-        const insert = this.db.query(
-          `INSERT OR IGNORE INTO flow_liquidations
+    return retryOnBusy(
+      Effect.try({
+        try: () => {
+          const insert = this.db.query(
+            `INSERT OR IGNORE INTO flow_liquidations
              (exchange, symbol, ts, side, size, price, bankruptcy_price)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const row of rows) {
-          insert.run(
-            row.exchange,
-            row.symbol,
-            row.ts,
-            row.side,
-            row.size,
-            row.price,
-            row.bankruptcyPrice ?? null,
           );
-        }
-      },
-      catch: (err) =>
-        new PaperTradingRepositoryError(
-          `Failed to save liquidation rows: ${err instanceof Error ? err.message : String(err)}`,
-          err,
-        ),
-    });
+          for (const row of rows) {
+            insert.run(
+              row.exchange,
+              row.symbol,
+              row.ts,
+              row.side,
+              row.size,
+              row.price,
+              row.bankruptcyPrice ?? null,
+            );
+          }
+        },
+        catch: (err) =>
+          new PaperTradingRepositoryError(
+            `Failed to save liquidation rows: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      }),
+    );
   }
 
   getOpenInterest(

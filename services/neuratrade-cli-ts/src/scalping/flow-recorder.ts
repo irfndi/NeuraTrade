@@ -224,7 +224,20 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 }
 
 function describeError<T>(err: T): string {
-  return err instanceof Error ? err.message : String(err);
+  if (err instanceof Error) return err.message;
+  if (err !== null && typeof err === "object") {
+    const e = err as {
+      readonly message?: unknown;
+      readonly reason?: unknown;
+      readonly _tag?: unknown;
+      readonly cause?: unknown;
+    };
+    if (typeof e.reason === "string" && e.reason.length > 0) return e.reason;
+    if (typeof e.message === "string" && e.message.length > 0) return e.message;
+    if (typeof e._tag === "string" && e._tag.length > 0) return e._tag;
+    if (e.cause !== undefined) return describeError(e.cause);
+  }
+  return String(err);
 }
 
 function decodeFrame(payload: RawWsEventPayload): unknown {
