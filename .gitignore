@@ -212,3 +212,6 @@ services/backend-api/5yr-backtest
 .opencode/
 session_*/
 skills-lock.json
+
+# CodeGraphContext local ignore (auto-generated tool state)
+.cgcignore
