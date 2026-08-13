@@ -59,6 +59,14 @@ const commandOptions = {
   ),
 } as const;
 
+/**
+ * Minimum number of trades a parity window must produce on both engines for
+ * the execution-fidelity checks to be statistically meaningful. A parity
+ * artifact below this threshold fails closed: a single coincidental trade
+ * cannot substantiate fee, slippage, order-type or fill-price fidelity.
+ */
+const MIN_PARITY_TRADES = 30;
+
 export interface ExecutionParityArtifact {
   readonly protocolVersion: "execution-parity/v1";
   readonly generatedAt: string;
@@ -247,8 +255,11 @@ function inferBtExitReason(t: GridTrade): "target" | "stop" | "liquidation" {
 function computeExecutionParityChecks(
   btTrades: readonly GridTrade[],
   depTrades: readonly GridPaperTrade[],
+  cfg: { readonly feePct: number; readonly slippageBps: number },
 ): readonly ExecutionParityCheck[] {
   const n = Math.min(btTrades.length, depTrades.length);
+  const countMatch = btTrades.length === depTrades.length;
+  const adequateSample = n >= MIN_PARITY_TRADES;
   let priceMatches = 0;
   let reasonMatches = 0;
   let pnlMatches = 0;
@@ -256,56 +267,56 @@ function computeExecutionParityChecks(
     const b = btTrades[i];
     const d = depTrades[i];
     if (withinTol(b.entryPrice, money(d.entryPrice).toNumber())) priceMatches++;
-    if (d.side === b.side && d.exitReason === inferBtExitReason(b)) {
-      reasonMatches++;
-    }
+    if (d.side === b.side && d.exitReason === inferBtExitReason(b)) reasonMatches++;
     if (withinPp(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
   }
-  const countMatch = btTrades.length === depTrades.length;
-  const pairCoverage = btTrades.length === 0 || n === btTrades.length;
+  const roundTrip = cfg.feePct * 2;
+  const sampleDetail = `backtest=${btTrades.length} deployed=${depTrades.length} (minimum ${MIN_PARITY_TRADES} trades)`;
   const zeroTrades = btTrades.length === 0;
   return [
     {
+      name: "sample-size",
+      passed: adequateSample,
+      detail: sampleDetail,
+    },
+    {
       name: "trigger-bar",
-      passed: countMatch,
+      passed: countMatch && adequateSample,
       detail: `backtest=${btTrades.length} deployed=${depTrades.length}`,
     },
     {
       name: "order-type",
-      passed: countMatch,
-      detail: "both use limit entry at grid level with round-trip limit exits",
+      passed: countMatch && adequateSample,
+      detail:
+        "both use limit entry at grid level with priced limit exits (config-identical, not per-fill measured)",
     },
     {
       name: "fill-price",
       passed:
-        btTrades.length === 0 || (priceMatches === n && n === btTrades.length),
+        adequateSample && priceMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${priceMatches}/${n} entry prices within 0.5%`,
     },
     {
       name: "fees",
-      passed: pairCoverage,
-      detail: zeroTrades
-        ? "N/A (0 trades on both engines)"
-        : "both charge feePct*2 = 0.12% round-trip",
+      passed: countMatch && adequateSample,
+      detail: `both engines charge maker feePct=${cfg.feePct}% (round-trip ${roundTrip}%) from the locked candidate`,
     },
     {
       name: "slippage",
-      passed: pairCoverage,
-      detail: zeroTrades
-        ? "N/A (0 trades on both engines)"
-        : "both apply slippageBps=2 on entry and exit",
+      passed: countMatch && adequateSample,
+      detail: `both engines apply slippageBps=${cfg.slippageBps} on entry and exit`,
     },
     {
       name: "quantity",
-      passed: countMatch,
+      passed: countMatch && adequateSample,
       detail: "both size at 50% of capital (positionFraction / maxPositionPct)",
     },
     {
       name: "exit-reason",
       passed:
-        btTrades.length === 0 || (reasonMatches === n && n === btTrades.length),
+        adequateSample && reasonMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${reasonMatches}/${n} exit reasons equal (target/stop/liquidation)`,
@@ -313,7 +324,7 @@ function computeExecutionParityChecks(
     {
       name: "pnl",
       passed:
-        btTrades.length === 0 || (pnlMatches === n && n === btTrades.length),
+        adequateSample && pnlMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${pnlMatches}/${n} round-trip pnl within 0.5pp`,
@@ -519,7 +530,7 @@ function humanReport(
       )}pp btReason=${inferBtExitReason(b)} depReason=${d.exitReason}`,
     );
   }
-  lines.push(`\n8-dimension parity check:`);
+  lines.push(`\nparity check (${checks.length} dimensions):`);
   for (const check of checks) {
     lines.push(
       `  ${check.name.padEnd(12)} ${check.passed ? "MATCH" : "MISMATCH"}  ${check.detail}`,
@@ -541,18 +552,19 @@ function findTradeWindow(
   const size = Math.min(bars, candles.length);
   if (size < 2) return candles.slice(-size);
   // Start from the most recent window and scan backward until the validated
-  // engine produces at least one trade. A parity window with zero trades on
-  // both engines is vacuous — it cannot exercise fill-price, fees, slippage,
-  // exit-reason or pnl. The golden fixture must run on a window that actually
-  // fills orders. If no window in the series produces a trade, fall back to
-  // the most recent window (the report will then show N/A for every
-  // fill-sensitive dimension).
+  // engine produces at least MIN_PARITY_TRADES trades. A parity window below
+  // that threshold cannot substantiate fill-price, fees, slippage, exit-reason
+  // or pnl fidelity, so it fails closed via the `sample-size` check. If no
+  // window in the series reaches the minimum, fall back to the most recent
+  // window and let the report surface the shortfall (increase --bars).
   const maxSkips = Math.max(1, Math.floor(candles.length / size) - 1);
   for (let skip = 0; skip <= maxSkips; skip++) {
     const start = candles.length - size - skip * size;
     if (start < 0) break;
     const window = candles.slice(start, start + size);
-    if (runGridBacktest(window, grid).totalTrades > 0) return window;
+    if (runGridBacktest(window, grid).totalTrades >= MIN_PARITY_TRADES) {
+      return window;
+    }
   }
   return candles.slice(-size);
 }
@@ -569,7 +581,8 @@ export function makeParityReplayCommand(homeDir?: string) {
         args.symbol,
         args.timeframe,
       );
-      const window = findTradeWindow(candles, args.bars, gridConfig());
+      const grid = gridConfig();
+      const window = findTradeWindow(candles, args.bars, grid);
       if (window.length === 0) {
         return yield* Effect.fail(
           new Error(
@@ -577,14 +590,17 @@ export function makeParityReplayCommand(homeDir?: string) {
           ),
         );
       }
-      const bt = runGridBacktest(window, gridConfig());
+      const bt = runGridBacktest(window, grid);
       const depTrades = yield* runReplay(
         window,
         args.exchange,
         args.symbol,
         args.timeframe,
       );
-      const checks = computeExecutionParityChecks(bt.trades, depTrades);
+      const checks = computeExecutionParityChecks(bt.trades, depTrades, {
+        feePct: grid.feePct,
+        slippageBps: grid.slippageBps,
+      });
       const artifact: ExecutionParityArtifact = {
         protocolVersion: "execution-parity/v1",
         generatedAt: new Date().toISOString(),

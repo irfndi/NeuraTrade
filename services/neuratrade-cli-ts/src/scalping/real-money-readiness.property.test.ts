@@ -41,6 +41,11 @@ function baseInput(): RealMoneyReadinessInput {
       protocolVersion: "execution-parity/v1",
       checks: [
         {
+          name: "sample-size",
+          passed: true,
+          detail: "backtest=30 deployed=30 (minimum 30 trades)",
+        },
+        {
           name: "trigger-bar",
           passed: true,
           detail: "backtest=2 deployed=2",
@@ -55,11 +60,15 @@ function baseInput(): RealMoneyReadinessInput {
           passed: true,
           detail: "2/2 entries within 0.5%",
         },
-        { name: "fees", passed: true, detail: "both charge 0.12% round-trip" },
+        {
+          name: "fees",
+          passed: true,
+          detail: "both charge maker feePct=0.02% (round-trip 0.04%)",
+        },
         {
           name: "slippage",
           passed: true,
-          detail: "both apply slippageBps=2",
+          detail: "both apply slippageBps=1",
         },
         {
           name: "quantity",

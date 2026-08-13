@@ -350,9 +350,14 @@ describe("real-money-readiness CLI contract", () => {
         symbol: "BTC/USDT:USDT",
         timeframe: "15m",
         barCount: 500,
-        backtestTrades: 2,
-        deployedTrades: 2,
+        backtestTrades: 30,
+        deployedTrades: 30,
         checks: [
+          {
+            name: "sample-size",
+            passed: true,
+            detail: "backtest=30 deployed=30 (minimum 30 trades)",
+          },
           {
             name: "trigger-bar",
             passed: true,
@@ -371,12 +376,12 @@ describe("real-money-readiness CLI contract", () => {
           {
             name: "fees",
             passed: true,
-            detail: "both charge 0.12% round-trip",
+            detail: "both charge maker feePct=0.02% (round-trip 0.04%)",
           },
           {
             name: "slippage",
             passed: true,
-            detail: "both apply slippageBps=2",
+            detail: "both apply slippageBps=1",
           },
           {
             name: "quantity",
@@ -412,6 +417,7 @@ describe("real-money-readiness CLI contract", () => {
     const home = makeSeededHome(60);
     tempHomes.push(home);
     const checks = [
+      "sample-size",
       "trigger-bar",
       "order-type",
       "fill-price",

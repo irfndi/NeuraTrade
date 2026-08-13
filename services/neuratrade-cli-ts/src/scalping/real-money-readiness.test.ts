@@ -41,6 +41,11 @@ function passingInput(): RealMoneyReadinessInput {
       protocolVersion: "execution-parity/v1",
       checks: [
         {
+          name: "sample-size",
+          passed: true,
+          detail: "backtest=30 deployed=30 (minimum 30 trades)",
+        },
+        {
           name: "trigger-bar",
           passed: true,
           detail: "backtest=2 deployed=2",
@@ -55,11 +60,15 @@ function passingInput(): RealMoneyReadinessInput {
           passed: true,
           detail: "2/2 entries within 0.5%",
         },
-        { name: "fees", passed: true, detail: "both charge 0.12% round-trip" },
+        {
+          name: "fees",
+          passed: true,
+          detail: "both charge maker feePct=0.02% (round-trip 0.04%)",
+        },
         {
           name: "slippage",
           passed: true,
-          detail: "both apply slippageBps=2",
+          detail: "both apply slippageBps=1",
         },
         {
           name: "quantity",
@@ -224,6 +233,7 @@ describe("real-money readiness contract", () => {
 
   it("fails execution parity when any required check is missing", () => {
     const checks = [
+      "sample-size",
       "trigger-bar",
       "order-type",
       "fill-price",
@@ -275,6 +285,30 @@ describe("real-money readiness contract", () => {
     expect(
       result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
     ).toContain("execution parity check failed: fill-price");
+  });
+
+  it("fails execution parity when the sample is below the minimum trade count", () => {
+    const result = evaluateRealMoneyReadiness({
+      ...passingInput(),
+      executionParity: {
+        ...passingInput().executionParity,
+        checks: passingInput().executionParity.checks.map((check) =>
+          check.name === "sample-size"
+            ? {
+                ...check,
+                passed: false,
+                detail: "backtest=1 deployed=1 (minimum 30 trades)",
+              }
+            : check,
+        ),
+      },
+    });
+
+    expect(result.status).toBe("FAIL");
+    expect(result.failedGateIds).toContain("execution-parity");
+    expect(
+      result.gates.find((gate) => gate.id === "execution-parity")?.reasons,
+    ).toContain("execution parity check failed: sample-size");
   });
 
   it("fails an inverted confidence interval", () => {

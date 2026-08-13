@@ -168,12 +168,13 @@ export interface ExecutionParityEvidence {
 }
 
 /**
- * The eight measured execution-fidelity dimensions a parity artifact must
+ * The nine measured execution-fidelity dimensions a parity artifact must
  * cover. A real parity run compares the validated backtest engine against the
  * deployed replay engine on the same candle window and records a per-check
  * verdict with measured detail (see `scalp parity-replay`).
  */
 export const EXECUTION_PARITY_CHECK_NAMES = [
+  "sample-size",
   "trigger-bar",
   "order-type",
   "fill-price",
