@@ -25,6 +25,7 @@ import {
   FAST_TIER_MIN_FILL_FREQUENCY_PCT,
   fillModelMultiplier,
   gateScoredEligibility,
+  passesLadderTimeSplitGate,
   passesStage2Screen,
   resampleCandles,
   selectUniversePortfolio,
@@ -34,6 +35,7 @@ import {
   type GridUniverseEntry,
 } from "./grid-universe.js";
 import { runGridWalkForward } from "./grid.js";
+import { runLadderGridWalkForward, type LadderOptions } from "./ladder-grid.js";
 
 const candle = (open: number, high: number, low: number) => ({
   open,
@@ -1313,5 +1315,151 @@ describe("runMarketUniverseScan (market-sourced batch)", () => {
     // fillFraction default 0.5: modeled fills = touch x 0.5, so the
     // projection halves exactly (same candles -> same bestParams).
     expect(conservativeFills ?? 0).toBeCloseTo((wickFills ?? 0) * 0.5, 6);
+  });
+});
+
+describe("ladder engine in the universe scan", () => {
+  const BAR_MS = 15 * 60 * 1000;
+  const N = 2000;
+
+  const LADDER_OPTIONS: GridUniverseOptions = {
+    exchange: "bitget-futures",
+    timeframe: "15m",
+    initialCapital: 10000,
+    minCandles: N,
+    trainWindow: 100,
+    testWindow: 200,
+    minProfitableWindowsPct: 60,
+    minAggregateReturnPct: 0,
+    minFillFrequencyPct: 0,
+    feePct: 0.06,
+    slippageBps: 2,
+    trendFilterPeriod: 0,
+    searchSpace: { ...DEFAULT_GRID_UNIVERSE_SEARCH_SPACE, rungs: [1, 2, 3] },
+    engine: "ladder",
+  };
+
+  /** Flat bars at 100 with a ±0.5% wick every 12 bars — the ladder fills and
+   * takes profit on each wick, and the 8.3% touch rate clears the fast-tier
+   * fill floor. */
+  function wickCandles(): Candle[] {
+    const end = Date.now() - BAR_MS;
+    const rows: Candle[] = [];
+    for (let i = 0; i < N; i += 1) {
+      const base = {
+        exchange: "bitget-futures",
+        symbol: "LADDER/USDT:USDT",
+        timeframe: "15m",
+        volume: 10,
+        timestamp: new Date(end - (N - 1 - i) * BAR_MS),
+      };
+      const wickBar = i % 12 === 0 && i > 10;
+      rows.push(
+        wickBar
+          ? { ...base, open: 100, high: 100.5, low: 99.5, close: 100 }
+          : { ...base, open: 100, high: 100, low: 100, close: 100 },
+      );
+    }
+    return rows;
+  }
+
+  const ladderFor = (step = 0.2): LadderOptions => ({
+    rungs: 1,
+    gridStepPct: step,
+    gridMaxGrids: 2,
+    gridPauseAfterLossBars: 0,
+    feePct: 0.06,
+    slippageBps: 2,
+    initialCapital: 10000,
+    leverage: 1,
+    trendFilterPeriod: 0,
+    targetRatio: 1,
+    onlyWithTrend: false,
+  });
+
+  /** Mirrors evaluateUniverseSymbol's ladder branch: ladder walk-forward over
+   * the full series, then derive bestParams (incl. rungs) + passed. */
+  function ladderEntry(candles: Candle[]): GridUniverseEntry {
+    const walkForward = runLadderGridWalkForward(candles, {
+      trainWindow: LADDER_OPTIONS.trainWindow,
+      testWindow: LADDER_OPTIONS.testWindow,
+      initialCapital: LADDER_OPTIONS.initialCapital,
+      searchSpace: {
+        rungs: [1],
+        gridStepPct: [0.2],
+        gridMaxGrids: [2],
+        gridPauseAfterLossBars: [0],
+      },
+      baseOptions: {
+        feePct: LADDER_OPTIONS.feePct,
+        slippageBps: LADDER_OPTIONS.slippageBps,
+        trendFilterPeriod: LADDER_OPTIONS.trendFilterPeriod,
+        leverage: 1,
+      },
+    });
+    const lastWindow = walkForward.windows[walkForward.windows.length - 1];
+    const bestParams = {
+      gridStepPct: lastWindow?.params.gridStepPct ?? 0.2,
+      gridMaxGrids: lastWindow?.params.gridMaxGrids ?? 2,
+      gridPauseAfterLossBars: lastWindow?.params.gridPauseAfterLossBars ?? 0,
+      rungs: lastWindow?.params.rungs ?? 1,
+    };
+    return {
+      symbol: "LADDER/USDT:USDT",
+      candles: candles.length,
+      bestParams,
+      walkForward,
+      passed:
+        walkForward.windows.length >= 1 &&
+        walkForward.profitableWindowsPct >=
+          LADDER_OPTIONS.minProfitableWindowsPct &&
+        walkForward.aggregateReturnPct >= LADDER_OPTIONS.minAggregateReturnPct,
+    };
+  }
+
+  it("passesLadderTimeSplitGate: true on a mean-reverting wick series, false on a no-fill flat series", () => {
+    const candles = wickCandles();
+    expect(passesLadderTimeSplitGate(candles, ladderFor())).toBe(true);
+
+    const flat = candles.map((c) => ({ ...c, high: 100, low: 100 }));
+    expect(passesLadderTimeSplitGate(flat, ladderFor())).toBe(false);
+  });
+
+  it("ladder gate: readiness tier fails closed (no ladder evidence validator)", () => {
+    const candles = wickCandles();
+    const entry = ladderEntry(candles);
+    expect(entry.passed).toBe(true);
+    expect(
+      gateScoredEligibility(entry, candles, {
+        ...LADDER_OPTIONS,
+        tier: "readiness",
+      }),
+    ).toBeNull();
+  });
+
+  it("ladder gate: fast tier admits a ladder-surviving entry and preserves rungs", () => {
+    const candles = wickCandles();
+    const entry = ladderEntry(candles);
+    expect(entry.passed).toBe(true);
+    const gated = gateScoredEligibility(entry, candles, {
+      ...LADDER_OPTIONS,
+      tier: "fast",
+    });
+    expect(gated).not.toBeNull();
+    if (gated === null) return;
+    expect(gated.bestParams.rungs).toBe(1);
+    expect(gated.validatedTargetRatio).toBeDefined();
+    expect(gated.validatedChopGateAdx).toBeDefined();
+    if (
+      gated.validatedTargetRatio === undefined ||
+      gated.validatedChopGateAdx === undefined
+    )
+      return;
+    expect(GATE_TARGETS as readonly number[]).toContain(
+      gated.validatedTargetRatio,
+    );
+    expect(GATE_ADX_GATES as readonly number[]).toContain(
+      gated.validatedChopGateAdx,
+    );
   });
 });

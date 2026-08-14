@@ -1240,6 +1240,20 @@ export const gridUniverseDataSourceOption = Options.text("data-source").pipe(
   ),
 );
 
+export const gridUniverseEngineOption = Options.text("engine").pipe(
+  Options.withDefault("grid"),
+  Options.withDescription(
+    "Grid engine to evaluate: 'grid' (single-position, default) or 'ladder' (multi-rung, one TP per rung)",
+  ),
+);
+
+export const gridUniverseRungsOption = Options.text("rungs").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Comma-separated rungs sweep for --engine ladder (default '1,2,3')",
+  ),
+);
+
 export const watchlistListExchangeOption = Options.text("exchange").pipe(
   Options.withDefault("bitget-futures"),
   Options.withDescription("Exchange to list watchlist for"),

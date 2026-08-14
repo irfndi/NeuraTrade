@@ -63,10 +63,7 @@ import {
   type BitgetContract,
 } from "../services/bitget-client.js";
 import { BitgetConfig, BitgetConfigLive } from "../services/bitget-config.js";
-import {
-  BybitConfig,
-  BybitConfigLive,
-} from "../services/bybit-config.js";
+import { BybitConfig, BybitConfigLive } from "../services/bybit-config.js";
 import { RateLimiterLive } from "../services/rate-limiter.js";
 import type { FuturesMarginMode } from "../exchange/futures-adapter.js";
 import {
@@ -377,6 +374,8 @@ import {
   gridUniverseAccountCapitalOption,
   gridUniverseTierOption,
   gridUniverseDataSourceOption,
+  gridUniverseEngineOption,
+  gridUniverseRungsOption,
   watchlistListExchangeOption,
   watchlistListTimeframeOption,
   flowSymbolsOption,
@@ -5025,6 +5024,8 @@ export const gridUniverseScanCommand = Command.make(
     tier: gridUniverseTierOption,
     market: gridUniverseMarketOption,
     dataSource: gridUniverseDataSourceOption,
+    engine: gridUniverseEngineOption,
+    rungs: gridUniverseRungsOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -5050,6 +5051,36 @@ export const gridUniverseScanCommand = Command.make(
         return yield* Effect.fail(
           new Error(
             `--data-source db-mainnet requires --market (db-mainnet candles come from the 5m mainnet DB cache via the market scan)`,
+          ),
+        );
+      }
+      if (args.engine !== "grid" && args.engine !== "ladder") {
+        return yield* Effect.fail(
+          new Error(
+            `invalid --engine '${args.engine}': expected 'grid' or 'ladder'`,
+          ),
+        );
+      }
+      const rungs = Option.isSome(args.rungs)
+        ? args.rungs.value
+            .split(",")
+            .map((token) => Number(token.trim()))
+            .filter((n) => Number.isInteger(n) && n >= 1)
+        : [1, 2, 3];
+      if (rungs.length === 0) {
+        return yield* Effect.fail(
+          new Error(
+            `invalid --rungs '${args.rungs}': expected comma-separated integers >= 1`,
+          ),
+        );
+      }
+      if (args.engine === "ladder" && args.tier === "readiness") {
+        // The ladder engine has no stage-4 evidence validator yet, so the
+        // readiness tier fails closed (no survivors). Fast tier is the only
+        // ladder path until a ladder evidence validator ships.
+        return yield* Effect.fail(
+          new Error(
+            `--engine ladder requires --tier fast (no ladder evidence validator exists for the readiness board yet)`,
           ),
         );
       }
@@ -5084,8 +5115,9 @@ export const gridUniverseScanCommand = Command.make(
         feePct: args.fee,
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.trendFilterPeriod,
-        searchSpace: DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+        searchSpace: { ...DEFAULT_GRID_UNIVERSE_SEARCH_SPACE, rungs },
         tier: args.tier,
+        engine: args.engine,
         // db-mainnet evaluates on mainnet-fidelity candles; its fills are
         // modeled conservatively by default (a wick touch is not a fill).
         dataSource: args.dataSource,
@@ -5152,47 +5184,57 @@ export const gridUniverseScanCommand = Command.make(
             `🎯 Portfolio selection: ${selected.length}/${survivors.length} survivors selected, ~${Math.round(projectedFills)} fills/day projected (target ${targetFillsPerDay})`,
           );
 
-          const entries: DbWatchlistEntry[] = selected.map((e) => ({
-            // Persist under the resolved futures-market key so scan-write
-            // and paper-trade read always agree, even when the scan was run
-            // with a raw exchange name that resolves differently (e.g.
-            // --exchange binance + futures => bitget-futures).
-            exchange: marketExchange,
-            symbol: e.symbol,
-            timeframe: args.timeframe,
-            returnPct: e.walkForward.aggregateReturnPct,
-            profitableWindowsPct: e.walkForward.profitableWindowsPct,
-            aggregateReturnPct: e.walkForward.aggregateReturnPct,
-            gridStepPct: e.bestParams.gridStepPct,
-            gridMaxGrids: e.bestParams.gridMaxGrids,
-            gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
-            // Stage-4 gate-scored validation fills these; walk-forward-only
-            // (DB-sourced) scans default to target 1 / no chop gate.
-            targetRatio: e.validatedTargetRatio ?? 1,
-            chopGateAdx: e.validatedChopGateAdx ?? 0,
-            oosTrades: e.oosTrades ?? 0,
-            fillsPerDay: e.fillsPerDay ?? 0,
-            edgePerTradePct: e.edgePerTradePct ?? 0,
-            volatility: e.volatility ?? 0,
-            // ponytail: equal weight per selected symbol — simple, spreads
-            // risk; upgrade to edge-proportional (edgePerTradePct / sum)
-            // once the soak measures per-symbol edge live.
-            allocatedWeight: selected.length > 0 ? 1 / selected.length : 0,
-            updatedAt: new Date(),
-          }));
-          if (entries.length === 0) {
+          if (args.engine === "ladder") {
+            // Ladder survivors are reported (funnel + whitelist) but NOT
+            // persisted to the DB watchlist: the live single-position paper
+            // engine cannot trade ladder configs (rungs) yet. Persisting them
+            // would hand the demo soak configs it would silently mis-execute.
             yield* Console.log(
-              `💾 No survivors selected this cycle — keeping existing watchlist unchanged`,
+              `💾 Ladder scan: ${selected.length} survivors reported but NOT written to the DB watchlist (single-position live engine can't trade rungs yet)`,
             );
           } else {
-            yield* paperRepo.replaceWatchlist(
-              marketExchange,
-              args.timeframe,
-              entries,
-            );
-            yield* Console.log(
-              `💾 Watchlist replaced: ${entries.length} survivors now in DB (${marketExchange}:${args.timeframe}); prior symbols in this scope were removed`,
-            );
+            const entries: DbWatchlistEntry[] = selected.map((e) => ({
+              // Persist under the resolved futures-market key so scan-write
+              // and paper-trade read always agree, even when the scan was run
+              // with a raw exchange name that resolves differently (e.g.
+              // --exchange binance + futures => bitget-futures).
+              exchange: marketExchange,
+              symbol: e.symbol,
+              timeframe: args.timeframe,
+              returnPct: e.walkForward.aggregateReturnPct,
+              profitableWindowsPct: e.walkForward.profitableWindowsPct,
+              aggregateReturnPct: e.walkForward.aggregateReturnPct,
+              gridStepPct: e.bestParams.gridStepPct,
+              gridMaxGrids: e.bestParams.gridMaxGrids,
+              gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+              // Stage-4 gate-scored validation fills these; walk-forward-only
+              // (DB-sourced) scans default to target 1 / no chop gate.
+              targetRatio: e.validatedTargetRatio ?? 1,
+              chopGateAdx: e.validatedChopGateAdx ?? 0,
+              oosTrades: e.oosTrades ?? 0,
+              fillsPerDay: e.fillsPerDay ?? 0,
+              edgePerTradePct: e.edgePerTradePct ?? 0,
+              volatility: e.volatility ?? 0,
+              // ponytail: equal weight per selected symbol — simple, spreads
+              // risk; upgrade to edge-proportional (edgePerTradePct / sum)
+              // once the soak measures per-symbol edge live.
+              allocatedWeight: selected.length > 0 ? 1 / selected.length : 0,
+              updatedAt: new Date(),
+            }));
+            if (entries.length === 0) {
+              yield* Console.log(
+                `💾 No survivors selected this cycle — keeping existing watchlist unchanged`,
+              );
+            } else {
+              yield* paperRepo.replaceWatchlist(
+                marketExchange,
+                args.timeframe,
+                entries,
+              );
+              yield* Console.log(
+                `💾 Watchlist replaced: ${entries.length} survivors now in DB (${marketExchange}:${args.timeframe}); prior symbols in this scope were removed`,
+              );
+            }
           }
 
           // Only ever write the whitelist file after a successful scan with
@@ -5207,6 +5249,7 @@ export const gridUniverseScanCommand = Command.make(
                 gridStepPct: e.bestParams.gridStepPct,
                 gridMaxGrids: e.bestParams.gridMaxGrids,
                 gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
+                rungs: e.bestParams.rungs,
               },
             }));
             const fsys = yield* FileSystem.FileSystem;

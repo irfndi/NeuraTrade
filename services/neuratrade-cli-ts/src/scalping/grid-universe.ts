@@ -21,8 +21,12 @@ import {
   runGridBacktest,
   runGridWalkForward,
   type GridOptions,
-  type GridWalkForwardResult,
 } from "./grid.js";
+import {
+  runLadderGridBacktest,
+  runLadderGridWalkForward,
+  type LadderOptions,
+} from "./ladder-grid.js";
 import {
   validateGridEvidence,
   type GridValidationOk,
@@ -79,6 +83,16 @@ export const GATE_ADX_GATES = [24, 26, 28] as const;
  * support 10+ rolling validation windows at the readiness default sizes.
  */
 export const DEEP_HISTORY_TARGET = 55_000;
+
+/**
+ * Bounded recent-history window (bars) for the LADDER gate's backtest +
+ * time-split. The ladder gate does not use the stage-4 rolling-window
+ * validator (which needs 55k bars), so it evaluates on a bounded tail that
+ * matches the ladder validation sweep (scripts/ladder-universe-sweep.ts,
+ * --tail 2000): the ladder's edge is recent, and 2-year full-history returns
+ * are inflated by walk-forward compounding.
+ */
+export const LADDER_GATE_TAIL = 2_000;
 
 /**
  * Per-cycle deep-fetch request budget shared across gate candidates: the
@@ -183,7 +197,18 @@ export interface GridUniverseOptions {
     readonly gridStepPct: readonly number[];
     readonly gridMaxGrids: readonly number[];
     readonly gridPauseAfterLossBars: readonly number[];
+    /**
+     * Ladder engine only (engine === "ladder"): number of simultaneous rungs
+     * per side swept by the walk-forward. Absent = single-position grid.
+     */
+    readonly rungs?: readonly number[];
   };
+  /**
+   * Which grid engine to evaluate: "grid" (single-position, default) or
+   * "ladder" (multi-rung, one TP per rung). The ladder engine converts
+   * negative-expectancy single-position configs to OOS-passing profiles.
+   */
+  readonly engine?: "grid" | "ladder";
   /** Per-cycle deep-history fetch request budget (shared across gate candidates). */
   readonly deepFetchBudgetPerCycle?: number;
   /**
@@ -234,6 +259,31 @@ export interface GridUniverseOptions {
   readonly maxBreakevenWinRate?: number;
 }
 
+/**
+ * Structural walk-forward result shared by the grid and ladder engines: the
+ * subset of fields the universe funnel consumes. Both `GridWalkForwardResult`
+ * and `LadderWalkForwardResult` satisfy it structurally.
+ */
+export interface UniverseWalkForwardResult {
+  readonly windows: readonly {
+    readonly params: {
+      readonly gridStepPct: number;
+      readonly gridMaxGrids: number;
+      readonly gridPauseAfterLossBars: number;
+      readonly rungs?: number;
+    };
+    readonly testReturnPct: number;
+    readonly testMaxDrawdownPct: number;
+    readonly testTrades: number;
+  }[];
+  readonly aggregateReturnPct: number;
+  readonly profitableWindowsPct: number;
+  readonly maxDrawdownPct: number;
+  readonly totalTrades: number;
+  readonly avgWinPct?: number;
+  readonly avgLossPct?: number;
+}
+
 export interface GridUniverseEntry {
   readonly symbol: string;
   readonly candles: number;
@@ -241,8 +291,10 @@ export interface GridUniverseEntry {
     readonly gridStepPct: number;
     readonly gridMaxGrids: number;
     readonly gridPauseAfterLossBars: number;
+    /** Ladder engine only: number of simultaneous rungs per side. */
+    readonly rungs?: number;
   };
-  readonly walkForward: GridWalkForwardResult;
+  readonly walkForward: UniverseWalkForwardResult;
   readonly passed: boolean;
   /**
    * ATR(14) as a % of the latest close — the volatility used for stage-2
@@ -452,7 +504,7 @@ export function resampleCandles(
  * degenerate all-flat series) — callers pass that through (no rejection).
  */
 export function breakevenWinRateFromWalkForward(
-  walkForward: Pick<GridWalkForwardResult, "avgWinPct" | "avgLossPct">,
+  walkForward: Pick<UniverseWalkForwardResult, "avgWinPct" | "avgLossPct">,
 ): number | undefined {
   const { avgWinPct, avgLossPct } = walkForward;
   if (avgWinPct === undefined && avgLossPct === undefined) return undefined;
@@ -534,6 +586,113 @@ export function passesTimeSplitGate(
 }
 
 /**
+ * Ladder variant of the strict time-split honesty check: both the in-sample
+ * and held-out last-20% slices must be profitable AND trade, otherwise the
+ * regime-concentration guard fails closed. Identical semantics to
+ * `passesTimeSplitGate` but evaluates through the ladder engine.
+ */
+export function passesLadderTimeSplitGate(
+  candles: readonly Candle[],
+  ladder: LadderOptions,
+  splitPct = 0.2,
+): boolean {
+  const split = Math.floor(candles.length * (1 - splitPct));
+  const isSlice = runLadderGridBacktest(candles.slice(0, split), {
+    ...ladder,
+    initialCapital: ladder.initialCapital,
+  });
+  const oosSlice = runLadderGridBacktest(candles.slice(split), {
+    ...ladder,
+    initialCapital: ladder.initialCapital,
+  });
+  return (
+    isSlice.totalTrades >= 1 &&
+    oosSlice.totalTrades >= 1 &&
+    isSlice.totalReturnPct >= 0 &&
+    oosSlice.totalReturnPct >= 0
+  );
+}
+
+/**
+ * Ladder-engine gate-scored eligibility: sweeps the target_ratio × chop-gate
+ * ADX dials around the ladder walk-forward bestParams (including rungs)
+ * through the ladder backtest + ladder time-split. Fast-tier light criteria:
+ * walk-forward profitability + fills/day floor + strict time-split honesty.
+ * The readiness tier fails closed: no ladder evidence validator exists yet.
+ *
+ * NOTE: the ladder deliberately OMITS the single-position structural-
+ * asymmetry gate (BE <= 0.40). The ladder's edge is frequency-based — a tight
+ * TP yields a high win rate whose many small wins outweigh fewer, larger
+ * stops (BE ~0.7), which the win/loss-ratio gate misclassifies as doomed.
+ * Empirical honesty is enforced instead by walk-forward OOS profitability
+ * (>= 60% windows) plus the strict time-split (both halves profitable).
+ */
+export function ladderGateScoredEligibility(
+  entry: GridUniverseEntry,
+  candles: readonly Candle[],
+  options: GridUniverseOptions,
+): GridUniverseEntry | null {
+  const tier = options.tier ?? "readiness";
+  if (tier !== "fast") {
+    // No ladder evidence validator yet; readiness-tier ladder admission is
+    // not gated and must fail closed rather than admit untested configs.
+    return null;
+  }
+  if (!entry.passed) return null;
+  const fillFloorOk =
+    computeFillFrequencyPct(
+      candles,
+      entry.bestParams.gridStepPct,
+      FAST_TIER_MIN_FILL_FREQUENCY_PCT,
+    ) *
+      fillModelMultiplier(options) >=
+    FAST_TIER_MIN_FILL_FREQUENCY_PCT;
+  if (!fillFloorOk) return null;
+
+  let best: {
+    targetRatio: number;
+    chopGateAdx: number;
+    totalReturnPct: number;
+  } | null = null;
+  for (const targetRatio of GATE_TARGETS) {
+    for (const chopGateAdx of GATE_ADX_GATES) {
+      const ladder: LadderOptions = {
+        rungs: entry.bestParams.rungs ?? 1,
+        gridStepPct: entry.bestParams.gridStepPct,
+        gridMaxGrids: entry.bestParams.gridMaxGrids,
+        gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
+        feePct: options.feePct,
+        slippageBps: options.slippageBps,
+        initialCapital: options.initialCapital,
+        trendFilterPeriod: options.trendFilterPeriod,
+        leverage: 1,
+        positionFraction: MAX_POSITION_FRACTION,
+        chopGateAdxThreshold: chopGateAdx,
+        targetRatio,
+        onlyWithTrend: false,
+      };
+      if (!passesLadderTimeSplitGate(candles, ladder)) continue;
+      const totalReturnPct = runLadderGridBacktest(
+        candles,
+        ladder,
+      ).totalReturnPct;
+      // The time-split already requires each half >= 0; this strict-positive
+      // check drops the degenerate all-flat case (both halves exactly 0).
+      if (totalReturnPct <= 0) continue;
+      if (best === null || totalReturnPct > best.totalReturnPct) {
+        best = { targetRatio, chopGateAdx, totalReturnPct };
+      }
+    }
+  }
+  if (best === null) return null;
+  return {
+    ...entry,
+    validatedTargetRatio: best.targetRatio,
+    validatedChopGateAdx: best.chopGateAdx,
+  };
+}
+
+/**
  * Stage-4 gate-scored eligibility: sweep the target_ratio × chop-gate-ADX
  * dials (GATE_TARGETS × GATE_ADX_GATES) around the entry's walk-forward
  * bestParams through validateGridEvidence, applying the manifest gate
@@ -548,6 +707,9 @@ export function gateScoredEligibility(
   options: GridUniverseOptions,
 ): GridUniverseEntry | null {
   const tier = options.tier ?? "readiness";
+  if (options.engine === "ladder") {
+    return ladderGateScoredEligibility(entry, candles, options);
+  }
   // Structural-asymmetry gate (both tiers): the config's breakeven win rate
   // over the walk-forward window trades must be <= maxBreakevenWinRate
   // (default 0.40 = target >= 1.5x stop). Rejects profiles like ETH
@@ -685,24 +847,52 @@ function evaluateUniverseSymbol(
   candles: readonly Candle[],
   options: GridUniverseOptions,
 ): GridUniverseEntry {
-  const walkForward = runGridWalkForward(candles, {
-    trainWindow: options.trainWindow,
-    testWindow: options.testWindow,
-    initialCapital: options.initialCapital,
-    searchSpace: options.searchSpace,
-    baseOptions: {
-      feePct: options.feePct,
-      slippageBps: options.slippageBps,
-      trendFilterPeriod: options.trendFilterPeriod,
-      leverage: 1,
-    },
-  });
+  const engine = options.engine ?? "grid";
+  const walkForward: UniverseWalkForwardResult =
+    engine === "ladder"
+      ? runLadderGridWalkForward(candles, {
+          trainWindow: options.trainWindow,
+          testWindow: options.testWindow,
+          initialCapital: options.initialCapital,
+          searchSpace: {
+            rungs: options.searchSpace.rungs ?? [1],
+            gridStepPct: options.searchSpace.gridStepPct,
+            gridMaxGrids: options.searchSpace.gridMaxGrids,
+            gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars,
+          },
+          baseOptions: {
+            feePct: options.feePct,
+            slippageBps: options.slippageBps,
+            trendFilterPeriod: options.trendFilterPeriod,
+            leverage: 1,
+          },
+        })
+      : runGridWalkForward(candles, {
+          trainWindow: options.trainWindow,
+          testWindow: options.testWindow,
+          initialCapital: options.initialCapital,
+          searchSpace: options.searchSpace,
+          baseOptions: {
+            feePct: options.feePct,
+            slippageBps: options.slippageBps,
+            trendFilterPeriod: options.trendFilterPeriod,
+            leverage: 1,
+          },
+        });
 
   const lastWindow = walkForward.windows[walkForward.windows.length - 1];
-  const bestParams = lastWindow?.params ?? {
-    gridStepPct: options.searchSpace.gridStepPct[0] ?? 1,
-    gridMaxGrids: options.searchSpace.gridMaxGrids[0] ?? 2,
-    gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars[0] ?? 0,
+  const bestParams = {
+    gridStepPct:
+      lastWindow?.params.gridStepPct ?? options.searchSpace.gridStepPct[0] ?? 1,
+    gridMaxGrids:
+      lastWindow?.params.gridMaxGrids ??
+      options.searchSpace.gridMaxGrids[0] ??
+      2,
+    gridPauseAfterLossBars:
+      lastWindow?.params.gridPauseAfterLossBars ??
+      options.searchSpace.gridPauseAfterLossBars[0] ??
+      0,
+    rungs: lastWindow?.params.rungs,
   };
 
   // Zero windows (candles shorter than train+test) yields profitableWindowsPct
@@ -719,8 +909,14 @@ function evaluateUniverseSymbol(
   // loses -10.3% over 12 mainnet months despite +17.85% testnet edge).
   const maxBreakevenWinRate = options.maxBreakevenWinRate ?? 0.4;
   const breakevenWinRate = breakevenWinRateFromWalkForward(walkForward);
+  // Ladder: the walk-forward does not sweep targetRatio (default 1 => win 1
+  // step vs loss gridMaxGrids steps), so its avgWin/avgLoss overstates the
+  // structural asymmetry. The ladder gate re-checks asymmetry on the swept
+  // winning combo (targetRatio 3-4 restores the 1.5x+ win/loss ratio).
   const asymmetryOk =
-    breakevenWinRate === undefined || breakevenWinRate <= maxBreakevenWinRate;
+    engine === "ladder" ||
+    breakevenWinRate === undefined ||
+    breakevenWinRate <= maxBreakevenWinRate;
 
   // Fill model: 'wick' counts every touch as a fill; 'conservative' (the
   // db-mainnet default) discounts touches by fillFraction — a wick does not
@@ -762,6 +958,7 @@ function evaluateUniverseSymbol(
       gridStepPct: bestParams.gridStepPct,
       gridMaxGrids: bestParams.gridMaxGrids,
       gridPauseAfterLossBars: bestParams.gridPauseAfterLossBars,
+      rungs: bestParams.rungs,
     },
     walkForward,
     passed,
@@ -1167,8 +1364,23 @@ export function runMarketUniverseScan(
         if (entry.passed) {
           // Gate candidates need deep history (~55k bars for 10+ windows):
           // top up the cache backward under a shared per-cycle request
-          // budget; the cache grows over cycles until eligible.
-          const deep = yield* deepFetch(symbol, candles.length);
+          // budget; the cache grows over cycles until eligible. The ladder
+          // gate evaluates on a bounded recent tail instead (its backtest +
+          // time-split do not use the rolling-window validator).
+          let deep: readonly Candle[];
+          if (options.engine === "ladder") {
+            deep =
+              dataSource === "db-mainnet"
+                ? yield* dbMainnetCandles(symbol, LADDER_GATE_TAIL)
+                : yield* repo.getCandles({
+                    exchange: options.exchange,
+                    symbol,
+                    timeframe: options.timeframe,
+                    limit: LADDER_GATE_TAIL,
+                  });
+          } else {
+            deep = yield* deepFetch(symbol, candles.length);
+          }
           const gated = gateScoredEligibility(entry, deep, options);
           if (gated === null) {
             yield* Ref.update(gateDropped, (n) => n + 1);
