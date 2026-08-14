@@ -563,6 +563,7 @@ export function runLadderPaperTradingIteration(
             options.trendFilterPeriod ?? 0,
           )
         : null;
+    const openBefore = openRungCount(w);
     let closedThisIteration = 0;
     for (let i = startIndex; i < candles.length; i++) {
       closedThisIteration += advanceLadderBar(
@@ -575,7 +576,6 @@ export function runLadderPaperTradingIteration(
     }
     const last = candles[candles.length - 1];
 
-    const openBefore = openRungCount(w);
     state = workingToState(options, w, last.timestamp, state);
     yield* repo.saveLadderState(state);
 

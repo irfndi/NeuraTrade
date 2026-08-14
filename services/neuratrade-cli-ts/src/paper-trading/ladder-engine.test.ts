@@ -205,6 +205,35 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(second.capital).toBeCloseTo(first.capital, 9);
   });
 
+  it("reports action=opened when an iteration fills a rung without closing it", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts = baseOptions();
+    // bar1 dips to fill rung1 (level 99); high stays under the TP target so
+    // the rung remains open at the end of the iteration.
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.3, 1),
+    ];
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, {
+          fetchTick: () => Effect.fail({ reason: "n" } as never),
+          fetchOHLCV: () => Effect.succeed(candles as Candle[]),
+          fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+          fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+          fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+          fetch24hrVolumes: () => Effect.succeed({}),
+          fetchFundingRates: () => Effect.succeed([]),
+        }),
+      ),
+    );
+    expect(result.action).toBe("opened");
+    expect(result.openRungs).toBe(1);
+    expect(result.closedThisIteration).toBe(0);
+  });
+
   it("config match detects a persisted-vs-requested config drift", () => {
     const state = freshLadderState(baseOptions({ rungs: 1 }));
     expect(state.rungs).toBe(1);
