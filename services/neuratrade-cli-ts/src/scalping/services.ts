@@ -17,6 +17,11 @@ import {
   type BacktestResult,
 } from "./backtest.js";
 import { runGridBacktest, type GridOptions, type GridResult } from "./grid.js";
+import {
+  runLadderGridBacktest,
+  type LadderOptions,
+  type LadderResult,
+} from "./ladder-grid.js";
 import { composeSignal } from "./composer.js";
 import {
   checkRsiExit,
@@ -55,6 +60,11 @@ export interface BacktestEngineImpl {
     candles: readonly CandleLike[],
     options: GridOptions,
   ) => Effect.Effect<GridResult>;
+  /** Run the multi-level ladder grid backtest engine over historical candles. */
+  readonly runLadderGridBacktest: (
+    candles: readonly CandleLike[],
+    options: LadderOptions,
+  ) => Effect.Effect<LadderResult>;
 }
 
 export class BacktestEngine extends Context.Service<
@@ -87,6 +97,8 @@ export const BacktestEngineLive: Layer.Layer<BacktestEngine> = Layer.succeed(
       }),
     runGridBacktest: (candles, options) =>
       Effect.sync(() => runGridBacktest(candles, options)),
+    runLadderGridBacktest: (candles, options) =>
+      Effect.sync(() => runLadderGridBacktest(candles, options)),
   } satisfies BacktestEngineImpl,
 );
 

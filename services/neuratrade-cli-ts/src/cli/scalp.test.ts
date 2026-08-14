@@ -1430,6 +1430,15 @@ describe("backtestProgram fill-model option forwarding", () => {
           profitFactor: 0,
           trades: [],
         }),
+      runLadderGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
     });
 
     const args = makeOptimizeArgs({
@@ -1501,6 +1510,15 @@ describe("backtestProgram fill-model option forwarding", () => {
           profitFactor: 0,
           trades: [],
         }),
+      runLadderGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
     });
 
     // Only candles from 2026-01-16 onward (index 24+) should be loaded.
@@ -1554,6 +1572,15 @@ describe("backtestProgram fill-model option forwarding", () => {
     const fakeEngine = Layer.succeed(BacktestEngine, {
       runBacktest: () => Effect.succeed(makeResult()),
       runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+      runLadderGridBacktest: () =>
         Effect.succeed({
           totalReturnPct: 0,
           maxDrawdownPct: 0,
@@ -1622,6 +1649,15 @@ describe("backtestProgram funding-rate wiring", () => {
         return Effect.succeed(makeResult());
       },
       runGridBacktest: () =>
+        Effect.succeed({
+          totalReturnPct: 0,
+          maxDrawdownPct: 0,
+          winRate: 0,
+          totalTrades: 0,
+          profitFactor: 0,
+          trades: [],
+        }),
+      runLadderGridBacktest: () =>
         Effect.succeed({
           totalReturnPct: 0,
           maxDrawdownPct: 0,

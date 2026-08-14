@@ -172,6 +172,32 @@ describe("BacktestEngine", () => {
 
     expect(result).toEqual(expected);
   });
+
+  it("runLadderGridBacktest delegates to the pure engine with identical results", async () => {
+    const candles = makeOscillatingCandles(300);
+    const options = {
+      rungs: 2,
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 0,
+      leverage: 1,
+    };
+    const { runLadderGridBacktest } = await import("./ladder-grid.js");
+    const expected = runLadderGridBacktest(candles, options);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const engine = yield* BacktestEngine;
+        return yield* engine.runLadderGridBacktest(candles, options);
+      }).pipe(Effect.provide(BacktestEngineLive)),
+    );
+
+    expect(result).toEqual(expected);
+  });
 });
 
 describe("SignalComposer", () => {
