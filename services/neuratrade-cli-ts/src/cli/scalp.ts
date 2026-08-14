@@ -92,6 +92,11 @@ import {
   type GridPaperTradingIterationResult,
 } from "../paper-trading/grid-engine.js";
 import {
+  runLadderPaperTradingIteration,
+  type LadderPaperIterationResult,
+  type LadderPaperTradingOptions,
+} from "../paper-trading/ladder-engine.js";
+import {
   freshFlowTradeState,
   iterateFlowTrade,
   type FlowTradeError,
@@ -2272,7 +2277,25 @@ export interface WatchlistEntry {
      * watchlists, where the full base position applies.
      */
     readonly allocatedWeight?: number;
+    /**
+     * Ladder rung count. Present only on ladder-scan survivor whitelist rows;
+     * its presence routes the row to the incremental ladder paper engine
+     * (single-position grid rows omit it).
+     */
+    readonly rungs?: number;
   };
+}
+
+/**
+ * A watchlist row is a ladder survivor (routed to the incremental ladder paper
+ * engine) when its gridParams carry a gate-scored rung count. Single-position
+ * grid rows omit rungs, so they keep routing to the grid engine.
+ */
+export function isLadderSurvivorRow(
+  gridParams: WatchlistEntry["gridParams"] | undefined,
+  strategyType: string | undefined,
+): boolean {
+  return strategyType === "grid" && (gridParams?.rungs ?? 0) > 0;
 }
 
 /**
@@ -3207,6 +3230,38 @@ function paperTradeProgram(args: PaperTradeArgs) {
       return options as GridPaperTradingOptions;
     };
 
+    const makeLadderOptions = (
+      symbol: string,
+      exchange: string,
+      gridParams?: WatchlistEntry["gridParams"],
+    ): LadderPaperTradingOptions => {
+      const resolvedLadderExchange = resolveFuturesMarketExchange(
+        exchange,
+        true,
+      );
+      return {
+        exchange: resolvedLadderExchange,
+        symbol,
+        timeframe: args.timeframe,
+        // Ladder survivors carry their gate-scored rung count; default 1 for
+        // direct symbol invocation where no whitelist row exists.
+        rungs: gridParams?.rungs ?? 1,
+        gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
+        gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
+        gridPauseAfterLossBars:
+          gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
+        feePct: args.fee,
+        slippageBps: args.slippageBps,
+        trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
+        initialCapital: args.capital,
+        leverage: args.leverage,
+        onlyWithTrend: args.onlyWithTrend,
+        targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
+        chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
+        replayBars: args.replayBars > 0 ? args.replayBars : undefined,
+      };
+    };
+
     const spotAdapterLayer = args.live
       ? BinanceLiveExchangeAdapterLive({
           apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
@@ -3296,6 +3351,33 @@ function paperTradeProgram(args: PaperTradeArgs) {
         ),
       ) as Effect.Effect<GridPaperTradingIterationResult, never, never>;
 
+    const runLadderIteration = (
+      opts: LadderPaperTradingOptions,
+    ): Effect.Effect<LadderPaperIterationResult, never, never> =>
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.catch((err) =>
+          Effect.gen(function* () {
+            const state = yield* paperRepo
+              .getLadderState(opts.exchange, opts.symbol, opts.timeframe)
+              .pipe(Effect.orElseSucceed(() => null));
+            yield* Console.error(
+              `ladder iteration skipped (network/IO error): ${err.reason}`,
+            );
+            return {
+              action: "hold" as const,
+              capital: state ? toNumber(state.capital) : 0,
+              peakCapital: state ? toNumber(state.peakCapital) : 0,
+              openRungs: state
+                ? state.longRungs.filter((r) => r.filled).length +
+                  state.shortRungs.filter((r) => r.filled).length
+                : 0,
+              closedThisIteration: 0,
+              note: `skip: ${err.reason}`,
+            };
+          }),
+        ),
+      ) as Effect.Effect<LadderPaperIterationResult, never, never>;
+
     let remaining = args.iterations;
     // iterations=0 means run forever.
     while (args.iterations === 0 || remaining !== 0) {
@@ -3310,8 +3392,19 @@ function paperTradeProgram(args: PaperTradeArgs) {
           if (cohortSymbols.has(entry.symbol)) continue;
           if (remaining === 0 && args.iterations !== 0) break;
           const entryExchange = entry.exchange ?? args.exchange;
-          const result =
-            args.strategyType === "grid"
+          const isLadderSurvivor = isLadderSurvivorRow(
+            entry.gridParams,
+            args.strategyType,
+          );
+          const result = isLadderSurvivor
+            ? yield* runLadderIteration(
+                makeLadderOptions(
+                  entry.symbol,
+                  entryExchange,
+                  entry.gridParams,
+                ),
+              )
+            : args.strategyType === "grid"
               ? yield* runGridIteration(
                   makeGridOptions(
                     entry.symbol,
@@ -5185,12 +5278,14 @@ export const gridUniverseScanCommand = Command.make(
           );
 
           if (args.engine === "ladder") {
-            // Ladder survivors are reported (funnel + whitelist) but NOT
-            // persisted to the DB watchlist: the live single-position paper
-            // engine cannot trade ladder configs (rungs) yet. Persisting them
-            // would hand the demo soak configs it would silently mis-execute.
+            // Ladder survivors are NOT written to the DB watchlist (that feed
+            // gates the single-position readiness cohort, and the readiness
+            // tier fails closed for ladder). The demo soak trades these rows
+            // directly from the ladder whitelist file, which carries the rungs,
+            // via the incremental ladder paper engine (--watchlist
+            // grid-whitelist-ladder.json).
             yield* Console.log(
-              `💾 Ladder scan: ${selected.length} survivors reported but NOT written to the DB watchlist (single-position live engine can't trade rungs yet)`,
+              `💾 Ladder scan: ${selected.length} survivors reported to the whitelist file (NOT the DB watchlist — readiness tier fails closed for ladder); demo soak can trade them via --watchlist grid-whitelist-ladder.json`,
             );
           } else {
             const entries: DbWatchlistEntry[] = selected.map((e) => ({
