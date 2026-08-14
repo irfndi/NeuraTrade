@@ -169,6 +169,14 @@ class InMemRepo implements PaperTradingRepositoryService {
     });
   }
 
+  getLadderState() {
+    return Effect.succeed(null);
+  }
+
+  saveLadderState() {
+    return Effect.succeed(undefined);
+  }
+
   resetGridState() {
     this.state = null;
     return Effect.void;
@@ -267,7 +275,8 @@ function computeExecutionParityChecks(
     const b = btTrades[i];
     const d = depTrades[i];
     if (withinTol(b.entryPrice, money(d.entryPrice).toNumber())) priceMatches++;
-    if (d.side === b.side && d.exitReason === inferBtExitReason(b)) reasonMatches++;
+    if (d.side === b.side && d.exitReason === inferBtExitReason(b))
+      reasonMatches++;
     if (withinPp(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
   }
   const roundTrip = cfg.feePct * 2;
@@ -292,8 +301,7 @@ function computeExecutionParityChecks(
     },
     {
       name: "fill-price",
-      passed:
-        adequateSample && priceMatches === n && n === btTrades.length,
+      passed: adequateSample && priceMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${priceMatches}/${n} entry prices within 0.5%`,
@@ -315,16 +323,14 @@ function computeExecutionParityChecks(
     },
     {
       name: "exit-reason",
-      passed:
-        adequateSample && reasonMatches === n && n === btTrades.length,
+      passed: adequateSample && reasonMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${reasonMatches}/${n} exit reasons equal (target/stop/liquidation)`,
     },
     {
       name: "pnl",
-      passed:
-        adequateSample && pnlMatches === n && n === btTrades.length,
+      passed: adequateSample && pnlMatches === n && n === btTrades.length,
       detail: zeroTrades
         ? "N/A (0 trades on both engines)"
         : `${pnlMatches}/${n} round-trip pnl within 0.5pp`,

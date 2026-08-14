@@ -150,6 +150,12 @@ class InMemRepo implements PaperTradingRepositoryService {
       this.state = state;
     });
   }
+  getLadderState() {
+    return Effect.succeed(null);
+  }
+  saveLadderState() {
+    return Effect.succeed(undefined);
+  }
   recordGridTrade(trade: GridPaperTrade) {
     return Effect.sync(() => {
       this.trades.push(trade);

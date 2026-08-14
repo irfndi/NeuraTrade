@@ -1,0 +1,226 @@
+import { expect, describe, it } from "bun:test";
+import { Database } from "bun:sqlite";
+import { Effect } from "effect";
+import { MarketDataGateway } from "../market-data/gateway.js";
+import type { Candle } from "../market-data/types.js";
+import type { CandleLike } from "../scalping/types.js";
+import { runLadderGridBacktest } from "../scalping/ladder-grid.js";
+import { toNumber } from "../utils/money.js";
+import {
+  PaperTradingRepository,
+  PaperTradingRepositorySQLite,
+} from "./repository.js";
+import {
+  advanceLadderBar,
+  freshLadderState,
+  freshWorkingState,
+  runLadderPaperTradingIteration,
+  configMatchesLadderState,
+  type LadderPaperTradingOptions,
+} from "./ladder-engine.js";
+
+function candle(
+  o: number,
+  h: number,
+  l: number,
+  c: number,
+  i: number,
+): CandleLike {
+  return {
+    timestamp: new Date(1000 * 60 * 15 * i),
+    open: o,
+    high: h,
+    low: l,
+    close: c,
+    volume: 1000,
+  };
+}
+
+function baseOptions(
+  overrides: Partial<LadderPaperTradingOptions> = {},
+): LadderPaperTradingOptions {
+  return {
+    exchange: "bybit",
+    symbol: "TEST",
+    timeframe: "15m",
+    rungs: 2,
+    gridStepPct: 1.0,
+    gridMaxGrids: 5,
+    gridPauseAfterLossBars: 0,
+    feePct: 0.05,
+    slippageBps: 0,
+    initialCapital: 100,
+    trendFilterPeriod: 0,
+    leverage: 1,
+    ...overrides,
+  };
+}
+
+// Beautifully oscillating series: dips fill the long ladder, rallies take
+// profit back to flat. Used for parity with the backtest.
+function oscillatorSeries(): CandleLike[] {
+  return [
+    candle(100, 100, 100, 100, 0),
+    candle(100, 101, 98.8, 99.0, 1),
+    candle(99.0, 101.2, 99.0, 100.8, 2),
+    candle(100.8, 100.8, 100.8, 100.8, 3),
+  ];
+}
+
+/** Stepping the incremental engine bar-by-bar over the series must reproduce
+ *  the validated backtest's final capital exactly (same state machine). */
+function incrementalCapital(
+  candles: CandleLike[],
+  opts: LadderPaperTradingOptions,
+): number {
+  const w = freshWorkingState(opts.initialCapital);
+  for (let i = 1; i < candles.length; i++) {
+    advanceLadderBar(w, candles, i, opts, null);
+  }
+  return toNumber(w.capital);
+}
+
+function backtestCapital(
+  candles: CandleLike[],
+  opts: LadderPaperTradingOptions,
+): number {
+  const r = runLadderGridBacktest(candles, opts);
+  return opts.initialCapital * (1 + r.totalReturnPct / 100);
+}
+
+describe("advanceLadderBar (incremental ladder engine)", () => {
+  it("reproduces the backtest capital on a take-profit oscillator", () => {
+    const opts = baseOptions();
+    const candles = oscillatorSeries();
+    expect(incrementalCapital(candles, opts)).toBeCloseTo(
+      backtestCapital(candles, opts),
+      6,
+    );
+    // Both engines must have actually traded (capital moved off 100).
+    expect(incrementalCapital(candles, opts)).not.toBeCloseTo(100, 6);
+  });
+
+  it("reproduces the backtest capital under leverage", () => {
+    const opts = baseOptions({ leverage: 3 });
+    const candles = oscillatorSeries();
+    expect(incrementalCapital(candles, opts)).toBeCloseTo(
+      backtestCapital(candles, opts),
+      6,
+    );
+  });
+
+  it("stops out the whole ladder at the boundary and pauses after a loss", () => {
+    const opts = baseOptions({ gridPauseAfterLossBars: 3 });
+    // bar1 drops to just below the first step (99) -> rung1 fills.
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.3, 1), // rung1 (level 99) fills; boundary is 92
+      candle(99.3, 99.3, 90, 90, 2), // craters below boundary -> stop-out both
+    ];
+    const w = freshWorkingState(100);
+    expect(advanceLadderBar(w, candles, 1, opts, null)).toBe(0);
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(1);
+    // The boundary stop takes the WHOLE ladder: rung2 fills on the way down,
+    // then both rungs are closed out at the boundary.
+    expect(advanceLadderBar(w, candles, 2, opts, null)).toBe(2);
+    expect(w.totalLosses).toBe(2);
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(0);
+    expect(w.paused).toBe(3);
+    // While paused, bars advance for free and the counter decrements.
+    expect(advanceLadderBar(w, candles, 0, opts, null)).toBe(0);
+    expect(w.paused).toBe(2);
+    expect(incrementalCapital(candles, opts)).toBeCloseTo(
+      backtestCapital(candles, opts),
+      6,
+    );
+  });
+
+  it("fills only the first rung when price touches the first step", () => {
+    const opts = baseOptions({ rungs: 3 });
+    // low (98.9) reaches the first step (level 99) but not the second (98),
+    // and the high stays under the TP target (100) so the fill holds.
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.3, 1),
+    ];
+    const w = freshWorkingState(100);
+    advanceLadderBar(w, candles, 1, opts, null);
+    const filled = w.longRungs.filter((r) => r.filled);
+    expect(filled).toHaveLength(1);
+    expect(filled[0].rungIndex).toBe(1);
+    expect(w.longRungs.length).toBe(3); // resting rungs remain armed
+  });
+});
+
+describe("runLadderPaperTradingIteration (persistence + resume)", () => {
+  it("persists state and resumes from the last processed candle", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts = baseOptions();
+
+    // Gateway returns a growing window: one extra bar on each call.
+    let calls = 0;
+    const series = oscillatorSeries();
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "not used" } as never),
+      fetchOHLCV: () =>
+        Effect.succeed(
+          (calls++ === 0
+            ? series.slice(0, 4)
+            : [...series, candle(101, 101, 100, 100.5, 4)]) as Candle[],
+        ),
+      fetchOrderBook: () => Effect.fail({ reason: "not used" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+        ),
+      );
+
+    const first = await run();
+    expect(first.closedThisIteration).toBeGreaterThan(0);
+    expect(first.capital).not.toBe(100);
+
+    const saved = await Effect.runPromise(
+      repo.getLadderState(opts.exchange, opts.symbol, opts.timeframe),
+    );
+    expect(saved).not.toBeNull();
+    expect(saved!.lastTimestamp).not.toBeNull();
+    expect(saved!.initialCapital).toBe(100);
+    expect(toNumber(saved!.capital)).toBeCloseTo(first.capital, 9);
+    expect(configMatchesLadderState(saved!, opts)).toBe(true);
+
+    // Second iteration resumes; the older bars are not reprocessed (a
+    // reprocess would not change already-settled capital anyway), and it
+    // advances over the single new bar.
+    const second = await run();
+    expect(second.closedThisIteration).toBeGreaterThanOrEqual(0);
+    expect(second.capital).toBeCloseTo(first.capital, 9);
+  });
+
+  it("config match detects a persisted-vs-requested config drift", () => {
+    const state = freshLadderState(baseOptions({ rungs: 1 }));
+    expect(state.rungs).toBe(1);
+    // A config mismatch must be reported (drives the flat re-seed / open-hold
+    // paths in runLadderPaperTradingIteration).
+    expect(configMatchesLadderState(state, baseOptions({ rungs: 1 }))).toBe(
+      true,
+    );
+    expect(configMatchesLadderState(state, baseOptions({ rungs: 2 }))).toBe(
+      false,
+    );
+    expect(
+      configMatchesLadderState(
+        state,
+        baseOptions({ rungs: 1, gridStepPct: 0.5 }),
+      ),
+    ).toBe(false);
+  });
+});

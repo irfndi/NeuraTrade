@@ -4,10 +4,51 @@ import { Decimal, toNumber } from "../utils/money.js";
 import type {
   GridPaperState,
   GridPaperTrade,
+  LadderPaperState,
   PaperPosition,
   PaperTrade,
 } from "./types.js";
 import type { FlowTradeState } from "../scalping/flow-trade.js";
+
+/** Persisted JSON shape of a ladder rung (mirrors LadderPaperRungState). */
+interface LadderRungJson {
+  readonly rungIndex: number;
+  readonly side: "long" | "short";
+  readonly level: number;
+  readonly step: number;
+  readonly filled: boolean;
+  readonly entryPrice: number;
+  readonly entryBar: number;
+}
+
+/**
+ * Persisted JSON shape of the incremental ladder paper state. Monetary fields
+ * are persisted as decimal strings so precision survives the JSON round-trip.
+ */
+interface LadderStateJson {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly initialCapital: number;
+  readonly capital: string;
+  readonly peakCapital: string;
+  readonly totalWins: number;
+  readonly totalLosses: number;
+  readonly longRungs: readonly LadderRungJson[];
+  readonly shortRungs: readonly LadderRungJson[];
+  readonly longBase: number;
+  readonly shortBase: number;
+  readonly paused: number;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly rungs: number;
+  readonly targetRatio: number;
+  readonly onlyWithTrend: boolean;
+  readonly chopGateAdxThreshold: number;
+  readonly lastTimestamp: string | null;
+  readonly updatedAt: string;
+}
 
 /**
  * Error raised when paper-trading persistence fails.
@@ -182,6 +223,23 @@ export interface PaperTradingRepositoryService {
     PaperTradingRepositoryError,
     never
   >;
+
+  /** Load the persisted incremental-ladder state for a key, or null when no
+   *  row exists yet (fresh start — flat). */
+  readonly getLadderState: (
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ) => Effect.Effect<
+    LadderPaperState | null,
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  /** Persist the incremental-ladder state (upsert by exchange+symbol+timeframe). */
+  readonly saveLadderState: (
+    state: LadderPaperState,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 
   /** Load the persisted flow-trade state for one (exchange, symbol), or null
    *  when no row exists yet (fresh start — flat). */
@@ -379,6 +437,15 @@ CREATE TABLE IF NOT EXISTS grid_paper_state (
   leverage REAL NOT NULL DEFAULT 1,
   killed INTEGER NOT NULL DEFAULT 0,
   last_timestamp DATETIME,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (exchange, symbol, timeframe)
+);
+
+CREATE TABLE IF NOT EXISTS ladder_paper_state (
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  state_json TEXT NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (exchange, symbol, timeframe)
 );
@@ -1310,7 +1377,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
+          execution_environment:
+            | "bitget-demo"
+            | "bitget-live"
+            | "bybit-demo"
+            | "bybit-live"
+            | null;
           grid_step_pct: number;
           grid_max_grids: number;
           grid_pause_after_loss_bars: number;
@@ -1486,6 +1558,105 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
+  getLadderState(
+    exchange: string,
+    symbol: string,
+    timeframe: string,
+  ): Effect.Effect<
+    LadderPaperState | null,
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const row = this.db
+          .query(
+            `SELECT state_json FROM ladder_paper_state
+             WHERE exchange = ? AND symbol = ? AND timeframe = ?`,
+          )
+          .get(exchange, symbol, timeframe) as { state_json: string } | null;
+        if (!row) return null;
+        const parsed = JSON.parse(row.state_json) as LadderStateJson;
+        return {
+          exchange: parsed.exchange,
+          symbol: parsed.symbol,
+          timeframe: parsed.timeframe,
+          initialCapital: parsed.initialCapital,
+          capital: new Decimal(parsed.capital),
+          peakCapital: new Decimal(parsed.peakCapital),
+          totalWins: parsed.totalWins,
+          totalLosses: parsed.totalLosses,
+          longRungs: parsed.longRungs.map((r) => ({
+            rungIndex: r.rungIndex,
+            side: r.side,
+            level: r.level,
+            step: r.step,
+            filled: r.filled,
+            entryPrice: r.entryPrice,
+            entryBar: r.entryBar,
+          })),
+          shortRungs: parsed.shortRungs.map((r) => ({
+            rungIndex: r.rungIndex,
+            side: r.side,
+            level: r.level,
+            step: r.step,
+            filled: r.filled,
+            entryPrice: r.entryPrice,
+            entryBar: r.entryBar,
+          })),
+          longBase: parsed.longBase,
+          shortBase: parsed.shortBase,
+          paused: parsed.paused,
+          gridStepPct: parsed.gridStepPct,
+          gridMaxGrids: parsed.gridMaxGrids,
+          gridPauseAfterLossBars: parsed.gridPauseAfterLossBars,
+          rungs: parsed.rungs,
+          targetRatio: parsed.targetRatio,
+          onlyWithTrend: parsed.onlyWithTrend,
+          chopGateAdxThreshold: parsed.chopGateAdxThreshold,
+          lastTimestamp: parsed.lastTimestamp
+            ? new Date(parsed.lastTimestamp)
+            : null,
+          updatedAt: new Date(parsed.updatedAt),
+        };
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load ladder paper state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveLadderState(
+    state: LadderPaperState,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db
+          .query(
+            `INSERT INTO ladder_paper_state (exchange, symbol, timeframe, state_json, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+               state_json = excluded.state_json,
+               updated_at = excluded.updated_at`,
+          )
+          .run(
+            state.exchange,
+            state.symbol,
+            state.timeframe,
+            JSON.stringify(state),
+            state.updatedAt.toISOString(),
+          );
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to save ladder paper state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
   resetGridState(
     exchange: string,
     symbol: string,
@@ -1652,7 +1823,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
+          execution_environment:
+            | "bitget-demo"
+            | "bitget-live"
+            | "bybit-demo"
+            | "bybit-live"
+            | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;
@@ -2088,7 +2264,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           candidate_lock_at: string | null;
           dataset_cutoff_at: string | null;
           entry_opened_at: string | null;
-          execution_environment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live" | null;
+          execution_environment:
+            | "bitget-demo"
+            | "bitget-live"
+            | "bybit-demo"
+            | "bybit-live"
+            | null;
           exit_reason: string;
           opened_at: string;
           closed_at: string;

@@ -10,7 +10,11 @@ import {
   PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
 } from "./repository.js";
-import type { GridPaperState, GridPaperTrade } from "./types.js";
+import type {
+  GridPaperState,
+  GridPaperTrade,
+  LadderPaperState,
+} from "./types.js";
 import {
   runGridPaperTradingIteration,
   type GridPaperTradingOptions,
@@ -149,6 +153,14 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
           err,
         ),
     });
+  }
+
+  getLadderState() {
+    return Effect.succeed(null as LadderPaperState | null);
+  }
+
+  saveLadderState() {
+    return Effect.succeed(undefined);
   }
 
   recordGridTrade(trade: GridPaperTrade) {

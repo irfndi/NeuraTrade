@@ -104,6 +104,8 @@ class FakeRepo implements PaperTradingRepositoryService {
   getStartOfDayCapital = () => Effect.die(new Error("unused"));
   getGridState = () => Effect.die(new Error("unused"));
   saveGridState = () => Effect.die(new Error("unused"));
+  getLadderState = () => Effect.die(new Error("unused"));
+  saveLadderState = () => Effect.die(new Error("unused"));
   resetGridState = () => Effect.die(new Error("unused"));
   recordGridTrade = () => Effect.die(new Error("unused"));
   listRecentGridTrades = () => Effect.die(new Error("unused"));

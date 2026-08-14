@@ -119,7 +119,11 @@ export interface GridPaperState {
   readonly candidateLockAt?: Date;
   readonly datasetCutoffAt?: Date;
   readonly entryOpenedAt?: Date;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
+  readonly executionEnvironment?:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live";
   readonly gridStepPct: number;
   readonly gridMaxGrids: number;
   readonly gridPauseAfterLossBars: number;
@@ -164,5 +168,55 @@ export interface GridPaperTrade {
   readonly candidateLockAt?: Date;
   readonly datasetCutoffAt?: Date;
   readonly entryOpenedAt?: Date;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
+  readonly executionEnvironment?:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live";
+}
+
+/** One rung of the multi-level ladder grid paper engine. */
+export interface LadderPaperRungState {
+  readonly rungIndex: number;
+  readonly side: "long" | "short";
+  /** Entry level (pre-slippage), in price units. */
+  readonly level: number;
+  /** Grid step in price units for this rung's ladder. */
+  readonly step: number;
+  readonly filled: boolean;
+  readonly entryPrice: number;
+  readonly entryBar: number;
+}
+
+/**
+ * Persistent runtime state of the incremental ladder grid paper engine: the
+ * open rung ladders per side, base anchors, and running capital. Advanced one
+ * candle per iteration and persisted as JSON in `ladder_paper_state`.
+ */
+export interface LadderPaperState {
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  /** Config-level starting capital the state was seeded under. */
+  readonly initialCapital: number;
+  readonly capital: Money;
+  readonly peakCapital: Money;
+  readonly totalWins: number;
+  readonly totalLosses: number;
+  readonly longRungs: readonly LadderPaperRungState[];
+  readonly shortRungs: readonly LadderPaperRungState[];
+  readonly longBase: number;
+  readonly shortBase: number;
+  readonly paused: number;
+  /** Ladder config fingerprint for provenance mismatch detection. */
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly rungs: number;
+  readonly targetRatio: number;
+  readonly onlyWithTrend: boolean;
+  readonly chopGateAdxThreshold: number;
+  /** Timestamp of the last processed candle (replay bookkeeping). */
+  readonly lastTimestamp: Date | null;
+  readonly updatedAt: Date;
 }
