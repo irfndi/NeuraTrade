@@ -746,13 +746,18 @@ function makeBybitClientImpl(
         z.unknown(),
         BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE,
       ).pipe(
+        // Best-effort: tolerate both the "already in this mode" retCode and an
+        // HTTP 404 (some demo/portfolio accounts do not expose the set-mode
+        // endpoint at all; the account's current mode — one-way by default —
+        // is left untouched and orders proceed with it).
         Effect.catchIf(
           (err): err is BybitApiError =>
             err._tag === "BybitApiError" &&
-            err.code !== undefined &&
-            (
-              BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE as readonly number[]
-            ).includes(Number(err.code)),
+            (err.status === 404 ||
+              (err.code !== undefined &&
+                (
+                  BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE as readonly number[]
+                ).includes(Number(err.code)))),
           () => Effect.void,
         ),
         Effect.tap(() =>
