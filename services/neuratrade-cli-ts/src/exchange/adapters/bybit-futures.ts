@@ -389,10 +389,13 @@ function bybitAuthHeaders(
 }
 
 // ---------------------------------------------------------------------------
-// Internal fetch helper
-// ---------------------------------------------------------------------------
+export const BYBIT_IDEMPOTENT_RET_CODES = {
+  SET_LEVERAGE: [110043, 110028] as const,
+  SET_MARGIN_MODE: [110026, 110027, 110028] as const,
+  SET_POSITION_MODE: [110025] as const,
+};
 
-function fetchBybit<A>(
+export function fetchBybit<A>(
   baseUrl: string,
   method: "GET" | "POST",
   path: string,
@@ -400,6 +403,7 @@ function fetchBybit<A>(
     readonly query?: Record<string, string | number>;
     readonly body?: BybitRequestPayload;
     readonly signed?: boolean;
+    readonly acceptableRetCodes?: ReadonlyArray<number>;
   },
   resultSchema: z.ZodType<A>,
   credentials?: BybitCredentials,
@@ -502,7 +506,8 @@ function fetchBybit<A>(
         }),
     });
 
-    if (envelope.retCode !== 0) {
+    const acceptable = options.acceptableRetCodes ?? [];
+    if (envelope.retCode !== 0 && !acceptable.includes(envelope.retCode)) {
       const retCode = envelope.retCode;
       const retMsg = envelope.retMsg ?? "";
       if (retCode === 10004 || retCode === 10006) {
@@ -605,12 +610,13 @@ function makeBybitClientImpl(
     path: string,
     body: BybitRequestPayload,
     resultSchema: z.ZodType<A>,
+    acceptableRetCodes?: ReadonlyArray<number>,
   ) =>
     fetchBybit<A>(
       baseUrl,
       "POST",
       path,
-      { body, signed: true },
+      { body, signed: true, acceptableRetCodes },
       resultSchema,
       credentials,
     );
@@ -714,23 +720,41 @@ function makeBybitClientImpl(
         "/v5/position/set-leverage",
         { category: "linear", symbol, buyLeverage, sellLeverage },
         z.unknown(),
-      ).pipe(Effect.as(undefined)),
-    setMarginMode: ({ symbol, marginMode }) =>
-      post(
-        "/v5/position/set-margin-mode",
-        {
-          category: "linear",
-          symbol,
-          marginMode: marginMode === "isolated" ? "ISOLATED" : "CROSSED",
-        },
-        z.unknown(),
-      ).pipe(Effect.as(undefined)),
+        BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE,
+      ).pipe(
+        Effect.catchIf(
+          (err): err is BybitApiError =>
+            err._tag === "BybitApiError" &&
+            err.code !== undefined &&
+            (
+              BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE as readonly number[]
+            ).includes(Number(err.code)),
+          () => Effect.void,
+        ),
+        Effect.as(undefined),
+      ),
+    setMarginMode: (_args) =>
+      // Bybit margin mode is account-level, not per-symbol. Unified accounts
+      // report it via GET /v5/account/info (ISOLATED_MARGIN / REGULAR_MARGIN /
+      // PORTFOLIO_MARGIN); the legacy /v5/position/set-margin-mode endpoint is
+      // deprecated and returns 404, so this is a deliberate no-op.
+      Effect.sync(() => {}),
     setPositionMode: ({ mode }) =>
       post(
         "/v5/position/set-mode",
         { category: "linear", mode: mode === "hedge_mode" ? 3 : 0 },
         z.unknown(),
+        BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE,
       ).pipe(
+        Effect.catchIf(
+          (err): err is BybitApiError =>
+            err._tag === "BybitApiError" &&
+            err.code !== undefined &&
+            (
+              BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE as readonly number[]
+            ).includes(Number(err.code)),
+          () => Effect.void,
+        ),
         Effect.tap(() =>
           Effect.sync(() => {
             positionMode = mode;
@@ -880,11 +904,23 @@ export function makeBybitFuturesAdapter(
 
         if (leverage !== request.leverage) {
           yield* withError(
-            client.setLeverage({
-              symbol,
-              buyLeverage: String(leverage),
-              sellLeverage: String(leverage),
-            }),
+            client
+              .setLeverage({
+                symbol,
+                buyLeverage: String(leverage),
+                sellLeverage: String(leverage),
+              })
+              .pipe(
+                Effect.catchIf(
+                  (err): err is BybitApiError =>
+                    err._tag === "BybitApiError" &&
+                    err.code !== undefined &&
+                    (
+                      BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE as readonly number[]
+                    ).includes(Number(err.code)),
+                  () => Effect.void,
+                ),
+              ),
           );
         }
 
@@ -1110,20 +1146,56 @@ export function makeBybitFuturesAdapter(
 
     setLeverage: (symbol, _productType, _marginMode, leverage, _holdSide) =>
       withError(
-        client.setLeverage({
-          symbol: toBybitSymbol(symbol),
-          buyLeverage: String(leverage),
-          sellLeverage: String(leverage),
-        }),
+        client
+          .setLeverage({
+            symbol: toBybitSymbol(symbol),
+            buyLeverage: String(leverage),
+            sellLeverage: String(leverage),
+          })
+          .pipe(
+            Effect.catchIf(
+              (err): err is BybitApiError =>
+                err._tag === "BybitApiError" &&
+                err.code !== undefined &&
+                (
+                  BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE as readonly number[]
+                ).includes(Number(err.code)),
+              () => Effect.void,
+            ),
+          ),
       ),
 
     setMarginMode: (symbol, _productType, marginMode) =>
       withError(
-        client.setMarginMode({ symbol: toBybitSymbol(symbol), marginMode }),
+        client
+          .setMarginMode({ symbol: toBybitSymbol(symbol), marginMode })
+          .pipe(
+            Effect.catchIf(
+              (err): err is BybitApiError =>
+                err._tag === "BybitApiError" &&
+                err.code !== undefined &&
+                (
+                  BYBIT_IDEMPOTENT_RET_CODES.SET_MARGIN_MODE as readonly number[]
+                ).includes(Number(err.code)),
+              () => Effect.void,
+            ),
+          ),
       ),
 
     setPositionMode: (_productType, positionMode) =>
-      withError(client.setPositionMode({ mode: positionMode })),
+      withError(
+        client.setPositionMode({ mode: positionMode }).pipe(
+          Effect.catchIf(
+            (err): err is BybitApiError =>
+              err._tag === "BybitApiError" &&
+              err.code !== undefined &&
+              (
+                BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE as readonly number[]
+              ).includes(Number(err.code)),
+            () => Effect.void,
+          ),
+        ),
+      ),
 
     setTradingStop: (request) => {
       const stop: BybitTradingStopParams = {
