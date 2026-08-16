@@ -1425,16 +1425,22 @@ describe("ladder engine in the universe scan", () => {
     expect(passesLadderTimeSplitGate(flat, ladderFor())).toBe(false);
   });
 
-  it("ladder gate: readiness tier fails closed (no ladder evidence validator)", () => {
+  it("ladder gate: readiness tier runs the ladder evidence validator and admits the mean-reverting fixture", () => {
     const candles = wickCandles();
     const entry = ladderEntry(candles);
     expect(entry.passed).toBe(true);
-    expect(
-      gateScoredEligibility(entry, candles, {
-        ...LADDER_OPTIONS,
-        tier: "readiness",
-      }),
-    ).toBeNull();
+    // The readiness tier no longer fails closed: it gate-scores through
+    // validateLadderEvidence (data quality, historical windows, fixed-OOS,
+    // block-bootstrap confidence, pooled adverse-stress). The mean-reverting
+    // wick fixture clears it.
+    const gated = gateScoredEligibility(entry, candles, {
+      ...LADDER_OPTIONS,
+      tier: "readiness",
+    });
+    expect(gated).not.toBeNull();
+    if (gated === null) return;
+    expect(gated.validatedTargetRatio).toBeDefined();
+    expect(gated.validatedChopGateAdx).toBeDefined();
   });
 
   it("ladder gate: fast tier admits a ladder-surviving entry and preserves rungs", () => {
