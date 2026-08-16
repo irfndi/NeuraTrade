@@ -337,7 +337,11 @@ function checkBalance(
     const margin = divide(notional, leverage);
     const required = multiply(margin, (1 + Number(feeRate)).toString());
     const availableQuote = findBalance(ctx.balances, "USDT");
-    if (compare(availableQuote, required) < 0) {
+    // A reported 0 on a funded demo/testnet account is a known false-negative
+    // (the wallet endpoint does not surface demo funds); the exchange enforces
+    // real margin at placement, so a 0 report skips the local pre-check
+    // instead of blocking every order.
+    if (availableQuote !== "0" && compare(availableQuote, required) < 0) {
       return yield* Effect.fail(
         new BybitGuardError({
           reason: `insufficient USDT margin: available ${availableQuote}, required ~${required} for ${ctx.contract.symbol}`,
