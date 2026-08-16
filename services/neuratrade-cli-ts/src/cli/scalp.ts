@@ -5206,13 +5206,12 @@ export const gridUniverseScanCommand = Command.make(
         );
       }
       if (args.engine === "ladder" && args.tier === "readiness") {
-        // The ladder engine has no stage-4 evidence validator yet, so the
-        // readiness tier fails closed (no survivors). Fast tier is the only
-        // ladder path until a ladder evidence validator ships.
-        return yield* Effect.fail(
-          new Error(
-            `--engine ladder requires --tier fast (no ladder evidence validator exists for the readiness board yet)`,
-          ),
+        // Ladder readiness is gated by the ladder evidence validator inside
+        // ladderGateScoredEligibility (data quality, historical windows,
+        // fixed-OOS, block-bootstrap confidence, pooled adverse-stress LB);
+        // a survivor that clears it is admissible to the readiness board.
+        yield* Console.log(
+          `🧪 Ladder readiness tier: gate-scoring through the ladder evidence validator (this is slower than fast tier — every combo runs the 5-seed adverse-stress protocol)`,
         );
       }
       const path = yield* Path;

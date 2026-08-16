@@ -31,6 +31,10 @@ import {
   validateGridEvidence,
   type GridValidationOk,
 } from "./grid-validation.js";
+import {
+  validateLadderEvidence,
+  type LadderValidationOk,
+} from "./ladder-validation.js";
 import { computeSymbolStats, type SymbolStatistics } from "./symbol-stats.js";
 
 /**
@@ -614,18 +618,37 @@ export function passesLadderTimeSplitGate(
 }
 
 /**
+ * Ladder readiness gate criteria, mirroring the grid board's manifest:
+ * majority profitable historical windows, non-negative compounded return,
+ * drawdown cap, fixed-OOS trade floor, and non-negative block-bootstrap
+ * confidence + pooled adverse-stress lower bounds.
+ */
+function passesLadderGateCriteria(result: LadderValidationOk): boolean {
+  return (
+    result.historical.profitableWindowPct > 50 &&
+    result.historical.compoundedReturnPct >= 0 &&
+    result.historical.maximumDrawdownPct <= 15 &&
+    result.fixedOos.totalTrades >= 30 &&
+    result.confidence.lowerBoundPct >= 0 &&
+    result.stress.worstReturnPct >= 0 &&
+    result.stress.pooledLowerBoundPct >= 0
+  );
+}
+
+/**
  * Ladder-engine gate-scored eligibility: sweeps the target_ratio × chop-gate
  * ADX dials around the ladder walk-forward bestParams (including rungs)
- * through the ladder backtest + ladder time-split. Fast-tier light criteria:
- * walk-forward profitability + fills/day floor + strict time-split honesty.
- * The readiness tier fails closed: no ladder evidence validator exists yet.
+ * through the ladder backtest + ladder time-split.
  *
- * NOTE: the ladder deliberately OMITS the single-position structural-
- * asymmetry gate (BE <= 0.40). The ladder's edge is frequency-based — a tight
- * TP yields a high win rate whose many small wins outweigh fewer, larger
- * stops (BE ~0.7), which the win/loss-ratio gate misclassifies as doomed.
- * Empirical honesty is enforced instead by walk-forward OOS profitability
- * (>= 60% windows) plus the strict time-split (both halves profitable).
+ * Fast tier: walk-forward profitability + fills/day floor + strict time-split
+ * honesty. Readiness tier: the same sweep must ALSO clear the full ladder
+ * evidence validator (data quality, historical windows, fixed-OOS >= 30
+ * trades, block-bootstrap confidence LB >= 0, pooled 5-seed stress LB >= 0).
+ *
+ * The ladder deliberately OMITS the single-position structural-asymmetry
+ * gate (BE <= 0.40): the ladder's edge is frequency-based — a tight TP yields
+ * a high win rate whose many small wins outweigh fewer, larger stops
+ * (BE ~0.7), which the win/loss-ratio gate misclassifies as doomed.
  */
 export function ladderGateScoredEligibility(
   entry: GridUniverseEntry,
@@ -633,11 +656,6 @@ export function ladderGateScoredEligibility(
   options: GridUniverseOptions,
 ): GridUniverseEntry | null {
   const tier = options.tier ?? "readiness";
-  if (tier !== "fast") {
-    // No ladder evidence validator yet; readiness-tier ladder admission is
-    // not gated and must fail closed rather than admit untested configs.
-    return null;
-  }
   if (!entry.passed) return null;
   const fillFloorOk =
     computeFillFrequencyPct(
@@ -672,6 +690,29 @@ export function ladderGateScoredEligibility(
         onlyWithTrend: false,
       };
       if (!passesLadderTimeSplitGate(candles, ladder)) continue;
+      if (tier === "readiness") {
+        // Readiness tier: the combo must ALSO clear the full ladder evidence
+        // validator (windows scaled to the available history, same protocol
+        // as the grid board).
+        const n = candles.length;
+        const trainBars = Math.min(11520, Math.max(200, Math.floor(n * 0.6)));
+        const testBars = Math.min(4320, Math.max(50, Math.floor(n * 0.2)));
+        const minimumWindows = Math.max(
+          1,
+          Math.floor((n - trainBars - testBars) / testBars),
+        );
+        const evidence = validateLadderEvidence(candles, {
+          now: new Date(),
+          timeframeMinutes: timeframeMinutesFor(options.timeframe),
+          trainBars,
+          testBars,
+          minimumWindows,
+          ladder,
+        });
+        if (evidence.kind !== "ok" || !passesLadderGateCriteria(evidence)) {
+          continue;
+        }
+      }
       const totalReturnPct = runLadderGridBacktest(
         candles,
         ladder,
