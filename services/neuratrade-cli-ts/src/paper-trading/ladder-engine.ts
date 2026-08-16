@@ -590,7 +590,7 @@ function ladderRungSize(
   const rungs = Math.max(1, Math.floor(options.rungs ?? 1));
   const positionFraction = Math.max(
     0,
-    Math.min(1, options.maxPositionPct ?? 100) / 100,
+    Math.min(1, (options.maxPositionPct ?? 100) / 100),
   );
   const perRungAllocation = capital.times(positionFraction).div(rungs);
   // The fill price is unknown here (caller supplies it via the event); size

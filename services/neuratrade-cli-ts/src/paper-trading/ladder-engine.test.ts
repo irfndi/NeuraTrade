@@ -4,11 +4,11 @@ import { Effect } from "effect";
 import { MarketDataGateway } from "../market-data/gateway.js";
 import type { Candle } from "../market-data/types.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
-import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
+import { FuturesExchangeAdapter, type FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import type { CandleLike } from "../scalping/types.js";
 import { runLadderGridBacktest } from "../scalping/ladder-grid.js";
-import { toNumber } from "../utils/money.js";
+import { money, toNumber } from "../utils/money.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLite,
@@ -289,6 +289,65 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.closedThisIteration).toBeGreaterThan(0);
     expect(result.note).toContain("[LIVE]");
     expect(result.capital).not.toBe(100);
+  });
+
+  it("sizes each live rung from the position cap (regression: 50% cap -> 0.01 fraction)", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(), // capital 100, rungs 2
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    let lastOrderNotional = 0;
+    const adapter = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const recordingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      placeOrder: (req) => {
+        lastOrderNotional = toNumber(req.size.times(req.price ?? money(0)));
+        return adapter.placeOrder(req);
+      },
+    };
+
+    await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, recordingAdapter),
+      ),
+    );
+    // capital 100, 50% position cap, 2 rungs => 25 USDT per rung. The
+    // precedence bug clamped 50 to 1 before /100, sizing 0.25 USDT instead.
+    expect(lastOrderNotional).toBeGreaterThan(20);
+    expect(lastOrderNotional).toBeLessThan(30);
   });
 
   it("holds (never reprocesses) when no candle is newer than the last processed", async () => {
