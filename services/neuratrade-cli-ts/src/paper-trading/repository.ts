@@ -19,6 +19,7 @@ interface LadderRungJson {
   readonly filled: boolean;
   readonly entryPrice: number;
   readonly entryBar: number;
+  readonly entryTimestamp: number;
 }
 
 /**
@@ -46,6 +47,7 @@ interface LadderStateJson {
   readonly targetRatio: number;
   readonly onlyWithTrend: boolean;
   readonly chopGateAdxThreshold: number;
+  readonly maxHoldBars: number;
   readonly lastTimestamp: string | null;
   readonly updatedAt: string;
 }
@@ -1594,6 +1596,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             filled: r.filled,
             entryPrice: r.entryPrice,
             entryBar: r.entryBar,
+            entryTimestamp: r.entryTimestamp,
           })),
           shortRungs: parsed.shortRungs.map((r) => ({
             rungIndex: r.rungIndex,
@@ -1603,6 +1606,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             filled: r.filled,
             entryPrice: r.entryPrice,
             entryBar: r.entryBar,
+            entryTimestamp: r.entryTimestamp,
           })),
           longBase: parsed.longBase,
           shortBase: parsed.shortBase,
@@ -1614,6 +1618,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           targetRatio: parsed.targetRatio,
           onlyWithTrend: parsed.onlyWithTrend,
           chopGateAdxThreshold: parsed.chopGateAdxThreshold,
+          maxHoldBars: parsed.maxHoldBars,
           lastTimestamp: parsed.lastTimestamp
             ? new Date(parsed.lastTimestamp)
             : null,

@@ -234,6 +234,62 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.closedThisIteration).toBe(0);
   });
 
+  it("holds (never reprocesses) when no candle is newer than the last processed", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts = baseOptions();
+    // Iteration 1 processes the oscillator to flat (capital moves off 100).
+    const series = oscillatorSeries();
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(series as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+        ),
+      );
+    const first = await run();
+    expect(first.closedThisIteration).toBeGreaterThan(0);
+    const capitalAfterFirst = first.capital;
+
+    // Iteration 2 sees the IDENTICAL window (no new candle): it must hold
+    // without reprocessing — reprocessing would re-fill and re-close rungs,
+    // double-counting capital.
+    const second = await run();
+    expect(second.action).toBe("hold");
+    expect(second.note).toBe("no new candle");
+    expect(second.capital).toBeCloseTo(capitalAfterFirst, 9);
+    expect(second.closedThisIteration).toBe(0);
+  });
+
+  it("force-closes a rung held past maxHoldBars at the current close", () => {
+    const opts = baseOptions({ maxHoldBars: 2 });
+    // bar1 fills rung1; bars 2-4 keep price flat so neither TP nor boundary
+    // hits. On bar 3 (entryBar 1, i=3 => held 2 bars) the rung must close.
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.4, 1), // fill rung1 @ 99
+      candle(99.4, 99.4, 99.0, 99.2, 2), // hold (target 100, boundary 92)
+      candle(99.2, 99.4, 99.0, 99.3, 3), // i-entryBar = 2 >= maxHoldBars -> close
+    ];
+    const w = freshWorkingState(100);
+    expect(advanceLadderBar(w, candles, 1, opts, null)).toBe(0);
+    expect(advanceLadderBar(w, candles, 2, opts, null)).toBe(0);
+    expect(advanceLadderBar(w, candles, 3, opts, null)).toBe(1);
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(0);
+    // Closed at the close price (99.3, above the 99 entry) => a small win.
+    expect(w.totalWins).toBe(1);
+    expect(w.totalLosses).toBe(0);
+  });
+
   it("config match detects a persisted-vs-requested config drift", () => {
     const state = freshLadderState(baseOptions({ rungs: 1 }));
     expect(state.rungs).toBe(1);

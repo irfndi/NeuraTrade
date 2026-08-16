@@ -48,8 +48,22 @@ export interface LadderPaperTradingOptions {
   readonly onlyWithTrend?: boolean;
   readonly targetRatio?: number;
   readonly chopGateAdxThreshold?: number;
+  /**
+   * When > 0, a filled rung is force-closed at the current close if it stays
+   * open for more than this many bars (market exit, taker fee). Default 0
+   * disables the time-based exit, matching the validated backtest model.
+   */
+  readonly maxHoldBars?: number;
   /** When > 0, step through the last N stored candles one per iteration. */
   readonly replayBars?: number;
+}
+
+/** Milliseconds per candle for the given timeframe (default 15m). */
+function timeframeMs(timeframe: string): number {
+  const m = /^(\d+)([mhd])$/.exec(timeframe);
+  if (!m) return 15 * 60 * 1000;
+  const n = Number(m[1]);
+  return m[2] === "h" ? n * 3600000 : m[2] === "d" ? n * 86400000 : n * 60000;
 }
 
 export interface LadderPaperIterationResult {
@@ -97,7 +111,7 @@ function closeRung(
   w: WorkingState,
   r: LadderPaperRungState,
   exitPrice: number,
-  reason: "target" | "stop" | "liquidation",
+  reason: "target" | "stop" | "liquidation" | "max_hold",
   opts: LadderPaperTradingOptions,
 ): void {
   const leverage = Math.max(1, opts.leverage ?? 1);
@@ -170,6 +184,8 @@ export function advanceLadderBar(
   const N = Math.max(1, Math.floor(opts.rungs ?? 1));
   const targetRatio = Math.max(0.001, opts.targetRatio ?? 1);
   const leverage = Math.max(1, opts.leverage ?? 1);
+  const maxHoldBars = Math.max(0, Math.floor(opts.maxHoldBars ?? 0));
+  const msPerBar = timeframeMs(opts.timeframe);
 
   const chopGateActive =
     (opts.chopGateAdxThreshold ?? 0) > 0 &&
@@ -200,6 +216,7 @@ export function advanceLadderBar(
           filled: false,
           entryPrice: 0,
           entryBar: 0,
+          entryTimestamp: 0,
         });
       }
     } else {
@@ -225,6 +242,7 @@ export function advanceLadderBar(
           filled: false,
           entryPrice: 0,
           entryBar: 0,
+          entryTimestamp: 0,
         });
       }
     } else {
@@ -245,6 +263,7 @@ export function advanceLadderBar(
           filled: true,
           entryPrice: r.level * slippage,
           entryBar: i,
+          entryTimestamp: c.timestamp.getTime(),
         };
       }
     }
@@ -284,6 +303,14 @@ export function advanceLadderBar(
             closeRung(w, r, target / slippage, "target", opts);
             closed += 1;
             anyFillClosed = true;
+          } else if (
+            maxHoldBars > 0 &&
+            r.entryTimestamp > 0 &&
+            c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
+          ) {
+            closeRung(w, r, c.close / slippage, "max_hold", opts);
+            closed += 1;
+            anyFillClosed = true;
           } else {
             stillOpen.push(r);
           }
@@ -310,6 +337,7 @@ export function advanceLadderBar(
           filled: true,
           entryPrice: r.level / slippage,
           entryBar: i,
+          entryTimestamp: c.timestamp.getTime(),
         };
       }
     }
@@ -347,6 +375,14 @@ export function advanceLadderBar(
           const target = r.entryPrice - r.step * targetRatio;
           if (c.low <= target) {
             closeRung(w, r, target * slippage, "target", opts);
+            closed += 1;
+            anyFillClosed = true;
+          } else if (
+            maxHoldBars > 0 &&
+            r.entryTimestamp > 0 &&
+            c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
+          ) {
+            closeRung(w, r, c.close * slippage, "max_hold", opts);
             closed += 1;
             anyFillClosed = true;
           } else {
@@ -390,6 +426,7 @@ export function freshLadderState(
     targetRatio: options.targetRatio ?? 1,
     onlyWithTrend: options.onlyWithTrend ?? false,
     chopGateAdxThreshold: options.chopGateAdxThreshold ?? 0,
+    maxHoldBars: Math.max(0, Math.floor(options.maxHoldBars ?? 0)),
     lastTimestamp: null,
     updatedAt: new Date(),
   };
@@ -446,7 +483,8 @@ export function configMatchesLadderState(
     state.rungs === options.rungs &&
     state.targetRatio === (options.targetRatio ?? 1) &&
     state.onlyWithTrend === (options.onlyWithTrend ?? false) &&
-    state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0)
+    state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0) &&
+    state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0))
   );
 }
 
@@ -541,18 +579,28 @@ export function runLadderPaperTradingIteration(
         startIndex = nextIndex;
       }
     } else {
-      // Re-process from the last handled bar (or start) so a bar that both
-      // filled and closed in a gap cannot be skipped. In live mode we always
-      // process the latest bar; using the previous index here is simpler and
-      // deterministic for the forward stepping.
-      startIndex =
-        state.lastTimestamp === null
-          ? Math.max(1, options.trendFilterPeriod)
-          : candles.findIndex(
-              (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
-            );
-      if (startIndex === -1)
+      // Live forward stepping: only advance bars NEWER than the last
+      // processed candle. When no new bar exists yet (fetch raced ahead of
+      // the candle close), hold instead of reprocessing history — replaying
+      // already-settled bars would double-count fills and closes.
+      if (state.lastTimestamp === null) {
         startIndex = Math.max(1, options.trendFilterPeriod);
+      } else {
+        const nextIndex = candles.findIndex(
+          (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
+        );
+        if (nextIndex === -1) {
+          return {
+            action: "hold",
+            capital: toNumber(state.capital),
+            peakCapital: toNumber(state.peakCapital),
+            openRungs: openRungCount(stateToWorking(state)),
+            closedThisIteration: 0,
+            note: "no new candle",
+          };
+        }
+        startIndex = nextIndex;
+      }
     }
 
     const w = stateToWorking(state);

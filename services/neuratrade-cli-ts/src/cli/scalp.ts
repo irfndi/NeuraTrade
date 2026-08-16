@@ -239,6 +239,7 @@ import {
   onlyWithTrendOption,
   targetRatioOption,
   chopGateAdxOption,
+  maxHoldBarsOption,
   volatilityTargetAnnualPctOption,
   noAtrOption,
   scanEntryOrdersOption,
@@ -1403,6 +1404,7 @@ export const optimizeCommand = Command.make(
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
     chopGateAdx: chopGateAdxOption,
+    maxHoldBars: maxHoldBarsOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
     start: Options.text("start").pipe(
@@ -1767,6 +1769,7 @@ export const scanCommand = Command.make(
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
     chopGateAdx: chopGateAdxOption,
+    maxHoldBars: maxHoldBarsOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
@@ -2339,6 +2342,8 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly interval: number;
   readonly iterations: number;
   readonly replayBars: number;
+  /** Ladder: force-close a rung held longer than this many bars (0 = off). */
+  readonly maxHoldBars: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
@@ -2601,6 +2606,7 @@ export const paperTradeCommand = Command.make(
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
     chopGateAdx: chopGateAdxOption,
+    maxHoldBars: maxHoldBarsOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
@@ -3073,8 +3079,38 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.momentumConfirmBars,
     );
 
-    const entries =
+    let entries =
       args.entries && args.entries.length > 0 ? args.entries : undefined;
+
+    // Ladder survivors were whitelisted from MAINNET db data, but the live
+    // ladder soak reads the trading venue's klines (bybit testnet). Symbols
+    // not listed on the venue burn every pass on "no candles" — filter them
+    // out once at startup.
+    if (
+      entries !== undefined &&
+      entries.some((e) => isLadderSurvivorRow(e.gridParams, args.strategyType))
+    ) {
+      const gateway = yield* MarketDataGateway;
+      const venueList = yield* gateway
+        .fetchSymbols(resolvedExchange)
+        .pipe(Effect.orElseSucceed(() => [] as readonly string[]));
+      if (venueList.length > 0) {
+        const listed = new Set(
+          venueList.map((s) => s.replace(/:.*$/, "").toLowerCase()),
+        );
+        const before = entries.length;
+        entries = entries.filter(
+          (e) =>
+            !isLadderSurvivorRow(e.gridParams, args.strategyType) ||
+            listed.has(e.symbol.replace(/:.*$/, "").toLowerCase()),
+        );
+        if (entries.length !== before) {
+          yield* Console.warn(
+            `⚠️ Ladder whitelist filtered: ${before - entries.length} symbol(s) not listed on ${resolvedExchange} — removed (${entries.map((e) => e.symbol).join(", ")})`,
+          );
+        }
+      }
+    }
 
     const makeSpotOptions = (
       symbol: string,
@@ -3258,6 +3294,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         onlyWithTrend: args.onlyWithTrend,
         targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
         chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
+        maxHoldBars: args.maxHoldBars ?? 0,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
       };
     };
@@ -3639,6 +3676,7 @@ export const soakCommand = Command.make(
     onlyWithTrend: onlyWithTrendOption,
     targetRatio: targetRatioOption,
     chopGateAdx: chopGateAdxOption,
+    maxHoldBars: maxHoldBarsOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },

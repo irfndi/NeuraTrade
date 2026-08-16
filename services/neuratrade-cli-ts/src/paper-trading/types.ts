@@ -185,7 +185,10 @@ export interface LadderPaperRungState {
   readonly step: number;
   readonly filled: boolean;
   readonly entryPrice: number;
+  /** Window-relative bar index of the fill (backtest bookkeeping). */
   readonly entryBar: number;
+  /** Absolute fill time in ms epoch — the live max-hold clock. */
+  readonly entryTimestamp: number;
 }
 
 /**
@@ -216,6 +219,8 @@ export interface LadderPaperState {
   readonly targetRatio: number;
   readonly onlyWithTrend: boolean;
   readonly chopGateAdxThreshold: number;
+  /** Max hold bars when the time-based exit is enabled (0 = disabled). */
+  readonly maxHoldBars: number;
   /** Timestamp of the last processed candle (replay bookkeeping). */
   readonly lastTimestamp: Date | null;
   readonly updatedAt: Date;

@@ -432,6 +432,13 @@ export const chopGateAdxOption = Options.float("chop-gate-adx").pipe(
   ),
 );
 
+export const maxHoldBarsOption = Options.integer("max-hold-bars").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Ladder: force-close a filled rung at the current close if it stays open for more than this many bars (0 = disabled, matches the backtest)",
+  ),
+);
+
 export const volatilityTargetAnnualPctOption = Options.float(
   "volatility-target-annual-pct",
 ).pipe(
