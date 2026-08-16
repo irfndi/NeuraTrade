@@ -892,19 +892,34 @@ export function makeBybitFuturesAdapter(
 
         // Margin-based cap: the sized order's margin (notional / leverage)
         // must fit the wallet's available USDT, mirroring the bitget guard's
-        // fail-closed insufficient-margin rejection.
-        const coins = yield* withError(client.getBalance());
-        const usdt = coins.find((c) => c.coin.toUpperCase() === "USDT");
-        const available = money(
-          usdt?.availableToWithdraw || usdt?.walletBalance || "0",
+        // fail-closed insufficient-margin rejection. Some demo/testnet
+        // accounts do not expose /v5/wallet/balance (HTTP 404); the exchange
+        // still enforces real margin on order placement, so a missing balance
+        // endpoint skips the local cap instead of blocking every order.
+        const coins = yield* client.getBalance().pipe(
+          // Some demo/testnet accounts do not expose /v5/wallet/balance
+          // (HTTP 404); the exchange still enforces real margin on order
+          // placement, so a missing balance endpoint skips the local cap.
+          Effect.catchIf(
+            (err): err is BybitApiError =>
+              err._tag === "BybitApiError" && err.status === 404,
+            () => Effect.succeed([] as ReadonlyArray<BybitWalletCoin>),
+          ),
+          Effect.mapError(toExchangeError),
         );
-        const margin = qty.times(price).div(money(leverage));
-        if (margin.greaterThan(available)) {
-          return yield* Effect.fail(
-            new ExchangeError(
-              `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
-            ),
+        if (coins.length > 0) {
+          const usdt = coins.find((c) => c.coin.toUpperCase() === "USDT");
+          const available = money(
+            usdt?.availableToWithdraw || usdt?.walletBalance || "0",
           );
+          const margin = qty.times(price).div(money(leverage));
+          if (margin.greaterThan(available)) {
+            return yield* Effect.fail(
+              new ExchangeError(
+                `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
+              ),
+            );
+          }
         }
 
         if (leverage !== request.leverage) {
