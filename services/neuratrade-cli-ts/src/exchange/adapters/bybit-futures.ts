@@ -912,13 +912,19 @@ export function makeBybitFuturesAdapter(
           const available = money(
             usdt?.availableToWithdraw || usdt?.walletBalance || "0",
           );
-          const margin = qty.times(price).div(money(leverage));
-          if (margin.greaterThan(available)) {
-            return yield* Effect.fail(
-              new ExchangeError(
-                `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
-              ),
-            );
+          // A reported 0 on a funded demo/testnet account is a known
+          // false-negative (the wallet endpoint does not surface demo funds);
+          // the exchange enforces real margin at placement, so a 0 report
+          // skips the local pre-check instead of blocking every order.
+          if (available.greaterThan(0)) {
+            const margin = qty.times(price).div(money(leverage));
+            if (margin.greaterThan(available)) {
+              return yield* Effect.fail(
+                new ExchangeError(
+                  `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
+                ),
+              );
+            }
           }
         }
 
