@@ -3,6 +3,9 @@ import { Database } from "bun:sqlite";
 import { Effect } from "effect";
 import { MarketDataGateway } from "../market-data/gateway.js";
 import type { Candle } from "../market-data/types.js";
+import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
+import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
+import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import type { CandleLike } from "../scalping/types.js";
 import { runLadderGridBacktest } from "../scalping/ladder-grid.js";
 import { toNumber } from "../utils/money.js";
@@ -118,16 +121,16 @@ describe("advanceLadderBar (incremental ladder engine)", () => {
       candle(99.3, 99.3, 90, 90, 2), // craters below boundary -> stop-out both
     ];
     const w = freshWorkingState(100);
-    expect(advanceLadderBar(w, candles, 1, opts, null)).toBe(0);
+    expect(advanceLadderBar(w, candles, 1, opts, null).closes.length).toBe(0);
     expect(w.longRungs.filter((r) => r.filled)).toHaveLength(1);
     // The boundary stop takes the WHOLE ladder: rung2 fills on the way down,
     // then both rungs are closed out at the boundary.
-    expect(advanceLadderBar(w, candles, 2, opts, null)).toBe(2);
+    expect(advanceLadderBar(w, candles, 2, opts, null).closes.length).toBe(2);
     expect(w.totalLosses).toBe(2);
     expect(w.longRungs.filter((r) => r.filled)).toHaveLength(0);
     expect(w.paused).toBe(3);
     // While paused, bars advance for free and the counter decrements.
-    expect(advanceLadderBar(w, candles, 0, opts, null)).toBe(0);
+    expect(advanceLadderBar(w, candles, 0, opts, null).closes.length).toBe(0);
     expect(w.paused).toBe(2);
     expect(incrementalCapital(candles, opts)).toBeCloseTo(
       backtestCapital(candles, opts),
@@ -234,6 +237,60 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.closedThisIteration).toBe(0);
   });
 
+  it("executes live fills and closes through the exchange adapter", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+
+    const adapter = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+      ),
+    );
+    // The oscillator fills the ladder and takes profit in the same window;
+    // the LIVE path must place limit entries and market closes without error.
+    expect(result.action).toBe("closed");
+    expect(result.closedThisIteration).toBeGreaterThan(0);
+    expect(result.note).toContain("[LIVE]");
+    expect(result.capital).not.toBe(100);
+  });
+
   it("holds (never reprocesses) when no candle is newer than the last processed", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);
@@ -281,9 +338,9 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
       candle(99.2, 99.4, 99.0, 99.3, 3), // i-entryBar = 2 >= maxHoldBars -> close
     ];
     const w = freshWorkingState(100);
-    expect(advanceLadderBar(w, candles, 1, opts, null)).toBe(0);
-    expect(advanceLadderBar(w, candles, 2, opts, null)).toBe(0);
-    expect(advanceLadderBar(w, candles, 3, opts, null)).toBe(1);
+    expect(advanceLadderBar(w, candles, 1, opts, null).closes.length).toBe(0);
+    expect(advanceLadderBar(w, candles, 2, opts, null).closes.length).toBe(0);
+    expect(advanceLadderBar(w, candles, 3, opts, null).closes.length).toBe(1);
     expect(w.longRungs.filter((r) => r.filled)).toHaveLength(0);
     // Closed at the close price (99.3, above the 99 entry) => a small win.
     expect(w.totalWins).toBe(1);

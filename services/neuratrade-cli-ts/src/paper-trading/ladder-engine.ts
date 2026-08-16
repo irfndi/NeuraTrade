@@ -10,26 +10,45 @@
  * ladder stop boundary, pause-after-loss) so forward returns reproduce the
  * validated sweep.
  *
- * PAPER ONLY: fills are simulated (touch = fill, same fill model as the
- * backtest). Real order placement per rung is a follow-up.
+ * Paper fills are simulated (touch = fill, same fill model as the backtest).
+ * When `isLive` is set, each bar's fill/close events are ALSO executed on the
+ * exchange through FuturesExchangeAdapter (limit entry per rung, market close
+ * per exit), gated by RiskGuard; the paper capital ledger stays the PnL
+ * source of truth and the bar is rolled back if any live order fails.
  */
 
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
+import {
+  FuturesExchangeAdapter,
+  type FuturesExchangeAdapterService,
+  type FuturesOrderFill,
+  type FuturesOrderRequest,
+  type FuturesProductType,
+  type FuturesMarginMode,
+  type FuturesOrderSide,
+} from "../exchange/futures-adapter.js";
+import { ExchangeError } from "../exchange/adapter.js";
 import {
   MarketDataError,
   MarketDataGateway,
   type MarketDataGatewayService,
 } from "../market-data/gateway.js";
+import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import type { CandleLike } from "../scalping/types.js";
 import { calculateSMA } from "../scalping/indicators.js";
 import { makeCausalSymbolStats } from "../scalping/symbol-stats.js";
-import { Decimal, money, toNumber } from "../utils/money.js";
+import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
   type PaperTradingRepositoryService,
 } from "./repository.js";
-import { type LadderPaperRungState, type LadderPaperState } from "./types.js";
+import {
+  type ContractSizeSpec,
+  orderableQty,
+  type LadderPaperRungState,
+  type LadderPaperState,
+} from "./types.js";
 
 export interface LadderPaperTradingOptions {
   readonly exchange: string;
@@ -56,6 +75,18 @@ export interface LadderPaperTradingOptions {
   readonly maxHoldBars?: number;
   /** When > 0, step through the last N stored candles one per iteration. */
   readonly replayBars?: number;
+  /**
+   * When true, bar fill/close events are also executed on the exchange
+   * through FuturesExchangeAdapter (live orders); the paper ledger stays the
+   * PnL source of truth. Default false = paper-only.
+   */
+  readonly isLive?: boolean;
+  readonly productType?: FuturesProductType;
+  readonly marginMode?: FuturesMarginMode;
+  /** Position size fraction for live sizing (mirrors the grid cap). */
+  readonly maxPositionPct?: number;
+  /** Exchange contract constraints for orderable live sizing. */
+  readonly contractSpecs?: ContractSizeSpec;
 }
 
 /** Milliseconds per candle for the given timeframe (default 15m). */
@@ -64,6 +95,36 @@ function timeframeMs(timeframe: string): number {
   if (!m) return 15 * 60 * 1000;
   const n = Number(m[1]);
   return m[2] === "h" ? n * 3600000 : m[2] === "d" ? n * 86400000 : n * 60000;
+}
+
+/** A rung fill detected on one bar (level touched, entry at the level). */
+export interface LadderFillEvent {
+  readonly rungIndex: number;
+  readonly side: "long" | "short";
+  /** Post-slippage entry price used by the paper ledger. */
+  readonly fillPrice: number;
+  /** Raw grid level (pre-slippage). */
+  readonly level: number;
+}
+
+/** A rung close detected on one bar (target / stop / liquidation / max-hold). */
+export interface LadderCloseEvent {
+  readonly rungIndex: number;
+  readonly side: "long" | "short";
+  readonly entryPrice: number;
+  readonly exitPrice: number;
+  readonly reason: "target" | "stop" | "liquidation" | "max_hold";
+}
+
+export interface LadderBarEvents {
+  readonly fills: readonly LadderFillEvent[];
+  readonly closes: readonly LadderCloseEvent[];
+}
+
+/** Mutable accumulator used while advancing a bar. */
+interface MutableBarEvents {
+  fills: LadderFillEvent[];
+  closes: LadderCloseEvent[];
 }
 
 export interface LadderPaperIterationResult {
@@ -106,13 +167,15 @@ export function freshWorkingState(initialCapital: number): WorkingState {
 }
 
 /** Close one rung at `exitPrice`, updating working capital (mirrors the
- *  backtest's closeRung, with Decimal money accounting). */
+ *  backtest's closeRung, with Decimal money accounting) and recording the
+ *  close event for the live executor. */
 function closeRung(
   w: WorkingState,
   r: LadderPaperRungState,
   exitPrice: number,
   reason: "target" | "stop" | "liquidation" | "max_hold",
   opts: LadderPaperTradingOptions,
+  events: MutableBarEvents,
 ): void {
   const leverage = Math.max(1, opts.leverage ?? 1);
   const positionFraction = Math.max(0, Math.min(1, 1));
@@ -141,6 +204,13 @@ function closeRung(
   } else {
     w.totalWins += 1;
   }
+  events.closes.push({
+    rungIndex: r.rungIndex,
+    side: r.side,
+    entryPrice: r.entryPrice,
+    exitPrice,
+    reason,
+  });
 }
 
 function openRungCount(w: WorkingState): number {
@@ -163,8 +233,8 @@ function liquidationPrice(
 /**
  * Advance the ladder by ONE candle (`candles[i]`). Mirrors the backtest's
  * per-bar loop: re-seed when flat, fill rungs progressively on touch, then
- * manage liquidation / ladder-stop / per-rung take-profits. Returns the
- * number of rungs closed this bar.
+ * manage liquidation / ladder-stop / per-rung take-profits. Mutates `w` and
+ * returns the bar's fill/close events for the live executor.
  */
 export function advanceLadderBar(
   w: WorkingState,
@@ -172,10 +242,13 @@ export function advanceLadderBar(
   i: number,
   opts: LadderPaperTradingOptions,
   trendSeries: readonly number[] | null = null,
-): number {
+): LadderBarEvents {
+  const fills: LadderFillEvent[] = [];
+  const closes: LadderCloseEvent[] = [];
+  const events: MutableBarEvents = { fills, closes };
   if (w.paused > 0) {
     w.paused -= 1;
-    return 0;
+    return { fills, closes };
   }
   const c = candles[i];
   const mid = c.open;
@@ -195,9 +268,8 @@ export function advanceLadderBar(
   const onlyWithTrend = opts.onlyWithTrend ?? false;
   const trend =
     trendSeries !== null && trendSeries.length > i ? trendSeries[i] : NaN;
-  if (trendFilterPeriod > 0 && (trend === null || isNaN(trend))) return 0;
-
-  let closed = 0;
+  if (trendFilterPeriod > 0 && (trend === null || isNaN(trend)))
+    return { fills, closes };
 
   // Re-seed long ladder while flat.
   if (!w.longRungs.some((r) => r.filled)) {
@@ -265,6 +337,12 @@ export function advanceLadderBar(
           entryBar: i,
           entryTimestamp: c.timestamp.getTime(),
         };
+        fills.push({
+          rungIndex: r.rungIndex,
+          side: "long",
+          fillPrice: r.level * slippage,
+          level: r.level,
+        });
       }
     }
     const filledLong = w.longRungs.filter((r) => r.filled);
@@ -276,16 +354,14 @@ export function advanceLadderBar(
       const liq = longLiqs.length > 0 ? Math.max(...longLiqs) : 0;
       if (liq > 0 && c.low <= liq) {
         for (const r of filledLong)
-          closeRung(w, r, liq * slippage, "liquidation", opts);
-        closed += filledLong.length;
+          closeRung(w, r, liq * slippage, "liquidation", opts, events);
         w.longRungs = [];
         w.longBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
       } else if (c.low <= boundary) {
         for (const r of filledLong)
-          closeRung(w, r, boundary * slippage, "stop", opts);
-        closed += filledLong.length;
+          closeRung(w, r, boundary * slippage, "stop", opts, events);
         w.longRungs = [];
         w.longBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
@@ -300,16 +376,14 @@ export function advanceLadderBar(
           }
           const target = r.entryPrice + r.step * targetRatio;
           if (c.high >= target) {
-            closeRung(w, r, target / slippage, "target", opts);
-            closed += 1;
+            closeRung(w, r, target / slippage, "target", opts, events);
             anyFillClosed = true;
           } else if (
             maxHoldBars > 0 &&
             r.entryTimestamp > 0 &&
             c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
           ) {
-            closeRung(w, r, c.close / slippage, "max_hold", opts);
-            closed += 1;
+            closeRung(w, r, c.close / slippage, "max_hold", opts, events);
             anyFillClosed = true;
           } else {
             stillOpen.push(r);
@@ -339,6 +413,12 @@ export function advanceLadderBar(
           entryBar: i,
           entryTimestamp: c.timestamp.getTime(),
         };
+        fills.push({
+          rungIndex: r.rungIndex,
+          side: "short",
+          fillPrice: r.level / slippage,
+          level: r.level,
+        });
       }
     }
     const filledShort = w.shortRungs.filter((r) => r.filled);
@@ -350,16 +430,14 @@ export function advanceLadderBar(
       const liq = shortLiqs.length > 0 ? Math.min(...shortLiqs) : 0;
       if (liq > 0 && c.high >= liq) {
         for (const r of filledShort)
-          closeRung(w, r, liq / slippage, "liquidation", opts);
-        closed += filledShort.length;
+          closeRung(w, r, liq / slippage, "liquidation", opts, events);
         w.shortRungs = [];
         w.shortBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
       } else if (c.high >= boundary) {
         for (const r of filledShort)
-          closeRung(w, r, boundary / slippage, "stop", opts);
-        closed += filledShort.length;
+          closeRung(w, r, boundary / slippage, "stop", opts, events);
         w.shortRungs = [];
         w.shortBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
@@ -374,16 +452,14 @@ export function advanceLadderBar(
           }
           const target = r.entryPrice - r.step * targetRatio;
           if (c.low <= target) {
-            closeRung(w, r, target * slippage, "target", opts);
-            closed += 1;
+            closeRung(w, r, target * slippage, "target", opts, events);
             anyFillClosed = true;
           } else if (
             maxHoldBars > 0 &&
             r.entryTimestamp > 0 &&
             c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
           ) {
-            closeRung(w, r, c.close * slippage, "max_hold", opts);
-            closed += 1;
+            closeRung(w, r, c.close * slippage, "max_hold", opts, events);
             anyFillClosed = true;
           } else {
             stillOpen.push(r);
@@ -399,7 +475,7 @@ export function advanceLadderBar(
     }
   }
 
-  return closed;
+  return { fills, closes };
 }
 
 export function freshLadderState(
@@ -486,6 +562,160 @@ export function configMatchesLadderState(
     state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0) &&
     state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0))
   );
+}
+
+/**
+ * Deep-ish snapshot of the working state for the live rollback path (rung
+ * arrays are copied; Decimal capital is immutable).
+ */
+function cloneWorking(w: WorkingState): WorkingState {
+  return {
+    capital: w.capital,
+    peak: w.peak,
+    totalWins: w.totalWins,
+    totalLosses: w.totalLosses,
+    longRungs: w.longRungs.map((r) => ({ ...r })),
+    shortRungs: w.shortRungs.map((r) => ({ ...r })),
+    longBase: w.longBase,
+    shortBase: w.shortBase,
+    paused: w.paused,
+  };
+}
+
+/** Per-rung orderable size (one rung's share of the position cap). */
+function ladderRungSize(
+  capital: Decimal,
+  options: LadderPaperTradingOptions,
+): { size: Money; skipReason?: string } {
+  const rungs = Math.max(1, Math.floor(options.rungs ?? 1));
+  const positionFraction = Math.max(
+    0,
+    Math.min(1, options.maxPositionPct ?? 100) / 100,
+  );
+  const perRungAllocation = capital.times(positionFraction).div(rungs);
+  // The fill price is unknown here (caller supplies it via the event); size
+  // is re-derived per event using the event's fill price, so this returns the
+  // allocation only. The caller divides by the fill price.
+  return { size: perRungAllocation };
+}
+
+/** Orderable qty for one rung at `fillPrice`, contract-step rounded. */
+function ladderRungQty(
+  capital: Decimal,
+  options: LadderPaperTradingOptions,
+  fillPrice: Decimal,
+): { qty: Money; skipReason?: string } {
+  const perRungAllocation = ladderRungSize(capital, options).size;
+  if (perRungAllocation.lessThanOrEqualTo(0)) {
+    return { qty: money(0), skipReason: "per-rung allocation is zero" };
+  }
+  if (fillPrice.lessThanOrEqualTo(0)) {
+    return { qty: money(0), skipReason: "non-positive fill price" };
+  }
+  const spec = options.contractSpecs;
+  const raw = perRungAllocation.div(fillPrice);
+  if (spec === undefined) return { qty: Decimal.max(0, raw) };
+  const qty = orderableQty(raw, spec, fillPrice, perRungAllocation);
+  const notional = qty.times(fillPrice);
+  const leverage = Math.max(1, options.leverage ?? 1);
+  const margin = notional.div(leverage);
+  if (margin.greaterThan(perRungAllocation)) {
+    return {
+      qty: money(0),
+      skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${leverage}x, exceeding the ${toNumber(perRungAllocation).toFixed(2)} USDT per-rung cap`,
+    };
+  }
+  return { qty };
+}
+
+/**
+ * Execute one bar's fill/close events on the exchange. Fills place limit
+ * entries at the rung level (the bar already touched it, so they fill
+ * immediately); closes market-close the rung's size. Any failure fails the
+ * effect so the caller rolls the paper ledger back and retries next bar.
+ */
+function executeLadderBarLive(
+  fills: readonly LadderFillEvent[],
+  closes: readonly LadderCloseEvent[],
+  w: WorkingState,
+  options: LadderPaperTradingOptions,
+  adapter: FuturesExchangeAdapterService,
+  riskGuard: RiskGuardService,
+  repo: PaperTradingRepositoryService,
+): Effect.Effect<
+  void,
+  ExchangeError | RiskError | PaperTradingRepositoryError,
+  never
+> {
+  return Effect.gen(function* () {
+    const productType = options.productType ?? "USDT-FUTURES";
+    const marginMode = options.marginMode ?? "isolated";
+    const leverage = Math.max(1, options.leverage ?? 1);
+    for (const fill of fills) {
+      const side: FuturesOrderSide = fill.side === "long" ? "buy" : "sell";
+      const fillPrice = money(fill.fillPrice);
+      const tradesTodayCount = yield* repo.countTradesForDate(new Date());
+      const todayPnl = yield* repo
+        .getTodayRealizedPnl()
+        .pipe(Effect.orElseSucceed(() => money(0)));
+      yield* riskGuard.check({
+        isLive: true,
+        capital: toNumber(w.capital),
+        peakCapital: toNumber(w.peak),
+        startOfDayCapital: toNumber(w.capital),
+        dailyRealizedPnl: toNumber(todayPnl),
+        tradesTodayCount,
+        positionValue: toNumber(
+          w.capital.times((options.maxPositionPct ?? 100) / 100),
+        ),
+        symbol: options.symbol,
+        side,
+        leverage,
+        productType,
+      });
+      const sized = ladderRungQty(w.capital, options, fillPrice);
+      if (sized.qty.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
+          ),
+        );
+      }
+      yield* adapter.setLeverage(
+        options.symbol,
+        productType,
+        marginMode,
+        leverage,
+      );
+      const request: FuturesOrderRequest = {
+        symbol: options.symbol,
+        side,
+        type: "limit",
+        productType,
+        marginMode,
+        leverage,
+        size: sized.qty,
+        price: fillPrice,
+        reduceOnly: false,
+      };
+      yield* adapter.placeOrder(request);
+    }
+    for (const close of closes) {
+      const side: FuturesOrderSide = close.side === "long" ? "sell" : "buy";
+      const exitPrice = money(close.exitPrice);
+      const sized = ladderRungQty(w.capital, options, exitPrice);
+      if (sized.qty.lessThanOrEqualTo(0)) continue;
+      yield* adapter.closePosition({
+        symbol: options.symbol,
+        side,
+        productType,
+        marginMode,
+        leverage,
+        size: sized.qty,
+        price: exitPrice,
+      });
+    }
+  });
 }
 
 /**
@@ -612,17 +842,69 @@ export function runLadderPaperTradingIteration(
           )
         : null;
     const openBefore = openRungCount(w);
+    const snapshot = cloneWorking(w);
     let closedThisIteration = 0;
+    const iterationFills: LadderFillEvent[] = [];
+    const iterationCloses: LadderCloseEvent[] = [];
     for (let i = startIndex; i < candles.length; i++) {
-      closedThisIteration += advanceLadderBar(
-        w,
-        candles,
-        i,
-        options,
-        trendSeries,
-      );
+      const barEvents = advanceLadderBar(w, candles, i, options, trendSeries);
+      closedThisIteration += barEvents.closes.length;
+      iterationFills.push(...barEvents.fills);
+      iterationCloses.push(...barEvents.closes);
     }
     const last = candles[candles.length - 1];
+
+    // Live path: execute this bar's events on the exchange. On ANY failure the
+    // paper ledger rolls back to the pre-loop snapshot (the state is not
+    // committed) and the iteration holds — the exchange may hold orphan orders
+    // from the partially executed batch, which the operator can review.
+    if (
+      options.isLive === true &&
+      (iterationFills.length > 0 || iterationCloses.length > 0)
+    ) {
+      const adapter = yield* Effect.serviceOption(FuturesExchangeAdapter);
+      const riskGuard = yield* Effect.serviceOption(RiskGuard);
+      if (Option.isNone(adapter) || Option.isNone(riskGuard)) {
+        return {
+          action: "hold",
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          openRungs: openRungCount(stateToWorking(state)),
+          closedThisIteration: 0,
+          note: "live ladder requested but FuturesExchangeAdapter/RiskGuard not provided",
+        };
+      }
+      const outcome = yield* executeLadderBarLive(
+        iterationFills,
+        iterationCloses,
+        w,
+        options,
+        adapter.value,
+        riskGuard.value,
+        repo,
+      ).pipe(Effect.result);
+      if (outcome._tag === "Failure") {
+        // Roll the ledger back; do not commit the bar's simulated trades.
+        const rolled = cloneWorking(snapshot);
+        w.capital = rolled.capital;
+        w.peak = rolled.peak;
+        w.totalWins = rolled.totalWins;
+        w.totalLosses = rolled.totalLosses;
+        w.longRungs = rolled.longRungs;
+        w.shortRungs = rolled.shortRungs;
+        w.longBase = rolled.longBase;
+        w.shortBase = rolled.shortBase;
+        w.paused = rolled.paused;
+        return {
+          action: "hold",
+          capital: toNumber(w.capital),
+          peakCapital: toNumber(w.peak),
+          openRungs: openRungCount(w),
+          closedThisIteration: 0,
+          note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}`,
+        };
+      }
+    }
 
     state = workingToState(options, w, last.timestamp, state);
     yield* repo.saveLadderState(state);
@@ -640,7 +922,7 @@ export function runLadderPaperTradingIteration(
       peakCapital: toNumber(state.peakCapital),
       openRungs: openAfter,
       closedThisIteration,
-      note: `ladder iter over ${candles.length - startIndex} bars`,
+      note: `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}`,
     };
   });
 }

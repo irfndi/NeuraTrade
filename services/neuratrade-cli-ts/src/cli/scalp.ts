@@ -3296,6 +3296,13 @@ function paperTradeProgram(args: PaperTradeArgs) {
         chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
         maxHoldBars: args.maxHoldBars ?? 0,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
+        isLive: args.live,
+        productType,
+        marginMode,
+        maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+        ...(contractSpecsFor(symbol) !== undefined
+          ? { contractSpecs: contractSpecsFor(symbol) }
+          : {}),
       };
     };
 
@@ -3392,6 +3399,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       opts: LadderPaperTradingOptions,
     ): Effect.Effect<LadderPaperIterationResult, never, never> =>
       runLadderPaperTradingIteration(opts).pipe(
+        Effect.provide(futuresAdapterLayer),
         Effect.catch((err) =>
           Effect.gen(function* () {
             const state = yield* paperRepo
