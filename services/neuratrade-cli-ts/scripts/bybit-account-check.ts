@@ -9,13 +9,13 @@ const program = Effect.gen(function* () {
 
   const balance = yield* client.getBalance().pipe(Effect.result);
   if (balance._tag === "Failure") {
-    console.log("balance fetch:", "ERR", String(balance.failure._tag));
+    console.log("balance fetch:", "ERR", JSON.stringify({ tag: balance.failure._tag, code: (balance.failure as any).code, status: (balance.failure as any).status, body: (balance.failure as any).body }));
   } else {
     const usdt = balance.success.find((c) => c.coin.toUpperCase() === "USDT");
     console.log("USDT balance:", usdt ? `available=${usdt.availableToWithdraw} wallet=${usdt.walletBalance}` : "not reported");
   }
 
-  for (const symbol of ["FARTCOINUSDT", "NEARUSDT", "EPICUSDT", "KAITOUSDT"]) {
+  for (const symbol of ["FARTCOINUSDT", "NEARUSDT", "EPICUSDT", "KAITOUSDT", "ENAUSDT", "MUBARAKUSDT", "ADAUSDT", "PUMPFUNUSDT", "BEATUSDT", "CYSUSDT", "SOXLUSDT", "SPCXUSDT", "CAPUSDT"]) {
     const pos = yield* client.getPositions(symbol).pipe(Effect.result);
     if (pos._tag === "Success" && pos.success.length > 0) {
       for (const p of pos.success) {

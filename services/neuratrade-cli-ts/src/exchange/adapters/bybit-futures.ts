@@ -648,7 +648,7 @@ function makeBybitClientImpl(
       ),
     getBalance: () =>
       get(
-        "/v5/wallet/balance",
+        "/v5/account/wallet-balance",
         { accountType: "UNIFIED" },
         BybitWalletBalanceSchema,
       ).pipe(Effect.map((result) => result.list?.[0]?.coin ?? [])),
