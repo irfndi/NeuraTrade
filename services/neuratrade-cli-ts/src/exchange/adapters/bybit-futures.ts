@@ -46,7 +46,11 @@ import { validateOrder } from "../../services/bybit-guards.js";
 const BYBIT_LIVE_URL = "https://api.bybit.com";
 const BYBIT_TESTNET_URL = "https://api-testnet.bybit.com";
 const DEFAULT_TIMEOUT_MS = 30000;
-const RECV_WINDOW_MS = "5000";
+// Bybit's max recv-window (60s). This host's clock has been observed ~20s
+// behind the exchange's, which intermittently failed every signed request
+// at the 5s default ("10002: check your server timestamp"). 60s covers the
+// drift; a server-time offset sync is a follow-up if the skew grows.
+const RECV_WINDOW_MS = "60000";
 
 // ---------------------------------------------------------------------------
 // Errors

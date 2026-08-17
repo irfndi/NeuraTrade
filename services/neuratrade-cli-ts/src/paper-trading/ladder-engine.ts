@@ -901,7 +901,7 @@ export function runLadderPaperTradingIteration(
           peakCapital: toNumber(w.peak),
           openRungs: openRungCount(w),
           closedThisIteration: 0,
-          note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}`,
+          note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}${"violations" in outcome.failure && Array.isArray(outcome.failure.violations) ? `: ${(outcome.failure as { violations: readonly string[] }).violations.join("; ")}` : ""}`,
         };
       }
     }
