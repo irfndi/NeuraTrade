@@ -492,6 +492,82 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.action).toBe("hold");
   });
 
+  it("blocks a symbol after a trading-terms (110126) failure instead of re-attempting", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions({ symbol: "BLOCKED/USDT:USDT" }),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    let gatewayCalls = 0;
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () =>
+        Effect.succeed(
+          (gatewayCalls++ === 0
+            ? oscillatorSeries()
+            : [
+                ...oscillatorSeries(),
+                candle(100, 100, 100, 100, 4),
+              ]) as Candle[],
+        ),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    let placeCalls = 0;
+    const termsAdapter: FuturesExchangeAdapterService = {
+      ...base,
+      placeOrder: (req) => {
+        placeCalls += 1;
+        return Effect.fail(
+          new ExchangeError(
+            "Bybit API 200 on /v5/order/create: 110126: You must sign the required agreement before trading this contract",
+          ),
+        );
+      },
+    };
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(FuturesExchangeAdapter, termsAdapter),
+        ),
+      );
+
+    const first = await run();
+    expect(first.note).toContain("rolled back");
+    expect(placeCalls).toBe(1);
+    // Iteration 2: the symbol is blocked for the cooldown — no order attempt.
+    const second = await run();
+    expect(second.note).toContain("blocked");
+    expect(placeCalls).toBe(1);
+  });
+
   it("holds (never reprocesses) when no candle is newer than the last processed", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);

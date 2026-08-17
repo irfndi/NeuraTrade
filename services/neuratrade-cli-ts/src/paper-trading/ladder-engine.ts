@@ -97,6 +97,12 @@ function timeframeMs(timeframe: string): number {
   return m[2] === "h" ? n * 3600000 : m[2] === "d" ? n * 86400000 : n * 60000;
 }
 
+/** How long a symbol stays blocked after a "must agree to the Trading Terms"
+ *  (110123/110125/110126) fill failure. The agreement is an exchange-UI action
+ *  with no API, so the engine stops retrying for the cooldown. */
+const AGREEMENT_BLOCK_MS = 6 * 60 * 60 * 1000;
+const agreementBlockedUntil = new Map<string, number>();
+
 /** A rung fill detected on one bar (level touched, entry at the level). */
 export interface LadderFillEvent {
   readonly rungIndex: number;
@@ -839,6 +845,25 @@ export function runLadderPaperTradingIteration(
 
     const w = stateToWorking(state);
 
+    // Agreement-block cooldown: when a fill failed with a "must agree to the
+    // Trading Terms" error (110123/110125/110126), the contract is untradeable
+    // until the user accepts the terms in the exchange UI. Skip fills for the
+    // cooldown instead of re-attempting on every new bar (the exchange has no
+    // API to accept the agreement, so retrying is pure noise).
+    if (options.isLive === true) {
+      const blockedUntil = agreementBlockedUntil.get(options.symbol) ?? 0;
+      if (blockedUntil > Date.now()) {
+        return {
+          action: "hold",
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          openRungs: openRungCount(stateToWorking(state)),
+          closedThisIteration: 0,
+          note: "symbol blocked: trading terms not accepted (110126) — sign the agreement in the exchange UI",
+        };
+      }
+    }
+
     // Reconcile orphans: a REAL position the paper ledger does not track (left
     // by a rolled-back bar whose earlier order filled before a later event
     // failed) is closed on the exchange so it cannot sit unmanaged and consume
@@ -929,6 +954,15 @@ export function runLadderPaperTradingIteration(
         // every cycle (the 'ab not enough' / risk-reject / agreement churn).
         // The failed bar's fills are not committed; any real orders it placed
         // are reconciled (closed) at the next iteration's start.
+        const failureReason = outcome.failure.reason ?? String(outcome.failure);
+        if (/11012[356]/.test(failureReason)) {
+          // "must agree to the Trading Terms" — no API accepts it; block the
+          // symbol for the cooldown so it is not re-attempted every bar.
+          agreementBlockedUntil.set(
+            options.symbol,
+            Date.now() + AGREEMENT_BLOCK_MS,
+          );
+        }
         const rolled = cloneWorking(snapshot);
         w.capital = rolled.capital;
         w.peak = rolled.peak;
