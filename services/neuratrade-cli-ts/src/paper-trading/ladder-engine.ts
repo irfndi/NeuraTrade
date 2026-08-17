@@ -665,8 +665,12 @@ function executeLadderBarLive(
         startOfDayCapital: toNumber(w.capital),
         dailyRealizedPnl: toNumber(todayPnl),
         tradesTodayCount,
+        // A hair under the cap: capital × maxPositionPct/100 at the exact
+        // cap computes to 50.00000000000001% (> 50%) and the guard rejects
+        // every fill on float precision. Real exposure is a hair under the
+        // cap anyway after fee/rounding.
         positionValue: toNumber(
-          w.capital.times((options.maxPositionPct ?? 100) / 100),
+          w.capital.times((options.maxPositionPct ?? 100) / 100).times(0.9999),
         ),
         symbol: options.symbol,
         side,
