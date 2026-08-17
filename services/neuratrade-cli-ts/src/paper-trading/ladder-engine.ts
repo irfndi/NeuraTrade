@@ -838,6 +838,42 @@ export function runLadderPaperTradingIteration(
     }
 
     const w = stateToWorking(state);
+
+    // Reconcile orphans: a REAL position the paper ledger does not track (left
+    // by a rolled-back bar whose earlier order filled before a later event
+    // failed) is closed on the exchange so it cannot sit unmanaged and consume
+    // the account's margin. Only closes when the paper ledger is flat for this
+    // symbol; a paper rung with a matching real position is left to manage.
+    if (options.isLive === true) {
+      const adapter = yield* Effect.serviceOption(FuturesExchangeAdapter);
+      if (Option.isSome(adapter)) {
+        const productType = options.productType ?? "USDT-FUTURES";
+        const marginMode = options.marginMode ?? "isolated";
+        const realPos = yield* adapter.value
+          .getPosition(options.symbol, productType)
+          .pipe(Effect.result);
+        if (
+          realPos._tag === "Success" &&
+          realPos.success !== null &&
+          Number(realPos.success.quantity) > 0 &&
+          openRungCount(w) === 0
+        ) {
+          const side: FuturesOrderSide =
+            realPos.success.side === "long" ? "sell" : "buy";
+          yield* adapter.value
+            .closePosition({
+              symbol: options.symbol,
+              side,
+              productType,
+              marginMode,
+              leverage: Math.max(1, options.leverage ?? 1),
+              size: realPos.success.quantity,
+            })
+            .pipe(Effect.result);
+        }
+      }
+    }
+
     const trendSeries =
       (options.trendFilterPeriod ?? 0) > 0
         ? calculateSMA(
@@ -888,7 +924,11 @@ export function runLadderPaperTradingIteration(
         repo,
       ).pipe(Effect.result);
       if (outcome._tag === "Failure") {
-        // Roll the ledger back; do not commit the bar's simulated trades.
+        // Roll the ledger back but ADVANCE lastTimestamp past the processed
+        // bars: otherwise the same failing bar is reprocessed and re-fails
+        // every cycle (the 'ab not enough' / risk-reject / agreement churn).
+        // The failed bar's fills are not committed; any real orders it placed
+        // are reconciled (closed) at the next iteration's start.
         const rolled = cloneWorking(snapshot);
         w.capital = rolled.capital;
         w.peak = rolled.peak;
@@ -899,6 +939,8 @@ export function runLadderPaperTradingIteration(
         w.longBase = rolled.longBase;
         w.shortBase = rolled.shortBase;
         w.paused = rolled.paused;
+        const rolledState = workingToState(options, w, last.timestamp, state);
+        yield* repo.saveLadderState(rolledState);
         return {
           action: "hold",
           capital: toNumber(w.capital),

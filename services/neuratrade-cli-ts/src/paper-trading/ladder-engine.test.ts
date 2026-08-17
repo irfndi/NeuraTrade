@@ -4,7 +4,11 @@ import { Effect } from "effect";
 import { MarketDataGateway } from "../market-data/gateway.js";
 import type { Candle } from "../market-data/types.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
-import { FuturesExchangeAdapter, type FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
+import {
+  FuturesExchangeAdapter,
+  type FuturesExchangeAdapterService,
+} from "../exchange/futures-adapter.js";
+import { ExchangeError } from "../exchange/adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import type { CandleLike } from "../scalping/types.js";
 import { runLadderGridBacktest } from "../scalping/ladder-grid.js";
@@ -348,6 +352,144 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     // precedence bug clamped 50 to 1 before /100, sizing 0.25 USDT instead.
     expect(lastOrderNotional).toBeGreaterThan(20);
     expect(lastOrderNotional).toBeLessThan(30);
+  });
+
+  it("advances lastTimestamp on a live rollback so the failing bar is not reprocessed", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    // Force the live executor to fail: every order is rejected.
+    const failingAdapter: FuturesExchangeAdapterService = {
+      ...base,
+      placeOrder: () => Effect.fail(new ExchangeError("ab not enough (test)")),
+    };
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(FuturesExchangeAdapter, failingAdapter),
+        ),
+      );
+
+    const first = await run();
+    expect(first.action).toBe("hold");
+    expect(first.note).toContain("rolled back");
+    // The ledger rolled back: capital unchanged.
+    expect(first.capital).toBe(100);
+    // Iteration 2 sees the SAME window: the rollback must have advanced
+    // lastTimestamp, so the failing bar is NOT reprocessed (churn fix).
+    const second = await run();
+    expect(second.action).toBe("hold");
+    expect(second.note).toBe("no new candle");
+    expect(second.capital).toBe(100);
+  });
+
+  it("reconciles an orphan real position when the paper ledger is flat", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () =>
+        Effect.succeed([
+          candle(100, 100, 100, 100, 0),
+          candle(100, 100, 100, 100, 1),
+        ] as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    let closedSide = "";
+    const orphanAdapter: FuturesExchangeAdapterService = {
+      ...base,
+      getPosition: () =>
+        Effect.succeed({
+          symbol: opts.symbol,
+          side: "long",
+          productType: "USDT-FUTURES",
+          marginMode: "isolated",
+          leverage: 1,
+          quantity: money(5),
+          available: money(5),
+          entryPrice: money(100),
+          marginCoin: "USDT",
+        }),
+      closePosition: (req) => {
+        closedSide = req.side;
+        return Effect.succeed(null);
+      },
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, orphanAdapter),
+      ),
+    );
+    // The orphan long must be closed (sell side) even though the bar holds.
+    expect(closedSide).toBe("sell");
+    expect(result.action).toBe("hold");
   });
 
   it("holds (never reprocesses) when no candle is newer than the last processed", async () => {

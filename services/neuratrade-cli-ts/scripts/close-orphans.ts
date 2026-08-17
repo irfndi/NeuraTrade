@@ -13,7 +13,7 @@ const program = Effect.gen(function* () {
   const client = yield* BybitClient;
   for (const c of closes) {
     const r = yield* client
-      .placeOrder({ category: "linear", symbol: c.symbol, side: c.side, orderType: "Market", qty: c.qty, reduceOnly: true, timeInForce: "IOC" })
+      .placeOrder({ symbol: c.symbol, side: c.side, orderType: "Market", qty: c.qty, reduceOnly: true })
       .pipe(Effect.result);
     if (r._tag === "Failure") {
       console.log(`CLOSE ${c.symbol}: FAILED ${JSON.stringify({ code: (r.failure as any).code, body: (r.failure as any).body })}`);
