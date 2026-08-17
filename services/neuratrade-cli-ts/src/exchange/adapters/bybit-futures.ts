@@ -1011,10 +1011,35 @@ export function makeBybitFuturesAdapter(
       }
 
       // The create response is an acknowledgement; query the realtime order
-      // for the actual filled size/price/fee before recording the position.
-      const data = yield* withError(
+      // for the actual filled size/price/fee before recording the position. A
+      // limit entry placed on a touch may not fill within the first poll — poll
+      // for a short window (bounded, with a metric-worthy emit per poll) so a
+      // touch-then-fill (maker) entry is captured instead of canceled as a
+      // phantom failure. Market orders and reduce-only closes skip the wait.
+      const isEntryLimit =
+        request.type === "limit" && request.reduceOnly !== true;
+      const pollAttempts = isEntryLimit ? 10 : 1;
+      let data = yield* withError(
         client.getOrder({ symbol, orderId: ack.orderId }),
       );
+      for (let attempt = 1; attempt < pollAttempts; attempt += 1) {
+        const probeQty = money(data.cumExecQty);
+        const probePrice = money(data.avgPrice);
+        if (probeQty.greaterThan(0) && probePrice.greaterThan(0)) break;
+        const probeStatus = data.orderStatus;
+        if (
+          probeStatus !== "Created" &&
+          probeStatus !== "New" &&
+          probeStatus !== "PartiallyFilled" &&
+          probeStatus !== "Untriggered"
+        ) {
+          break; // final state (Filled/Canceled/Rejected) — no more waiting.
+        }
+        yield* Effect.sleep("250 millis");
+        data = yield* withError(
+          client.getOrder({ symbol, orderId: ack.orderId }),
+        );
+      }
       const filledQty = money(data.cumExecQty);
       const filledPrice = money(data.avgPrice);
       if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
