@@ -3300,9 +3300,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         productType,
         marginMode,
         maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
-        ...(contractSpecsFor(symbol) !== undefined
-          ? { contractSpecs: contractSpecsFor(symbol) }
-          : {}),
+        // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
+        // contract rules, but the ladder trades BYBIT — passing them caused
+        // false min-orderable rejections (NEAR "min orderable 25.19" from the
+        // bitget spec) and "Qty invalid" (bitget's qty step on bybit). The
+        // bybit adapter rounds the qty to the contract's own step internally.
       };
     };
 
