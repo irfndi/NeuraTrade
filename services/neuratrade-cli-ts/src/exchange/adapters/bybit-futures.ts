@@ -1101,9 +1101,22 @@ export function makeBybitFuturesAdapter(
         return null;
       }
       const available = money(existing.size).abs();
-      const closeSize = request.size.lessThan(available)
+      let closeSize = request.size.lessThan(available)
         ? request.size
         : available;
+      if (closeSize.lessThanOrEqualTo(0)) {
+        return null;
+      }
+      // Round the close size DOWN to the contract qty step so a fractional
+      // theoretical close (a rung's sized qty) is orderable — otherwise a
+      // reduce-only close of e.g. 4538.13 on a step-100 contract is rejected
+      // "Qty invalid". The position size is always a step multiple; a close at
+      // the full position size is already valid.
+      const contract = yield* withError(client.getContract(symbol));
+      const qtyStep = money(contract.qtyStep);
+      if (qtyStep.greaterThan(0) && closeSize.lessThan(available)) {
+        closeSize = closeSize.div(qtyStep).floor().times(qtyStep);
+      }
       if (closeSize.lessThanOrEqualTo(0)) {
         return null;
       }
