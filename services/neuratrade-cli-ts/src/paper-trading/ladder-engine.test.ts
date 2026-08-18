@@ -358,9 +358,9 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);
     // $1000 account, 50% position budget -> the account-scaled cap is
-    // 50x (size tier for $500-$5000) discounted x0.75 (budget >25%) = 37x.
-    // maxLeverage=150 configured; the effective cap must be ~37x, NOT 150x
-    // and not the old static 10x.
+    // 25x (size tier for $500-$5000) discounted x0.5 (budget >25%) = 12x.
+    // maxLeverage=150 configured; the effective cap must be ~12x, NOT 150x
+    // and not the old static 1x.
     const opts2: LadderPaperTradingOptions = {
       ...baseOptions(),
       initialCapital: 1000,
@@ -413,11 +413,10 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
       ),
     );
     expect(result.action).toBe("closed");
-    // Account-scaled cap for $1000@50% budget = 37x; the fill uses at most
-    // that (it may use less if the notional fits at lower leverage). It must
-    // be >= 1 and <= 37 — never the raw 150x configured cap.
+    // Account-scaled cap for $1000@50% budget = floor(25*0.5)=12x; the fill
+    // uses at most that. It must be >= 1 and <= 12 — never the raw 150x.
     expect(sentLeverage).toBeGreaterThanOrEqual(1);
-    expect(sentLeverage).toBeLessThanOrEqual(37);
+    expect(sentLeverage).toBeLessThanOrEqual(12);
     expect(sentLeverage).toBeLessThan(150);
   });
 

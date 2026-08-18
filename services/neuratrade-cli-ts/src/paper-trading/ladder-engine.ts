@@ -87,6 +87,13 @@ export interface LadderPaperTradingOptions {
   readonly maxPositionPct?: number;
   /** Risk limit cap on dynamic leverage (default 10x). */
   readonly maxLeverage?: number;
+  /**
+   * When true, leverage is fully DYNAMIC: it is computed from the account
+   * size + per-position budget (the accountScaledLeverageCap), ignoring any
+   * static --leverage. When false/omitted, leverage is the minimum of the
+   * static --leverage and the account-scaled cap.
+   */
+  readonly fullyDynamicLeverage?: boolean;
   /** Exchange contract constraints for orderable live sizing. */
   readonly contractSpecs?: ContractSizeSpec;
 }
@@ -625,13 +632,15 @@ function accountScaledLeverageCap(
   const budgetFrac = Math.max(0, Math.min(1, perPositionBudget));
   if (capital.lessThanOrEqualTo(0)) return 1;
   const dollar = toNumber(capital);
-  // Risk tiers by account size (USDT):
-  //   < 500    : 25x   (small account, high liquidation risk)
-  //   < 5000   : 50x
-  //   < 25000  : 75x
+  // Risk tiers by account size (USDT). Small accounts stay VERY conservative
+  // (a $100 account at 100x on BTC is reckless), scaling up only as capital
+  // grows so a big account can use high leverage on a small slice:
+  //   < 500    : 10x   (small account — low, sane leverage)
+  //   < 5000   : 25x
+  //   < 25000  : 50x
   //   >= 25000 : 150x  (big account can afford a kick on a small slice)
   const sizeCap =
-    dollar < 500 ? 25 : dollar < 5000 ? 50 : dollar < 25000 ? 75 : 150;
+    dollar < 500 ? 10 : dollar < 5000 ? 25 : dollar < 25000 ? 50 : 150;
   // Discount when a large fraction of capital is committed per position.
   const budgetFactor = budgetFrac <= 0.1 ? 1 : budgetFrac <= 0.25 ? 0.75 : 0.5;
   const effective = Math.floor(sizeCap * budgetFactor);
@@ -639,18 +648,28 @@ function accountScaledLeverageCap(
 }
 
 /**
- * Dynamic leverage: instead of a static multiple, use the least leverage that
- * fits the full per-rung notional (from the position cap) into the available
- * margin, bounded by the account-scaled cap. This grows exposure with capital
- * instead of leaving leverage frozen at 1x, accelerating PnL; the exchange
- * enforces the true liquidation price and per-contract leverage ceiling.
+ * Deployed leverage: the multiplier actually applied to the per-rung margin
+ * budget, so notional = marginBudget x leverage (growing PnL with exposure).
+ * In FULLY dynamic mode it is the account-scaled cap itself (the engine
+ * decides leverage from account size + budget, ignoring any fixed --leverage).
+ * Otherwise it is the minimum of the requested leverage and the account-scaled
+ * cap. It never drops below 1x, and the per-contract ceiling is enforced by
+ * the adapter at order time.
  */
 function dynamicLeverage(
   rawNotional: Decimal,
   perRungAllocation: Decimal,
   requestedLeverage: number,
   maxLeverage: number,
+  fullyDynamic: boolean,
 ): number {
+  const cap = Math.max(1, maxLeverage);
+  if (fullyDynamic) {
+    // Leverage sized purely from the account: deploy the account-scaled cap
+    // (from capital + per-position budget), ignoring any fixed --leverage.
+    // The min-orderable-floor raise is handled by the adapter at order time.
+    return Math.max(1, cap);
+  }
   const requested = Math.max(1, requestedLeverage);
   if (
     perRungAllocation.lessThanOrEqualTo(0) ||
@@ -658,9 +677,10 @@ function dynamicLeverage(
   ) {
     return requested;
   }
-  const cap = Math.max(1, maxLeverage);
   // Leverage needed so the full raw notional fits the per-rung margin budget.
   const needed = rawNotional.div(perRungAllocation);
+  // Deploy at least enough to fit the floor (min-orderable), and up to the
+  // requested leverage, bounded by the account-scaled cap.
   const leverage = Math.min(
     cap,
     Math.max(requested, Math.ceil(needed.toNumber())),
@@ -705,6 +725,7 @@ function ladderRungQty(
     configuredMax,
   );
   const spec = options.contractSpecs;
+  const fullyDynamic = options.fullyDynamicLeverage === true;
   const raw = perRungAllocation.div(fillPrice);
   if (spec === undefined) {
     const lev = dynamicLeverage(
@@ -712,6 +733,7 @@ function ladderRungQty(
       perRungAllocation,
       options.leverage ?? 1,
       maxLeverage,
+      fullyDynamic,
     );
     return { qty: Decimal.max(0, raw), leverage: lev };
   }
@@ -722,6 +744,7 @@ function ladderRungQty(
     perRungAllocation,
     options.leverage ?? 1,
     maxLeverage,
+    fullyDynamic,
   );
   const margin = notional.div(leverage);
   if (margin.greaterThan(perRungAllocation)) {

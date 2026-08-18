@@ -3300,10 +3300,14 @@ function paperTradeProgram(args: PaperTradeArgs) {
         productType,
         marginMode,
         maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
-        // Dynamic leverage: the real cap is the account-scaled one (25x at
-        // $50, rising to 150x by $25k) inside ladderRungQty. The configured
-        // ceiling stays at 150 so a large account can use high leverage on a
-        // small slice, while the per-contract max is enforced by the adapter.
+        // Fully dynamic leverage: the engine sizes leverage from the account
+        // size + per-position budget (accountScaledLeverageCap), ignoring any
+        // static --leverage. No fixed leverage in the config.
+        fullyDynamicLeverage: true,
+        // The real cap is the account-scaled one (e.g. 18x at $50, rising to
+        // 150x by $25k) inside ladderRungQty. The configured ceiling stays at
+        // 150 so a large account can use high leverage on a small slice, while
+        // the per-contract max is enforced by the adapter.
         maxLeverage: 150,
         // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
         // contract rules, but the ladder trades BYBIT — passing them caused
