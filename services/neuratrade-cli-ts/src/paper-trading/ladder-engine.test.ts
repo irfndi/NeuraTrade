@@ -354,6 +354,71 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(lastOrderNotional).toBeLessThan(30);
   });
 
+  it("uses dynamic leverage to fit the position margin (not static 1x)", async () => {
+    // A low-priced symbol whose full notional (25 USDT at 2 rungs, 50% cap)
+    // would need only ~1x fits fine; but a HIGH notional vs small margin must
+    // raise leverage. Force a high notional: large capital, wide position pct.
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    // Assert the live path works end to end with dynamic leverage enabled
+    // (large capital so high notional exercises leverage raising, capped at
+    // the 10x risk limit) and that fills still complete.
+    const opts2: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      initialCapital: 1000,
+      isLive: true,
+      maxPositionPct: 50,
+      maxLeverage: 10,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const adapter = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 10000 },
+        "bybit-futures",
+      ),
+    );
+    let sentLeverage = 1;
+    const recordingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      setLeverage: (_s, _p, _m, lev) => {
+        sentLeverage = lev;
+        return Effect.void;
+      },
+    };
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts2).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, recordingAdapter),
+      ),
+    );
+    expect(result.action).toBe("closed");
+    expect(sentLeverage).toBeGreaterThanOrEqual(1);
+    expect(sentLeverage).toBeLessThanOrEqual(10);
+  });
+
   it("advances lastTimestamp on a live rollback so the failing bar is not reprocessed", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);

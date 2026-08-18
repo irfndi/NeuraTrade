@@ -85,6 +85,8 @@ export interface LadderPaperTradingOptions {
   readonly marginMode?: FuturesMarginMode;
   /** Position size fraction for live sizing (mirrors the grid cap). */
   readonly maxPositionPct?: number;
+  /** Risk limit cap on dynamic leverage (default 10x). */
+  readonly maxLeverage?: number;
   /** Exchange contract constraints for orderable live sizing. */
   readonly contractSpecs?: ContractSizeSpec;
 }
@@ -605,33 +607,92 @@ function ladderRungSize(
   return { size: perRungAllocation };
 }
 
-/** Orderable qty for one rung at `fillPrice`, contract-step rounded. */
+/**
+ * Dynamic leverage: instead of a static multiple, use the least leverage that
+ * fits the full per-rung notional (from the position cap) into the available
+ * margin, bounded by the risk limit (maxLeverage, default 10x). This grows
+ * exposure with capital instead of leaving leverage frozen at 1x, accelerating
+ * PnL; the exchange enforces the true liquidation price.
+ */
+function dynamicLeverage(
+  rawNotional: Decimal,
+  perRungAllocation: Decimal,
+  requestedLeverage: number,
+  maxLeverage: number,
+): number {
+  const requested = Math.max(1, requestedLeverage);
+  if (
+    perRungAllocation.lessThanOrEqualTo(0) ||
+    rawNotional.lessThanOrEqualTo(0)
+  ) {
+    return requested;
+  }
+  const cap = Math.max(1, maxLeverage);
+  // Leverage needed so the full raw notional fits the per-rung margin budget.
+  const needed = rawNotional.div(perRungAllocation);
+  const leverage = Math.min(
+    cap,
+    Math.max(requested, Math.ceil(needed.toNumber())),
+  );
+  return leverage >= 1 ? leverage : 1;
+}
+
+/**
+ * Orderable qty for one rung at `fillPrice`, contract-step rounded. Uses
+ * DYNAMIC leverage so the full notional (from the per-rung budget) fits the
+ * margin: returns the qty and the leverage that keeps margin <= the per-rung
+ * allocation, bounded by the risk cap. When no contract spec is available the
+ * raw notional is used at the requested leverage.
+ */
 function ladderRungQty(
   capital: Decimal,
   options: LadderPaperTradingOptions,
   fillPrice: Decimal,
-): { qty: Money; skipReason?: string } {
+): { qty: Money; leverage: number; skipReason?: string } {
   const perRungAllocation = ladderRungSize(capital, options).size;
   if (perRungAllocation.lessThanOrEqualTo(0)) {
-    return { qty: money(0), skipReason: "per-rung allocation is zero" };
+    return {
+      qty: money(0),
+      leverage: Math.max(1, options.leverage ?? 1),
+      skipReason: "per-rung allocation is zero",
+    };
   }
   if (fillPrice.lessThanOrEqualTo(0)) {
-    return { qty: money(0), skipReason: "non-positive fill price" };
+    return {
+      qty: money(0),
+      leverage: Math.max(1, options.leverage ?? 1),
+      skipReason: "non-positive fill price",
+    };
   }
+  const maxLeverage = Math.max(1, options.maxLeverage ?? 10);
   const spec = options.contractSpecs;
   const raw = perRungAllocation.div(fillPrice);
-  if (spec === undefined) return { qty: Decimal.max(0, raw) };
+  if (spec === undefined) {
+    const lev = dynamicLeverage(
+      raw.times(fillPrice),
+      perRungAllocation,
+      options.leverage ?? 1,
+      maxLeverage,
+    );
+    return { qty: Decimal.max(0, raw), leverage: lev };
+  }
   const qty = orderableQty(raw, spec, fillPrice, perRungAllocation);
   const notional = qty.times(fillPrice);
-  const leverage = Math.max(1, options.leverage ?? 1);
+  const leverage = dynamicLeverage(
+    notional,
+    perRungAllocation,
+    options.leverage ?? 1,
+    maxLeverage,
+  );
   const margin = notional.div(leverage);
   if (margin.greaterThan(perRungAllocation)) {
     return {
       qty: money(0),
+      leverage,
       skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${leverage}x, exceeding the ${toNumber(perRungAllocation).toFixed(2)} USDT per-rung cap`,
     };
   }
-  return { qty };
+  return { qty, leverage };
 }
 
 /**
@@ -660,6 +721,18 @@ function executeLadderBarLive(
     for (const fill of fills) {
       const side: FuturesOrderSide = fill.side === "long" ? "buy" : "sell";
       const fillPrice = money(fill.fillPrice);
+      // Size first: resolves the DYNAMIC leverage (fits notional to the
+      // per-rung margin budget, capped at the risk limit) used for the risk
+      // check and the order.
+      const sized = ladderRungQty(w.capital, options, fillPrice);
+      if (sized.qty.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
+          ),
+        );
+      }
+      const leverage = Math.max(1, sized.leverage);
       const tradesTodayCount = yield* repo.countTradesForDate(new Date());
       const todayPnl = yield* repo
         .getTodayRealizedPnl()
@@ -683,14 +756,6 @@ function executeLadderBarLive(
         leverage,
         productType,
       });
-      const sized = ladderRungQty(w.capital, options, fillPrice);
-      if (sized.qty.lessThanOrEqualTo(0)) {
-        return yield* Effect.fail(
-          new ExchangeError(
-            `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
-          ),
-        );
-      }
       yield* adapter.setLeverage(
         options.symbol,
         productType,

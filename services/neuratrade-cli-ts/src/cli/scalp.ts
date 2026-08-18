@@ -3300,6 +3300,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
         productType,
         marginMode,
         maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+        // Dynamic leverage risk cap (10x) — the engine sizes leverage to fit
+        // the position margin instead of freezing at the static --leverage 1.
+        maxLeverage: 10,
         // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
         // contract rules, but the ladder trades BYBIT — passing them caused
         // false min-orderable rejections (NEAR "min orderable 25.19" from the
