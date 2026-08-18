@@ -3300,9 +3300,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         productType,
         marginMode,
         maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
-        // Dynamic leverage risk cap (10x) — the engine sizes leverage to fit
-        // the position margin instead of freezing at the static --leverage 1.
-        maxLeverage: 10,
+        // Dynamic leverage: the real cap is the account-scaled one (25x at
+        // $50, rising to 150x by $25k) inside ladderRungQty. The configured
+        // ceiling stays at 150 so a large account can use high leverage on a
+        // small slice, while the per-contract max is enforced by the adapter.
+        maxLeverage: 150,
         // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
         // contract rules, but the ladder trades BYBIT — passing them caused
         // false min-orderable rejections (NEAR "min orderable 25.19" from the
@@ -3731,7 +3733,13 @@ export const soakCommand = Command.make(
         soakRiskOverrides.maxTradesPerDay = mergedArgs.maxTradesPerDay.value;
       if (Option.isSome(mergedArgs.minCapital))
         soakRiskOverrides.minCapital = mergedArgs.minCapital.value;
-      const riskGuardLayer = RiskGuardLive(mergedArgs.live, soakRiskOverrides);
+      // The ladder uses dynamic leverage up to the account-scaled cap (150x
+      // configured); the guard must not block those higher-leverage fills. The
+      // real cap is still applied by ladderRungQty (small account -> low cap).
+      const riskGuardLayer = RiskGuardLive(mergedArgs.live, {
+        ...soakRiskOverrides,
+        maxLeverage: 150,
+      });
       const killSwitchLayer = KillSwitchSQLiteLive(db);
       const circuitBreakerMaxLoss = Option.getOrElse(
         mergedArgs.maxDailyLossPct,

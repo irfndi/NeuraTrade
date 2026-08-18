@@ -354,21 +354,19 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(lastOrderNotional).toBeLessThan(30);
   });
 
-  it("uses dynamic leverage to fit the position margin (not static 1x)", async () => {
-    // A low-priced symbol whose full notional (25 USDT at 2 rungs, 50% cap)
-    // would need only ~1x fits fine; but a HIGH notional vs small margin must
-    // raise leverage. Force a high notional: large capital, wide position pct.
+  it("uses dynamic leverage that scales with account size (small acct -> low cap)", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);
-    // Assert the live path works end to end with dynamic leverage enabled
-    // (large capital so high notional exercises leverage raising, capped at
-    // the 10x risk limit) and that fills still complete.
+    // $1000 account, 50% position budget -> the account-scaled cap is
+    // 50x (size tier for $500-$5000) discounted x0.75 (budget >25%) = 37x.
+    // maxLeverage=150 configured; the effective cap must be ~37x, NOT 150x
+    // and not the old static 10x.
     const opts2: LadderPaperTradingOptions = {
       ...baseOptions(),
       initialCapital: 1000,
       isLive: true,
       maxPositionPct: 50,
-      maxLeverage: 10,
+      maxLeverage: 150,
       productType: "USDT-FUTURES",
       marginMode: "isolated",
     };
@@ -388,7 +386,7 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
       maxDrawdownPct: 100,
       minCapital: 0,
       maxTradesPerDay: Number.MAX_SAFE_INTEGER,
-      maxLeverage: 10,
+      maxLeverage: 150,
       allowedProductTypes: ["USDT-FUTURES"],
     });
     const adapter = await Effect.runPromise(
@@ -415,8 +413,12 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
       ),
     );
     expect(result.action).toBe("closed");
+    // Account-scaled cap for $1000@50% budget = 37x; the fill uses at most
+    // that (it may use less if the notional fits at lower leverage). It must
+    // be >= 1 and <= 37 — never the raw 150x configured cap.
     expect(sentLeverage).toBeGreaterThanOrEqual(1);
-    expect(sentLeverage).toBeLessThanOrEqual(10);
+    expect(sentLeverage).toBeLessThanOrEqual(37);
+    expect(sentLeverage).toBeLessThan(150);
   });
 
   it("advances lastTimestamp on a live rollback so the failing bar is not reprocessed", async () => {

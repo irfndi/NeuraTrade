@@ -608,11 +608,42 @@ function ladderRungSize(
 }
 
 /**
+ * Account-scaled leverage cap: leverage should rise with account size so small
+ * accounts stay conservative (a $100 account at 100x on BTC is reckless) while
+ * larger accounts can run high leverage on a small slice of capital (a $25k
+ * account can use 150x on a 5% position). The effective cap is
+ * min(configuredMax, sizeTier) then discounted by the per-position budget
+ * fraction — committing 50% of a small account at high leverage is absurd.
+ * The per-contract ceiling is enforced by the adapter at order time.
+ */
+function accountScaledLeverageCap(
+  capital: Decimal,
+  perPositionBudget: number,
+  configuredMax: number,
+): number {
+  const cap = Math.max(1, Math.floor(configuredMax) || 1);
+  const budgetFrac = Math.max(0, Math.min(1, perPositionBudget));
+  if (capital.lessThanOrEqualTo(0)) return 1;
+  const dollar = toNumber(capital);
+  // Risk tiers by account size (USDT):
+  //   < 500    : 25x   (small account, high liquidation risk)
+  //   < 5000   : 50x
+  //   < 25000  : 75x
+  //   >= 25000 : 150x  (big account can afford a kick on a small slice)
+  const sizeCap =
+    dollar < 500 ? 25 : dollar < 5000 ? 50 : dollar < 25000 ? 75 : 150;
+  // Discount when a large fraction of capital is committed per position.
+  const budgetFactor = budgetFrac <= 0.1 ? 1 : budgetFrac <= 0.25 ? 0.75 : 0.5;
+  const effective = Math.floor(sizeCap * budgetFactor);
+  return Math.max(1, Math.min(cap, effective));
+}
+
+/**
  * Dynamic leverage: instead of a static multiple, use the least leverage that
  * fits the full per-rung notional (from the position cap) into the available
- * margin, bounded by the risk limit (maxLeverage, default 10x). This grows
- * exposure with capital instead of leaving leverage frozen at 1x, accelerating
- * PnL; the exchange enforces the true liquidation price.
+ * margin, bounded by the account-scaled cap. This grows exposure with capital
+ * instead of leaving leverage frozen at 1x, accelerating PnL; the exchange
+ * enforces the true liquidation price and per-contract leverage ceiling.
  */
 function dynamicLeverage(
   rawNotional: Decimal,
@@ -664,7 +695,15 @@ function ladderRungQty(
       skipReason: "non-positive fill price",
     };
   }
-  const maxLeverage = Math.max(1, options.maxLeverage ?? 10);
+  const configuredMax = Math.max(1, Math.floor(options.maxLeverage ?? 10) || 1);
+  // Account-scaled cap: rises with account size, discounted by the fraction of
+  // capital committed per position. Small accounts stay low; a $25k+ account
+  // can use high leverage on a small slice.
+  const maxLeverage = accountScaledLeverageCap(
+    capital,
+    Math.max(0, (options.maxPositionPct ?? 100) / 100),
+    configuredMax,
+  );
   const spec = options.contractSpecs;
   const raw = perRungAllocation.div(fillPrice);
   if (spec === undefined) {
