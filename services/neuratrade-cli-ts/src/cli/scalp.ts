@@ -3444,60 +3444,75 @@ function paperTradeProgram(args: PaperTradeArgs) {
         const cohortSymbols = new Set<string>(
           READINESS_COHORT_CANDIDATES.map((candidate) => candidate.symbol),
         );
-        for (const entry of entries) {
-          if (cohortSymbols.has(entry.symbol)) continue;
-          if (remaining === 0 && args.iterations !== 0) break;
-          const entryExchange = entry.exchange ?? args.exchange;
-          const isLadderSurvivor = isLadderSurvivorRow(
-            entry.gridParams,
-            args.strategyType,
-          );
-          const result = isLadderSurvivor
-            ? yield* runLadderIteration(
-                makeLadderOptions(
-                  entry.symbol,
-                  entryExchange,
-                  entry.gridParams,
-                ),
-              )
-            : args.strategyType === "grid"
-              ? yield* runGridIteration(
-                  makeGridOptions(
-                    entry.symbol,
-                    entryExchange,
-                    entry.gridParams,
-                  ),
-                )
-              : args.futures
-                ? yield* runFuturesIteration(
-                    makeFuturesOptions(entry.symbol, entryExchange, {
-                      minConfidence: entry.bestParams?.minConfidence,
-                      atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
-                      atrTakeProfitMultiplier:
-                        entry.bestParams?.atrTakeProfitMultiplier,
-                    }),
+        // Run the whole sweep of symbols CONCURRENTLY so multiple positions can
+        // open in parallel (sequential iteration leaves the rest of the account
+        // idle while each symbol waits for a limit fill). Each symbol's ladder
+        // self-limits by its paper capital and the real wallet margin (the
+        // adapter fails "ab not enough" when the account can't cover more), so
+        // parallel execution fills as many concurrent positions as the $50
+        // wallet can actually hold — ~4 at 25% margin each. API-call and
+        // order-rate safety is preserved by the market-data/exchange rate
+        // limiters; the per-round sleep below bounds overall cadence.
+        yield* Effect.forEach(
+          entries,
+          (entry) =>
+            Effect.gen(function* () {
+              if (cohortSymbols.has(entry.symbol)) return;
+              if (remaining === 0 && args.iterations !== 0) return;
+              const entryExchange = entry.exchange ?? args.exchange;
+              const isLadderSurvivor = isLadderSurvivorRow(
+                entry.gridParams,
+                args.strategyType,
+              );
+              const result = isLadderSurvivor
+                ? yield* runLadderIteration(
+                    makeLadderOptions(
+                      entry.symbol,
+                      entryExchange,
+                      entry.gridParams,
+                    ),
                   )
-                : yield* runSpotIteration(
-                    makeSpotOptions(entry.symbol, entryExchange, {
-                      minConfidence: entry.bestParams?.minConfidence,
-                      atrStopMultiplier: entry.bestParams?.atrStopMultiplier,
-                      atrTakeProfitMultiplier:
-                        entry.bestParams?.atrTakeProfitMultiplier,
-                    }),
-                  );
-          yield* Console.log(
-            `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
-          );
-
-          if (remaining > 0) {
-            remaining -= 1;
-          }
-
-          // Sleep between iterations: always in infinite mode (0), otherwise
-          // after every iteration except the final one.
-          if (args.iterations === 0 || remaining !== 0) {
-            yield* Effect.sleep(`${args.interval} seconds`);
-          }
+                : args.strategyType === "grid"
+                  ? yield* runGridIteration(
+                      makeGridOptions(
+                        entry.symbol,
+                        entryExchange,
+                        entry.gridParams,
+                      ),
+                    )
+                  : args.futures
+                    ? yield* runFuturesIteration(
+                        makeFuturesOptions(entry.symbol, entryExchange, {
+                          minConfidence: entry.bestParams?.minConfidence,
+                          atrStopMultiplier:
+                            entry.bestParams?.atrStopMultiplier,
+                          atrTakeProfitMultiplier:
+                            entry.bestParams?.atrTakeProfitMultiplier,
+                        }),
+                      )
+                    : yield* runSpotIteration(
+                        makeSpotOptions(entry.symbol, entryExchange, {
+                          minConfidence: entry.bestParams?.minConfidence,
+                          atrStopMultiplier:
+                            entry.bestParams?.atrStopMultiplier,
+                          atrTakeProfitMultiplier:
+                            entry.bestParams?.atrTakeProfitMultiplier,
+                        }),
+                      );
+              yield* Console.log(
+                `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)} | ${result.note}`,
+              );
+              if (remaining > 0 && args.iterations !== 0) {
+                remaining -= 1;
+              }
+              return;
+            }),
+          { concurrency: 16, discard: true },
+        );
+        // Cadence between sweep rounds: bounded by interval, so parallel
+        // evaluation never spams the exchanges.
+        if (args.iterations === 0 || remaining !== 0) {
+          yield* Effect.sleep(`${args.interval} seconds`);
         }
       } else {
         const result =
