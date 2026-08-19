@@ -23,6 +23,8 @@ export interface RiskLimits {
   readonly maxDrawdownPct: number;
   readonly minCapital: number;
   readonly maxTradesPerDay: number;
+  /** Maximum order notional as a percentage of capital, independent of leverage. */
+  readonly maxNotionalPct?: number;
   readonly maxLeverage?: number;
   readonly allowedSymbols?: readonly string[];
   readonly allowedProductTypes?: readonly string[];
@@ -39,6 +41,8 @@ export interface RiskContext {
   readonly dailyRealizedPnl: number;
   readonly tradesTodayCount: number;
   readonly positionValue: number;
+  /** Gross order notional; unlike positionValue, this is not margin-adjusted. */
+  readonly notionalValue?: number;
   readonly symbol: string;
   readonly side: "buy" | "sell";
   readonly leverage?: number;
@@ -75,6 +79,7 @@ export function defaultRiskLimits(isLive: boolean): RiskLimits {
       minCapital: 100,
       maxTradesPerDay: 10,
       maxLeverage: 10,
+      maxNotionalPct: 100,
       allowedProductTypes: ["USDT-FUTURES"],
     };
   }
@@ -156,6 +161,21 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
           violations.push(
             `position size ${positionSizePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
           );
+        }
+
+        // Notional cap is deliberately separate from the margin cap above:
+        // leverage may reduce collateral without reducing market exposure.
+        if (
+          limits.maxNotionalPct !== undefined &&
+          context.notionalValue !== undefined &&
+          context.capital > 0
+        ) {
+          const notionalPct = (context.notionalValue / context.capital) * 100;
+          if (notionalPct > limits.maxNotionalPct) {
+            violations.push(
+              `notional size ${notionalPct.toFixed(2)}% exceeds max ${limits.maxNotionalPct}%`,
+            );
+          }
         }
 
         // Min-orderable fail-closed: when the exchange contract's minimum

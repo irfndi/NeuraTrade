@@ -213,6 +213,29 @@ describe("makeRiskGuard", () => {
     expect(result).toBeUndefined();
   });
 
+  it("enforces a separate notional cap independent of leverage", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(true),
+      maxNotionalPct: 100,
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(
+          baseContext({
+            isLive: true,
+            positionValue: 1_000,
+            notionalValue: 10_001,
+            leverage: 10,
+            productType: "USDT-FUTURES",
+          }),
+        )
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("notional size"))).toBe(
+      true,
+    );
+  });
+
   it("allows drawdown exactly at the max and blocks just over", async () => {
     const guard = makeRiskGuard(defaultRiskLimits(true));
     const atLimit = await Effect.runPromise(

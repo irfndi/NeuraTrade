@@ -223,6 +223,8 @@ export interface LadderPaperState {
   readonly maxHoldBars: number;
   /** Stop distance as a multiple of the grid step (0 = legacy ladder boundary). */
   readonly stopRatio?: number;
+  /** True when same-candle entry/target ambiguity is resolved conservatively. */
+  readonly conservativeIntrabar: boolean;
   /** Timestamp of the last processed candle (replay bookkeeping). */
   readonly lastTimestamp: Date | null;
   readonly updatedAt: Date;

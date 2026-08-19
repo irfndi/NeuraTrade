@@ -21,7 +21,6 @@ import { Effect, Option } from "effect";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
-  type FuturesOrderFill,
   type FuturesOrderRequest,
   type FuturesProductType,
   type FuturesMarginMode,
@@ -34,6 +33,11 @@ import {
   type MarketDataGatewayService,
 } from "../market-data/gateway.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
+import {
+  CircuitBreaker,
+  CircuitBreakerError,
+} from "../risk/circuit-breaker.js";
+import { KillSwitch, KillSwitchError } from "../risk/kill-switch.js";
 import type { CandleLike } from "../scalping/types.js";
 import { calculateSMA } from "../scalping/indicators.js";
 import { makeCausalSymbolStats } from "../scalping/symbol-stats.js";
@@ -119,6 +123,12 @@ export interface LadderPaperTradingOptions {
    * `base ± step*(N+gridMaxGrids)` applies unchanged (backtest parity).
    */
   readonly stopRatio?: number;
+  /** Avoid assuming that an OHLC candle hits a newly entered rung's target. */
+  readonly conservativeIntrabar?: boolean;
+  /** Maximum total position notional as a percentage of capital. */
+  readonly maxNotionalPct?: number;
+  /** Per-side taker fee for non-target exits; defaults to feePct. */
+  readonly takerExitFeePct?: number;
   /** Exchange contract constraints for orderable live sizing. */
   readonly contractSpecs?: ContractSizeSpec;
 }
@@ -218,11 +228,14 @@ function closeRung(
   events: MutableBarEvents,
 ): void {
   const leverage = Math.max(1, opts.leverage ?? 1);
-  const positionFraction = Math.max(0, Math.min(1, 1));
+  const positionFraction = Math.max(
+    0,
+    Math.min(1, (opts.maxPositionPct ?? 100) / 100),
+  );
   const N = Math.max(1, Math.floor(opts.rungs ?? 1));
   const sizePerRung = positionFraction / N;
   const makerFee = (opts.feePct ?? 0) / 100;
-  const takerFee = makerFee;
+  const takerFee = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
   const targetFee = makerFee * 2;
   const stopFee = makerFee + takerFee;
   const isLiquidation = reason === "liquidation";
@@ -395,8 +408,7 @@ export function advanceLadderBar(
       // filled rung's entry for a consistent per-position R:R.
       const stopLevel =
         stopRatio > 0
-          ? Math.min(...filledLong.map((r) => r.entryPrice)) -
-            step * stopRatio
+          ? Math.min(...filledLong.map((r) => r.entryPrice)) - step * stopRatio
           : w.longBase - step * (N + opts.gridMaxGrids);
       const boundary = stopLevel;
       const longLiqs = filledLong
@@ -455,7 +467,10 @@ export function advanceLadderBar(
             continue;
           }
           const target = r.entryPrice + r.step * targetRatio;
-          if (c.high >= target) {
+          if (
+            c.high >= target &&
+            ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
+          ) {
             closeRung(w, r, target / slippage, "target", opts, events);
             anyFillClosed = true;
           } else if (
@@ -508,8 +523,7 @@ export function advanceLadderBar(
       // entry + step*stopRatio.
       const stopLevel =
         stopRatio > 0
-          ? Math.max(...filledShort.map((r) => r.entryPrice)) +
-            step * stopRatio
+          ? Math.max(...filledShort.map((r) => r.entryPrice)) + step * stopRatio
           : w.shortBase + step * (N + opts.gridMaxGrids);
       const boundary = stopLevel;
       const shortLiqs = filledShort
@@ -566,7 +580,10 @@ export function advanceLadderBar(
             continue;
           }
           const target = r.entryPrice - r.step * targetRatio;
-          if (c.low <= target) {
+          if (
+            c.low <= target &&
+            ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
+          ) {
             closeRung(w, r, target * slippage, "target", opts, events);
             anyFillClosed = true;
           } else if (
@@ -619,6 +636,7 @@ export function freshLadderState(
     chopGateAdxThreshold: options.chopGateAdxThreshold ?? 0,
     maxHoldBars: Math.max(0, Math.floor(options.maxHoldBars ?? 0)),
     stopRatio: Math.max(0, options.stopRatio ?? 0),
+    conservativeIntrabar: options.conservativeIntrabar ?? true,
     lastTimestamp: null,
     updatedAt: new Date(),
   };
@@ -678,7 +696,9 @@ export function configMatchesLadderState(
     state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0) &&
     state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0)) &&
     Math.max(0, (state as { stopRatio?: number }).stopRatio ?? 0) ===
-      Math.max(0, options.stopRatio ?? 0)
+      Math.max(0, options.stopRatio ?? 0) &&
+    (state.conservativeIntrabar ?? true) ===
+      (options.conservativeIntrabar ?? true)
   );
 }
 
@@ -701,10 +721,15 @@ function cloneWorking(w: WorkingState): WorkingState {
 }
 
 /** Per-rung orderable size (one rung's share of the position cap). */
+interface LadderRungSizeResult {
+  readonly size: Money;
+  readonly skipReason?: string;
+}
+
 function ladderRungSize(
   capital: Decimal,
   options: LadderPaperTradingOptions,
-): { size: Money; skipReason?: string } {
+): LadderRungSizeResult {
   const rungs = Math.max(1, Math.floor(options.rungs ?? 1));
   const positionFraction = Math.max(
     0,
@@ -714,7 +739,7 @@ function ladderRungSize(
   // The fill price is unknown here (caller supplies it via the event); size
   // is re-derived per event using the event's fill price, so this returns the
   // allocation only. The caller divides by the fill price.
-  return { size: perRungAllocation };
+  return { size: perRungAllocation } satisfies LadderRungSizeResult;
 }
 
 /**
@@ -798,25 +823,31 @@ function dynamicLeverage(
  * allocation, bounded by the risk cap. When no contract spec is available the
  * raw notional is used at the requested leverage.
  */
+interface LadderRungQtyResult {
+  readonly qty: Money;
+  readonly leverage: number;
+  readonly skipReason?: string;
+}
+
 function ladderRungQty(
   capital: Decimal,
   options: LadderPaperTradingOptions,
   fillPrice: Decimal,
-): { qty: Money; leverage: number; skipReason?: string } {
+): LadderRungQtyResult {
   const perRungAllocation = ladderRungSize(capital, options).size;
   if (perRungAllocation.lessThanOrEqualTo(0)) {
     return {
       qty: money(0),
       leverage: Math.max(1, options.leverage ?? 1),
       skipReason: "per-rung allocation is zero",
-    };
+    } satisfies LadderRungQtyResult;
   }
   if (fillPrice.lessThanOrEqualTo(0)) {
     return {
       qty: money(0),
       leverage: Math.max(1, options.leverage ?? 1),
       skipReason: "non-positive fill price",
-    };
+    } satisfies LadderRungQtyResult;
   }
   const configuredMax = Math.max(1, Math.floor(options.maxLeverage ?? 10) || 1);
   // Account-scaled cap: rises with account size, discounted by the fraction of
@@ -829,7 +860,16 @@ function ladderRungQty(
   );
   const spec = options.contractSpecs;
   const fullyDynamic = options.fullyDynamicLeverage === true;
-  const raw = perRungAllocation.div(fillPrice);
+  const marginSizedRaw = perRungAllocation.div(fillPrice);
+  const notionalCapPct = options.maxNotionalPct;
+  const notionalSizedRaw =
+    notionalCapPct === undefined
+      ? marginSizedRaw
+      : capital
+          .times(Math.max(0, notionalCapPct) / 100)
+          .div(Math.max(1, Math.floor(options.rungs ?? 1)))
+          .div(fillPrice);
+  const raw = Decimal.min(marginSizedRaw, notionalSizedRaw);
   if (spec === undefined) {
     const lev = dynamicLeverage(
       raw.times(fillPrice),
@@ -838,7 +878,10 @@ function ladderRungQty(
       maxLeverage,
       fullyDynamic,
     );
-    return { qty: Decimal.max(0, raw), leverage: lev };
+    return {
+      qty: Decimal.max(0, raw),
+      leverage: lev,
+    } satisfies LadderRungQtyResult;
   }
   const qty = orderableQty(raw, spec, fillPrice, perRungAllocation);
   const notional = qty.times(fillPrice);
@@ -855,9 +898,9 @@ function ladderRungQty(
       qty: money(0),
       leverage,
       skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${leverage}x, exceeding the ${toNumber(perRungAllocation).toFixed(2)} USDT per-rung cap`,
-    };
+    } satisfies LadderRungQtyResult;
   }
-  return { qty, leverage };
+  return { qty, leverage } satisfies LadderRungQtyResult;
 }
 
 /**
@@ -906,7 +949,9 @@ function executeLadderBarLive(
         isLive: true,
         capital: toNumber(w.capital),
         peakCapital: toNumber(w.peak),
-        startOfDayCapital: toNumber(w.capital),
+        startOfDayCapital: toNumber(
+          yield* repo.getStartOfDayCapital(new Date(), w.capital),
+        ),
         dailyRealizedPnl: toNumber(todayPnl),
         tradesTodayCount,
         // A hair under the cap: capital × maxPositionPct/100 at the exact
@@ -916,6 +961,7 @@ function executeLadderBarLive(
         positionValue: toNumber(
           w.capital.times((options.maxPositionPct ?? 100) / 100).times(0.9999),
         ),
+        notionalValue: toNumber(sized.qty.times(fillPrice)),
         symbol: options.symbol,
         side,
         leverage,
@@ -961,14 +1007,15 @@ function executeLadderBarLive(
               ? toNumber(fillPrice) - stepAbs * stopRatio
               : toNumber(fillPrice) + stepAbs * stopRatio
             : undefined;
-        yield* adapter.setTradingStop({
+        const tradingStop = {
           symbol: options.symbol,
           productType,
           marginMode,
           side: fill.side,
           takeProfit: money(tp),
-          ...(sl !== undefined ? { stopLoss: money(sl) } : {}),
-        }).pipe(Effect.result);
+          stopLoss: sl === undefined ? undefined : money(sl),
+        };
+        yield* adapter.setTradingStop(tradingStop).pipe(Effect.result);
       }
     }
     for (const close of closes) {
@@ -997,7 +1044,10 @@ export function runLadderPaperTradingIteration(
   options: LadderPaperTradingOptions,
 ): Effect.Effect<
   LadderPaperIterationResult,
-  MarketDataError | PaperTradingRepositoryError,
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | KillSwitchError
+  | CircuitBreakerError,
   MarketDataGatewayService | PaperTradingRepositoryService
 > {
   return Effect.gen(function* () {
@@ -1163,6 +1213,37 @@ export function runLadderPaperTradingIteration(
 
     const w = stateToWorking(state);
 
+    // Ladder now shares the same account-level circuit/kill controls as the
+    // single-position and grid engines. These services are optional for pure
+    // unit-level paper stepping, but when present they are checked before any
+    // candle is allowed to mutate the ladder.
+    const killSwitch = yield* Effect.serviceOption(KillSwitch);
+    const circuitBreaker = yield* Effect.serviceOption(CircuitBreaker);
+    if (Option.isSome(killSwitch)) {
+      if (yield* killSwitch.value.isEngaged()) {
+        return {
+          action: "hold",
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          openRungs: openRungCount(w),
+          closedThisIteration: 0,
+          note: "ladder held: kill switch engaged",
+        };
+      }
+    }
+    if (Option.isSome(circuitBreaker)) {
+      if (yield* circuitBreaker.value.isOpen()) {
+        return {
+          action: "hold",
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          openRungs: openRungCount(w),
+          closedThisIteration: 0,
+          note: "ladder held: circuit breaker open",
+        };
+      }
+    }
+
     // Agreement-block cooldown: when a fill failed with a "must agree to the
     // Trading Terms" error (110123/110125/110126), the contract is untradeable
     // until the user accepts the terms in the exchange UI. Skip fills for the
@@ -1226,6 +1307,10 @@ export function runLadderPaperTradingIteration(
         : null;
     const openBefore = openRungCount(w);
     const snapshot = cloneWorking(w);
+    const startOfDayCapital = yield* repo.getStartOfDayCapital(
+      new Date(),
+      w.capital,
+    );
     let closedThisIteration = 0;
     const iterationFills: LadderFillEvent[] = [];
     const iterationCloses: LadderCloseEvent[] = [];
@@ -1302,6 +1387,13 @@ export function runLadderPaperTradingIteration(
           note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}${"violations" in outcome.failure && Array.isArray(outcome.failure.violations) ? `: ${(outcome.failure as { violations: readonly string[] }).violations.join("; ")}` : ""}`,
         };
       }
+    }
+
+    if (Option.isSome(circuitBreaker) && iterationCloses.length > 0) {
+      yield* circuitBreaker.value.recordTradeResult(
+        toNumber(w.capital.minus(snapshot.capital)),
+        toNumber(startOfDayCapital),
+      );
     }
 
     state = workingToState(options, w, last.timestamp, state);

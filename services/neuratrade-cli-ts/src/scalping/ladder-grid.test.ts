@@ -167,6 +167,98 @@ describe("runLadderGridBacktest", () => {
     expect(result.totalReturnPct).toBeGreaterThan(0);
   });
 
+  it("does not take profit on the same ambiguous candle as a new entry", () => {
+    const candles: CandleLike[] = [
+      {
+        open: 100,
+        high: 100,
+        low: 100,
+        close: 100,
+        volume: 1,
+        timestamp: new Date(0),
+      },
+      {
+        open: 100,
+        high: 100.2,
+        low: 98.9,
+        close: 99,
+        volume: 1,
+        timestamp: new Date(15 * 60 * 1000),
+      },
+    ];
+    const conservative = runLadderGridBacktest(candles, {
+      ...baseOpts,
+      gridStepPct: 1,
+      slippageBps: 0,
+    });
+    expect(conservative.trades[0]?.exitReason).toBe("mark_to_market");
+
+    const permissive = runLadderGridBacktest(candles, {
+      ...baseOpts,
+      gridStepPct: 1,
+      slippageBps: 0,
+      conservativeIntrabar: false,
+    });
+    expect(permissive.trades[0]?.exitReason).toBe("target");
+  });
+
+  it("uses stopRatio and maxHoldBars in the backtest", () => {
+    const stopResult = runLadderGridBacktest(
+      [
+        {
+          ...makeOscillatingCandles(1)[0],
+          open: 100,
+          high: 100,
+          low: 100,
+          close: 100,
+        },
+        {
+          ...makeOscillatingCandles(1)[0],
+          open: 100,
+          high: 100,
+          low: 97,
+          close: 98,
+        },
+      ],
+      {
+        ...baseOpts,
+        gridStepPct: 1,
+        gridMaxGrids: 10,
+        slippageBps: 0,
+        stopRatio: 1,
+      },
+    );
+    expect(stopResult.trades[0]?.exitReason).toBe("stop");
+
+    const holdResult = runLadderGridBacktest(
+      [
+        {
+          ...makeOscillatingCandles(1)[0],
+          open: 100,
+          high: 100,
+          low: 100,
+          close: 100,
+        },
+        {
+          ...makeOscillatingCandles(1)[0],
+          open: 100,
+          high: 100,
+          low: 98.9,
+          close: 99,
+        },
+        {
+          ...makeOscillatingCandles(1)[0],
+          open: 99,
+          high: 99.2,
+          low: 98.8,
+          close: 99.1,
+        },
+      ],
+      { ...baseOpts, gridStepPct: 1, slippageBps: 0, maxHoldBars: 1 },
+    );
+    expect(holdResult.trades[0]?.exitReason).toBe("max_hold");
+  });
+
   it("multi-rung (N=2, N=3) scales fill capture per oscillation vs N=1", () => {
     // Generate wide oscillations so multiple rungs get touched
     const candles = makeOscillatingCandles(400, 100, 2.0);

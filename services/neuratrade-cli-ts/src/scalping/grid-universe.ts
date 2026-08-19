@@ -213,6 +213,10 @@ export interface GridUniverseOptions {
    * negative-expectancy single-position configs to OOS-passing profiles.
    */
   readonly engine?: "grid" | "ladder";
+  /** Ladder stop geometry used by both the walk-forward and gate. */
+  readonly ladderStopRatio?: number;
+  /** Ladder max-hold exit used by both the walk-forward and gate. */
+  readonly ladderMaxHoldBars?: number;
   /** Per-cycle deep-history fetch request budget (shared across gate candidates). */
   readonly deepFetchBudgetPerCycle?: number;
   /**
@@ -702,6 +706,9 @@ export function ladderGateScoredEligibility(
         chopGateAdxThreshold: chopGateAdx,
         targetRatio,
         onlyWithTrend: false,
+        stopRatio: options.ladderStopRatio ?? 0,
+        maxHoldBars: options.ladderMaxHoldBars ?? 0,
+        conservativeIntrabar: true,
       };
       if (!passesLadderTimeSplitGate(candles, ladder)) continue;
       if (tier === "readiness") {
@@ -920,6 +927,9 @@ function evaluateUniverseSymbol(
             slippageBps: options.slippageBps,
             trendFilterPeriod: options.trendFilterPeriod,
             leverage: 1,
+            stopRatio: options.ladderStopRatio ?? 0,
+            maxHoldBars: options.ladderMaxHoldBars ?? 0,
+            conservativeIntrabar: true,
           },
         })
       : runGridWalkForward(candles, {

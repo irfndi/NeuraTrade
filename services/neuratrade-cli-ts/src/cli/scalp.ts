@@ -3315,6 +3315,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
         productType,
         marginMode,
         maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+        // Keep gross market exposure bounded separately from the collateral
+        // cap enforced by RiskGuard. The latter is leverage-aware; this cap is
+        // not, so a future leverage change cannot silently expand notional.
+        maxNotionalPct: 100,
         // Fully dynamic leverage: the engine sizes leverage from the account
         // size + per-position budget (accountScaledLeverageCap), ignoring any
         // static --leverage. No fixed leverage in the config.
@@ -5212,6 +5216,8 @@ export const gridUniverseScanCommand = Command.make(
     dataSource: gridUniverseDataSourceOption,
     engine: gridUniverseEngineOption,
     rungs: gridUniverseRungsOption,
+    ladderStopRatio: stopRatioOption,
+    ladderMaxHoldBars: maxHoldBarsOption,
   },
   (args) =>
     Effect.gen(function* () {
@@ -5307,6 +5313,8 @@ export const gridUniverseScanCommand = Command.make(
         // modeled conservatively by default (a wick touch is not a fill).
         dataSource: args.dataSource,
         fillModel: args.dataSource === "db-mainnet" ? "conservative" : "wick",
+        ladderStopRatio: args.ladderStopRatio,
+        ladderMaxHoldBars: args.ladderMaxHoldBars,
       };
 
       const targetFillsPerDay = Option.isSome(args.targetFillsPerDay)

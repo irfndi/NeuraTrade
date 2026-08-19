@@ -48,6 +48,8 @@ interface LadderStateJson {
   readonly onlyWithTrend: boolean;
   readonly chopGateAdxThreshold: number;
   readonly maxHoldBars: number;
+  readonly stopRatio?: number;
+  readonly conservativeIntrabar?: boolean;
   readonly lastTimestamp: string | null;
   readonly updatedAt: string;
 }
@@ -1619,6 +1621,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           onlyWithTrend: parsed.onlyWithTrend,
           chopGateAdxThreshold: parsed.chopGateAdxThreshold,
           maxHoldBars: parsed.maxHoldBars,
+          stopRatio: parsed.stopRatio ?? 0,
+          conservativeIntrabar: parsed.conservativeIntrabar ?? true,
           lastTimestamp: parsed.lastTimestamp
             ? new Date(parsed.lastTimestamp)
             : null,

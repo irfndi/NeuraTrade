@@ -58,6 +58,12 @@ export interface LadderOptions {
   readonly onlyWithTrend?: boolean;
   /** TP distance as multiple of grid step (default 1.0). */
   readonly targetRatio?: number;
+  /** Step-relative stop distance from the nearest filled rung (0 = legacy boundary). */
+  readonly stopRatio?: number;
+  /** Maximum bars a filled rung may remain open (0 = disabled). */
+  readonly maxHoldBars?: number;
+  /** Avoid assuming that an OHLC candle hits a newly entered rung's target. */
+  readonly conservativeIntrabar?: boolean;
   /** Fraction of equity allocated across all rungs (default 1.0 = 100%). */
   readonly positionFraction?: number;
   /**
@@ -88,7 +94,12 @@ export interface LadderTrade {
   readonly pnlQuote?: number;
   readonly win: boolean;
   readonly isLiquidation: boolean;
-  readonly exitReason?: "target" | "stop" | "liquidation" | "mark_to_market";
+  readonly exitReason?:
+    | "target"
+    | "stop"
+    | "liquidation"
+    | "max_hold"
+    | "mark_to_market";
 }
 
 export interface LadderResult {
@@ -177,6 +188,9 @@ export function runLadderGridBacktest(
   const leverage = Math.max(1, opts.leverage ?? 1);
   const positionFraction = Math.max(0, Math.min(1, opts.positionFraction ?? 1));
   const targetRatio = Math.max(0.001, opts.targetRatio ?? 1);
+  const stopRatio = Math.max(0, opts.stopRatio ?? 0);
+  const maxHoldBars = Math.max(0, Math.floor(opts.maxHoldBars ?? 0));
+  const conservativeIntrabar = opts.conservativeIntrabar ?? true;
   const makerFeePerSide = (opts.feePct ?? 0) / 100;
   const takerFeePerSide = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
   const targetFee = makerFeePerSide * 2;
@@ -235,7 +249,7 @@ export function runLadderGridBacktest(
   const closeRung = (
     r: Rung,
     exitPrice: number,
-    reason: "target" | "stop" | "liquidation" | "mark_to_market",
+    reason: "target" | "stop" | "liquidation" | "max_hold" | "mark_to_market",
     bar: number,
   ): void => {
     const isLiquidation = reason === "liquidation";
@@ -280,7 +294,7 @@ export function runLadderGridBacktest(
   const closeAll = (
     rungs: Rung[],
     exitPrice: number,
-    reason: "target" | "stop" | "liquidation" | "mark_to_market",
+    reason: "target" | "stop" | "liquidation" | "max_hold" | "mark_to_market",
     bar: number,
   ): boolean => {
     let anyLoss = false;
@@ -396,7 +410,11 @@ export function runLadderGridBacktest(
       }
       const filledLong = longRungs.filter((r) => r.filled);
       if (filledLong.length > 0) {
-        const boundary = longBase - step * (N + opts.gridMaxGrids);
+        const boundary =
+          stopRatio > 0
+            ? Math.min(...filledLong.map((r) => r.entryPrice)) -
+              step * stopRatio
+            : longBase - step * (N + opts.gridMaxGrids);
         const longLiqs = filledLong
           .map((r) => liquidationPrice("long", r.entryPrice, leverage))
           .filter((p) => p > 0);
@@ -425,8 +443,17 @@ export function runLadderGridBacktest(
               continue;
             }
             const target = r.entryPrice + r.step * targetRatio;
-            if (c.high >= target) {
+            const targetReached =
+              c.high >= target && (!conservativeIntrabar || r.entryBar < i);
+            if (targetReached) {
               closeRung(r, target / slippage, "target", i);
+              anyFillClosed = true;
+            } else if (
+              maxHoldBars > 0 &&
+              i - r.entryBar >= maxHoldBars &&
+              r.entryBar < i
+            ) {
+              closeRung(r, c.close / slippage, "max_hold", i);
               anyFillClosed = true;
             } else {
               stillOpen.push(r);
@@ -462,7 +489,11 @@ export function runLadderGridBacktest(
       }
       const filledShort = shortRungs.filter((r) => r.filled);
       if (filledShort.length > 0) {
-        const boundary = shortBase + step * (N + opts.gridMaxGrids);
+        const boundary =
+          stopRatio > 0
+            ? Math.max(...filledShort.map((r) => r.entryPrice)) +
+              step * stopRatio
+            : shortBase + step * (N + opts.gridMaxGrids);
         const shortLiqs = filledShort
           .map((r) => liquidationPrice("short", r.entryPrice, leverage))
           .filter((p) => p > 0);
@@ -490,8 +521,17 @@ export function runLadderGridBacktest(
               continue;
             }
             const target = r.entryPrice - r.step * targetRatio;
-            if (c.low <= target) {
+            const targetReached =
+              c.low <= target && (!conservativeIntrabar || r.entryBar < i);
+            if (targetReached) {
               closeRung(r, target * slippage, "target", i);
+              anyFillClosed = true;
+            } else if (
+              maxHoldBars > 0 &&
+              i - r.entryBar >= maxHoldBars &&
+              r.entryBar < i
+            ) {
+              closeRung(r, c.close * slippage, "max_hold", i);
               anyFillClosed = true;
             } else {
               stillOpen.push(r);
