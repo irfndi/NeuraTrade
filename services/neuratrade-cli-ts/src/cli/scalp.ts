@@ -5442,10 +5442,11 @@ export const gridUniverseScanCommand = Command.make(
           }
 
           // Only ever write the whitelist file after a successful scan with
-          // survivors: a failed/empty scan must not truncate the file the
-          // demo soak consumes.
-          if (outputPath && survivors.length > 0) {
-            const watchlistJson = survivors.map((e) => ({
+          // selected rows: a failed/empty scan must not truncate the file the
+          // demo soak consumes, and unselected eligible rows must not bypass
+          // the account-sized portfolio cap.
+          if (outputPath && selected.length > 0) {
+            const watchlistJson = selected.map((e) => ({
               symbol: e.symbol,
               exchange: args.exchange,
               returnPct: e.walkForward.aggregateReturnPct,
