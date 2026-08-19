@@ -4,7 +4,19 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_dir/.."
 
-exec "${BUN_BIN:-bun}" run index.ts scalp grid-universe-scan \
+bun_bin="${BUN_BIN:-}"
+if [[ -z "$bun_bin" ]]; then
+  bun_bin="$(command -v bun 2>/dev/null || true)"
+fi
+if [[ -z "$bun_bin" && -x /root/.bun/bin/bun ]]; then
+  bun_bin="/root/.bun/bin/bun"
+fi
+if [[ -z "$bun_bin" ]]; then
+  echo "ladder research: Bun executable not found" >&2
+  exit 127
+fi
+
+exec "$bun_bin" run index.ts scalp grid-universe-scan \
   --exchange bybit-futures \
   --timeframe 15m \
   --data-source db-mainnet \
