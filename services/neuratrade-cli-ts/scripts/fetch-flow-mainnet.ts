@@ -33,6 +33,7 @@ const PAGE = 1000;
 // backfill from taking several hours. Inserts remain synchronous transactions
 // on this single SQLite connection and are resumable via INSERT OR IGNORE.
 const SYMBOL_CONCURRENCY = 2;
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
 const db = new Database(`${HOME}/data/neuratrade.db`);
 db.exec("PRAGMA journal_mode = WAL;");
@@ -108,6 +109,32 @@ function pairId(symbol: string): number {
     )
     .run(EX_ID, symbol, base, quote);
   return Number(info.lastInsertRowid);
+}
+
+function hasCandleCoverage(
+  symbol: string,
+  startMs: number,
+  endMs: number,
+): boolean {
+  const pair = pairId(symbol);
+  const row = db
+    .query(
+      `SELECT COUNT(*) AS count, MIN(timestamp) AS oldest, MAX(timestamp) AS newest
+       FROM ohlcv_data
+       WHERE exchange_id = ? AND trading_pair_id = ? AND timeframe = '5m'`,
+    )
+    .get(EX_ID, pair) as {
+    count: number;
+    oldest: string | null;
+    newest: string | null;
+  };
+  if (row.oldest === null || row.newest === null) return false;
+  const expected = Math.floor((endMs - startMs) / FIVE_MINUTES_MS);
+  return (
+    row.count >= expected * 0.98 &&
+    new Date(row.oldest).getTime() <= startMs + 24 * 3600 * 1000 &&
+    new Date(row.newest).getTime() >= endMs - 24 * 3600 * 1000
+  );
 }
 
 const insCandle = db.prepare(
@@ -293,7 +320,10 @@ async function main() {
       const bSym = toBitgetSymbol(rawSymbol);
       console.log(`\n== ${bSym} ==`);
       try {
-        const c = await fetchCandles(symbol, startMs);
+        const c = hasCandleCoverage(symbol, startMs, now)
+          ? 0
+          : await fetchCandles(symbol, startMs);
+        if (c === 0) console.log("  klines skipped: cached range complete");
         totalCandles += c;
         console.log(`  klines saved: ${c}`);
         const oi = await fetchOi(symbol, startMs, now);
