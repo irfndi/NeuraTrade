@@ -439,6 +439,25 @@ export const maxHoldBarsOption = Options.integer("max-hold-bars").pipe(
   ),
 );
 
+export const configMismatchActionOption = Options.choice(
+  "config-mismatch-action",
+  ["hold", "force-reseed"],
+).pipe(
+  Options.withDefault("hold" as const),
+  Options.withDescription(
+    "Ladder: how to resolve a persisted state whose config no longer matches the current options while rungs are open. hold = freeze until manually reset (default); force-reseed = close open rungs at the current close and re-seed fresh so a whitelist edit self-heals",
+  ),
+);
+
+export const maxPositionDrawdownPctOption = Options.float(
+  "max-position-drawdown-pct",
+).pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Ladder: force-close an open rung at the current close when its unrealized loss exceeds this percent of entry (0 = disabled). A per-position guard so one leveraged loser cannot sink the book before the ladder-stop boundary triggers",
+  ),
+);
+
 export const volatilityTargetAnnualPctOption = Options.float(
   "volatility-target-annual-pct",
 ).pipe(

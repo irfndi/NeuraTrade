@@ -94,6 +94,23 @@ export interface LadderPaperTradingOptions {
    * static --leverage and the account-scaled cap.
    */
   readonly fullyDynamicLeverage?: boolean;
+  /**
+   * How to resolve a persisted state whose config no longer matches the
+   * current options while rungs are open. Default "hold" refuses to trade
+   * stale geometry (the ladder freezes until manually reset). "force-reseed"
+   * closes open rungs at the current close and re-seeds fresh — used by the
+   * ladder soak so a whitelist edit (e.g. a gridMaxGrids change) self-heals
+   * instead of deadlocking a symbol with an unmanaged position.
+   */
+  readonly configMismatchAction?: "hold" | "force-reseed";
+  /**
+   * When > 0, an open rung whose UNREALIZED loss exceeds this percent of its
+   * entry (a single leveraged position bleeding too much) is force-closed at
+   * the current close before the ladder-stop boundary can take it out deeper.
+   * 0 disables the per-position guard (default). Mirrors the account-level
+   * maxDrawdownPct but scoped to one position.
+   */
+  readonly maxPositionDrawdownPct?: number;
   /** Exchange contract constraints for orderable live sizing. */
   readonly contractSpecs?: ContractSizeSpec;
 }
@@ -367,6 +384,7 @@ export function advanceLadderBar(
         .map((r) => liquidationPrice("long", r.entryPrice, leverage))
         .filter((p) => p > 0);
       const liq = longLiqs.length > 0 ? Math.max(...longLiqs) : 0;
+      const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
       if (liq > 0 && c.low <= liq) {
         for (const r of filledLong)
           closeRung(w, r, liq * slippage, "liquidation", opts, events);
@@ -381,6 +399,34 @@ export function advanceLadderBar(
         w.longBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
+      } else if (
+        maxPosDd > 0 &&
+        filledLong.some(
+          (r) =>
+            r.entryPrice > 0 &&
+            ((r.entryPrice - c.close) / r.entryPrice) * 100 > maxPosDd,
+        )
+      ) {
+        // Per-position max-drawdown kill: a single leveraged rung bleeding
+        // past the threshold is closed at the current close before the wider
+        // ladder-stop boundary can take it out deeper (or a second rung
+        // compounds the loss). Scoped to the losing rungs only.
+        const killed = filledLong.filter(
+          (r) =>
+            r.entryPrice > 0 &&
+            ((r.entryPrice - c.close) / r.entryPrice) * 100 > maxPosDd,
+        );
+        const survivors = filledLong.filter((r) => !killed.includes(r));
+        for (const r of killed)
+          closeRung(w, r, c.close / slippage, "stop", opts, events);
+        if (survivors.length === 0) {
+          w.longRungs = [];
+          w.longBase = 0;
+          if (opts.gridPauseAfterLossBars > 0)
+            w.paused = opts.gridPauseAfterLossBars;
+        } else {
+          w.longRungs = survivors;
+        }
       } else {
         const stillOpen: LadderPaperRungState[] = [];
         let anyFillClosed = false;
@@ -443,6 +489,7 @@ export function advanceLadderBar(
         .map((r) => liquidationPrice("short", r.entryPrice, leverage))
         .filter((p) => p > 0);
       const liq = shortLiqs.length > 0 ? Math.min(...shortLiqs) : 0;
+      const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
       if (liq > 0 && c.high >= liq) {
         for (const r of filledShort)
           closeRung(w, r, liq / slippage, "liquidation", opts, events);
@@ -457,6 +504,32 @@ export function advanceLadderBar(
         w.shortBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
+      } else if (
+        maxPosDd > 0 &&
+        filledShort.some(
+          (r) =>
+            r.entryPrice > 0 &&
+            ((c.close - r.entryPrice) / r.entryPrice) * 100 > maxPosDd,
+        )
+      ) {
+        // Per-position max-drawdown kill (short mirror): a leveraged short
+        // rung bleeding past the threshold is closed at the current close.
+        const killed = filledShort.filter(
+          (r) =>
+            r.entryPrice > 0 &&
+            ((c.close - r.entryPrice) / r.entryPrice) * 100 > maxPosDd,
+        );
+        const survivors = filledShort.filter((r) => !killed.includes(r));
+        for (const r of killed)
+          closeRung(w, r, c.close * slippage, "stop", opts, events);
+        if (survivors.length === 0) {
+          w.shortRungs = [];
+          w.shortBase = 0;
+          if (opts.gridPauseAfterLossBars > 0)
+            w.paused = opts.gridPauseAfterLossBars;
+        } else {
+          w.shortRungs = survivors;
+        }
       } else {
         const stillOpen: LadderPaperRungState[] = [];
         let anyFillClosed = false;
@@ -882,6 +955,63 @@ export function runLadderPaperTradingIteration(
       if (isFlat(state)) {
         // Flat state under different params: re-seed fresh so the next entry
         // trades the current rung geometry.
+        state = freshLadderState(options);
+        yield* repo.saveLadderState(state);
+      } else if (options.configMismatchAction === "force-reseed") {
+        // Open ladder under different params with force-reseed: close any
+        // open rungs at the current close (a market-ish exit on stale
+        // geometry) and re-seed fresh with the new config. Without this an
+        // open ladder under a changed whitelist is deadlocked forever — the
+        // engine refuses to advance, so the stale rung never closes and the
+        // real exchange position it mirrors stays unmanaged (regression
+        // 2026-08-19: FARTCOIN frozen at grids=2 with a filled rung while
+        // the whitelist moved to grids=3).
+        const gateway = yield* MarketDataGateway;
+        const candles = yield* gateway
+          .fetchOHLCV(options.exchange, options.symbol, options.timeframe, 2)
+          .pipe(Effect.result);
+        const closePrice =
+          candles._tag === "Success" && candles.success.length > 0
+            ? candles.success[candles.success.length - 1].close
+            : null;
+        if (closePrice !== null && closePrice > 0) {
+          const w = stateToWorking(state);
+          const events: MutableBarEvents = { fills: [], closes: [] };
+          for (const side of ["long", "short"] as const) {
+            const rungs = side === "long" ? w.longRungs : w.shortRungs;
+            for (const r of rungs) {
+              if (r.filled) {
+                closeRung(w, r, closePrice, "max_hold", options, events);
+              }
+            }
+            if (side === "long") w.longRungs = [];
+            else w.shortRungs = [];
+          }
+          w.longBase = 0;
+          w.shortBase = 0;
+          const closed = events.closes.length;
+          // Re-seed with the NEW config but carry the realized capital forward
+          // (workingToState would keep the stale config fields via `previous`).
+          state = {
+            ...freshLadderState(options),
+            capital: w.capital,
+            peakCapital: Decimal.max(w.peak, money(options.initialCapital)),
+            totalWins: w.totalWins,
+            totalLosses: w.totalLosses,
+            lastTimestamp: state.lastTimestamp,
+          };
+          yield* repo.saveLadderState(state);
+          if (closed > 0) {
+            return {
+              action: "closed" as const,
+              capital: toNumber(state.capital),
+              peakCapital: toNumber(state.peakCapital),
+              openRungs: 0,
+              closedThisIteration: closed,
+              note: `config mismatch on open ladder — force-closed ${closed} stale rung(s) at ${closePrice}, re-seed next bar`,
+            };
+          }
+        }
         state = freshLadderState(options);
         yield* repo.saveLadderState(state);
       } else {

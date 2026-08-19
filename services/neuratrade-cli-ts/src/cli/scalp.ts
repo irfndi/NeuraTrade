@@ -240,6 +240,8 @@ import {
   targetRatioOption,
   chopGateAdxOption,
   maxHoldBarsOption,
+  configMismatchActionOption,
+  maxPositionDrawdownPctOption,
   volatilityTargetAnnualPctOption,
   noAtrOption,
   scanEntryOrdersOption,
@@ -2344,6 +2346,10 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly replayBars: number;
   /** Ladder: force-close a rung held longer than this many bars (0 = off). */
   readonly maxHoldBars: number;
+  /** Ladder: how to resolve a config mismatch with open rungs. */
+  readonly configMismatchAction: "hold" | "force-reseed";
+  /** Ladder: force-close an open rung whose unrealized loss exceeds this % (0 = off). */
+  readonly maxPositionDrawdownPct: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
@@ -2607,6 +2613,8 @@ export const paperTradeCommand = Command.make(
     targetRatio: targetRatioOption,
     chopGateAdx: chopGateAdxOption,
     maxHoldBars: maxHoldBarsOption,
+    configMismatchAction: configMismatchActionOption,
+    maxPositionDrawdownPct: maxPositionDrawdownPctOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
@@ -3295,6 +3303,8 @@ function paperTradeProgram(args: PaperTradeArgs) {
         targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
         chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
         maxHoldBars: args.maxHoldBars ?? 0,
+        configMismatchAction: args.configMismatchAction,
+        maxPositionDrawdownPct: args.maxPositionDrawdownPct,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
         isLive: args.live,
         productType,

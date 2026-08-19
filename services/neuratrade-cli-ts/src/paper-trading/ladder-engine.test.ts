@@ -25,6 +25,7 @@ import {
   configMatchesLadderState,
   type LadderPaperTradingOptions,
 } from "./ladder-engine.js";
+import type { LadderPaperState } from "./types.js";
 
 function candle(
   o: number,
@@ -707,5 +708,169 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
         baseOptions({ rungs: 1, gridStepPct: 0.5 }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("ladder config-mismatch force-reseed", () => {
+  it("force-closes open rungs and re-seeds when config changed and force-reseed is set", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repo.ensureTables());
+    // State persisted under the OLD config (gridMaxGrids 2) with a filled rung.
+    const staleOpts = baseOptions({ gridMaxGrids: 2 });
+    const staleState: LadderPaperState = {
+      ...freshLadderState(staleOpts),
+      longRungs: [
+        {
+          rungIndex: 1,
+          side: "long",
+          level: 99,
+          step: 1,
+          filled: true,
+          entryPrice: 99,
+          entryBar: 1,
+          entryTimestamp: 1000 * 60 * 15,
+        },
+      ],
+      longBase: 100,
+      capital: money(99),
+      peakCapital: money(100),
+    };
+    await Effect.runPromise(repo.saveLadderState(staleState));
+
+    // New options: gridMaxGrids 3 (the whitelist changed) + force-reseed.
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      gridMaxGrids: 3,
+      configMismatchAction: "force-reseed",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "not used" } as never),
+      // Current close 97 — a loss vs the 99 entry.
+      fetchOHLCV: () =>
+        Effect.succeed([candle(100, 100, 100, 100, 0), candle(100, 99, 97, 97, 1)] as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "not used" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+      ),
+    );
+
+    expect(result.action).toBe("closed");
+    expect(result.closedThisIteration).toBe(1);
+    expect(result.openRungs).toBe(0);
+    expect(result.note).toContain("force-closed 1 stale rung");
+
+    // The persisted state must now match the NEW config (re-seeded fresh).
+    const saved = await Effect.runPromise(
+      repo.getLadderState(opts.exchange, opts.symbol, opts.timeframe),
+    );
+    expect(configMatchesLadderState(saved!, opts)).toBe(true);
+  });
+
+  it("still holds (does not force-close) when the default action is used", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repo.ensureTables());
+    const staleOpts = baseOptions({ gridMaxGrids: 2 });
+    const staleState: LadderPaperState = {
+      ...freshLadderState(staleOpts),
+      longRungs: [
+        {
+          rungIndex: 1,
+          side: "long",
+          level: 99,
+          step: 1,
+          filled: true,
+          entryPrice: 99,
+          entryBar: 1,
+          entryTimestamp: 1000 * 60 * 15,
+        },
+      ],
+      longBase: 100,
+      capital: money(99),
+      peakCapital: money(100),
+    };
+    await Effect.runPromise(repo.saveLadderState(staleState));
+
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      gridMaxGrids: 3, // mismatch, but default action = hold
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "not used" } as never),
+      fetchOHLCV: () =>
+        Effect.succeed([candle(100, 100, 100, 100, 0), candle(100, 99, 97, 97, 1)] as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "not used" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "not used" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.openRungs).toBe(1);
+    expect(result.note).toContain("config mismatch on open ladder");
+  });
+});
+
+describe("ladder per-position max-drawdown kill", () => {
+  it("force-closes a bleeding long rung past the per-position drawdown threshold", () => {
+    const opts = baseOptions({
+      leverage: 7,
+      rungs: 1,
+      maxPositionDrawdownPct: 3,
+    });
+    // rung1 fills @ 99 on bar 1; bar 2's close drops 4% below entry (95.1)
+    // => per-position drawdown kill fires (before the ladder boundary at 92).
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.3, 1),
+      candle(99.3, 99.3, 95.0, 95.1, 2),
+    ];
+    const w = freshWorkingState(100);
+    advanceLadderBar(w, candles, 1, opts, null);
+    const events = advanceLadderBar(w, candles, 2, opts, null);
+    expect(events.closes).toHaveLength(1);
+    expect(events.closes[0].reason).toBe("stop");
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(0);
+    // The loss is capped by the close price (~4% on the rung's capital share
+    // at 7x leverage), NOT the full liquidation wipe — the guard's whole
+    // point is to exit before the ladder stop/liquidation takes more.
+    expect(toNumber(w.capital)).toBeGreaterThan(60);
+    expect(toNumber(w.capital)).toBeLessThan(100);
+  });
+
+  it("does not kill when the drawdown stays under the threshold", () => {
+    const opts = baseOptions({
+      leverage: 7,
+      rungs: 1,
+      maxPositionDrawdownPct: 3,
+    });
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 99.5, 98.9, 99.3, 1),
+      // close 98 = 1% below entry: under the 3% threshold, rung stays open.
+      candle(99.3, 99.3, 97.5, 98.0, 2),
+    ];
+    const w = freshWorkingState(100);
+    advanceLadderBar(w, candles, 1, opts, null);
+    const events = advanceLadderBar(w, candles, 2, opts, null);
+    expect(events.closes).toHaveLength(0);
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(1);
   });
 });
