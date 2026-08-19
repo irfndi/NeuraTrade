@@ -126,12 +126,14 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
   const bSym = toBitgetSymbol(symbol);
   let startTime: Date | undefined;
   let saved = 0;
+  let fetched = 0;
   for (let page = 0; page < 600; page++) {
     await sleep(REQUEST_DELAY_MS);
     const batch = await withRetry(`kline ${bSym} page ${page}`, () =>
       run(Bybit.fetchOHLCV(symbol, "5m", PAGE, startTime, MAINNET)),
     );
     if (batch === undefined || batch.length === 0) break;
+    fetched += batch.length;
     // Bybit clamps limit to 200/page and returns DESC — the cursor must
     // advance from the page's OLDEST bar (batch.at(-1)), not batch[0]
     // (the newest), or every page returns the same window forever.
@@ -157,9 +159,9 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
     saved += inserted;
     if (oldestTs < startMs) break;
     startTime = new Date(oldestTs - 1);
-    if (saved % 20000 < PAGE) {
+    if (page === 0 || page % 20 === 0 || oldestTs < startMs) {
       console.log(
-        `  klines: ${saved} (${new Date(oldestTs).toISOString().slice(0, 10)})`,
+        `  klines fetched=${fetched} saved=${saved} (${new Date(oldestTs).toISOString().slice(0, 10)})`,
       );
     }
   }

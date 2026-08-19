@@ -109,10 +109,12 @@ export function selectFlowUniverse(
     const turnover24h = volumes[symbol];
     if (turnover24h === undefined) continue;
     const instrument = bySymbol.get(symbol);
+    if (!instrument?.listedTime) continue;
+    if (instrument.status !== undefined && instrument.status !== "Trading") {
+      continue;
+    }
     const ageDays =
-      instrument?.listedTime !== undefined
-        ? (now - instrument.listedTime) / MS_PER_DAY
-        : 0;
+      (now - instrument.listedTime) / MS_PER_DAY;
     ranked.push({
       symbol,
       turnover24h,
