@@ -96,6 +96,7 @@ import {
   type LadderPaperIterationResult,
   type LadderPaperTradingOptions,
 } from "../paper-trading/ladder-engine.js";
+import { bybitSnapshotCommand } from "./bybit-snapshot.js";
 import {
   freshFlowTradeState,
   iterateFlowTrade,
@@ -6351,7 +6352,7 @@ function flowTradeProgram(args: FlowTradeArgs) {
 
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|parity-replay|flow-backtest|flow-universe|flow-record|flow-trade --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|bybit-snapshot|parity-replay|flow-backtest|flow-universe|flow-record|flow-trade --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -6366,6 +6367,7 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     walkForwardCommand,
     readinessCommand,
     demoReadinessCommand,
+    bybitSnapshotCommand,
     parityReplayCommand,
     gridUniverseScanCommand,
     watchlistCommand,

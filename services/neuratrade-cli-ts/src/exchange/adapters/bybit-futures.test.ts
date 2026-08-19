@@ -65,15 +65,17 @@ function makeStubClient(): BybitClientImpl {
         {
           symbol: "BTCUSDT",
           side: "Buy",
-          size: "0.5",
-          avgPrice: "66000",
-          unrealisedPnl: "200",
+        size: "0.5",
+        avgPrice: "66000",
+        markPrice: "66400",
+        unrealisedPnl: "200",
           liqPrice: "60000",
           leverage: "10",
           tradeMode: 0,
           positionIdx: 0,
         },
       ]),
+    getClosedPnl: () => Effect.succeed([]),
     placeOrder: (order) =>
       Effect.sync(() => {
         lastOrder = order;

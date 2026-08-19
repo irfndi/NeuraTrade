@@ -146,12 +146,29 @@ export interface BybitPosition {
   readonly side: BybitOrderSide;
   readonly size: string;
   readonly avgPrice: string;
+  readonly markPrice: string;
   readonly unrealisedPnl: string;
   readonly liqPrice: string;
   readonly leverage: string;
   /** 0 = cross, 1 = isolated. */
   readonly tradeMode: number;
   readonly positionIdx: number;
+}
+
+/** Recent closed-position PnL row from Bybit account history. */
+export interface BybitClosedPnl {
+  readonly symbol: string;
+  readonly side: BybitOrderSide;
+  readonly orderId: string;
+  readonly closedSize: string;
+  readonly avgEntryPrice: string;
+  readonly avgExitPrice: string;
+  readonly closedPnl: string;
+  readonly openFee: string;
+  readonly closeFee: string;
+  readonly fillCount: string;
+  readonly createdTime: string;
+  readonly updatedTime: string;
 }
 
 export interface BybitOrderRequest {
@@ -207,6 +224,7 @@ export type BybitRequestPayload = Record<
   string,
   string | number | boolean | undefined
 >;
+type BybitQuery = Record<string, string | number>;
 
 /** Headers produced by bybitAuthHeaders. */
 type BybitAuthHeaders = {
@@ -278,11 +296,27 @@ const BybitPositionSchema = z.object({
   side: z.enum(["Buy", "Sell"]).catch("Buy"),
   size: tolerantString("0"),
   avgPrice: tolerantString("0"),
+  markPrice: tolerantString("0"),
   unrealisedPnl: tolerantString("0"),
   liqPrice: tolerantString("0"),
   leverage: tolerantString("1"),
   tradeMode: z.number().catch(0),
   positionIdx: z.number().catch(0),
+});
+
+const BybitClosedPnlSchema = z.object({
+  symbol: tolerantString(""),
+  side: z.enum(["Buy", "Sell"]).catch("Buy"),
+  orderId: tolerantString(""),
+  closedSize: tolerantString("0"),
+  avgEntryPrice: tolerantString("0"),
+  avgExitPrice: tolerantString("0"),
+  closedPnl: tolerantString("0"),
+  openFee: tolerantString("0"),
+  closeFee: tolerantString("0"),
+  fillCount: tolerantString("0"),
+  createdTime: tolerantString("0"),
+  updatedTime: tolerantString("0"),
 });
 
 const BybitOrderSchema = z
@@ -332,6 +366,9 @@ const BybitWalletBalanceSchema = z.object({
 });
 const BybitPositionListSchema = z.object({
   list: z.array(BybitPositionSchema).optional(),
+});
+const BybitClosedPnlListSchema = z.object({
+  list: z.array(BybitClosedPnlSchema).optional(),
 });
 const BybitOrderListSchema = z.object({
   list: z.array(BybitOrderSchema).optional(),
@@ -546,8 +583,14 @@ export interface BybitClientImpl {
     BybitClientError
   >;
   readonly getPositions: (
-    symbol: string,
+    symbol?: string,
   ) => Effect.Effect<ReadonlyArray<BybitPosition>, BybitClientError>;
+  readonly getClosedPnl: (args?: {
+    readonly symbol?: string;
+    readonly limit?: number;
+    readonly startTime?: number;
+    readonly endTime?: number;
+  }) => Effect.Effect<ReadonlyArray<BybitClosedPnl>, BybitClientError>;
   readonly placeOrder: (
     order: BybitOrderRequest,
   ) => Effect.Effect<BybitOrderAck, BybitClientError>;
@@ -557,7 +600,7 @@ export interface BybitClientImpl {
   }) => Effect.Effect<BybitOrder, BybitClientError>;
   /** All resting open orders for a symbol (realtime endpoint, no orderId). */
   readonly getOpenOrders: (
-    symbol: string,
+    symbol?: string,
   ) => Effect.Effect<ReadonlyArray<BybitOrder>, BybitClientError>;
   readonly cancelOrder: (args: {
     symbol: string;
@@ -656,12 +699,29 @@ function makeBybitClientImpl(
         { accountType: "UNIFIED" },
         BybitWalletBalanceSchema,
       ).pipe(Effect.map((result) => result.list?.[0]?.coin ?? [])),
-    getPositions: (symbol) =>
-      get(
+    getPositions: (symbol) => {
+      const query: BybitQuery = { category: "linear" };
+      if (symbol !== undefined) query.symbol = symbol;
+      return get(
         "/v5/position/list",
-        { category: "linear", symbol },
+        query,
         BybitPositionListSchema,
-      ).pipe(Effect.map((result) => result.list ?? [])),
+      ).pipe(Effect.map((result) => result.list ?? []));
+    },
+    getClosedPnl: (args = {}) => {
+      const query: BybitQuery = {
+        category: "linear",
+        limit: args.limit ?? 100,
+      };
+      if (args.symbol !== undefined) query.symbol = args.symbol;
+      if (args.startTime !== undefined) query.startTime = args.startTime;
+      if (args.endTime !== undefined) query.endTime = args.endTime;
+      return get(
+        "/v5/position/closed-pnl",
+        query,
+        BybitClosedPnlListSchema,
+      ).pipe(Effect.map((result) => result.list ?? []));
+    },
     placeOrder: (order) => {
       const body: BybitRequestPayload = {
         category: "linear",
@@ -707,12 +767,15 @@ function makeBybitClientImpl(
             },
         ),
       ),
-    getOpenOrders: (symbol) =>
-      get(
+    getOpenOrders: (symbol) => {
+      const query: BybitQuery = { category: "linear" };
+      if (symbol !== undefined) query.symbol = symbol;
+      return get(
         "/v5/order/realtime",
-        { category: "linear", symbol },
+        query,
         BybitOrderListSchema,
-      ).pipe(Effect.map((result) => result.list ?? [])),
+      ).pipe(Effect.map((result) => result.list ?? []));
+    },
     cancelOrder: ({ symbol, orderId }) =>
       post(
         "/v5/order/cancel",
