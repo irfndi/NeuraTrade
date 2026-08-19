@@ -612,7 +612,10 @@ export const backtestCommand = Command.make(
         Effect.tap((r) => printBacktestResult(r)),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg =
+              err instanceof Error
+                ? err.message
+                : String((err as { readonly reason?: unknown }).reason ?? err);
             yield* Console.error(`backtest failed: ${msg}`);
             return emptyResult(args.symbol);
           }),
@@ -1441,7 +1444,10 @@ export const optimizeCommand = Command.make(
         Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const msg = err instanceof Error ? err.message : String(err);
+            const msg =
+              err instanceof Error
+                ? err.message
+                : String((err as { readonly reason?: unknown }).reason ?? err);
             yield* Console.error(`optimize failed: ${msg}`);
             return [];
           }),
