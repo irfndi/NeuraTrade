@@ -692,6 +692,29 @@ describe("findBestLadderGridParams", () => {
     expect([0.3, 0.5]).toContain(best.gridStepPct);
     expect(best.result.totalTrades).toBeGreaterThan(0);
   });
+
+  it("prefers the highest-return combo among filter-eligible candidates", () => {
+    const candles = makeOscillatingCandles(200);
+    const best = findBestLadderGridParams(
+      candles,
+      {
+        rungs: [1],
+        gridStepPct: [0.3, 0.5],
+        gridMaxGrids: [2],
+        gridPauseAfterLossBars: [0],
+      },
+      {
+        feePct: 0.04,
+        slippageBps: 1,
+        initialCapital: 100,
+        trendFilterPeriod: 0,
+        leverage: 1,
+      },
+      (_trainCandles, candidate) => candidate.gridStepPct === 0.5,
+    );
+
+    expect(best.gridStepPct).toBe(0.5);
+  });
 });
 
 describe("runLadderGridWalkForward", () => {

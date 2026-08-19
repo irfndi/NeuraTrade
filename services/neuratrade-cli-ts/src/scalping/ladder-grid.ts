@@ -595,8 +595,10 @@ export function findBestLadderGridParams(
     LadderOptions,
     "rungs" | "gridStepPct" | "gridMaxGrids" | "gridPauseAfterLossBars"
   >,
+  candidateFilter?: LadderCandidateFilter,
 ): LadderOptions & { result: LadderResult } {
-  let best: (LadderOptions & { result: LadderResult }) | null = null;
+  let bestOverall: (LadderOptions & { result: LadderResult }) | null = null;
+  let bestEligible: (LadderOptions & { result: LadderResult }) | null = null;
 
   for (const rungs of searchSpace.rungs) {
     for (const gridStepPct of searchSpace.gridStepPct) {
@@ -610,14 +612,26 @@ export function findBestLadderGridParams(
             gridPauseAfterLossBars,
           };
           const result = runLadderGridBacktest(trainCandles, options);
-          if (!best || result.totalReturnPct > best.result.totalReturnPct) {
-            best = { ...options, result };
+          const candidate = { ...options, result };
+          if (
+            !bestOverall ||
+            result.totalReturnPct > bestOverall.result.totalReturnPct
+          ) {
+            bestOverall = candidate;
+          }
+          if (
+            candidateFilter?.(trainCandles, options, result) !== false &&
+            (!bestEligible ||
+              result.totalReturnPct > bestEligible.result.totalReturnPct)
+          ) {
+            bestEligible = candidate;
           }
         }
       }
     }
   }
 
+  const best = bestEligible ?? bestOverall;
   if (!best) {
     throw new Error(
       "Ladder grid search space produced no parameter combinations.",
@@ -626,6 +640,18 @@ export function findBestLadderGridParams(
 
   return best;
 }
+
+/**
+ * Optional training-window constraint used by universe selection. The
+ * selector still falls back to the unconstrained winner when no combination
+ * meets the constraint, allowing the downstream gate to reject it explicitly
+ * instead of silently producing an empty walk-forward result.
+ */
+export type LadderCandidateFilter = (
+  trainCandles: readonly CandleLike[],
+  candidate: LadderOptions,
+  result: LadderResult,
+) => boolean;
 
 export function runLadderGridWalkForward(
   candles: readonly CandleLike[],
@@ -642,10 +668,17 @@ export function runLadderGridWalkForward(
       | "gridPauseAfterLossBars"
       | "initialCapital"
     >;
+    readonly candidateFilter?: LadderCandidateFilter;
   },
 ): LadderWalkForwardResult {
-  const { trainWindow, testWindow, initialCapital, searchSpace, baseOptions } =
-    options;
+  const {
+    trainWindow,
+    testWindow,
+    initialCapital,
+    searchSpace,
+    baseOptions,
+    candidateFilter,
+  } = options;
 
   const windows: LadderWalkForwardWindow[] = [];
   let runningCapital = initialCapital;
@@ -670,7 +703,7 @@ export function runLadderGridWalkForward(
     const best = findBestLadderGridParams(trainCandles, searchSpace, {
       ...baseOptions,
       initialCapital: runningCapital,
-    });
+    }, candidateFilter);
 
     const testResult = runLadderGridBacktest(testCandles, {
       ...best,

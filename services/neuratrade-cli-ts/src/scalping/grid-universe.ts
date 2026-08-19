@@ -933,6 +933,25 @@ function evaluateUniverseSymbol(
             maxHoldBars: options.ladderMaxHoldBars ?? 0,
             conservativeIntrabar: true,
           },
+          // Select among training-window configurations that are executable
+          // under the same conservative fill model used by the downstream
+          // gate. Without this, the selector can choose a high-return,
+          // wide-step config and reject it later for having too few fills.
+          candidateFilter:
+            (options.minFillFrequencyPct ?? 0) > 0
+              ? (trainCandles, candidate) => {
+                  const minimum = options.minFillFrequencyPct ?? 0;
+                  return (
+                    computeFillFrequencyPct(
+                      trainCandles,
+                      candidate.gridStepPct,
+                      minimum,
+                    ) *
+                      fillModelMultiplier(options) >=
+                    minimum
+                  );
+                }
+              : undefined,
         })
       : runGridWalkForward(candles, {
           trainWindow: options.trainWindow,
