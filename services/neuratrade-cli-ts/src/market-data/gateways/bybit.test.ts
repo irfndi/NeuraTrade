@@ -249,6 +249,35 @@ describe("Bybit gateway", () => {
     expect(symbols).toEqual(["BTC/USDT", "ETH/USDT"]);
   });
 
+  it("fetchSymbols excludes non-USDT linear contracts", async () => {
+    mockFetch({
+      retCode: 0,
+      retMsg: "OK",
+      result: {
+        category: "linear",
+        list: [
+          {
+            symbol: "BTCUSDT",
+            baseCoin: "BTC",
+            quoteCoin: "USDT",
+            status: "Trading",
+          },
+          {
+            symbol: "BTCUSDC",
+            baseCoin: "BTC",
+            quoteCoin: "USDC",
+            status: "Trading",
+          },
+        ],
+        nextPageCursor: undefined,
+      },
+    });
+
+    await expect(Effect.runPromise(Bybit.fetchSymbols())).resolves.toEqual([
+      "BTC/USDT",
+    ]);
+  });
+
   it("fetch24hrVolumes keys quote volume by raw symbol", async () => {
     mockFetch(tickersFixture);
 

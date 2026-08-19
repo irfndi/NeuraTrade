@@ -2,13 +2,13 @@
 /**
  * One-time mainnet Bybit flow-research data fetch (Flow Ignition).
  *
- * For the top-40 flow universe (turnover/spread/age ranked, majors always
+ * For the top-100 flow universe (turnover/spread/age ranked, majors always
  * included): 12 months of 5m klines + 5m open-interest history + funding
  * rates, persisted to the market-data SQLite. Plain async + bun:sqlite —
  * no effect layers (one-off research tool).
  *
  * Usage:
- *   NEURATRADE_HOME=~/.neuratrade bun run scripts/fetch-flow-mainnet.ts [--months 12] [--symbols BTCUSDT,ETHUSDT]
+ *   NEURATRADE_HOME=~/.neuratrade bun run scripts/fetch-flow-mainnet.ts [--months=12] [--top-n=100] [--symbols=BTCUSDT,ETHUSDT]
  * Pacing 250ms/request, bounded retry on 429/5xx/transport, resumable.
  */
 import { Effect } from "effect";
@@ -24,6 +24,9 @@ const MONTHS = Number(
 const symbolOverride = process.argv
   .find((a) => a.startsWith("--symbols="))
   ?.split("=")[1];
+const topN = Number(
+  process.argv.find((a) => a.startsWith("--top-n="))?.split("=")[1] ?? 100,
+);
 const REQUEST_DELAY_MS = 250;
 const PAGE = 1000;
 
@@ -241,9 +244,29 @@ async function main() {
   const symbols: string[] = symbolOverride
     ? symbolOverride.split(",")
     : await (async () => {
-        const volumes = await run(Bybit.fetch24hrVolumes(MAINNET));
-        const instruments = await run(Bybit.fetchInstruments(MAINNET));
-        const ranked = selectFlowUniverse(volumes, instruments, undefined, {});
+        const [tickers, rawInstruments] = await Promise.all([
+          run(Bybit.fetchTickers(MAINNET)),
+          run(Bybit.fetchInstruments(MAINNET)),
+        ]);
+        const tickerBySymbol = new Map(
+          tickers.map((ticker) => [ticker.symbol, ticker]),
+        );
+        const volumes = Object.fromEntries(
+          tickers.map((ticker) => [ticker.symbol, ticker.turnover24h]),
+        );
+        const instruments = rawInstruments.map((instrument) => {
+          const ticker = tickerBySymbol.get(instrument.symbol);
+          return ticker === undefined
+            ? instrument
+            : {
+                ...instrument,
+                bid1Price: ticker.bid1Price,
+                ask1Price: ticker.ask1Price,
+              };
+        });
+        const ranked = selectFlowUniverse(volumes, instruments, undefined, {
+          topN,
+        });
         console.log(`universe: ${ranked.length} selected`);
         return ranked.map((e) => e.symbol);
       })();

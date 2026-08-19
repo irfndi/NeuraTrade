@@ -29,7 +29,7 @@ export interface FlowUniverseOptions {
   readonly maxSpreadBps?: number;
   /** Min contract age in days (default 30). */
   readonly minAgeDays?: number;
-  /** Max universe size (default 40). */
+  /** Max universe size (default 100). */
   readonly topN?: number;
   /**
    * Base coins always carried even below the cutoff (default
@@ -55,7 +55,7 @@ export interface FlowUniverseEntry {
 
 const DEFAULT_MAX_SPREAD_BPS = 6;
 const DEFAULT_MIN_AGE_DAYS = 30;
-const DEFAULT_TOP_N = 40;
+export const DEFAULT_FLOW_UNIVERSE_TOP_N = 100;
 const DEFAULT_ALWAYS_INCLUDE = ["BTC", "ETH", "SOL", "XRP", "DOGE"] as const;
 const MS_PER_DAY = 86_400_000;
 
@@ -67,7 +67,7 @@ export function selectFlowUniverse(
 ): readonly FlowUniverseEntry[] {
   const maxSpreadBps = opts.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
   const minAgeDays = opts.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
-  const topN = opts.topN ?? DEFAULT_TOP_N;
+  const topN = opts.topN ?? DEFAULT_FLOW_UNIVERSE_TOP_N;
   const alwaysInclude = opts.alwaysInclude ?? DEFAULT_ALWAYS_INCLUDE;
   const defaultSpreadBps = opts.defaultSpreadBps ?? maxSpreadBps;
   const now = Date.now();
@@ -77,8 +77,12 @@ export function selectFlowUniverse(
 
   const entries: FlowUniverseEntry[] = [];
   for (const [symbol, turnover24h] of Object.entries(volumes)) {
+    if (!symbol.toUpperCase().endsWith("USDT")) continue;
     const instrument = bySymbol.get(symbol);
     if (!instrument?.listedTime) continue; // age is unknowable without a listing time
+    if (instrument.status !== undefined && instrument.status !== "Trading") {
+      continue;
+    }
     const ageDays = (now - instrument.listedTime) / MS_PER_DAY;
     if (ageDays < minAgeDays) continue;
     const spreadBps = spreadInBps(instrument, defaultSpreadBps);

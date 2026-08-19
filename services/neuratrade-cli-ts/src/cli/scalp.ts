@@ -176,7 +176,7 @@ import {
   type FlowUniverseEntry,
 } from "../scalping/flow-universe.js";
 import {
-  fetch24hrVolumes,
+  fetchTickers,
   fetchInstruments,
 } from "../market-data/gateways/bybit.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
@@ -6125,8 +6125,26 @@ export const flowUniverseCommand = Command.make(
       } else {
         // Mainnet Bybit public market data (no auth needed).
         const baseUrl = "https://api.bybit.com";
-        volumes = yield* fetch24hrVolumes(baseUrl);
-        instruments = yield* fetchInstruments(baseUrl);
+        const [tickers, rawInstruments] = yield* Effect.all([
+          fetchTickers(baseUrl),
+          fetchInstruments(baseUrl),
+        ]);
+        const tickerBySymbol = new Map(
+          tickers.map((ticker) => [ticker.symbol, ticker]),
+        );
+        volumes = Object.fromEntries(
+          tickers.map((ticker) => [ticker.symbol, ticker.turnover24h]),
+        );
+        instruments = rawInstruments.map((instrument) => {
+          const ticker = tickerBySymbol.get(instrument.symbol);
+          return ticker === undefined
+            ? instrument
+            : {
+                ...instrument,
+                bid1Price: ticker.bid1Price,
+                ask1Price: ticker.ask1Price,
+              };
+        });
       }
       const ranked = selectFlowUniverse(volumes, instruments, undefined, {
         topN: args.limit,
@@ -6160,7 +6178,7 @@ export const flowRecordCommand = Command.make(
     symbols: Options.text("symbols").pipe(
       Options.withDefault(""),
       Options.withDescription(
-        "Comma-separated Bybit linear symbols (default: flow universe top-40 or fallback set)",
+        "Comma-separated Bybit USDT-perp symbols (default: flow universe top-100 or fallback set)",
       ),
     ),
     duration: Options.integer("duration").pipe(

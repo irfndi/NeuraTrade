@@ -2,7 +2,7 @@
  * Live Flow Ignition recorder — Bybit v5 linear public WebSocket feed.
  *
  * Subscribes to:
- *  - `publicTrade.<SYMBOL>` for each configured symbol (default: top-40 from
+ *  - `publicTrade.<SYMBOL>` for each configured symbol (default: top-100 from
  *    `selectFlowUniverse`, else a liquid fallback set)
  *  - `liquidation` (all symbols) — best-effort: some endpoints reject the
  *    topic (observed on this mainnet linear endpoint), in which case the
@@ -22,10 +22,13 @@
 import { Data, Effect } from "effect";
 import * as S from "effect/Schema";
 import {
-  fetch24hrVolumes,
+  fetchTickers,
   fetchInstruments,
 } from "../market-data/gateways/bybit.js";
-import { selectFlowUniverse } from "./flow-universe.js";
+import {
+  DEFAULT_FLOW_UNIVERSE_TOP_N,
+  selectFlowUniverse,
+} from "./flow-universe.js";
 
 export const FLOW_EXCHANGE = "bybit-futures";
 
@@ -225,18 +228,23 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 
 function describeError<T>(err: T): string {
   if (err instanceof Error) return err.message;
-  if (err !== null && typeof err === "object") {
-    const e = err as {
-      readonly message?: unknown;
-      readonly reason?: unknown;
-      readonly _tag?: unknown;
-      readonly cause?: unknown;
-    };
-    if (typeof e.reason === "string" && e.reason.length > 0) return e.reason;
-    if (typeof e.message === "string" && e.message.length > 0) return e.message;
-    if (typeof e._tag === "string" && e._tag.length > 0) return e._tag;
-    if (e.cause !== undefined) return describeError(e.cause);
+  if (err === null || err === undefined) return String(err);
+  const e = err as {
+    readonly message?: unknown;
+    readonly reason?: unknown;
+    readonly _tag?: unknown;
+    readonly cause?: unknown;
+  };
+  if (e.reason != null && String(e.reason).length > 0) {
+    return String(e.reason);
   }
+  if (e.message != null && String(e.message).length > 0) {
+    return String(e.message);
+  }
+  if (e._tag != null && String(e._tag).length > 0) {
+    return String(e._tag);
+  }
+  if (e.cause !== undefined) return describeError(e.cause);
   return String(err);
 }
 
@@ -764,7 +772,7 @@ export function runFlowRecorder(
 }
 
 /**
- * Resolve the recorder's default symbol list: the ranked top-40 from
+ * Resolve the recorder's default symbol list: the ranked top-100 from
  * `selectFlowUniverse` (mainnet 24h turnover, refreshed per start), else the
  * liquid fallback set. Never throws — a failed REST fetch falls back.
  */
@@ -775,16 +783,33 @@ export async function resolveFlowSymbols(
     return overrides.map(toWireSymbol);
   }
   try {
-    const volumes = await Effect.runPromise(
-      fetch24hrVolumes("https://api.bybit.com"),
+    const [tickers, instruments] = await Promise.all([
+      Effect.runPromise(fetchTickers("https://api.bybit.com")),
+      Effect.runPromise(fetchInstruments("https://api.bybit.com")),
+    ]);
+    const tickerBySymbol = new Map(
+      tickers.map((ticker) => [ticker.symbol, ticker]),
     );
-    const instruments = await Effect.runPromise(
-      fetchInstruments("https://api.bybit.com"),
+    const volumes = Object.fromEntries(
+      tickers.map((ticker) => [ticker.symbol, ticker.turnover24h]),
     );
-    const ranked = selectFlowUniverse(volumes, instruments, undefined, {
-      topN: 40,
+    const quotedInstruments = instruments.map((instrument) => {
+      const ticker = tickerBySymbol.get(instrument.symbol);
+      return ticker === undefined
+        ? instrument
+        : {
+            ...instrument,
+            bid1Price: ticker.bid1Price,
+            ask1Price: ticker.ask1Price,
+          };
     });
-    const symbols = ranked.map((e) => toWireSymbol(e.symbol)).slice(0, 40);
+    const ranked = selectFlowUniverse(
+      volumes,
+      quotedInstruments,
+      undefined,
+      { topN: DEFAULT_FLOW_UNIVERSE_TOP_N },
+    );
+    const symbols = ranked.map((e) => toWireSymbol(e.symbol));
     if (symbols.length > 0) return symbols;
   } catch {
     // mainnet REST unavailable — fall back to the liquid set

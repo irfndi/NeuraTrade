@@ -255,7 +255,7 @@ export function fetchSymbols(
       for (const s of data.list) {
         // Bybit instruments-info: "Trading" is the online status
         // ("PreLaunch"/"Settling"/"Delivering"/"Closed" are not tradeable).
-        if (s.status === "Trading") {
+        if (s.status === "Trading" && s.quoteCoin === "USDT") {
           symbols.push(`${s.baseCoin}/${s.quoteCoin}`);
         }
       }

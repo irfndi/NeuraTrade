@@ -112,4 +112,21 @@ describe("selectFlowUniverse", () => {
       "BTCUSDT",
     ]);
   });
+
+  it("keeps only live USDT-perpetual instruments", () => {
+    const volumes = {
+      BTCUSDT: 100,
+      BTCUSDC: 90,
+      HALTEDUSDT: 80,
+    };
+    const symbols: FlowInstrument[] = [
+      { ...instrument("BTCUSDT", 2000), status: "Trading" },
+      { ...instrument("BTCUSDC", 2000), status: "Trading" },
+      { ...instrument("HALTEDUSDT", 2000), status: "Settling" },
+    ];
+
+    expect(selectFlowUniverse(volumes, symbols).map((e) => e.symbol)).toEqual([
+      "BTCUSDT",
+    ]);
+  });
 });
