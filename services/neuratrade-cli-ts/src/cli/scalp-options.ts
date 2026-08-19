@@ -458,6 +458,13 @@ export const maxPositionDrawdownPctOption = Options.float(
   ),
 );
 
+export const stopRatioOption = Options.float("stop-ratio").pipe(
+  Options.withDefault(0),
+  Options.withDescription(
+    "Ladder: stop distance as a multiple of the grid step for the per-rung stop (0 = legacy base-anchored ladder boundary). A tight step-relative stop (1.5-2x) with a multi-step target gives a positive R:R",
+  ),
+);
+
 export const volatilityTargetAnnualPctOption = Options.float(
   "volatility-target-annual-pct",
 ).pipe(

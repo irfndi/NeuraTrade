@@ -111,6 +111,14 @@ export interface LadderPaperTradingOptions {
    * maxDrawdownPct but scoped to one position.
    */
   readonly maxPositionDrawdownPct?: number;
+  /**
+   * Stop distance as a multiple of the grid step. When > 0, losses run
+   * looser than wins, and a 2:1 skew is typical — e.g. stopRatio 2 with
+   * targetRatio 4 (SL 2 steps, TP 4 steps) gives a 2R win / 1R loss trade.
+   * When 0 (default), the legacy ladder boundary
+   * `base ± step*(N+gridMaxGrids)` applies unchanged (backtest parity).
+   */
+  readonly stopRatio?: number;
   /** Exchange contract constraints for orderable live sizing. */
   readonly contractSpecs?: ContractSizeSpec;
 }
@@ -379,7 +387,18 @@ export function advanceLadderBar(
     }
     const filledLong = w.longRungs.filter((r) => r.filled);
     if (filledLong.length > 0) {
-      const boundary = w.longBase - step * (N + opts.gridMaxGrids);
+      const stopRatio = opts.stopRatio ?? 0;
+      // Step-relative stop: each rung exits at entry - step*stopRatio
+      // (long). The deepest filled rung's stop is the ladder's effective
+      // downside; using the shallowest filled rung's stop would let a deep
+      // fill run too far, so the stop level is anchored to the DEEPEST
+      // filled rung's entry for a consistent per-position R:R.
+      const stopLevel =
+        stopRatio > 0
+          ? Math.min(...filledLong.map((r) => r.entryPrice)) -
+            step * stopRatio
+          : w.longBase - step * (N + opts.gridMaxGrids);
+      const boundary = stopLevel;
       const longLiqs = filledLong
         .map((r) => liquidationPrice("long", r.entryPrice, leverage))
         .filter((p) => p > 0);
@@ -484,7 +503,15 @@ export function advanceLadderBar(
     }
     const filledShort = w.shortRungs.filter((r) => r.filled);
     if (filledShort.length > 0) {
-      const boundary = w.shortBase + step * (N + opts.gridMaxGrids);
+      const stopRatio = opts.stopRatio ?? 0;
+      // Step-relative stop (short mirror): stop at the deepest filled rung's
+      // entry + step*stopRatio.
+      const stopLevel =
+        stopRatio > 0
+          ? Math.max(...filledShort.map((r) => r.entryPrice)) +
+            step * stopRatio
+          : w.shortBase + step * (N + opts.gridMaxGrids);
+      const boundary = stopLevel;
       const shortLiqs = filledShort
         .map((r) => liquidationPrice("short", r.entryPrice, leverage))
         .filter((p) => p > 0);
@@ -591,6 +618,7 @@ export function freshLadderState(
     onlyWithTrend: options.onlyWithTrend ?? false,
     chopGateAdxThreshold: options.chopGateAdxThreshold ?? 0,
     maxHoldBars: Math.max(0, Math.floor(options.maxHoldBars ?? 0)),
+    stopRatio: Math.max(0, options.stopRatio ?? 0),
     lastTimestamp: null,
     updatedAt: new Date(),
   };
@@ -648,7 +676,9 @@ export function configMatchesLadderState(
     state.targetRatio === (options.targetRatio ?? 1) &&
     state.onlyWithTrend === (options.onlyWithTrend ?? false) &&
     state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0) &&
-    state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0))
+    state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0)) &&
+    Math.max(0, (state as { stopRatio?: number }).stopRatio ?? 0) ===
+      Math.max(0, options.stopRatio ?? 0)
   );
 }
 
@@ -909,6 +939,37 @@ function executeLadderBarLive(
         reduceOnly: false,
       };
       yield* adapter.placeOrder(request);
+
+      // Attach exchange-side TP/SL after each live fill so the position is
+      // protected even if this process dies or the polling loop stalls. The
+      // exchange holds the resting orders; the engine's polling closes remain
+      // as a second layer (and the single source of the paper ledger PnL).
+      // TP = one targetRatio step, SL = the step-relative stop when stopRatio
+      // is set, else fall back to the per-position drawdown kill, else skip
+      // (legacy boundary geometry only exists in the engine's close path).
+      if (adapter.setTradingStop !== undefined) {
+        const targetRatio = Math.max(0.001, options.targetRatio ?? 1);
+        const stepAbs = toNumber(fillPrice) * (options.gridStepPct / 100);
+        const tp =
+          fill.side === "long"
+            ? toNumber(fillPrice) + stepAbs * targetRatio
+            : toNumber(fillPrice) - stepAbs * targetRatio;
+        const stopRatio = options.stopRatio ?? 0;
+        const sl =
+          stopRatio > 0
+            ? fill.side === "long"
+              ? toNumber(fillPrice) - stepAbs * stopRatio
+              : toNumber(fillPrice) + stepAbs * stopRatio
+            : undefined;
+        yield* adapter.setTradingStop({
+          symbol: options.symbol,
+          productType,
+          marginMode,
+          side: fill.side,
+          takeProfit: money(tp),
+          ...(sl !== undefined ? { stopLoss: money(sl) } : {}),
+        }).pipe(Effect.result);
+      }
     }
     for (const close of closes) {
       const side: FuturesOrderSide = close.side === "long" ? "sell" : "buy";

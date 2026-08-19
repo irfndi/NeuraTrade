@@ -242,6 +242,7 @@ import {
   maxHoldBarsOption,
   configMismatchActionOption,
   maxPositionDrawdownPctOption,
+  stopRatioOption,
   volatilityTargetAnnualPctOption,
   noAtrOption,
   scanEntryOrdersOption,
@@ -2350,6 +2351,8 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly configMismatchAction: "hold" | "force-reseed";
   /** Ladder: force-close an open rung whose unrealized loss exceeds this % (0 = off). */
   readonly maxPositionDrawdownPct: number;
+  /** Ladder: stop distance as a multiple of the grid step (0 = legacy boundary). */
+  readonly stopRatio: number;
   readonly live: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
@@ -2615,6 +2618,7 @@ export const paperTradeCommand = Command.make(
     maxHoldBars: maxHoldBarsOption,
     configMismatchAction: configMismatchActionOption,
     maxPositionDrawdownPct: maxPositionDrawdownPctOption,
+    stopRatio: stopRatioOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
@@ -3305,6 +3309,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         maxHoldBars: args.maxHoldBars ?? 0,
         configMismatchAction: args.configMismatchAction,
         maxPositionDrawdownPct: args.maxPositionDrawdownPct,
+        stopRatio: args.stopRatio,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
         isLive: args.live,
         productType,
@@ -5432,6 +5437,13 @@ export const gridUniverseScanCommand = Command.make(
                 gridMaxGrids: e.bestParams.gridMaxGrids,
                 gridPauseAfterLossBars: e.bestParams.gridPauseAfterLossBars,
                 rungs: e.bestParams.rungs,
+                // Carry the stage-4 gate-validated dials so the ladder soak
+                // trades the geometry that cleared walk-forward + time-split
+                // evidence — NOT the CLI default targetRatio=1 (which caps
+                // wins at one grid step and inverts the ladder's R:R into
+                // an ~82%-win-rate-to-break-even bleed on tight steps).
+                targetRatio: e.validatedTargetRatio ?? 1,
+                chopGateAdx: e.validatedChopGateAdx ?? 0,
               },
             }));
             const fsys = yield* FileSystem.FileSystem;

@@ -221,6 +221,8 @@ export interface LadderPaperState {
   readonly chopGateAdxThreshold: number;
   /** Max hold bars when the time-based exit is enabled (0 = disabled). */
   readonly maxHoldBars: number;
+  /** Stop distance as a multiple of the grid step (0 = legacy ladder boundary). */
+  readonly stopRatio?: number;
   /** Timestamp of the last processed candle (replay bookkeeping). */
   readonly lastTimestamp: Date | null;
   readonly updatedAt: Date;

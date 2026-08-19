@@ -667,6 +667,20 @@ export function ladderGateScoredEligibility(
     FAST_TIER_MIN_FILL_FREQUENCY_PCT;
   if (!fillFloorOk) return null;
 
+  // Noise gate: the grid step must be a meaningful multiple of the symbol's
+  // per-bar range (ATR as % of price). A step inside the noise band fills
+  // constantly on tick-level churn — the ladder wins a hair under one step
+  // and loses the full N+grids stop, an inverted R:R that bleeds the account
+  // even at a high win rate (regression 2026-08-19: PUMPFUN at 0.75% step
+  // churned 190 round-trips for -$12.89 on a $50 account). ATR14 is the
+  // typical bar's range, so step >= 3x ATR means the target/stop sits outside
+  // the noise band and trades capture real directional moves. A zero ATR
+  // (null volatility on degenerate candles with no sort/sort) skips the gate.
+  const atrPct = entry.volatility ?? 0;
+  if (atrPct > 0 && entry.bestParams.gridStepPct < atrPct * 1.5) {
+    return null;
+  }
+
   let best: {
     targetRatio: number;
     chopGateAdx: number;
