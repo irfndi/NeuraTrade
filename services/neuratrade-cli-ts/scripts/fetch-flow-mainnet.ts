@@ -134,10 +134,10 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
     );
     if (batch === undefined || batch.length === 0) break;
     fetched += batch.length;
-    // Bybit clamps limit to 200/page and returns DESC — the cursor must
-    // advance from the page's OLDEST bar (batch.at(-1)), not batch[0]
+    // The gateway normalizes Bybit's newest-first wire response to
+    // oldest-first. The cursor must advance from batch[0], not batch.at(-1)
     // (the newest), or every page returns the same window forever.
-    const oldestTs = batch.at(-1)!.timestamp.getTime();
+    const oldestTs = batch[0]!.timestamp.getTime();
     const keep = batch.filter((c) => c.timestamp.getTime() >= startMs);
     let inserted = 0;
     db.transaction(() => {
