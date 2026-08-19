@@ -1441,7 +1441,9 @@ export const optimizeCommand = Command.make(
 
       const result = yield* optimizeProgram(programArgs).pipe(
         Effect.provide(repoLayer),
-        Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
+        Effect.tap((r) =>
+          printOptimizeResult(r, args.symbol, args.timeframe, args.capital),
+        ),
         Effect.catch((err) =>
           Effect.gen(function* () {
             const msg =
@@ -1631,6 +1633,7 @@ function printOptimizeResult(
   results: ReadonlyArray<OptimizeResult>,
   symbol: string,
   timeframe: string,
+  initialCapital: number,
 ) {
   return Effect.gen(function* () {
     if (results.length === 0) {
@@ -1656,6 +1659,36 @@ function printOptimizeResult(
     yield* Console.log(
       `\n🔬 Optimization results for ${symbol} ${timeframe} (${results.length} configs tested)`,
     );
+    const oosResults = results.flatMap((result) =>
+      result.oosResult === undefined ? [] : [result.oosResult],
+    );
+    if (oosResults.length > 0 && initialCapital > 0) {
+      let capital = initialCapital;
+      let peak = capital;
+      let maxDrawdownPct = 0;
+      for (const result of oosResults) {
+        const windowStartCapital = capital;
+        const scale = windowStartCapital / initialCapital;
+        for (const trade of result.trades) {
+          capital += trade.netPnl * scale;
+          peak = Math.max(peak, capital);
+          maxDrawdownPct = Math.max(
+            maxDrawdownPct,
+            peak > 0 ? ((peak - capital) / peak) * 100 : 0,
+          );
+        }
+      }
+      const profitableWindows = oosResults.filter(
+        (result) => result.totalReturnPct > 0,
+      ).length;
+      yield* Console.log(
+        `Walk-forward OOS aggregate: windows=${oosResults.length} ` +
+          `profitable=${((profitableWindows / oosResults.length) * 100).toFixed(1)}% ` +
+          `compoundReturn=${(((capital - initialCapital) / initialCapital) * 100).toFixed(2)}% ` +
+          `maxDD=${maxDrawdownPct.toFixed(2)}% ` +
+          `trades=${oosResults.reduce((sum, result) => sum + result.totalTrades, 0)}`,
+      );
+    }
     yield* Console.log("\nTop 5 by total return:");
     for (const r of byReturn) {
       const result = r.oosResult ?? r.isResult;
