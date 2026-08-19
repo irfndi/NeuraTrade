@@ -5610,13 +5610,16 @@ export const gridUniverseScanCommand = Command.make(
           );
           for (const e of result.entries) {
             const mark = e.gatedDropped ? " ✘" : e.passed ? " ✔" : "";
+            const reason = e.rejectionReason
+              ? ` [${e.rejectionReason}]`
+              : "";
             yield* Console.log(
               `${e.symbol.padEnd(13)} ${String(e.candles).padStart(7)}  ` +
                 `${e.bestParams.gridStepPct.toFixed(2).padStart(5)}  ` +
                 `${String(e.bestParams.gridMaxGrids).padStart(5)}  ` +
                 `${String(e.bestParams.gridPauseAfterLossBars).padStart(5)}  ` +
                 `${e.walkForward.profitableWindowsPct.toFixed(0).padStart(6)}%  ` +
-                `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}`,
+                `${e.walkForward.aggregateReturnPct.toFixed(2).padStart(9)}%${mark}${reason}`,
             );
           }
 

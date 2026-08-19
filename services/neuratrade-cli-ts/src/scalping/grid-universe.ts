@@ -323,6 +323,8 @@ export interface GridUniverseEntry {
    * per-trade expectation, not a per-trade win-rate edge.
    */
   readonly edgePerTradePct?: number;
+  /** Compact fail-closed reason(s) when the entry is not eligible. */
+  readonly rejectionReason?: string;
   /**
    * Stage-4 gate-scored eligibility: target_ratio of the passing gate combo
    * with the highest compounded return (unset until validated).
@@ -998,6 +1000,17 @@ function evaluateUniverseSymbol(
 
   const passed = passedBase && asymmetryOk && modeledFillPct >= fillGate;
 
+  const rejectionReasons: string[] = [];
+  if (walkForward.windows.length < 1) rejectionReasons.push("no_wf_windows");
+  if (walkForward.profitableWindowsPct < options.minProfitableWindowsPct) {
+    rejectionReasons.push("wf_profit_windows");
+  }
+  if (walkForward.aggregateReturnPct < options.minAggregateReturnPct) {
+    rejectionReasons.push("wf_return");
+  }
+  if (!asymmetryOk) rejectionReasons.push("asymmetry");
+  if (modeledFillPct < fillGate) rejectionReasons.push("fill_frequency");
+
   // Candidate metrics for the frequency-targeted selection stage. All are
   // display/selection hints, not money — plain numbers are fine.
   const stats = computeSymbolStats(candles, options.timeframe);
@@ -1031,6 +1044,8 @@ function evaluateUniverseSymbol(
     oosTrades,
     fillsPerDay,
     edgePerTradePct,
+    rejectionReason:
+      rejectionReasons.length > 0 ? rejectionReasons.join(",") : undefined,
   };
 }
 
@@ -1449,7 +1464,13 @@ export function runMarketUniverseScan(
           const gated = gateScoredEligibility(entry, deep, options);
           if (gated === null) {
             yield* Ref.update(gateDropped, (n) => n + 1);
-            entries.push({ ...entry, gatedDropped: true });
+            entries.push({
+              ...entry,
+              gatedDropped: true,
+              rejectionReason: entry.rejectionReason
+                ? `${entry.rejectionReason},stage4_gate`
+                : "stage4_gate",
+            });
             return;
           }
           entries.push(gated);
