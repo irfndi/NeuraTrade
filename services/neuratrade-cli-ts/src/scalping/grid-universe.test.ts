@@ -25,6 +25,7 @@ import {
   FAST_TIER_MIN_FILL_FREQUENCY_PCT,
   fillModelMultiplier,
   gateScoredEligibility,
+  ladderGateScoredEligibilityDetailed,
   passesLadderTimeSplitGate,
   passesStage2Screen,
   resampleCandles,
@@ -666,6 +667,47 @@ describe("gateScoredEligibility (stage-4)", () => {
 
     expect(gateScoredEligibility(entry, candles, GATE_OPTIONS)).toBeNull();
   }, 300_000);
+
+  it("reports ladder gate failure categories for research diagnostics", () => {
+    const candles = Array.from({ length: 2_000 }, (_, index) => ({
+      exchange: "bitget-futures",
+      symbol: "FLAT/USDT:USDT",
+      timeframe: "15m",
+      open: 100,
+      high: 100,
+      low: 100,
+      close: 100,
+      volume: 10,
+      timestamp: new Date(index * BAR_MS),
+    }));
+    const entry: GridUniverseEntry = {
+      symbol: "FLAT/USDT:USDT",
+      candles: candles.length,
+      bestParams: {
+        gridStepPct: 0.5,
+        gridMaxGrids: 1,
+        gridPauseAfterLossBars: 0,
+        rungs: 1,
+      },
+      walkForward: {
+        windows: [],
+        aggregateReturnPct: 1,
+        profitableWindowsPct: 100,
+        maxDrawdownPct: 0,
+        totalTrades: 10,
+      },
+      passed: true,
+    };
+    const result = ladderGateScoredEligibilityDetailed(entry, candles, {
+      ...GATE_OPTIONS,
+      engine: "ladder",
+      tier: "readiness",
+      ladderStopRatio: 1.5,
+    });
+
+    expect(result.entry).toBeNull();
+    expect(result.failureReasons).toContain("fill_frequency_floor");
+  });
 
   it("fast tier: a walk-forward survivor failing the readiness board becomes eligible on the light criteria", () => {
     // run ~3s each; the 5s default is too tight. // Two full 9-combo gate sweeps over 54,720 candles (readiness + fast)

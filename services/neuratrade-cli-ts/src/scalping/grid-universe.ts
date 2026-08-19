@@ -325,6 +325,8 @@ export interface GridUniverseEntry {
   readonly edgePerTradePct?: number;
   /** Compact fail-closed reason(s) when the entry is not eligible. */
   readonly rejectionReason?: string;
+  /** Detailed stage-4 diagnostics retained for research reports. */
+  readonly gateFailureReasons?: readonly string[];
   /**
    * Stage-4 gate-scored eligibility: target_ratio of the passing gate combo
    * with the highest compounded return (unset until validated).
@@ -641,6 +643,37 @@ function passesLadderGateCriteria(result: LadderValidationOk): boolean {
   );
 }
 
+function ladderGateCriteriaFailures(result: LadderValidationOk): string[] {
+  const failures: string[] = [];
+  if (result.historical.profitableWindowPct <= 50) {
+    failures.push("historical_profitable_windows");
+  }
+  if (result.historical.compoundedReturnPct < 0) {
+    failures.push("historical_return");
+  }
+  if (result.historical.maximumDrawdownPct > 15) {
+    failures.push("historical_drawdown");
+  }
+  if (result.fixedOos.totalTrades < 30) {
+    failures.push("fixed_oos_trades");
+  }
+  if (result.confidence.lowerBoundPct < 0) {
+    failures.push("confidence_lower_bound");
+  }
+  if (result.stress.worstReturnPct < 0) {
+    failures.push("stress_worst_return");
+  }
+  if (result.stress.pooledLowerBoundPct < 0) {
+    failures.push("stress_pooled_lower_bound");
+  }
+  return failures;
+}
+
+export interface LadderGateScoreResult {
+  readonly entry: GridUniverseEntry | null;
+  readonly failureReasons: readonly string[];
+}
+
 /**
  * Ladder-engine gate-scored eligibility: sweeps the target_ratio × chop-gate
  * ADX dials around the ladder walk-forward bestParams (including rungs)
@@ -656,13 +689,15 @@ function passesLadderGateCriteria(result: LadderValidationOk): boolean {
  * a high win rate whose many small wins outweigh fewer, larger stops
  * (BE ~0.7), which the win/loss-ratio gate misclassifies as doomed.
  */
-export function ladderGateScoredEligibility(
+export function ladderGateScoredEligibilityDetailed(
   entry: GridUniverseEntry,
   candles: readonly Candle[],
   options: GridUniverseOptions,
-): GridUniverseEntry | null {
+): LadderGateScoreResult {
   const tier = options.tier ?? "readiness";
-  if (!entry.passed) return null;
+  if (!entry.passed) {
+    return { entry: null, failureReasons: ["walk_forward"] };
+  }
   const fillFloorOk =
     computeFillFrequencyPct(
       candles,
@@ -671,7 +706,9 @@ export function ladderGateScoredEligibility(
     ) *
       fillModelMultiplier(options) >=
     FAST_TIER_MIN_FILL_FREQUENCY_PCT;
-  if (!fillFloorOk) return null;
+  if (!fillFloorOk) {
+    return { entry: null, failureReasons: ["fill_frequency_floor"] };
+  }
 
   // Noise gate: the grid step must be a meaningful multiple of the symbol's
   // per-bar range (ATR as % of price). A step inside the noise band fills
@@ -684,14 +721,19 @@ export function ladderGateScoredEligibility(
   // (null volatility on degenerate candles with no sort/sort) skips the gate.
   const atrPct = entry.volatility ?? 0;
   if (atrPct > 0 && entry.bestParams.gridStepPct < atrPct * 1.5) {
-    return null;
+    return { entry: null, failureReasons: ["step_inside_atr_noise"] };
   }
+
+  const failureReasons = new Set<string>();
 
   let best: {
     targetRatio: number;
     chopGateAdx: number;
     totalReturnPct: number;
   } | null = null;
+  let timeSplitPasses = 0;
+  let evidenceChecks = 0;
+  let evidencePasses = 0;
   for (const targetRatio of GATE_TARGETS) {
     for (const chopGateAdx of GATE_ADX_GATES) {
       const ladder: LadderOptions = {
@@ -713,6 +755,7 @@ export function ladderGateScoredEligibility(
         conservativeIntrabar: true,
       };
       if (!passesLadderTimeSplitGate(candles, ladder)) continue;
+      timeSplitPasses += 1;
       if (tier === "readiness") {
         // Readiness tier: the combo must ALSO clear the full ladder evidence
         // validator (windows scaled to the available history, same protocol
@@ -732,9 +775,19 @@ export function ladderGateScoredEligibility(
           minimumWindows,
           ladder,
         });
-        if (evidence.kind !== "ok" || !passesLadderGateCriteria(evidence)) {
+        evidenceChecks += 1;
+        if (evidence.kind !== "ok") {
+          failureReasons.add(
+            `evidence_invalid:${evidence.failures[0] ?? "unknown"}`,
+          );
           continue;
         }
+        const criteriaFailures = ladderGateCriteriaFailures(evidence);
+        if (!passesLadderGateCriteria(evidence)) {
+          for (const failure of criteriaFailures) failureReasons.add(failure);
+          continue;
+        }
+        evidencePasses += 1;
       }
       const totalReturnPct = runLadderGridBacktest(
         candles,
@@ -748,12 +801,33 @@ export function ladderGateScoredEligibility(
       }
     }
   }
-  if (best === null) return null;
+  if (best === null) {
+    if (timeSplitPasses === 0) failureReasons.add("time_split");
+    if (tier === "readiness" && evidenceChecks > 0 && evidencePasses === 0) {
+      failureReasons.add("readiness_evidence");
+    }
+    if (failureReasons.size === 0) failureReasons.add("tail_return");
+    return {
+      entry: null,
+      failureReasons: [...failureReasons].slice(0, 8),
+    };
+  }
   return {
-    ...entry,
-    validatedTargetRatio: best.targetRatio,
-    validatedChopGateAdx: best.chopGateAdx,
+    entry: {
+      ...entry,
+      validatedTargetRatio: best.targetRatio,
+      validatedChopGateAdx: best.chopGateAdx,
+    },
+    failureReasons: [],
   };
+}
+
+export function ladderGateScoredEligibility(
+  entry: GridUniverseEntry,
+  candles: readonly Candle[],
+  options: GridUniverseOptions,
+): GridUniverseEntry | null {
+  return ladderGateScoredEligibilityDetailed(entry, candles, options).entry;
 }
 
 /**
@@ -772,7 +846,7 @@ export function gateScoredEligibility(
 ): GridUniverseEntry | null {
   const tier = options.tier ?? "readiness";
   if (options.engine === "ladder") {
-    return ladderGateScoredEligibility(entry, candles, options);
+    return ladderGateScoredEligibilityDetailed(entry, candles, options).entry;
   }
   // Structural-asymmetry gate (both tiers): the config's breakeven win rate
   // over the walk-forward window trades must be <= maxBreakevenWinRate
@@ -1482,19 +1556,26 @@ export function runMarketUniverseScan(
           } else {
             deep = yield* deepFetch(symbol, candles.length);
           }
-          const gated = gateScoredEligibility(entry, deep, options);
-          if (gated === null) {
+          const gateResult =
+            options.engine === "ladder"
+              ? ladderGateScoredEligibilityDetailed(entry, deep, options)
+              : {
+                  entry: gateScoredEligibility(entry, deep, options),
+                  failureReasons: [] as readonly string[],
+                };
+          if (gateResult.entry === null) {
             yield* Ref.update(gateDropped, (n) => n + 1);
             entries.push({
               ...entry,
               gatedDropped: true,
+              gateFailureReasons: gateResult.failureReasons,
               rejectionReason: entry.rejectionReason
                 ? `${entry.rejectionReason},stage4_gate`
                 : "stage4_gate",
             });
             return;
           }
-          entries.push(gated);
+          entries.push(gateResult.entry);
           return;
         }
         entries.push(entry);
