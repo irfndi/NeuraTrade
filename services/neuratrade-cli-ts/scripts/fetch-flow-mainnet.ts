@@ -29,6 +29,10 @@ const topN = Number(
 );
 const REQUEST_DELAY_MS = 250;
 const PAGE = 1000;
+// Two workers keep the public API paced while preventing a 100-symbol
+// backfill from taking several hours. Inserts remain synchronous transactions
+// on this single SQLite connection and are resumable via INSERT OR IGNORE.
+const SYMBOL_CONCURRENCY = 2;
 
 const db = new Database(`${HOME}/data/neuratrade.db`);
 db.exec("PRAGMA journal_mode = WAL;");
@@ -277,26 +281,39 @@ async function main() {
   let totalOi = 0;
   let totalFunding = 0;
 
-  for (const rawSymbol of symbols) {
-    const symbol = canonicalSymbol(rawSymbol);
-    const bSym = toBitgetSymbol(rawSymbol);
-    console.log(`\n== ${bSym} ==`);
-    try {
-      const c = await fetchCandles(symbol, startMs);
-      totalCandles += c;
-      console.log(`  klines saved: ${c}`);
-      const oi = await fetchOi(symbol, startMs, now);
-      totalOi += oi;
-      console.log(`  OI saved: ${oi}`);
-      const f = await fetchFunding(symbol, startMs);
-      totalFunding += f;
-      console.log(`  funding saved: ${f}`);
-    } catch (err) {
-      console.warn(
-        `⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`,
-      );
+  let nextIndex = 0;
+  const processSymbol = async () => {
+    for (;;) {
+      const index = nextIndex++;
+      if (index >= symbols.length) return;
+      const rawSymbol = symbols[index];
+      const symbol = canonicalSymbol(rawSymbol);
+      const bSym = toBitgetSymbol(rawSymbol);
+      console.log(`\n== ${bSym} ==`);
+      try {
+        const c = await fetchCandles(symbol, startMs);
+        totalCandles += c;
+        console.log(`  klines saved: ${c}`);
+        const oi = await fetchOi(symbol, startMs, now);
+        totalOi += oi;
+        console.log(`  OI saved: ${oi}`);
+        const f = await fetchFunding(symbol, startMs);
+        totalFunding += f;
+        console.log(`  funding saved: ${f}`);
+      } catch (err) {
+        console.warn(
+          `⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`,
+        );
+      }
     }
-  }
+  };
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(SYMBOL_CONCURRENCY, symbols.length) },
+      processSymbol,
+    ),
+  );
 
   console.log(
     `\nDONE: ${symbols.length} symbols, ${totalCandles} candles, ${totalOi} OI rows, ${totalFunding} funding rows`,
