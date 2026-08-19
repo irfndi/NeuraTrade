@@ -41,6 +41,7 @@ import {
   SignalComposerLive,
   StrategyLibrary,
   StrategyLibraryLive,
+  type BacktestEngineImpl,
 } from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
 import { MarketDataGateway } from "../market-data/gateway.js";
@@ -611,7 +612,7 @@ export const backtestCommand = Command.make(
         Effect.tap((r) => printBacktestResult(r)),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const msg = err instanceof Error ? err.message : err.reason;
+            const msg = err instanceof Error ? err.message : String(err);
             yield* Console.error(`backtest failed: ${msg}`);
             return emptyResult(args.symbol);
           }),
@@ -1317,6 +1318,7 @@ export const optimizeCommand = Command.make(
     riskPerTrade: riskPerTradeOption,
     maxPositionSize: riskBasedMaxPositionSizeOption,
     fee: feeOption,
+    futures: futuresOption,
     priceOnly: priceOnlyOption,
     noRsi: noRsiOption,
     noTrend: noTrendOption,
@@ -1439,7 +1441,7 @@ export const optimizeCommand = Command.make(
         Effect.tap((r) => printOptimizeResult(r, args.symbol, args.timeframe)),
         Effect.catch((err) =>
           Effect.gen(function* () {
-            const msg = err instanceof Error ? err.message : err.reason;
+            const msg = err instanceof Error ? err.message : String(err);
             yield* Console.error(`optimize failed: ${msg}`);
             return [];
           }),
@@ -1492,88 +1494,135 @@ function optimizeProgram(args: OptimizeArgs) {
       args.entryCandleConfirm,
       args.momentumConfirmBars,
     );
-    const results: Array<{
-      readonly stopMult: number;
-      readonly tpMult: number;
-      readonly minConfidence: number;
-      readonly totalReturnPct: number;
-      readonly sharpeRatio: number;
-      readonly totalTrades: number;
-      readonly winRate: number;
-      readonly maxDrawdownPct: number;
-    }> = [];
+    const candidates = generateCandidates(args);
+    const results: OptimizeResult[] = [];
 
-    for (
-      let stopMult = args.atrStopMin;
-      stopMult <= args.atrStopMax + 1e-9;
-      stopMult += args.atrStopStep
-    ) {
-      for (
-        let tpMult = args.atrTpMin;
-        tpMult <= args.atrTpMax + 1e-9;
-        tpMult += args.atrTpStep
-      ) {
-        for (
-          let conf = args.confMin;
-          conf <= args.confMax + 1e-9;
-          conf += args.confStep
+    if (!args.walkForward) {
+      for (const params of candidates) {
+        const isResult = yield* runOptimizeCandidate(
+          engine,
+          args,
+          candles,
+          composerConfig,
+          params,
+        );
+        results.push({ params, isResult });
+      }
+      return results;
+    }
+
+    const windows = generateWalkForwardWindows(
+      candles,
+      args.wfTrainDays,
+      args.wfTestDays,
+      args.wfStepDays,
+    );
+    for (const window of windows) {
+      let selected:
+        | { readonly params: OptimizeCandidateParams; readonly isResult: BacktestResult }
+        | undefined;
+
+      for (const params of candidates) {
+        const isResult = yield* runOptimizeCandidate(
+          engine,
+          args,
+          window.trainCandles,
+          composerConfig,
+          params,
+        );
+        if (isResult.totalTrades < args.minTrades) continue;
+        if (
+          selected === undefined ||
+          objectiveValue(isResult, args.selectBy) >
+            objectiveValue(selected.isResult, args.selectBy)
         ) {
-          const result = yield* engine.runBacktest({
-            symbol: args.symbol,
-            exchange: args.exchange,
-            timeframe: args.timeframe,
-            candles,
-            composerConfig,
-            initialCapital: args.capital,
-            positionSizePct: args.positionSize,
-            riskPerTradePct: args.riskPerTrade,
-            maxPositionSizePct: args.maxPositionSize,
-            stopLossPct: 1.5,
-            takeProfitPct: 3.0,
-            feePct: args.fee,
-            minConfidence: Number(conf.toFixed(4)),
-            useAtrStops: true,
-            atrStopMultiplier: Number(stopMult.toFixed(4)),
-            atrTakeProfitMultiplier: Number(tpMult.toFixed(4)),
-            atrRiskReward: args.atrRiskReward,
-            scaleOutAtR: args.scaleOutAtR,
-            scaleOutPct: args.scaleOutPct,
-            volatilityLookback: args.volatilityLookback,
-            volatilityLowPct: args.volatilityLowPct,
-            volatilityHighPct: args.volatilityHighPct,
-            volatilityLowFactor: args.volatilityLowFactor,
-            volatilityHighFactor: args.volatilityHighFactor,
-            holdUntilStop: args.holdUntilStop,
-          });
-          results.push({
-            stopMult: Number(stopMult.toFixed(4)),
-            tpMult: Number(tpMult.toFixed(4)),
-            minConfidence: Number(conf.toFixed(4)),
-            totalReturnPct: result.totalReturnPct,
-            sharpeRatio: result.sharpeRatio,
-            totalTrades: result.totalTrades,
-            winRate: result.winRate,
-            maxDrawdownPct: result.maxDrawdownPct,
-          });
+          selected = { params, isResult };
         }
       }
+
+      if (selected === undefined) continue;
+      const oosResult = yield* runOptimizeCandidate(
+        engine,
+        args,
+        window.testCandles,
+        composerConfig,
+        selected.params,
+      );
+      if (oosResult.totalTrades < args.minOosTrades) continue;
+      results.push({ ...selected, oosResult });
     }
 
     return results;
   });
 }
 
+function runOptimizeCandidate(
+  engine: BacktestEngineImpl,
+  args: OptimizeArgs,
+  candles: readonly CandleLike[],
+  composerConfig: ComposerConfig,
+  params: OptimizeCandidateParams,
+) {
+  const slippageBps = args.realistic
+    ? args.realisticSlippageBps
+    : args.slippageBps;
+  return engine.runBacktest({
+    symbol: args.symbol,
+    exchange: args.exchange,
+    timeframe: args.timeframe,
+    candles,
+    composerConfig,
+    initialCapital: args.capital,
+    positionSizePct: args.positionSize,
+    riskPerTradePct: args.riskPerTrade,
+    maxPositionSizePct: args.maxPositionSize,
+    stopLossPct: params.stopLossPct,
+    takeProfitPct: params.takeProfitPct,
+    feePct: args.fee,
+    makerFeePct: args.makerFeePct,
+    entryOrderType: params.entryOrderType,
+    entryLimitOffsetBps: params.entryLimitOffsetBps,
+    minConfidence: params.minConfidence,
+    useAtrStops: params.useAtrStops,
+    atrStopMultiplier: params.stopMult,
+    atrTakeProfitMultiplier: params.tpMult,
+    atrRiskReward: args.atrRiskReward,
+    scaleOutAtR: args.scaleOutAtR,
+    scaleOutPct: args.scaleOutPct,
+    volatilityLookback: args.volatilityLookback,
+    volatilityLowPct: args.volatilityLowPct,
+    volatilityHighPct: args.volatilityHighPct,
+    volatilityLowFactor: args.volatilityLowFactor,
+    volatilityHighFactor: args.volatilityHighFactor,
+    volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
+    holdUntilStop: args.holdUntilStop,
+    isFutures: args.futures,
+    fundingRatePct: args.fundingRatePct,
+    slippageBps,
+    trailingStopPct: args.trailingStopPct,
+    trailingStopAtrMultiplier: args.trailingStopAtrMultiplier,
+    minAtrPct: args.minAtrPct,
+    signalPersistence: args.signalPersistence,
+    lossConfidencePenalty: args.lossConfidencePenalty,
+    lossConfidenceDecay: args.lossConfidenceDecay,
+    minEfficiencyRatio: params.minEfficiencyRatio,
+    efficiencyRatioPeriod: args.efficiencyRatioPeriod,
+    rsiLongMax: params.rsiLongMax,
+    rsiShortMin: params.rsiShortMin,
+    recordEquityCurve: false,
+    htfCandles: [],
+    breakevenAtR: params.breakevenAtR,
+    maxBarsInTrade: params.maxBarsInTrade,
+    lossCooldownBars: params.lossCooldownBars,
+    autoRegimeFilter: args.autoRegimeFilter,
+    autoRegimeAdxThreshold: args.autoRegimeAdxThreshold,
+    entryOnClose: args.entryOnClose,
+    useObservedPrice: args.observedPrice,
+  });
+}
+
 function printOptimizeResult(
-  results: ReadonlyArray<{
-    readonly stopMult: number;
-    readonly tpMult: number;
-    readonly minConfidence: number;
-    readonly totalReturnPct: number;
-    readonly sharpeRatio: number;
-    readonly totalTrades: number;
-    readonly winRate: number;
-    readonly maxDrawdownPct: number;
-  }>,
+  results: ReadonlyArray<OptimizeResult>,
   symbol: string,
   timeframe: string,
 ) {
@@ -1584,10 +1633,18 @@ function printOptimizeResult(
     }
 
     const byReturn = [...results]
-      .sort((a, b) => b.totalReturnPct - a.totalReturnPct)
+      .sort(
+        (a, b) =>
+          (b.oosResult ?? b.isResult).totalReturnPct -
+          (a.oosResult ?? a.isResult).totalReturnPct,
+      )
       .slice(0, 5);
     const bySharpe = [...results]
-      .sort((a, b) => b.sharpeRatio - a.sharpeRatio)
+      .sort(
+        (a, b) =>
+          (b.oosResult ?? b.isResult).sharpeRatio -
+          (a.oosResult ?? a.isResult).sharpeRatio,
+      )
       .slice(0, 5);
 
     yield* Console.log(
@@ -1595,17 +1652,19 @@ function printOptimizeResult(
     );
     yield* Console.log("\nTop 5 by total return:");
     for (const r of byReturn) {
+      const result = r.oosResult ?? r.isResult;
       yield* Console.log(
-        `  stop=${r.stopMult.toFixed(2)} tp=${r.tpMult.toFixed(2)} conf=${r.minConfidence.toFixed(2)} | ` +
-          `return=${r.totalReturnPct.toFixed(2)}% sharpe=${r.sharpeRatio.toFixed(3)} trades=${r.totalTrades} win=${(r.winRate * 100).toFixed(1)}% dd=${r.maxDrawdownPct.toFixed(2)}%`,
+        `  stop=${r.params.stopMult.toFixed(2)} tp=${r.params.tpMult.toFixed(2)} conf=${r.params.minConfidence.toFixed(2)} | ` +
+          `return=${result.totalReturnPct.toFixed(2)}% sharpe=${result.sharpeRatio.toFixed(3)} trades=${result.totalTrades} win=${(result.winRate * 100).toFixed(1)}% dd=${result.maxDrawdownPct.toFixed(2)}%`,
       );
     }
 
     yield* Console.log("\nTop 5 by Sharpe ratio:");
     for (const r of bySharpe) {
+      const result = r.oosResult ?? r.isResult;
       yield* Console.log(
-        `  stop=${r.stopMult.toFixed(2)} tp=${r.tpMult.toFixed(2)} conf=${r.minConfidence.toFixed(2)} | ` +
-          `return=${r.totalReturnPct.toFixed(2)}% sharpe=${r.sharpeRatio.toFixed(3)} trades=${r.totalTrades} win=${(r.winRate * 100).toFixed(1)}% dd=${r.maxDrawdownPct.toFixed(2)}%`,
+        `  stop=${r.params.stopMult.toFixed(2)} tp=${r.params.tpMult.toFixed(2)} conf=${r.params.minConfidence.toFixed(2)} | ` +
+          `return=${result.totalReturnPct.toFixed(2)}% sharpe=${result.sharpeRatio.toFixed(3)} trades=${result.totalTrades} win=${(result.winRate * 100).toFixed(1)}% dd=${result.maxDrawdownPct.toFixed(2)}%`,
       );
     }
   });
