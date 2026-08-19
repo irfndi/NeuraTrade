@@ -176,13 +176,16 @@ describe("Bybit gateway", () => {
     );
 
     expect(candles).toHaveLength(2);
-    expect(candles[0].open).toBe(66000);
-    expect(candles[0].high).toBe(68000);
-    expect(candles[0].low).toBe(65000);
-    expect(candles[0].close).toBe(67000);
-    expect(candles[0].volume).toBe(100);
+    expect(candles[0].open).toBe(65000);
+    expect(candles[0].high).toBe(67000);
+    expect(candles[0].low).toBe(64500);
+    expect(candles[0].close).toBe(66000);
+    expect(candles[0].volume).toBe(90);
     expect(candles[0].exchange).toBe("bybit-futures");
-    expect(candles[0].timestamp.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+    expect(candles[0].timestamp.toISOString()).toBe("2023-12-31T23:00:00.000Z");
+    expect(candles[1].timestamp.getTime()).toBeGreaterThan(
+      candles[0].timestamp.getTime(),
+    );
   });
 
   it("fetchOHLCV maps timeframe to bybit interval and passes start", async () => {

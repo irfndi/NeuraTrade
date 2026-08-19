@@ -174,17 +174,22 @@ export function fetchOHLCV(
       baseUrl,
     );
 
-    return data.list.map((c): Candle => ({
-      exchange: EXCHANGE,
-      symbol,
-      timeframe,
-      open: asNumber(c[1]),
-      high: asNumber(c[2]),
-      low: asNumber(c[3]),
-      close: asNumber(c[4]),
-      volume: asNumber(c[5]),
-      timestamp: new Date(Number(c[0])),
-    }));
+    // Bybit returns klines newest-first.  Every consumer advances candles in
+    // chronological order; leaving the wire order intact makes last-candle
+    // state move backwards and reprocess the same bar forever.
+    return data.list
+      .map((c): Candle => ({
+        exchange: EXCHANGE,
+        symbol,
+        timeframe,
+        open: asNumber(c[1]),
+        high: asNumber(c[2]),
+        low: asNumber(c[3]),
+        close: asNumber(c[4]),
+        volume: asNumber(c[5]),
+        timestamp: new Date(Number(c[0])),
+      }))
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
   });
 }
 
