@@ -126,7 +126,8 @@ function makeTradeDbLayer(home?: string) {
 
 /**
  * Build the adapter layer graph from a concrete SQLite handle: market-data
- * repo -> market-data gateway -> bybit client -> bybit futures adapter.
+ * repository for local state plus the live market-data gateway for exchange
+ * order sizing/reference prices -> bybit client -> futures adapter.
  */
 function makeAdapterLayer(db: Database) {
   const base = Layer.mergeAll(BunServices.layer, MarketDataGatewayLive);
@@ -142,7 +143,9 @@ function makeAdapterLayer(db: Database) {
   );
   const adapter = BybitFuturesExchangeAdapterLive.pipe(
     Layer.provide(bybitClient),
-    Layer.provide(marketDataLayer),
+    // Manual/live exchange commands must never depend on stale or missing
+    // paper candles for reference prices (especially emergency closes).
+    Layer.provide(base),
   );
   return Layer.mergeAll(marketDataLayer, adapter);
 }
