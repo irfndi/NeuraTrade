@@ -1024,6 +1024,13 @@ export const liveOption = Options.boolean("live").pipe(
   ),
 );
 
+export const shadowOption = Options.boolean("shadow").pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Use live public market data with simulated fills only; never place exchange orders",
+  ),
+);
+
 export const apiKeyOption = Options.text("api-key").pipe(
   Options.withDefault(""),
   Options.withDescription("Binance API key (or set BINANCE_API_KEY env)"),

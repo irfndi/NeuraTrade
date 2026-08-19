@@ -40,6 +40,7 @@ import {
   validateLiveGridConfiguration,
   validateLiveGridWatchlist,
   validateLiveSoakExecution,
+  validateShadowMode,
   probeNamesProbedSymbol,
   walkForwardCommand,
   buildValidateBacktestArgs,
@@ -129,6 +130,14 @@ describe("live execution market guard", () => {
     );
     expect(validateLiveExecutionStrategy(true, "grid")).toBeUndefined();
     expect(validateLiveExecutionStrategy(false, "signal")).toBeUndefined();
+  });
+
+  it("keeps shadow mode strictly non-executing", () => {
+    expect(validateShadowMode(true, true)).toContain(
+      "cannot be combined with --live",
+    );
+    expect(validateShadowMode(true, false)).toBeUndefined();
+    expect(validateShadowMode(false, true)).toBeUndefined();
   });
 
   it("routes default futures market data to the Bitget futures gateway", () => {

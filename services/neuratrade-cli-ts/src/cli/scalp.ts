@@ -348,6 +348,7 @@ import {
   iterationsOption,
   replayBarsOption,
   liveOption,
+  shadowOption,
   apiKeyOption,
   apiSecretOption,
   marginModeOption,
@@ -2454,6 +2455,7 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   /** Ladder: stop distance as a multiple of the grid step (0 = legacy boundary). */
   readonly stopRatio: number;
   readonly live: boolean;
+  readonly shadow?: boolean;
   readonly apiKey: string;
   readonly apiSecret: string;
   readonly marginMode: string;
@@ -2661,6 +2663,7 @@ export const paperTradeCommand = Command.make(
     iterations: iterationsOption,
     replayBars: replayBarsOption,
     live: liveOption,
+    shadow: shadowOption,
     apiKey: apiKeyOption,
     apiSecret: apiSecretOption,
     futures: futuresOption,
@@ -2770,7 +2773,12 @@ export const paperTradeCommand = Command.make(
                   },
                 }));
               }).pipe(Effect.provide(paperRepoLayer)),
-        onSome: (file) => loadWatchlist(resolve(path.homeDir, "data", file)),
+        onSome: (file) =>
+          loadWatchlist(
+            file.startsWith("/")
+              ? file
+              : resolve(path.homeDir, "data", file),
+          ),
       });
 
       const repoLayer = MarketDataRepositorySQLiteLive(db);
@@ -2787,7 +2795,7 @@ export const paperTradeCommand = Command.make(
         db,
         circuitBreakerMaxLoss,
       );
-      const marketDataLayer = mergedArgs.live
+      const marketDataLayer = mergedArgs.live || mergedArgs.shadow
         ? MarketDataGatewayLive
         : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
@@ -2898,6 +2906,15 @@ export function validateLiveExecutionStrategy(
     return "live directional signal execution is disabled; use --strategy-type grid";
   }
   return undefined;
+}
+
+export function validateShadowMode(
+  shadow: boolean,
+  live: boolean,
+): string | undefined {
+  return shadow && live
+    ? "--shadow cannot be combined with --live; shadow mode never places exchange orders"
+    : undefined;
 }
 
 export interface LiveGridConfiguration {
@@ -3098,6 +3115,10 @@ function paperTradeProgram(args: PaperTradeArgs) {
     );
     if (liveMarketError !== undefined) {
       return yield* Effect.fail(new Error(liveMarketError));
+    }
+    const shadowError = validateShadowMode(args.shadow ?? false, args.live);
+    if (shadowError !== undefined) {
+      return yield* Effect.fail(new Error(shadowError));
     }
     const liveSandboxError = validateLiveSandboxMode(args.live, isDemoAccount);
     if (liveSandboxError !== undefined) {
