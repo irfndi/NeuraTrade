@@ -1153,7 +1153,7 @@ export const gridUniverseTimeframeOption = Options.text("timeframe").pipe(
 export const gridUniverseMinCandlesOption = Options.integer("min-candles").pipe(
   Options.withDefault(500),
   Options.withDescription(
-    "Minimum candles a symbol must have to be included in the scan",
+    "Minimum candles a symbol must have to be included (ladder requires at least 2000)",
   ),
 );
 
