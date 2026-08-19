@@ -1183,7 +1183,7 @@ export function runMarketUniverseScan(
     let candidates: string[];
     if (dataSource === "db-mainnet") {
       // Mainnet-fidelity universe: symbol discovery comes from the 5m
-      // mainnet cache (fetch-flow-mainnet curated ~40 liquid symbols), NOT
+      // mainnet cache (fetch-flow-mainnet top-100 liquid symbols), NOT
       // from the testnet gateway's contract list / 24h volumes / demo
       // subset. Zero gateway calls on this path — the testnet demo list
       // would re-contaminate the universe.
@@ -1447,10 +1447,12 @@ export function runMarketUniverseScan(
 
         if (candles.length < options.minCandles) return;
 
-        // Stage-2 cheap-stats screen (market scan only; the DB-sourced path
-        // keeps its historical behavior): reject chop (ADX < 15), dead
+        // Stage-2 cheap-stats screen: reject chop (ADX < 15), dead
         // (ATR% < 0.02), and moon-shot (ATR% > 10) candidates from the
-        // cached candles BEFORE the expensive walk-forward runs.
+        // cached candles BEFORE the expensive walk-forward runs. Apply this
+        // to db-mainnet too: the expanded cache is a market universe, and
+        // letting dead/choppy symbols reach the ladder sweep made a 100-name
+        // readiness run needlessly expensive.
         const stats = computeSymbolStats(candles, options.timeframe);
         if (!passesStage2Screen(stats)) return;
 

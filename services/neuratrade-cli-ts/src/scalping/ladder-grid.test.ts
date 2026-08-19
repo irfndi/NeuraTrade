@@ -715,6 +715,42 @@ describe("findBestLadderGridParams", () => {
 
     expect(best.gridStepPct).toBe(0.5);
   });
+
+  it("does not resimulate inactive gridMaxGrids values when stopRatio is set", () => {
+    const candles = makeRandomWalkCandles(240);
+    const base = {
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 100,
+      trendFilterPeriod: 0,
+      leverage: 1,
+      stopRatio: 1.5,
+    };
+    const single = findBestLadderGridParams(
+      candles,
+      {
+        rungs: [1, 2],
+        gridStepPct: [0.3, 0.5],
+        gridMaxGrids: [1],
+        gridPauseAfterLossBars: [0, 6],
+      },
+      base,
+    );
+    const redundant = findBestLadderGridParams(
+      candles,
+      {
+        rungs: [1, 2],
+        gridStepPct: [0.3, 0.5],
+        gridMaxGrids: [1, 1.5, 2, 3],
+        gridPauseAfterLossBars: [0, 6],
+      },
+      base,
+    );
+
+    expect(redundant.result.totalReturnPct).toBe(single.result.totalReturnPct);
+    expect(redundant.result.totalTrades).toBe(single.result.totalTrades);
+    expect(redundant.gridMaxGrids).toBe(1);
+  });
 });
 
 describe("runLadderGridWalkForward", () => {

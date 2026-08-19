@@ -600,15 +600,25 @@ export function findBestLadderGridParams(
   let bestOverall: (LadderOptions & { result: LadderResult }) | null = null;
   let bestEligible: (LadderOptions & { result: LadderResult }) | null = null;
 
+  // When stopRatio is active, the stop boundary is derived from the deepest
+  // filled rung and stopRatio; gridMaxGrids is not read by the backtest. Do
+  // not spend four full simulations on equivalent candidates during every
+  // walk-forward window. Keep the first value for deterministic output and
+  // preserve the full sweep when the legacy grid-distance stop is active.
+  const gridMaxGrids =
+    (baseOptions.stopRatio ?? 0) > 0
+      ? [searchSpace.gridMaxGrids[0] ?? 1]
+      : searchSpace.gridMaxGrids;
+
   for (const rungs of searchSpace.rungs) {
     for (const gridStepPct of searchSpace.gridStepPct) {
-      for (const gridMaxGrids of searchSpace.gridMaxGrids) {
+      for (const maxGrids of gridMaxGrids) {
         for (const gridPauseAfterLossBars of searchSpace.gridPauseAfterLossBars) {
           const options: LadderOptions = {
             ...baseOptions,
             rungs,
             gridStepPct,
-            gridMaxGrids,
+            gridMaxGrids: maxGrids,
             gridPauseAfterLossBars,
           };
           const result = runLadderGridBacktest(trainCandles, options);
