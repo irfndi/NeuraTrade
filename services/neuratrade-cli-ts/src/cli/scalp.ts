@@ -143,6 +143,7 @@ import {
   type GridUniverseEntry,
   type GridUniverseOptions,
   DEFAULT_GRID_UNIVERSE_SEARCH_SPACE,
+  LADDER_GATE_TAIL,
   DEFAULT_PER_SYMBOL_FILL_CAP,
   accountScaledTargetFillsPerDay,
   accountSymbolCap,
@@ -5251,6 +5252,13 @@ export const gridUniverseScanCommand = Command.make(
         return yield* Effect.fail(
           new Error(
             `invalid --engine '${args.engine}': expected 'grid' or 'ladder'`,
+          ),
+        );
+      }
+      if (args.engine === "ladder" && args.minCandles < LADDER_GATE_TAIL) {
+        return yield* Effect.fail(
+          new Error(
+            `ladder scans require at least ${LADDER_GATE_TAIL} candles (~21 days at 15m); received ${args.minCandles}. Increase --min-candles before creating a paper whitelist`,
           ),
         );
       }
