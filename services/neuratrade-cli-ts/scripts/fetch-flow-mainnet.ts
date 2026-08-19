@@ -50,7 +50,10 @@ async function withRetry<A>(
     try {
       return await run();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : String((err as { readonly reason?: unknown }).reason ?? err);
       if (
         attempt < 4 &&
         /429|5\d\d|fetch failed|aborted|ETIMEDOUT|ECONN|rate limit/i.test(msg)
@@ -333,9 +336,9 @@ async function main() {
         totalFunding += f;
         console.log(`  funding saved: ${f}`);
       } catch (err) {
-        console.warn(
-          `⚠️ ${bSym} failed: ${err instanceof Error ? err.message.slice(0, 140) : String(err)}`,
-        );
+      console.warn(
+        `⚠️ ${bSym} failed: ${(err instanceof Error ? err.message : String((err as { readonly reason?: unknown }).reason ?? err)).slice(0, 140)}`,
+      );
       }
     }
   };
