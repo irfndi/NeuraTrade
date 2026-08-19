@@ -702,6 +702,7 @@ function makeBybitClientImpl(
     getPositions: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
+      else query.settleCoin = "USDT";
       return get(
         "/v5/position/list",
         query,
@@ -770,6 +771,7 @@ function makeBybitClientImpl(
     getOpenOrders: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
+      else query.settleCoin = "USDT";
       return get(
         "/v5/order/realtime",
         query,
