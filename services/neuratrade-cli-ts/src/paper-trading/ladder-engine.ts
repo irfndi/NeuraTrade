@@ -1567,13 +1567,29 @@ export function runLadderPaperTradingIteration(
         : openAfter > openBefore
           ? "opened"
           : "hold";
+    const chopGateThreshold = options.chopGateAdxThreshold ?? 0;
+    const lastAdx =
+      chopGateThreshold > 0
+        ? makeCausalSymbolStats(candles, "15m")(candles.length - 1).adx14
+        : 0;
+    const seedsBlockedByChopGate =
+      openBefore === 0 &&
+      openAfter === 0 &&
+      iterationFills.length === 0 &&
+      closedThisIteration === 0 &&
+      chopGateThreshold > 0 &&
+      lastAdx >= chopGateThreshold;
     return {
       action,
       capital: toNumber(state.capital),
       peakCapital: toNumber(state.peakCapital),
       openRungs: openAfter,
       closedThisIteration,
-      note: `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}`,
+      note:
+        `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}` +
+        (seedsBlockedByChopGate
+          ? `; seeds blocked by ADX gate (${lastAdx.toFixed(2)} >= ${chopGateThreshold})`
+          : ""),
     };
   });
 }
