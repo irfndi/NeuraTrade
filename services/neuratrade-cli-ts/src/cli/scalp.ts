@@ -1528,7 +1528,10 @@ function optimizeProgram(args: OptimizeArgs) {
     );
     for (const window of windows) {
       let selected:
-        | { readonly params: OptimizeCandidateParams; readonly isResult: BacktestResult }
+        | {
+            readonly params: OptimizeCandidateParams;
+            readonly isResult: BacktestResult;
+          }
         | undefined;
 
       for (const params of candidates) {
@@ -2775,9 +2778,7 @@ export const paperTradeCommand = Command.make(
               }).pipe(Effect.provide(paperRepoLayer)),
         onSome: (file) =>
           loadWatchlist(
-            file.startsWith("/")
-              ? file
-              : resolve(path.homeDir, "data", file),
+            file.startsWith("/") ? file : resolve(path.homeDir, "data", file),
           ),
       });
 
@@ -2795,9 +2796,10 @@ export const paperTradeCommand = Command.make(
         db,
         circuitBreakerMaxLoss,
       );
-      const marketDataLayer = mergedArgs.live || mergedArgs.shadow
-        ? MarketDataGatewayLive
-        : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
+      const marketDataLayer =
+        mergedArgs.live || mergedArgs.shadow
+          ? MarketDataGatewayLive
+          : Layer.provide(MarketDataGatewayRepositoryLive, repoLayer);
       const layers = Layer.mergeAll(
         BunServices.layer,
         PathLive(process.env.NEURATRADE_HOME),
@@ -3432,6 +3434,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         maxPositionDrawdownPct: args.maxPositionDrawdownPct,
         stopRatio: args.stopRatio,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
+        forwardOnly: args.live || args.shadow === true,
         isLive: args.live,
         productType,
         marginMode,
@@ -5730,9 +5733,7 @@ export const gridUniverseScanCommand = Command.make(
           );
           for (const e of result.entries) {
             const mark = e.gatedDropped ? " ✘" : e.passed ? " ✔" : "";
-            const reason = e.rejectionReason
-              ? ` [${e.rejectionReason}]`
-              : "";
+            const reason = e.rejectionReason ? ` [${e.rejectionReason}]` : "";
             const gateReasons = e.gateFailureReasons?.length
               ? ` gate=${e.gateFailureReasons.join("|")}`
               : "";

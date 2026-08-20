@@ -81,6 +81,12 @@ export interface LadderPaperTradingOptions {
   /** When > 0, step through the last N stored candles one per iteration. */
   readonly replayBars?: number;
   /**
+   * Use warm-up candles only for indicators and process the newest candle.
+   * Shadow/live starts must be forward-only; historical stepping is opt-in via
+   * replayBars or the deterministic test harness.
+   */
+  readonly forwardOnly?: boolean;
+  /**
    * When true, bar fill/close events are also executed on the exchange
    * through FuturesExchangeAdapter (live orders); the paper ledger stays the
    * PnL source of truth. Default false = paper-only.
@@ -1347,7 +1353,10 @@ export function runLadderPaperTradingIteration(
       // the candle close), hold instead of reprocessing history — replaying
       // already-settled bars would double-count fills and closes.
       if (state.lastTimestamp === null) {
-        startIndex = Math.max(1, options.trendFilterPeriod);
+        startIndex =
+          options.forwardOnly === true
+            ? Math.max(0, candles.length - 1)
+            : Math.max(1, options.trendFilterPeriod);
       } else {
         const nextIndex = candles.findIndex(
           (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
