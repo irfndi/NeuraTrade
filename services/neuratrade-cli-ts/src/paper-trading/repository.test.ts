@@ -4,7 +4,12 @@ import { Effect } from "effect";
 import { money } from "../utils/money.js";
 import { PaperTradingRepositorySQLite } from "./repository.js";
 import type { WatchlistEntry } from "./repository.js";
-import type { GridPaperState, GridPaperTrade, PaperPosition } from "./types.js";
+import type {
+  GridPaperState,
+  GridPaperTrade,
+  LadderPaperTrade,
+  PaperPosition,
+} from "./types.js";
 
 describe("PaperTradingRepositorySQLite", () => {
   it("round-trips monetary values without SQLite REAL precision loss", async () => {
@@ -19,6 +24,57 @@ describe("PaperTradingRepositorySQLite", () => {
 
     expect(portfolio.capital.toString()).toBe(capital.toString());
     expect(portfolio.peakCapital.toString()).toBe(peakCapital.toString());
+    db.close();
+  });
+
+  it("records ladder close history idempotently with exact decimal PnL", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const trade: LadderPaperTrade = {
+      id: "ladder-trade-test-1",
+      exchange: "bybit-futures",
+      symbol: "ENA/USDT:USDT",
+      timeframe: "15m",
+      side: "long",
+      rungIndex: 1,
+      entryPrice: money("0.12345678901234567890"),
+      exitPrice: money("0.12456789012345678901"),
+      capitalBefore: money("49.000000000000000001"),
+      capitalAfter: money("49.123456789012345678"),
+      pnl: money("0.123456789012345677"),
+      pnlPct: money("0.251952630637440157"),
+      exitReason: "target",
+      openedAt: new Date("2026-08-20T00:00:00.000Z"),
+      closedAt: new Date("2026-08-20T00:15:00.000Z"),
+    };
+    await Effect.runPromise(
+      repository.recordLadderTrades?.([trade]) ??
+        Effect.die("missing ladder recorder"),
+    );
+    await Effect.runPromise(
+      repository.recordLadderTrades?.([trade]) ??
+        Effect.die("missing ladder recorder"),
+    );
+
+    const row = db
+      .query(
+        `SELECT capital_before_decimal, capital_after_decimal, pnl_decimal,
+                pnl_pct_decimal, COUNT(*) OVER () AS trade_count
+         FROM ladder_paper_trades WHERE id = ?`,
+      )
+      .get(trade.id) as {
+      capital_before_decimal: string;
+      capital_after_decimal: string;
+      pnl_decimal: string;
+      pnl_pct_decimal: string;
+      trade_count: number;
+    };
+    expect(row.capital_before_decimal).toBe(trade.capitalBefore.toString());
+    expect(row.capital_after_decimal).toBe(trade.capitalAfter.toString());
+    expect(row.pnl_decimal).toBe(trade.pnl.toString());
+    expect(row.pnl_pct_decimal).toBe(trade.pnlPct.toString());
+    expect(row.trade_count).toBe(1);
     db.close();
   });
 

@@ -175,6 +175,30 @@ export interface GridPaperTrade {
     | "bybit-live";
 }
 
+/**
+ * Durable close record for the incremental ladder paper engine. Ladder state
+ * is intentionally compact, but its history must remain queryable so paper
+ * readiness uses trade-level expectancy and exit-reason evidence rather than
+ * only the current capital balance.
+ */
+export interface LadderPaperTrade {
+  readonly id: string;
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly side: "long" | "short";
+  readonly rungIndex: number;
+  readonly entryPrice: Money;
+  readonly exitPrice: Money;
+  readonly capitalBefore: Money;
+  readonly capitalAfter: Money;
+  readonly pnl: Money;
+  readonly pnlPct: Money;
+  readonly exitReason: "target" | "stop" | "liquidation" | "max_hold";
+  readonly openedAt: Date;
+  readonly closedAt: Date;
+}
+
 /** One rung of the multi-level ladder grid paper engine. */
 export interface LadderPaperRungState {
   readonly rungIndex: number;

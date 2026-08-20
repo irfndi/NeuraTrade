@@ -51,6 +51,7 @@ import {
   type ContractSizeSpec,
   orderableQty,
   type LadderPaperRungState,
+  type LadderPaperTrade,
   type LadderPaperState,
 } from "./types.js";
 
@@ -164,6 +165,12 @@ export interface LadderCloseEvent {
   readonly entryPrice: number;
   readonly exitPrice: number;
   readonly reason: "target" | "stop" | "liquidation" | "max_hold";
+  readonly capitalBefore: string;
+  readonly capitalAfter: string;
+  readonly pnl: string;
+  readonly pnlPct: string;
+  readonly entryTimestamp: number;
+  readonly closedTimestamp: number;
 }
 
 export interface LadderBarEvents {
@@ -226,6 +233,7 @@ function closeRung(
   reason: "target" | "stop" | "liquidation" | "max_hold",
   opts: LadderPaperTradingOptions,
   events: MutableBarEvents,
+  closedAt: Date,
 ): void {
   const leverage = Math.max(1, opts.leverage ?? 1);
   const positionFraction = Math.max(
@@ -257,13 +265,58 @@ function closeRung(
   } else {
     w.totalWins += 1;
   }
+  const pnl = w.capital.minus(capitalBefore);
   events.closes.push({
     rungIndex: r.rungIndex,
     side: r.side,
     entryPrice: r.entryPrice,
     exitPrice,
     reason,
+    capitalBefore: capitalBefore.toString(),
+    capitalAfter: w.capital.toString(),
+    pnl: pnl.toString(),
+    pnlPct: capitalBefore.isZero()
+      ? "0"
+      : pnl.div(capitalBefore).times(100).toString(),
+    entryTimestamp: r.entryTimestamp,
+    closedTimestamp: closedAt.getTime(),
   });
+}
+
+function ladderTradeFromClose(
+  options: LadderPaperTradingOptions,
+  close: LadderCloseEvent,
+): LadderPaperTrade {
+  const closedAt = new Date(close.closedTimestamp);
+  const openedAt = new Date(
+    close.entryTimestamp > 0 ? close.entryTimestamp : close.closedTimestamp,
+  );
+  return {
+    id: [
+      "ladder-trade",
+      options.exchange,
+      options.symbol,
+      options.timeframe,
+      close.side,
+      close.rungIndex,
+      close.entryTimestamp,
+      close.closedTimestamp,
+    ].join(":"),
+    exchange: options.exchange,
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    side: close.side,
+    rungIndex: close.rungIndex,
+    entryPrice: money(close.entryPrice),
+    exitPrice: money(close.exitPrice),
+    capitalBefore: money(close.capitalBefore),
+    capitalAfter: money(close.capitalAfter),
+    pnl: money(close.pnl),
+    pnlPct: money(close.pnlPct),
+    exitReason: close.reason,
+    openedAt,
+    closedAt,
+  };
 }
 
 function openRungCount(w: WorkingState): number {
@@ -418,14 +471,30 @@ export function advanceLadderBar(
       const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
       if (liq > 0 && c.low <= liq) {
         for (const r of filledLong)
-          closeRung(w, r, liq * slippage, "liquidation", opts, events);
+          closeRung(
+            w,
+            r,
+            liq * slippage,
+            "liquidation",
+            opts,
+            events,
+            c.timestamp,
+          );
         w.longRungs = [];
         w.longBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
       } else if (c.low <= boundary) {
         for (const r of filledLong)
-          closeRung(w, r, boundary * slippage, "stop", opts, events);
+          closeRung(
+            w,
+            r,
+            boundary * slippage,
+            "stop",
+            opts,
+            events,
+            c.timestamp,
+          );
         w.longRungs = [];
         w.longBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
@@ -449,7 +518,15 @@ export function advanceLadderBar(
         );
         const survivors = filledLong.filter((r) => !killed.includes(r));
         for (const r of killed)
-          closeRung(w, r, c.close / slippage, "stop", opts, events);
+          closeRung(
+            w,
+            r,
+            c.close / slippage,
+            "stop",
+            opts,
+            events,
+            c.timestamp,
+          );
         if (survivors.length === 0) {
           w.longRungs = [];
           w.longBase = 0;
@@ -471,14 +548,30 @@ export function advanceLadderBar(
             c.high >= target &&
             ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
           ) {
-            closeRung(w, r, target / slippage, "target", opts, events);
+            closeRung(
+              w,
+              r,
+              target / slippage,
+              "target",
+              opts,
+              events,
+              c.timestamp,
+            );
             anyFillClosed = true;
           } else if (
             maxHoldBars > 0 &&
             r.entryTimestamp > 0 &&
             c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
           ) {
-            closeRung(w, r, c.close / slippage, "max_hold", opts, events);
+            closeRung(
+              w,
+              r,
+              c.close / slippage,
+              "max_hold",
+              opts,
+              events,
+              c.timestamp,
+            );
             anyFillClosed = true;
           } else {
             stillOpen.push(r);
@@ -533,14 +626,30 @@ export function advanceLadderBar(
       const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
       if (liq > 0 && c.high >= liq) {
         for (const r of filledShort)
-          closeRung(w, r, liq / slippage, "liquidation", opts, events);
+          closeRung(
+            w,
+            r,
+            liq / slippage,
+            "liquidation",
+            opts,
+            events,
+            c.timestamp,
+          );
         w.shortRungs = [];
         w.shortBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
           w.paused = opts.gridPauseAfterLossBars;
       } else if (c.high >= boundary) {
         for (const r of filledShort)
-          closeRung(w, r, boundary / slippage, "stop", opts, events);
+          closeRung(
+            w,
+            r,
+            boundary / slippage,
+            "stop",
+            opts,
+            events,
+            c.timestamp,
+          );
         w.shortRungs = [];
         w.shortBase = 0;
         if (opts.gridPauseAfterLossBars > 0)
@@ -562,7 +671,15 @@ export function advanceLadderBar(
         );
         const survivors = filledShort.filter((r) => !killed.includes(r));
         for (const r of killed)
-          closeRung(w, r, c.close * slippage, "stop", opts, events);
+          closeRung(
+            w,
+            r,
+            c.close * slippage,
+            "stop",
+            opts,
+            events,
+            c.timestamp,
+          );
         if (survivors.length === 0) {
           w.shortRungs = [];
           w.shortBase = 0;
@@ -584,14 +701,30 @@ export function advanceLadderBar(
             c.low <= target &&
             ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
           ) {
-            closeRung(w, r, target * slippage, "target", opts, events);
+            closeRung(
+              w,
+              r,
+              target * slippage,
+              "target",
+              opts,
+              events,
+              c.timestamp,
+            );
             anyFillClosed = true;
           } else if (
             maxHoldBars > 0 &&
             r.entryTimestamp > 0 &&
             c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
           ) {
-            closeRung(w, r, c.close * slippage, "max_hold", opts, events);
+            closeRung(
+              w,
+              r,
+              c.close * slippage,
+              "max_hold",
+              opts,
+              events,
+              c.timestamp,
+            );
             anyFillClosed = true;
           } else {
             stillOpen.push(r);
@@ -1085,6 +1218,10 @@ export function runLadderPaperTradingIteration(
           candles._tag === "Success" && candles.success.length > 0
             ? candles.success[candles.success.length - 1].close
             : null;
+        const closeTimestamp =
+          candles._tag === "Success" && candles.success.length > 0
+            ? candles.success[candles.success.length - 1].timestamp
+            : new Date();
         if (closePrice !== null && closePrice > 0) {
           const w = stateToWorking(state);
           const events: MutableBarEvents = { fills: [], closes: [] };
@@ -1092,7 +1229,15 @@ export function runLadderPaperTradingIteration(
             const rungs = side === "long" ? w.longRungs : w.shortRungs;
             for (const r of rungs) {
               if (r.filled) {
-                closeRung(w, r, closePrice, "max_hold", options, events);
+                closeRung(
+                  w,
+                  r,
+                  closePrice,
+                  "max_hold",
+                  options,
+                  events,
+                  closeTimestamp,
+                );
               }
             }
             if (side === "long") w.longRungs = [];
@@ -1111,6 +1256,16 @@ export function runLadderPaperTradingIteration(
             totalLosses: w.totalLosses,
             lastTimestamp: state.lastTimestamp,
           };
+          if (
+            events.closes.length > 0 &&
+            repo.recordLadderTrades !== undefined
+          ) {
+            yield* repo.recordLadderTrades(
+              events.closes.map((close) =>
+                ladderTradeFromClose(options, close),
+              ),
+            );
+          }
           yield* repo.saveLadderState(state);
           if (closed > 0) {
             return {
@@ -1387,6 +1542,12 @@ export function runLadderPaperTradingIteration(
           note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}${"violations" in outcome.failure && Array.isArray(outcome.failure.violations) ? `: ${(outcome.failure as { violations: readonly string[] }).violations.join("; ")}` : ""}`,
         };
       }
+    }
+
+    if (iterationCloses.length > 0 && repo.recordLadderTrades !== undefined) {
+      yield* repo.recordLadderTrades(
+        iterationCloses.map((close) => ladderTradeFromClose(options, close)),
+      );
     }
 
     if (Option.isSome(circuitBreaker) && iterationCloses.length > 0) {

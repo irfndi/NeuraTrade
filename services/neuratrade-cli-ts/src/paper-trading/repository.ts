@@ -4,6 +4,7 @@ import { Decimal, toNumber } from "../utils/money.js";
 import type {
   GridPaperState,
   GridPaperTrade,
+  LadderPaperTrade,
   LadderPaperState,
   PaperPosition,
   PaperTrade,
@@ -245,6 +246,11 @@ export interface PaperTradingRepositoryService {
     state: LadderPaperState,
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 
+  /** Persist ladder close events. Optional for minimal test doubles. */
+  readonly recordLadderTrades?: (
+    trades: readonly LadderPaperTrade[],
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
   /** Load the persisted flow-trade state for one (exchange, symbol), or null
    *  when no row exists yet (fresh start — flat). */
   readonly getFlowTradeState: (
@@ -453,6 +459,35 @@ CREATE TABLE IF NOT EXISTS ladder_paper_state (
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (exchange, symbol, timeframe)
 );
+
+CREATE TABLE IF NOT EXISTS ladder_paper_trades (
+  id TEXT PRIMARY KEY,
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  side TEXT NOT NULL,
+  rung_index INTEGER NOT NULL,
+  entry_price REAL NOT NULL,
+  exit_price REAL NOT NULL,
+  capital_before REAL NOT NULL,
+  capital_after REAL NOT NULL,
+  pnl REAL NOT NULL,
+  pnl_pct REAL NOT NULL,
+  entry_price_decimal TEXT NOT NULL,
+  exit_price_decimal TEXT NOT NULL,
+  capital_before_decimal TEXT NOT NULL,
+  capital_after_decimal TEXT NOT NULL,
+  pnl_decimal TEXT NOT NULL,
+  pnl_pct_decimal TEXT NOT NULL,
+  exit_reason TEXT NOT NULL,
+  opened_at DATETIME NOT NULL,
+  closed_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ladder_paper_trades_symbol
+  ON ladder_paper_trades(exchange, symbol, timeframe);
+CREATE INDEX IF NOT EXISTS idx_ladder_paper_trades_closed_at
+  ON ladder_paper_trades(closed_at DESC);
 
 CREATE TABLE IF NOT EXISTS grid_paper_trades (
   id TEXT PRIMARY KEY,
@@ -1661,6 +1696,57 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to save ladder paper state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  recordLadderTrades(
+    trades: readonly LadderPaperTrade[],
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    if (trades.length === 0) return Effect.succeed(undefined);
+    return Effect.try({
+      try: () => {
+        const insert = this.db.query(
+          `INSERT OR IGNORE INTO ladder_paper_trades
+           (id, exchange, symbol, timeframe, side, rung_index,
+            entry_price, exit_price, capital_before, capital_after, pnl, pnl_pct,
+            entry_price_decimal, exit_price_decimal, capital_before_decimal,
+            capital_after_decimal, pnl_decimal, pnl_pct_decimal,
+            exit_reason, opened_at, closed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        this.db.transaction(() => {
+          for (const trade of trades) {
+            insert.run(
+              trade.id,
+              trade.exchange,
+              trade.symbol,
+              trade.timeframe,
+              trade.side,
+              trade.rungIndex,
+              toNumber(trade.entryPrice),
+              toNumber(trade.exitPrice),
+              toNumber(trade.capitalBefore),
+              toNumber(trade.capitalAfter),
+              toNumber(trade.pnl),
+              toNumber(trade.pnlPct),
+              trade.entryPrice.toString(),
+              trade.exitPrice.toString(),
+              trade.capitalBefore.toString(),
+              trade.capitalAfter.toString(),
+              trade.pnl.toString(),
+              trade.pnlPct.toString(),
+              trade.exitReason,
+              trade.openedAt.toISOString(),
+              trade.closedAt.toISOString(),
+            );
+          }
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to record ladder paper trades: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });
