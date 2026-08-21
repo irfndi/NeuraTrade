@@ -47,6 +47,13 @@ services/neuratrade-cli-ts/
 | Paper/live trading        | `src/paper-trading/{engine,futures-engine,grid-engine}.ts`   | Iteration loop + persistence                                                     |
 | Pre-trade risk guards     | `src/risk/guards.ts`                                         | Drawdown, daily loss, position size limits                                       |
 
+## LADDER PORTFOLIO (shared-capital watchlists)
+
+- A ladder watchlist is ONE paper account: `allocateLadderPortfolioCapital` partitions `--capital` across symbols by `allocatedWeight` (missing weights split equally).
+- Account-level compounding: every `NEURATRADE_LADDER_REBALANCE_HOURS` (default 24, `0` disables) the loop re-derives each member's target from live equity via `planLadderPortfolioRebalance` and applies it as a `maxPositionPct` cap — persisted state never mismatches because `configMatchesLadderState` ignores that field.
+- Whitelist decay: `scripts/ladder-whitelist-gatewatch.ts` re-runs the stage-4 gates on fresh DB candles for a live whitelist (exit 1 = any member failing; `--prune` drops failures, never to empty). Run it nightly in report-only mode; pruning is a deliberate act because membership changes mint a new portfolio id and reset cohort evidence.
+- Candle source note: gatewatch loads the 5m mainnet cache and resamples, matching the research funnel's data path — raw rows at higher timeframes are sparse/testnet-native.
+
 ## COMMANDS
 
 ```bash
