@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM oven/bun:1.2-alpine AS builder
+FROM oven/bun:1.4.0-alpine AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY . .
 RUN bun run build:bun
 
 # Final stage
-FROM oven/bun:1.2-alpine
+FROM oven/bun:1.4.0-alpine
 
 # Run as non-root bun user
 USER bun

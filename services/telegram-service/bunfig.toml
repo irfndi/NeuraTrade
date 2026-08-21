@@ -1,3 +1,9 @@
+[install]
+# Share package materializations with the CLI service through Bun 1.4's global
+# virtual store instead of copying duplicate dependency trees per project.
+linker = "isolated"
+globalStore = true
+
 [test]
 preload = ["./test-setup.ts"]
 coverageReporter = ["text", "lcov"]

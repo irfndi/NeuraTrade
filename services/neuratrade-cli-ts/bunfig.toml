@@ -1,3 +1,9 @@
+[install]
+# Bun 1.4 isolated installs share package materializations through the global
+# virtual store, avoiding duplicate dependency trees across NeuraTrade services.
+linker = "isolated"
+globalStore = true
+
 [test]
 preload = ["./test-setup.ts"]
 
