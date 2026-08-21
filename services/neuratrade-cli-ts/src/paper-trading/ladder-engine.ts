@@ -1360,6 +1360,27 @@ export function runLadderPaperTradingIteration(
       };
     }
 
+    const holdAtLatestCandle = (note: string): LadderPaperIterationResult => {
+      const markedState = stateToWorking(state!);
+      const markPrice = candles[candles.length - 1].close;
+      const unrealizedPnl = estimateUnrealizedPnl(
+        markedState,
+        markPrice,
+        options,
+      );
+      return {
+        action: "hold",
+        capital: toNumber(state!.capital),
+        peakCapital: toNumber(state!.peakCapital),
+        openRungs: openRungCount(markedState),
+        closedThisIteration: 0,
+        equity: toNumber(markedState.capital.plus(unrealizedPnl)),
+        unrealizedPnl: toNumber(unrealizedPnl),
+        markPrice,
+        note,
+      };
+    };
+
     let startIndex: number;
     if (replayBars > 0) {
       if (state.lastTimestamp === null) {
@@ -1372,14 +1393,7 @@ export function runLadderPaperTradingIteration(
           (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
         );
         if (nextIndex === -1) {
-          return {
-            action: "hold",
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            openRungs: openRungCount(stateToWorking(state)),
-            closedThisIteration: 0,
-            note: "no new replay candle",
-          };
+          return holdAtLatestCandle("no new replay candle");
         }
         startIndex = nextIndex;
       }
@@ -1398,14 +1412,7 @@ export function runLadderPaperTradingIteration(
           (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
         );
         if (nextIndex === -1) {
-          return {
-            action: "hold",
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            openRungs: openRungCount(stateToWorking(state)),
-            closedThisIteration: 0,
-            note: "no new candle",
-          };
+          return holdAtLatestCandle("no new candle");
         }
         startIndex = nextIndex;
       }

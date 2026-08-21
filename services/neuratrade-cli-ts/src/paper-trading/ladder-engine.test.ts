@@ -236,6 +236,8 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.closedThisIteration).toBe(0);
     expect(result.capital).toBe(100);
     expect(result.note).toContain("ladder iter over 1 bars");
+    expect(result.unrealizedPnl).toBeDefined();
+    expect(result.equity).toBeDefined();
   });
 
   it("reports action=opened when an iteration fills a rung without closing it", async () => {
