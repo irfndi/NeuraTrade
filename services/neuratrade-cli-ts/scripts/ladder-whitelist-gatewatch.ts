@@ -22,6 +22,7 @@ import {
   computeFillFrequencyPct,
   ladderGateCriteriaFailures,
   passesLadderGateCriteria,
+  resampleCandles,
 } from "../src/scalping/grid-universe.ts";
 import { validateLadderEvidence } from "../src/scalping/ladder-validation.ts";
 import type { LadderOptions } from "../src/scalping/ladder-grid.ts";
@@ -75,21 +76,28 @@ if (!Array.isArray(rows) || rows.length === 0) {
 const db = new Database(`${HOME}/data/neuratrade.db`, { readonly: true });
 db.exec("PRAGMA busy_timeout = 30000;");
 
-function loadCandles(symbolWire: string): Candle[] {
+/**
+ * Candles live in the DB as the 5m mainnet cache (the same source the
+ * research scan resamples from). Load 5m rows and resample to the scan
+ * timeframe so gate verdicts match the funnel's data path exactly.
+ */
+function loadCandles(symbolWire: string, targetMinutes: number): Candle[] {
   const canonical = symbolWire.replace(/\/USDT.*/, "/USDT");
   // Wire form, canonical pair, and perp suffix — always three bound params,
   // so the statement text is fully static.
   const variants = [symbolWire, canonical, `${canonical}:USDT`];
+  // 5m base bars needed to cover minCandles at the target timeframe.
+  const baseLimit = minCandles * Math.max(1, Math.round(targetMinutes / 5));
   const rowsDb = db
     .query(
       `SELECT c.open_price AS open, c.high_price AS high, c.low_price AS low,
               c.close_price AS close, c.volume, c.timestamp
        FROM ohlcv_data c
        JOIN trading_pairs tp ON tp.id = c.trading_pair_id
-       WHERE tp.symbol IN (?,?,?) AND c.timeframe = ?
+       WHERE tp.symbol IN (?,?,?) AND c.timeframe = '5m'
        ORDER BY c.timestamp DESC LIMIT ?`,
     )
-    .all(variants[0], variants[1], variants[2], timeframe, minCandles) as {
+    .all(variants[0], variants[1], variants[2], baseLimit) as {
     open: number;
     high: number;
     low: number;
@@ -97,12 +105,12 @@ function loadCandles(symbolWire: string): Candle[] {
     volume: number;
     timestamp: string;
   }[];
-  // Loaded DESC for the LIMIT; validator wants chronological order.
+  // Loaded DESC for the LIMIT; resampler wants chronological order.
   const chronological = rowsDb.toReversed();
-  return chronological.map((r) => ({
+  const base: Candle[] = chronological.map((r) => ({
     exchange: "bybit-futures",
     symbol: symbolWire,
-    timeframe,
+    timeframe: "5m",
     open: r.open,
     high: r.high,
     low: r.low,
@@ -110,13 +118,16 @@ function loadCandles(symbolWire: string): Candle[] {
     volume: r.volume,
     timestamp: new Date(r.timestamp),
   }));
+  if (targetMinutes === 5) return base;
+  return resampleCandles(base, targetMinutes, timeframe);
 }
 
 const survivors: WhitelistRow[] = [];
 let failures = 0;
 
 for (const row of rows) {
-  const candles = loadCandles(row.symbol);
+  const targetMinutes = timeframe === "5m" ? 5 : 15;
+  const candles = loadCandles(row.symbol, targetMinutes);
   const reasons: string[] = [];
 
   if (candles.length < trainBars + testBars + testBars) {
