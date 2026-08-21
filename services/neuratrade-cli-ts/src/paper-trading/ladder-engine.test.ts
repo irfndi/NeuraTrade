@@ -265,6 +265,9 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.action).toBe("opened");
     expect(result.openRungs).toBe(1);
     expect(result.closedThisIteration).toBe(0);
+    expect(result.unrealizedPnl).toBeDefined();
+    expect(result.equity).toBeDefined();
+    expect(result.equity!).toBeGreaterThan(result.capital);
   });
 
   it("executes live fills and closes through the exchange adapter", async () => {

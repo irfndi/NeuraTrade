@@ -198,6 +198,12 @@ export interface LadderPaperIterationResult {
   readonly openRungs: number;
   /** Trades closed this iteration. */
   readonly closedThisIteration: number;
+  /** Mark-to-market account equity when a candle was processed. */
+  readonly equity?: number;
+  /** Estimated unrealized PnL at the processed candle close. */
+  readonly unrealizedPnl?: number;
+  /** Price used for the mark-to-market estimate. */
+  readonly markPrice?: number;
   readonly note: string;
 }
 
@@ -330,6 +336,36 @@ function openRungCount(w: WorkingState): number {
     w.longRungs.filter((r) => r.filled).length +
     w.shortRungs.filter((r) => r.filled).length
   );
+}
+
+/** Estimate account-level unrealized PnL without mutating realized capital. */
+function estimateUnrealizedPnl(
+  w: WorkingState,
+  markPrice: number,
+  opts: LadderPaperTradingOptions,
+): Decimal {
+  if (!Number.isFinite(markPrice) || markPrice <= 0) return money(0);
+  const leverage = Math.max(1, opts.leverage ?? 1);
+  const positionFraction = Math.max(
+    0,
+    Math.min(1, (opts.maxPositionPct ?? 100) / 100),
+  );
+  const rungCount = Math.max(1, Math.floor(opts.rungs ?? 1));
+  const sizePerRung = positionFraction / rungCount;
+  const estimatedExitFee = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
+  const openRungs = [...w.longRungs, ...w.shortRungs].filter(
+    (r) => r.filled && r.entryPrice > 0,
+  );
+  let pnl = money(0);
+  for (const rung of openRungs) {
+    const priceReturn =
+      rung.side === "long"
+        ? (markPrice - rung.entryPrice) / rung.entryPrice
+        : (rung.entryPrice - markPrice) / rung.entryPrice;
+    const netReturn = priceReturn - estimatedExitFee;
+    pnl = pnl.plus(w.capital.mul(sizePerRung).mul(netReturn).mul(leverage));
+  }
+  return pnl;
 }
 
 function liquidationPrice(
@@ -1570,6 +1606,8 @@ export function runLadderPaperTradingIteration(
     yield* repo.saveLadderState(state);
 
     const openAfter = openRungCount(w);
+    const markPrice = last.close;
+    const unrealizedPnl = estimateUnrealizedPnl(w, markPrice, options);
     const action: "opened" | "closed" | "hold" =
       closedThisIteration > 0
         ? "closed"
@@ -1594,6 +1632,9 @@ export function runLadderPaperTradingIteration(
       peakCapital: toNumber(state.peakCapital),
       openRungs: openAfter,
       closedThisIteration,
+      equity: toNumber(w.capital.plus(unrealizedPnl)),
+      unrealizedPnl: toNumber(unrealizedPnl),
+      markPrice,
       note:
         `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}` +
         (seedsBlockedByChopGate

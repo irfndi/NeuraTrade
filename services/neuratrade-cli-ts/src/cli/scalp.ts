@@ -3643,7 +3643,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                         }),
                       );
               yield* Console.log(
-                `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}` : ""} | ${result.note}`,
+                `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}` : ""} | ${result.note}`,
               );
               if (remaining > 0 && args.iterations !== 0) {
                 remaining -= 1;
@@ -3671,7 +3671,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                   makeSpotOptions(args.symbol, args.exchange),
                 );
         yield* Console.log(
-          `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}` : ""} | ${result.note}`,
+          `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}` : ""} | ${result.note}`,
         );
 
         if (remaining > 0) {
