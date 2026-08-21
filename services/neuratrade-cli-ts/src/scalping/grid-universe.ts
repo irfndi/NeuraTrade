@@ -631,7 +631,7 @@ export function passesLadderTimeSplitGate(
  * drawdown cap, fixed-OOS trade floor, and non-negative block-bootstrap
  * confidence + pooled adverse-stress lower bounds.
  */
-function passesLadderGateCriteria(result: LadderValidationOk): boolean {
+export function passesLadderGateCriteria(result: LadderValidationOk): boolean {
   return (
     result.historical.profitableWindowPct > 50 &&
     result.historical.compoundedReturnPct >= 0 &&
@@ -643,7 +643,9 @@ function passesLadderGateCriteria(result: LadderValidationOk): boolean {
   );
 }
 
-function ladderGateCriteriaFailures(result: LadderValidationOk): string[] {
+export function ladderGateCriteriaFailures(
+  result: LadderValidationOk,
+): string[] {
   const failures: string[] = [];
   if (result.historical.profitableWindowPct <= 50) {
     failures.push("historical_profitable_windows");

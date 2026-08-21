@@ -99,6 +99,8 @@ import {
 } from "../paper-trading/ladder-engine.js";
 import {
   allocateLadderPortfolioCapital,
+  planLadderPortfolioRebalance,
+  type LadderRebalancePlan,
   summarizeLadderPortfolio,
 } from "../paper-trading/ladder-portfolio.js";
 import { bybitSnapshotCommand } from "./bybit-snapshot.js";
@@ -3288,6 +3290,43 @@ function paperTradeProgram(args: PaperTradeArgs) {
         `${resolveFuturesMarketExchange(exchange, true)}:${symbol}:${args.timeframe}`,
       );
 
+    // Account-level compounding: periodically re-derive each member's target
+    // allocation from LIVE equity (winners fund losers' targets) and express
+    // it as a maxPositionPct cap on sizing. initialCapital stays fixed so
+    // persisted state never mismatches (configMatchesLadderState ignores
+    // maxPositionPct). 0 disables; default every 24h.
+    const ladderRebalanceMs =
+      (Number(process.env.NEURATRADE_LADDER_REBALANCE_HOURS ?? "24") || 0) *
+      3_600_000;
+    const ladderLiveCapital = new Map<string, number>();
+    let ladderRebalancePlan: ReadonlyMap<string, LadderRebalancePlan> =
+      new Map();
+    let ladderRebalanceAt = 0;
+    const ladderRefreshRebalancePlan = (): string[] => {
+      if (
+        ladderRebalanceMs <= 0 ||
+        Date.now() - ladderRebalanceAt < ladderRebalanceMs
+      ) {
+        return [];
+      }
+      const plan = planLadderPortfolioRebalance(
+        ladderPortfolioRows.map((row) => ({
+          key: row.key,
+          allocatedWeight: row.entry.gridParams?.allocatedWeight,
+        })),
+        ladderLiveCapital,
+      );
+      if (plan.size === 0) return [];
+      ladderRebalancePlan = plan;
+      ladderRebalanceAt = Date.now();
+      return [...plan].map(
+        ([key, entry]) =>
+          `[${new Date().toISOString()}] REBALANCE ${key} target=${entry.targetAllocation.toFixed(2)} positionPct=${entry.positionPct.toFixed(1)}`,
+      );
+    };
+    const ladderRebalanceCapFor = (key: string): number | undefined =>
+      ladderRebalancePlan.get(key)?.positionPct;
+
     const makeSpotOptions = (
       symbol: string,
       exchange: string,
@@ -3447,6 +3486,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
       exchange: string,
       gridParams?: WatchlistEntry["gridParams"],
       allocatedCapital?: Decimal,
+      positionPctCap?: number,
     ): LadderPaperTradingOptions => {
       const resolvedLadderExchange = resolveFuturesMarketExchange(
         exchange,
@@ -3461,10 +3501,14 @@ function paperTradeProgram(args: PaperTradeArgs) {
       // max-position-size-pct is an account-level cap. Once capital is
       // partitioned, expand the per-partition cap enough to preserve that
       // account-level budget without ever exceeding 100% of a partition.
-      const partitionPositionPct =
+      const partitionPositionPct = Math.min(
         rawWeight.greaterThan(0) && rawWeight.lessThan(1)
           ? Math.min(100, basePositionPct / rawWeight.toNumber())
-          : basePositionPct;
+          : basePositionPct,
+        // Rebalance cap (when present): keeps deployed size tracking the
+        // member's target share of live portfolio equity.
+        positionPctCap ?? 100,
+      );
       return {
         exchange: resolvedLadderExchange,
         symbol,
@@ -3651,6 +3695,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
         // wallet can actually hold — ~4 at 25% margin each. API-call and
         // order-rate safety is preserved by the market-data/exchange rate
         // limiters; the per-round sleep below bounds overall cadence.
+        for (const line of ladderRefreshRebalancePlan()) {
+          yield* Console.log(line);
+        }
         const sweepResults = yield* Effect.forEach(
           entries,
           (entry) =>
@@ -3662,6 +3709,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                 entry.gridParams,
                 args.strategyType,
               );
+              const entryKey = `${resolveFuturesMarketExchange(entryExchange, true)}:${entry.symbol}:${args.timeframe}`;
               const allocatedCapital = isLadderSurvivor
                 ? ladderAllocationFor(entry.symbol, entryExchange)
                 : undefined;
@@ -3672,6 +3720,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                       entryExchange,
                       entry.gridParams,
                       allocatedCapital,
+                      ladderRebalanceCapFor(entryKey),
                     ),
                   )
                 : args.strategyType === "grid"
@@ -3711,6 +3760,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
                 paperRepo.saveLadderPortfolioMember !== undefined
               ) {
                 const ladderResult = result as LadderPaperIterationResult;
+                ladderLiveCapital.set(entryKey, ladderResult.capital);
                 const member: LadderPaperPortfolioMember = {
                   portfolioId: ladderPortfolioId,
                   exchange: resolveFuturesMarketExchange(entryExchange, true),
