@@ -550,7 +550,13 @@ CREATE TABLE IF NOT EXISTS ladder_paper_trades (
   pnl_pct_decimal TEXT NOT NULL,
   exit_reason TEXT NOT NULL,
   opened_at DATETIME NOT NULL,
-  closed_at DATETIME NOT NULL
+  closed_at DATETIME NOT NULL,
+  strategy_config_fingerprint TEXT,
+  cohort_id TEXT,
+  candidate_lock_at DATETIME,
+  dataset_cutoff_at DATETIME,
+  entry_opened_at DATETIME,
+  execution_environment TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ladder_paper_trades_symbol
@@ -783,6 +789,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "grid_paper_trades dataset_cutoff_at DATETIME",
           "grid_paper_trades entry_opened_at DATETIME",
           "grid_paper_trades execution_environment TEXT",
+          "ladder_paper_trades strategy_config_fingerprint TEXT",
+          "ladder_paper_trades cohort_id TEXT",
+          "ladder_paper_trades candidate_lock_at DATETIME",
+          "ladder_paper_trades dataset_cutoff_at DATETIME",
+          "ladder_paper_trades entry_opened_at DATETIME",
+          "ladder_paper_trades execution_environment TEXT",
         ]) {
           const [table, column, type] = tableColumn.split(" ");
           addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -1993,6 +2005,21 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     trades: readonly LadderPaperTrade[],
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     if (trades.length === 0) return Effect.succeed(undefined);
+    // Provenance guard (mirrors the grid path): a LIVE trade without a
+    // strategy fingerprint can never pass the readiness gate, so recording
+    // it would silently dilute the evidence pool with untagged rows.
+    for (const trade of trades) {
+      if (
+        trade.executionEnvironment?.endsWith("-live") &&
+        !trade.strategyConfigFingerprint
+      ) {
+        return Effect.fail(
+          new PaperTradingRepositoryError(
+            `Refusing to record live ladder trade ${trade.id}: missing strategy_config_fingerprint (provenance)`,
+          ),
+        );
+      }
+    }
     return Effect.try({
       try: () => {
         const insert = this.db.query(
@@ -2001,8 +2028,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             entry_price, exit_price, capital_before, capital_after, pnl, pnl_pct,
             entry_price_decimal, exit_price_decimal, capital_before_decimal,
             capital_after_decimal, pnl_decimal, pnl_pct_decimal,
-            exit_reason, opened_at, closed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            exit_reason, opened_at, closed_at,
+            strategy_config_fingerprint, cohort_id, candidate_lock_at,
+            dataset_cutoff_at, entry_opened_at, execution_environment)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         this.db.transaction(() => {
           for (const trade of trades) {
@@ -2028,6 +2057,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
               trade.exitReason,
               trade.openedAt.toISOString(),
               trade.closedAt.toISOString(),
+              trade.strategyConfigFingerprint ?? null,
+              trade.cohortId ?? null,
+              trade.candidateLockAt?.toISOString() ?? null,
+              trade.datasetCutoffAt?.toISOString() ?? null,
+              trade.entryOpenedAt?.toISOString() ?? null,
+              trade.executionEnvironment ?? null,
             );
           }
         })();

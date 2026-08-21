@@ -18,10 +18,7 @@ const arg = (flag: string, fallback: string) =>
   process.argv.find((a) => a.startsWith(flag))?.slice(flag.length) ?? fallback;
 const symbol = arg("--symbol=", "");
 const exchange = arg("--exchange=", "bitget-futures");
-const stepFilter = arg("--steps=", "")
-  .split(",")
-  .filter(Boolean)
-  .map(Number);
+const stepFilter = arg("--steps=", "").split(",").filter(Boolean).map(Number);
 if (!symbol) {
   console.error("--symbol=ETH/USDT:USDT is required");
   process.exit(1);
@@ -78,7 +75,8 @@ const base: GridOptions = {
   onlyWithTrend: false,
 };
 
-const steps = stepFilter.length > 0 ? stepFilter : [0.25, 0.5, 0.75, 1.0, 1.25, 1.5];
+const steps =
+  stepFilter.length > 0 ? stepFilter : [0.25, 0.5, 0.75, 1.0, 1.25, 1.5];
 const grids = [1.5, 2.0, 3.0];
 const pauses = [0, 24, 48];
 const targets = [1, 2, 3, 4];
@@ -169,7 +167,13 @@ for (const step of steps)
             writeFileSync(
               outPath,
               JSON.stringify(
-                { symbol, candles: candles.length, total, passing: results.filter((x) => x.pass), all: results },
+                {
+                  symbol,
+                  candles: candles.length,
+                  total,
+                  passing: results.filter((x) => x.pass),
+                  all: results,
+                },
                 null,
                 2,
               ),
@@ -187,10 +191,16 @@ const passing = results
 
 writeFileSync(
   outPath,
-  JSON.stringify({ symbol, candles: candles.length, total, passing, all: results }, null, 2),
+  JSON.stringify(
+    { symbol, candles: candles.length, total, passing, all: results },
+    null,
+    2,
+  ),
 );
 
-console.log(`\n=== ${symbol}: ${results.length} evaluated, ${passing.length} PASS (by stressLB) ===`);
+console.log(
+  `\n=== ${symbol}: ${results.length} evaluated, ${passing.length} PASS (by stressLB) ===`,
+);
 for (const p of passing.slice(0, 20)) {
   console.log(
     `PASS step=${p.config.gridStepPct} grids=${p.config.gridMaxGrids} pause=${p.config.gridPauseAfterLossBars} target=${p.config.targetRatio} adx=${p.config.chopGateAdx} | win=${p.gates.profitableWindowPct.toFixed(1)}% ret=${p.gates.compoundedReturnPct.toFixed(2)}% dd=${p.gates.maxDrawdownPct.toFixed(2)}% tpm=${p.gates.tradesPerMonth.toFixed(1)} oos=${p.gates.fixedOosTrades} confLB=${p.gates.confidenceLowerBoundPct.toFixed(5)} stressLB=${p.gates.stressLowerBoundPct.toFixed(5)}`,

@@ -77,6 +77,39 @@ const db = new Database(`${HOME}/data/neuratrade.db`, { readonly: true });
 db.exec("PRAGMA busy_timeout = 30000;");
 
 /**
+ * Freshness guard: the funnel's own rule is 48h. If the 5m mainnet cache
+ * stopped being refreshed (refresh-flow-mainnet down), gate verdicts would
+ * silently age out and "pass" on stale data — fail loudly instead.
+ */
+function assertCacheFresh(): void {
+  const row = db
+    .query(
+      `SELECT MAX(c.timestamp) AS newest
+       FROM ohlcv_data c
+       WHERE c.timeframe = '5m'`,
+    )
+    .get() as { newest: string | number | null } | undefined;
+  const newest = row?.newest;
+  if (newest === null || newest === undefined) {
+    console.error(
+      "gatewatch: 5m mainnet cache is EMPTY — refresh-flow-mainnet has never run",
+    );
+    process.exit(3);
+  }
+  const newestMs = Number.isFinite(Number(newest))
+    ? Number(newest)
+    : Date.parse(String(newest));
+  const ageHours = (Date.now() - newestMs) / 3_600_000;
+  if (!Number.isFinite(ageHours) || ageHours > 48) {
+    console.error(
+      `gatewatch: 5m mainnet cache is STALE (newest bar ${ageHours.toFixed(1)}h old > 48h) — check refresh-flow-mainnet`,
+    );
+    process.exit(3);
+  }
+}
+assertCacheFresh();
+
+/**
  * Candles live in the DB as the 5m mainnet cache (the same source the
  * research scan resamples from). Load 5m rows and resample to the scan
  * timeframe so gate verdicts match the funnel's data path exactly.
@@ -199,10 +232,35 @@ console.log(
 if (failures > 0 && prune && survivors.length > 0) {
   await Bun.write(path, JSON.stringify(survivors, null, 2));
   console.log(`gatewatch: pruned ${path} to ${survivors.length} member(s)`);
+  // The running soak loaded the whitelist at startup and never re-reads it —
+  // nudge pm2 to restart the soak so the pruned cohort takes effect. Best
+  // effort: a missing pm2 (local dev) is not an error.
+  const proc = Bun.spawn(["pm2", "restart", "neuratrade-ladder-soak"], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const restartErr = await new Response(proc.stderr).text();
+  if ((await proc.exited) !== 0) {
+    console.log(
+      `gatewatch: pm2 restart of neuratrade-ladder-soak skipped (${restartErr.trim().split("\n")[0] ?? "pm2 unavailable"}) — restart the soak manually to apply the prune`,
+    );
+  } else {
+    console.log("gatewatch: restarted neuratrade-ladder-soak to apply prune");
+  }
 } else if (failures > 0 && prune) {
   console.log(
     "gatewatch: --prune skipped, every member failed (refusing to empty the whitelist)",
   );
+}
+
+// ALL-BLOCKED ALERT: when every member fails, capital sits idle with no
+// whitelist change possible (prune refuses to empty). Exit code 4 lets cron/
+// pm2 alert distinctly from a partial failure (1).
+if (failures >= rows.length) {
+  console.error(
+    "gatewatch: ALERT every whitelist member failed its gates — portfolio capital is idle until the funnel repopulates",
+  );
+  process.exit(4);
 }
 
 process.exit(failures > 0 ? 1 : 0);

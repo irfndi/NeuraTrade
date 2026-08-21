@@ -536,5 +536,36 @@ module.exports = {
       merge_logs: true,
       time: true,
     },
+    {
+      // Nightly gate-watch: re-runs the stage-4 gates on fresh DB candles for
+      // the live ladder whitelist and PRUNES failing members (report + act).
+      // cron_restart 03:17 nightly; autorestart:false + pm2 restarts it at
+      // the next cron tick after each run exits. Exit codes: 0 all pass,
+      // 1 some failed (pruned), 2 malformed whitelist, 3 stale cache,
+      // 4 EVERY member failed (capital idle — alert).
+      name: "neuratrade-gatewatch",
+      script: "bun",
+      args: [
+        "run",
+        "scripts/ladder-whitelist-gatewatch.ts",
+        "--watchlist=grid-whitelist-ladder-portfolio-v1.json",
+        "--timeframe=15m",
+        "--prune",
+      ],
+      cwd: cliTsDir,
+      env: {
+        ...rootEnv,
+        NEURATRADE_HOME: neuratradeHome,
+        NODE_ENV: "production",
+      },
+      autorestart: false,
+      cron_restart: "17 3 * * *",
+      out_file: path.join(neuratradeHome, "logs", "gatewatch.out.log"),
+      error_file: path.join(neuratradeHome, "logs", "gatewatch.err.log"),
+      max_size: "50M",
+      retain: 5,
+      merge_logs: true,
+      time: true,
+    },
   ],
 };

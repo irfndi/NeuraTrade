@@ -181,9 +181,7 @@ async function fetchCandles(symbol: string, startMs: number): Promise<number> {
 }
 
 async function main() {
-  const symbols: string[] = symbolOverride
-    ? symbolOverride.split(",")
-    : MAJORS;
+  const symbols: string[] = symbolOverride ? symbolOverride.split(",") : MAJORS;
   const now = Date.now();
   const startMs = now - MONTHS * 30 * 24 * 3600 * 1000;
   console.log(

@@ -58,7 +58,7 @@ export function makeBinanceLiveAdapter(
             `Binance network error: ${err instanceof Error ? err.message : String(err)}`,
             err,
           ),
-      }).pipe(Effect.tap(() => Effect.sync(() => clearTimeout(timer))));
+      }).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(timer))));
 
       if (!response.ok) {
         const body = yield* Effect.tryPromise({

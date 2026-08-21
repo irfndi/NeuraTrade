@@ -16,7 +16,9 @@ import type { GridOptions } from "../src/scalping/grid.js";
 const HOME = process.env.NEURATRADE_HOME ?? `${process.env.HOME}/.neuratrade`;
 const quick = process.argv.includes("--quick");
 const stepArg = process.argv.find((a) => a.startsWith("--steps="));
-const stepFilter = stepArg ? stepArg.slice("--steps=".length).split(",").map(Number) : null;
+const stepFilter = stepArg
+  ? stepArg.slice("--steps=".length).split(",").map(Number)
+  : null;
 
 const db = new Database(`${HOME}/data/neuratrade.db`, { readonly: true });
 const rows = db
@@ -47,7 +49,9 @@ const candles = rows.map((r) => ({
   timestamp: new Date(Date.parse(r.ts)),
 }));
 const now = new Date(candles.at(-1)!.timestamp.getTime() + 15 * 60 * 1000);
-console.log(`candles: ${candles.length} | last: ${candles.at(-1)!.timestamp.toISOString()}`);
+console.log(
+  `candles: ${candles.length} | last: ${candles.at(-1)!.timestamp.toISOString()}`,
+);
 
 const base: GridOptions = {
   initialCapital: 100,
@@ -153,7 +157,16 @@ for (const step of steps)
             // Flush partial results so a timeout never loses completed work.
             writeFileSync(
               outPath,
-              JSON.stringify({ candles: candles.length, total, passing: results.filter((x) => x.pass), all: results }, null, 2),
+              JSON.stringify(
+                {
+                  candles: candles.length,
+                  total,
+                  passing: results.filter((x) => x.pass),
+                  all: results,
+                },
+                null,
+                2,
+              ),
             );
             const min = (Date.now() - t0) / 60000;
             console.log(
@@ -175,7 +188,9 @@ writeFileSync(
   ),
 );
 
-console.log(`\n=== ${total} configs, ${passing.length} PASS (ranked by stressLB) ===`);
+console.log(
+  `\n=== ${total} configs, ${passing.length} PASS (ranked by stressLB) ===`,
+);
 for (const p of passing.slice(0, 20)) {
   console.log(
     `PASS step=${p.config.gridStepPct} grids=${p.config.gridMaxGrids} pause=${p.config.gridPauseAfterLossBars} target=${p.config.targetRatio} adx=${p.config.chopGateAdx} | windows=${p.gates.profitableWindowPct.toFixed(1)}% ret=${p.gates.compoundedReturnPct.toFixed(2)}% dd=${p.gates.maxDrawdownPct.toFixed(2)}% oos=${p.gates.fixedOosTrades} confLB=${p.gates.confidenceLowerBoundPct.toFixed(5)} stressRet=${p.gates.stressWorstReturnPct.toFixed(2)}% stressLB=${p.gates.stressLowerBoundPct.toFixed(5)}`,

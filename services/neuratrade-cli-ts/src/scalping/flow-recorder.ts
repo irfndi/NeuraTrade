@@ -803,12 +803,9 @@ export async function resolveFlowSymbols(
             ask1Price: ticker.ask1Price,
           };
     });
-    const ranked = selectFlowUniverse(
-      volumes,
-      quotedInstruments,
-      undefined,
-      { topN: DEFAULT_FLOW_UNIVERSE_TOP_N },
-    );
+    const ranked = selectFlowUniverse(volumes, quotedInstruments, undefined, {
+      topN: DEFAULT_FLOW_UNIVERSE_TOP_N,
+    });
     const symbols = ranked.map((e) => toWireSymbol(e.symbol));
     if (symbols.length > 0) return symbols;
   } catch {

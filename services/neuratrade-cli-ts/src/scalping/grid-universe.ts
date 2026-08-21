@@ -1215,16 +1215,12 @@ export function runMarketUniverseScan(
   })();
   const BATCH = 200; // Bitget futures /history-candles rejects limit > 200.
   // Public API pacing: sequential scans burst past the rate limit without a
-  // delay between every request (observed HTTP 429 mid-scan).
+  // delay between every request (observed HTTP 429 mid-scan). The delay is
+  // CONSTANT — shrinking it when the per-cycle budget is small (tests,
+  // constrained runs) increases burstiness exactly when quota headroom is
+  // lowest; the budget Ref alone bounds volume.
   const REQUEST_DELAY_MS = 250;
-  // Scale the inter-request delay by the per-cycle request budget: production's
-  // 900-request budget keeps the full 250ms throttle intact, while a tiny
-  // budget (tests / one-off discovery) implies a constrained fast pass where
-  // the pacing would otherwise dominate runtime.
-  const requestDelayMs = Math.min(
-    REQUEST_DELAY_MS,
-    options.deepFetchBudgetPerCycle ?? DEEP_FETCH_REQUESTS_PER_CYCLE,
-  );
+  const requestDelayMs = REQUEST_DELAY_MS;
   // Tail-fetch concurrency: the sequential pacing is the binding
   // constraint on batch size, not the rate limit — 2 workers keep the batch
   // ~2x faster while staying well under Bitget's public limit.
@@ -1271,11 +1267,16 @@ export function runMarketUniverseScan(
         .filter((s) => s.count >= options.minCandles)
         .map((s) => s.symbol);
     } else {
-      const [marketSymbols, volumes, demoSymbols] = yield* Effect.all([
+      // fetchDemoSymbols IS fetchSymbols for bybit-futures (same paginated
+      // instruments-info endpoint) — call it once and reuse, or every scan
+      // cycle pages through the full instrument list twice.
+      const [marketSymbols, volumes] = yield* Effect.all([
         gateway.fetchSymbols(options.exchange),
         gateway.fetch24hrVolumes(options.exchange),
-        gateway.fetchDemoSymbols(options.exchange),
       ]);
+      const demoSymbols = yield* gateway
+        .fetchDemoSymbols(options.exchange)
+        .pipe(Effect.orElseSucceed(() => marketSymbols));
       // Tickers key volumes by "BTCUSDT" while fetchSymbols returns
       // "BTC/USDT"; normalize so the liquidity filter sees the same keys.
       const normalizedVolumes = new Map<string, number>(
@@ -1346,8 +1347,12 @@ export function runMarketUniverseScan(
         for (;;) {
           const outcome = yield* run().pipe(Effect.result);
           if (outcome._tag === "Success") return outcome.success;
+          const failure = outcome.failure as {
+            reason?: string;
+            retryAfterMs?: number;
+          };
           const reason =
-            (outcome.failure as { reason?: string } | undefined)?.reason ??
+            failure?.reason ??
             (outcome.failure instanceof Error
               ? outcome.failure.message
               : String(outcome.failure));
@@ -1359,7 +1364,10 @@ export function runMarketUniverseScan(
             );
             return [] as readonly Candle[];
           }
-          yield* Effect.sleep(1_000 * 2 ** attempt);
+          // Honor the server's Retry-After hint when present (429s), else
+          // exponential backoff.
+          const backoffMs = failure?.retryAfterMs ?? 1_000 * 2 ** attempt;
+          yield* Effect.sleep(backoffMs);
         }
       });
 

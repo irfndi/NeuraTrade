@@ -19,10 +19,21 @@ const rows = db
      WHERE e.name='bitget-futures' AND tp.symbol='BTC/USDT:USDT' AND o.timeframe='15m'
      ORDER BY o.timestamp ASC`,
   )
-  .all() as Array<{ open: number; high: number; low: number; close: number; volume: number; ts: string }>;
+  .all() as Array<{
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ts: string;
+}>;
 db.close();
 const candles = rows.map((r) => ({
-  open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume,
+  open: r.open,
+  high: r.high,
+  low: r.low,
+  close: r.close,
+  volume: r.volume,
   timestamp: new Date(Date.parse(r.ts)),
 }));
 const now = new Date(candles.at(-1)!.timestamp.getTime() + 15 * 60 * 1000);
@@ -30,11 +41,37 @@ const now = new Date(candles.at(-1)!.timestamp.getTime() + 15 * 60 * 1000);
 const CONFIGS: Array<{ name: string; grid: GridOptions }> = [
   {
     name: "LOCKED (0.5/2/p0/t2/a15)",
-    grid: { initialCapital: 100, gridStepPct: 0.5, gridMaxGrids: 2, gridPauseAfterLossBars: 0, feePct: 0.02, slippageBps: 1, trendFilterPeriod: 0, leverage: 1, positionFraction: 0.5, onlyWithTrend: false, targetRatio: 2, chopGateAdxThreshold: 15 },
+    grid: {
+      initialCapital: 100,
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.02,
+      slippageBps: 1,
+      trendFilterPeriod: 0,
+      leverage: 1,
+      positionFraction: 0.5,
+      onlyWithTrend: false,
+      targetRatio: 2,
+      chopGateAdxThreshold: 15,
+    },
   },
   {
     name: "ROBUST (0.5/3/p48/t2/a15)",
-    grid: { initialCapital: 100, gridStepPct: 0.5, gridMaxGrids: 3, gridPauseAfterLossBars: 48, feePct: 0.02, slippageBps: 1, trendFilterPeriod: 0, leverage: 1, positionFraction: 0.5, onlyWithTrend: false, targetRatio: 2, chopGateAdxThreshold: 15 },
+    grid: {
+      initialCapital: 100,
+      gridStepPct: 0.5,
+      gridMaxGrids: 3,
+      gridPauseAfterLossBars: 48,
+      feePct: 0.02,
+      slippageBps: 1,
+      trendFilterPeriod: 0,
+      leverage: 1,
+      positionFraction: 0.5,
+      onlyWithTrend: false,
+      targetRatio: 2,
+      chopGateAdxThreshold: 15,
+    },
   },
 ];
 
@@ -43,11 +80,18 @@ const SLIPS = [1, 2];
 
 for (const { name, grid } of CONFIGS) {
   console.log(`\n=== ${name} ===`);
-  console.log("fee  slip | ret%    dd%    oos  confLB    stressRet% stressLB  pass");
+  console.log(
+    "fee  slip | ret%    dd%    oos  confLB    stressRet% stressLB  pass",
+  );
   for (const fee of FEES) {
     for (const slip of SLIPS) {
       const g: GridOptions = { ...grid, feePct: fee, slippageBps: slip };
-      const r = validateGridEvidence(candles, { now, timeframeMinutes: 15, grid: g, executionParityPassed: true });
+      const r = validateGridEvidence(candles, {
+        now,
+        timeframeMinutes: 15,
+        grid: g,
+        executionParityPassed: true,
+      });
       if (r.kind === "invalid") {
         console.log(`${fee}  ${slip}  | INVALID: ${r.failures.join("; ")}`);
         continue;

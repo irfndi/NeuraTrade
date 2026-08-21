@@ -28,8 +28,26 @@ const candles = rows.map((r) => ({
 }));
 const now = new Date(candles.at(-1)!.timestamp.getTime() + 15 * 60 * 1000);
 const cands = [
-  { label: "cfg1 grids2 pause48 t4 adx28", g: { gridStepPct: 0.75, gridMaxGrids: 2, gridPauseAfterLossBars: 48, targetRatio: 4, chopGateAdxThreshold: 28 } },
-  { label: "cfg2 grids3 pause0 t3 adx20", g: { gridStepPct: 0.75, gridMaxGrids: 3, gridPauseAfterLossBars: 0, targetRatio: 3, chopGateAdxThreshold: 20 } },
+  {
+    label: "cfg1 grids2 pause48 t4 adx28",
+    g: {
+      gridStepPct: 0.75,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 48,
+      targetRatio: 4,
+      chopGateAdxThreshold: 28,
+    },
+  },
+  {
+    label: "cfg2 grids3 pause0 t3 adx20",
+    g: {
+      gridStepPct: 0.75,
+      gridMaxGrids: 3,
+      gridPauseAfterLossBars: 0,
+      targetRatio: 3,
+      chopGateAdxThreshold: 20,
+    },
+  },
 ];
 for (const c of cands) {
   const r = validateGridEvidence(candles, {
@@ -51,7 +69,9 @@ for (const c of cands) {
     console.log(c.label, "INVALID", r.failures);
     continue;
   }
-  const h = r.historical, g = r.confidence, s = r.stress;
+  const h = r.historical,
+    g = r.confidence,
+    s = r.stress;
   console.log(c.label);
   console.log(
     `  windows=${h.windows.length} win%=${h.profitableWindowPct.toFixed(2)} ret=${h.compoundedReturnPct.toFixed(2)} dd=${h.maximumDrawdownPct.toFixed(2)} totalTrades=${h.totalTrades}`,

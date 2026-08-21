@@ -116,8 +116,10 @@ export const takeProfitOption = Options.float("take-profit").pipe(
 );
 
 export const feeOption = Options.float("fee").pipe(
-  Options.withDefault(0.1),
-  Options.withDescription("Trading fee percent per side"),
+  Options.withDefault(0.02),
+  Options.withDescription(
+    "Maker fee percent per side (validated research default 0.02)",
+  ),
 );
 
 export const futuresOption = Options.boolean("futures").pipe(
@@ -138,8 +140,33 @@ export const fundingRateOption = Options.float("funding-rate-pct").pipe(
 );
 
 export const slippageBpsOption = Options.float("slippage-bps").pipe(
-  Options.withDefault(0),
-  Options.withDescription("Slippage in basis points applied to fills"),
+  Options.withDefault(2),
+  Options.withDescription(
+    "Slippage in basis points applied to fills (validated research default 2)",
+  ),
+);
+
+export const takerExitFeePctOption = Options.float("taker-exit-fee-pct").pipe(
+  Options.withDefault(0.06),
+  Options.withDescription(
+    "Per-side TAKER fee percent for stop/liquidation/max-hold market exits (default 0.06 = Bybit taker)",
+  ),
+);
+
+export const fundingRatePct8hOption = Options.float("funding-rate-pct-8h").pipe(
+  Options.withDefault(0.01),
+  Options.withDescription(
+    "Funding cost percent of notional per 8h held on open positions (signed: longs pay positive rates; 0 = disabled)",
+  ),
+);
+
+export const maintenanceMarginRatePctOption = Options.float(
+  "maintenance-margin-rate-pct",
+).pipe(
+  Options.withDefault(0.5),
+  Options.withDescription(
+    "Maintenance margin rate percent of notional used by the liquidation price model (0.5 = 0.5%, Bybit tier-1 default)",
+  ),
 );
 
 export const trailingStopPctOption = Options.float("trailing-stop-pct").pipe(

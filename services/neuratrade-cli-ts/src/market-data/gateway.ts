@@ -9,6 +9,9 @@ export class MarketDataError {
   constructor(
     readonly reason: string,
     readonly cause?: unknown,
+    /** Server-provided Retry-After hint in ms (429 responses); callers
+     *  honoring it must not retry sooner. */
+    readonly retryAfterMs?: number,
   ) {}
 }
 

@@ -197,6 +197,17 @@ export interface LadderPaperTrade {
   readonly exitReason: "target" | "stop" | "liquidation" | "max_hold";
   readonly openedAt: Date;
   readonly closedAt: Date;
+  /** Readiness provenance (mirrors GridPaperTrade); undefined on legacy rows. */
+  readonly strategyConfigFingerprint?: string;
+  readonly cohortId?: string;
+  readonly candidateLockAt?: Date;
+  readonly datasetCutoffAt?: Date;
+  readonly entryOpenedAt?: Date;
+  readonly executionEnvironment?:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live";
 }
 
 /**
@@ -245,6 +256,13 @@ export interface LadderPaperRungState {
   readonly entryBar: number;
   /** Absolute fill time in ms epoch — the live max-hold clock. */
   readonly entryTimestamp: number;
+  /**
+   * Exchange-confirmed (or simulated) filled quantity in base units.
+   * Persisted at entry so the close sends the ENTRY size, not a size
+   * re-derived from capital that rebalancing/compounding has since moved
+   * (over/under-closing corrupts the position and the ledger).
+   */
+  readonly filledQty?: number;
 }
 
 /**

@@ -336,9 +336,9 @@ async function main() {
         totalFunding += f;
         console.log(`  funding saved: ${f}`);
       } catch (err) {
-      console.warn(
-        `⚠️ ${bSym} failed: ${(err instanceof Error ? err.message : String((err as { readonly reason?: unknown }).reason ?? err)).slice(0, 140)}`,
-      );
+        console.warn(
+          `⚠️ ${bSym} failed: ${(err instanceof Error ? err.message : String((err as { readonly reason?: unknown }).reason ?? err)).slice(0, 140)}`,
+        );
       }
     }
   };

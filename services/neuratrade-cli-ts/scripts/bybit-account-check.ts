@@ -1,6 +1,9 @@
 import { Effect, Layer } from "effect";
 import { BybitConfigLive, BybitConfig } from "../src/services/bybit-config.js";
-import { BybitClient, BybitClientLiveConfig } from "../src/exchange/adapters/bybit-futures.js";
+import {
+  BybitClient,
+  BybitClientLiveConfig,
+} from "../src/exchange/adapters/bybit-futures.js";
 
 const program = Effect.gen(function* () {
   const config = yield* BybitConfig;
@@ -9,23 +12,55 @@ const program = Effect.gen(function* () {
 
   const balance = yield* client.getBalance().pipe(Effect.result);
   if (balance._tag === "Failure") {
-    console.log("balance fetch:", "ERR", JSON.stringify({ tag: balance.failure._tag, code: (balance.failure as any).code, status: (balance.failure as any).status, body: (balance.failure as any).body }));
+    console.log(
+      "balance fetch:",
+      "ERR",
+      JSON.stringify({
+        tag: balance.failure._tag,
+        code: (balance.failure as any).code,
+        status: (balance.failure as any).status,
+        body: (balance.failure as any).body,
+      }),
+    );
   } else {
     const usdt = balance.success.find((c) => c.coin.toUpperCase() === "USDT");
-    console.log("USDT balance:", usdt ? `available=${usdt.availableToWithdraw} wallet=${usdt.walletBalance}` : "not reported");
+    console.log(
+      "USDT balance:",
+      usdt
+        ? `available=${usdt.availableToWithdraw} wallet=${usdt.walletBalance}`
+        : "not reported",
+    );
   }
 
-  for (const symbol of ["FARTCOINUSDT", "NEARUSDT", "EPICUSDT", "KAITOUSDT", "ENAUSDT", "MUBARAKUSDT", "ADAUSDT", "PUMPFUNUSDT", "BEATUSDT", "CYSUSDT", "SOXLUSDT", "SPCXUSDT", "CAPUSDT"]) {
+  for (const symbol of [
+    "FARTCOINUSDT",
+    "NEARUSDT",
+    "EPICUSDT",
+    "KAITOUSDT",
+    "ENAUSDT",
+    "MUBARAKUSDT",
+    "ADAUSDT",
+    "PUMPFUNUSDT",
+    "BEATUSDT",
+    "CYSUSDT",
+    "SOXLUSDT",
+    "SPCXUSDT",
+    "CAPUSDT",
+  ]) {
     const pos = yield* client.getPositions(symbol).pipe(Effect.result);
     if (pos._tag === "Success" && pos.success.length > 0) {
       for (const p of pos.success) {
-        console.log(`POSITION ${symbol}: side=${p.side} qty=${p.size} entry=${p.avgPrice} pnl=${p.unrealisedPnl}`);
+        console.log(
+          `POSITION ${symbol}: side=${p.side} qty=${p.size} entry=${p.avgPrice} pnl=${p.unrealisedPnl}`,
+        );
       }
     }
     const orders = yield* client.getOpenOrders(symbol).pipe(Effect.result);
     if (orders._tag === "Success" && orders.success.length > 0) {
       for (const o of orders.success) {
-        console.log(`OPEN ORDER ${symbol}: side=${o.side} type=${o.orderType} qty=${o.qty} price=${o.price} status=${o.orderStatus}`);
+        console.log(
+          `OPEN ORDER ${symbol}: side=${o.side} type=${o.orderType} qty=${o.qty} price=${o.price} status=${o.orderStatus}`,
+        );
       }
     }
   }
@@ -34,6 +69,17 @@ const program = Effect.gen(function* () {
 
 Effect.runPromise(
   program.pipe(
-    Effect.provide(Layer.mergeAll(BybitConfigLive, Layer.provide(BybitClientLiveConfig, BybitConfigLive))),
+    Effect.provide(
+      Layer.mergeAll(
+        BybitConfigLive,
+        Layer.provide(BybitClientLiveConfig, BybitConfigLive),
+      ),
+    ),
   ),
-).then(() => process.exit(0), (e) => { console.error("FAILED:", e); process.exit(1); });
+).then(
+  () => process.exit(0),
+  (e) => {
+    console.error("FAILED:", e);
+    process.exit(1);
+  },
+);

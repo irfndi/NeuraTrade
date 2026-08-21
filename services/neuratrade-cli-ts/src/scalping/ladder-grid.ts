@@ -73,6 +73,15 @@ export interface LadderOptions {
   readonly takerExitFeePct?: number;
   /** Chop gate: when > 0, new ladder seeds are skipped while ADX(14) >= threshold. */
   readonly chopGateAdxThreshold?: number;
+  /** Candle timeframe the ADX gate is computed on (default "15m"). */
+  readonly timeframe?: string;
+  /** Funding cost per 8h held on open notional, in percent (longs pay positive rates). */
+  readonly fundingRatePct8h?: number;
+  /**
+   * Maintenance-margin rate (fraction of notional) in the liquidation model.
+   * Default 0 keeps the legacy 1/L distance.
+   */
+  readonly maintenanceMarginRate?: number;
   /** Base probability (0..1) that a touched entry level fills (default 1.0). */
   readonly makerFillProb?: number;
   /** Model adverse selection on maker fills when true (default false). */
@@ -101,6 +110,9 @@ export interface LadderTrade {
     | "max_hold"
     | "mark_to_market";
 }
+
+/** Funding interval in ms (perpetual funding settles every 8h). */
+const FUNDING_INTERVAL_MS = 8 * 3_600_000;
 
 export interface LadderResult {
   readonly totalReturnPct: number;
@@ -155,10 +167,15 @@ export function liquidationPrice(
   side: "long" | "short",
   entryPrice: number,
   leverage: number,
+  mmRate = 0,
 ): number {
   const l = Math.max(1, leverage);
   if (l <= 1) return 0;
-  return side === "long" ? entryPrice * (1 - 1 / l) : entryPrice * (1 + 1 / l);
+  // Adverse move to liquidation = initial leverage distance minus the
+  // maintenance-margin buffer (floored at 1% so a huge mmRate can never
+  // produce a non-liquidating or inverted price).
+  const move = Math.max(0.01, 1 / l - mmRate);
+  return side === "long" ? entryPrice * (1 - move) : entryPrice * (1 + move);
 }
 
 export function runLadderGridBacktest(
@@ -224,7 +241,9 @@ export function runLadderGridBacktest(
   };
 
   const statsProvider =
-    chopGateAdxThreshold > 0 ? makeCausalSymbolStats(candles, "15m") : null;
+    chopGateAdxThreshold > 0
+      ? makeCausalSymbolStats(candles, opts.timeframe ?? "15m")
+      : null;
 
   // Pre-calculate trend filter series if enabled
   const trendFilterPeriod = Math.max(0, opts.trendFilterPeriod ?? 0);
@@ -264,7 +283,25 @@ export function runLadderGridBacktest(
       ? -sizePerRung
       : sizePerRung * leveragedReturn;
     const capitalBefore = capital;
-    capital = Math.max(0, capitalBefore * (1 + equityReturn));
+    // Funding accrued while the rung was open (whole 8h intervals, charged at
+    // close; longs pay a positive rate, shorts receive it).
+    let funding = 0;
+    if ((opts.fundingRatePct8h ?? 0) !== 0 && r.entryBar !== undefined) {
+      const entryMs = candles[r.entryBar]?.timestamp?.getTime() ?? NaN;
+      const exitMs = candles[bar]?.timestamp?.getTime() ?? NaN;
+      if (Number.isFinite(entryMs) && Number.isFinite(exitMs)) {
+        const intervals = Math.floor((exitMs - entryMs) / FUNDING_INTERVAL_MS);
+        if (intervals > 0) {
+          funding =
+            capitalBefore *
+            positionFraction *
+            leverage *
+            ((opts.fundingRatePct8h! / 100) * intervals) *
+            (r.side === "long" ? -1 : 1);
+        }
+      }
+    }
+    capital = Math.max(0, capitalBefore * (1 + equityReturn) + funding);
     peak = Math.max(peak, capital);
     const dd = peak > 0 ? (peak - capital) / peak : 0;
     if (dd > maxDrawdown) maxDrawdown = dd;
@@ -420,14 +457,24 @@ export function runLadderGridBacktest(
           .filter((p) => p > 0);
         const liq = longLiqs.length > 0 ? Math.max(...longLiqs) : 0;
         if (liq > 0 && c.low <= liq) {
-          const loss = closeAll(filledLong, liq * slippage, "liquidation", i);
+          const loss = closeAll(
+            filledLong,
+            liq * (1 - opts.slippageBps / 10000),
+            "liquidation",
+            i,
+          );
           longRungs = [];
           longBase = 0;
           if (loss && opts.gridPauseAfterLossBars > 0) {
             paused = opts.gridPauseAfterLossBars;
           }
         } else if (c.low <= boundary) {
-          const loss = closeAll(filledLong, boundary * slippage, "stop", i);
+          const loss = closeAll(
+            filledLong,
+            boundary * (1 - opts.slippageBps / 10000),
+            "stop",
+            i,
+          );
           longRungs = [];
           longBase = 0;
           if (loss && opts.gridPauseAfterLossBars > 0) {
@@ -453,7 +500,12 @@ export function runLadderGridBacktest(
               i - r.entryBar >= maxHoldBars &&
               r.entryBar < i
             ) {
-              closeRung(r, c.close / slippage, "max_hold", i);
+              closeRung(
+                r,
+                c.close * (1 - opts.slippageBps / 10000),
+                "max_hold",
+                i,
+              );
               anyFillClosed = true;
             } else {
               stillOpen.push(r);
@@ -499,14 +551,24 @@ export function runLadderGridBacktest(
           .filter((p) => p > 0);
         const liq = shortLiqs.length > 0 ? Math.min(...shortLiqs) : 0;
         if (liq > 0 && c.high >= liq) {
-          const loss = closeAll(filledShort, liq / slippage, "liquidation", i);
+          const loss = closeAll(
+            filledShort,
+            liq * (1 + opts.slippageBps / 10000),
+            "liquidation",
+            i,
+          );
           shortRungs = [];
           shortBase = 0;
           if (loss && opts.gridPauseAfterLossBars > 0) {
             paused = opts.gridPauseAfterLossBars;
           }
         } else if (c.high >= boundary) {
-          const loss = closeAll(filledShort, boundary / slippage, "stop", i);
+          const loss = closeAll(
+            filledShort,
+            boundary * (1 + opts.slippageBps / 10000),
+            "stop",
+            i,
+          );
           shortRungs = [];
           shortBase = 0;
           if (loss && opts.gridPauseAfterLossBars > 0) {
@@ -531,7 +593,12 @@ export function runLadderGridBacktest(
               i - r.entryBar >= maxHoldBars &&
               r.entryBar < i
             ) {
-              closeRung(r, c.close * slippage, "max_hold", i);
+              closeRung(
+                r,
+                c.close * (1 + opts.slippageBps / 10000),
+                "max_hold",
+                i,
+              );
               anyFillClosed = true;
             } else {
               stillOpen.push(r);
@@ -710,10 +777,15 @@ export function runLadderGridWalkForward(
       start + trainWindow + testWindow,
     );
 
-    const best = findBestLadderGridParams(trainCandles, searchSpace, {
-      ...baseOptions,
-      initialCapital: runningCapital,
-    }, candidateFilter);
+    const best = findBestLadderGridParams(
+      trainCandles,
+      searchSpace,
+      {
+        ...baseOptions,
+        initialCapital: runningCapital,
+      },
+      candidateFilter,
+    );
 
     const testResult = runLadderGridBacktest(testCandles, {
       ...best,

@@ -94,6 +94,7 @@ import {
 } from "../paper-trading/grid-engine.js";
 import {
   runLadderPaperTradingIteration,
+  setLadderTradeProvenance,
   type LadderPaperIterationResult,
   type LadderPaperTradingOptions,
 } from "../paper-trading/ladder-engine.js";
@@ -104,6 +105,11 @@ import {
   summarizeLadderPortfolio,
 } from "../paper-trading/ladder-portfolio.js";
 import { bybitSnapshotCommand } from "./bybit-snapshot.js";
+import {
+  DEFAULT_STRATEGY_MANIFEST,
+  fingerprintStrategyManifest,
+  type StrategyManifest,
+} from "../scalping/real-money-readiness.js";
 import {
   freshFlowTradeState,
   iterateFlowTrade,
@@ -255,6 +261,9 @@ import {
   configMismatchActionOption,
   maxPositionDrawdownPctOption,
   stopRatioOption,
+  takerExitFeePctOption,
+  fundingRatePct8hOption,
+  maintenanceMarginRatePctOption,
   volatilityTargetAnnualPctOption,
   noAtrOption,
   scanEntryOrdersOption,
@@ -2466,6 +2475,12 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly maxPositionDrawdownPct: number;
   /** Ladder: stop distance as a multiple of the grid step (0 = legacy boundary). */
   readonly stopRatio: number;
+  /** Per-side taker fee percent for non-target (market) exits. */
+  readonly takerExitFeePct: number;
+  /** Funding cost percent of notional per 8h held on open positions. */
+  readonly fundingRatePct8h: number;
+  /** Maintenance margin rate percent of notional for the liquidation model. */
+  readonly maintenanceMarginRatePct: number;
   readonly live: boolean;
   readonly shadow?: boolean;
   readonly apiKey: string;
@@ -2734,6 +2749,9 @@ export const paperTradeCommand = Command.make(
     configMismatchAction: configMismatchActionOption,
     maxPositionDrawdownPct: maxPositionDrawdownPctOption,
     stopRatio: stopRatioOption,
+    takerExitFeePct: takerExitFeePctOption,
+    fundingRatePct8h: fundingRatePct8hOption,
+    maintenanceMarginRatePct: maintenanceMarginRatePctOption,
     volatilityTargetAnnualPct: volatilityTargetAnnualPctOption,
     profile: profileOption,
   },
@@ -2907,6 +2925,60 @@ export function executionEnvironmentFor(
     return live && !demoAccount ? "bybit-live" : "bybit-demo";
   }
   return live && !demoAccount ? "bitget-live" : "bitget-demo";
+}
+
+/**
+ * Readiness manifest for the LADDER portfolio soak. The fingerprint covers
+ * the config fields that change trading behavior; capital is excluded (a
+ * rebalance/compounding move must not orphan the cohort's evidence).
+ */
+export function strategyManifestForLadder(
+  args: {
+    readonly timeframe: string;
+    readonly fee: number;
+    readonly slippageBps: number;
+    readonly takerExitFeePct: number;
+    readonly fundingRatePct8h: number;
+    readonly maxDrawdownPct: Option.Option<number>;
+    readonly maxDailyLossPct: Option.Option<number>;
+    readonly onlyWithTrend?: boolean;
+    readonly trendFilterPeriod?: number;
+  },
+  symbol: string,
+  executionEnvironment:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live",
+): StrategyManifest {
+  return {
+    ...DEFAULT_STRATEGY_MANIFEST,
+    exchange: executionEnvironment,
+    symbol,
+    timeframe: args.timeframe,
+    // Per-symbol ladder params vary per whitelist row, so the portfolio
+    // manifest pins the shared cost/risk surface; per-row geometry stays in
+    // the row itself.
+    gridStepPct: "portfolio",
+    gridMaxGrids: "portfolio",
+    gridPauseAfterLossBars: "portfolio",
+    positionFraction: "portfolio",
+    feePct: args.fee.toString(),
+    slippageBps: args.slippageBps.toString(),
+    trendFilterPeriod: String(args.trendFilterPeriod ?? 0),
+    adxGate: "portfolio",
+    targetRatio: "portfolio",
+    onlyWithTrend: (args.onlyWithTrend ?? false).toString(),
+    leverage: "dynamic",
+    productType: "USDT-FUTURES",
+    marginMode: "isolated",
+    maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100).toString(),
+    maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 2).toString(),
+    validationProfile: "ladder-portfolio-soak",
+    orderType: "limit-at-grid-level",
+    triggerTiming: "level-touch",
+    engineVersion: "ladder-engine/v2",
+  };
 }
 
 export function validateLiveExecutionStrategy(
@@ -3290,6 +3362,26 @@ function paperTradeProgram(args: PaperTradeArgs) {
         `${resolveFuturesMarketExchange(exchange, true)}:${symbol}:${args.timeframe}`,
       );
 
+    // Stamp every ladder trade this process records with readiness
+    // provenance (fingerprint + cohort), mirroring the grid engine's
+    // per-state fields. Without it ladder fills are untagged legacy rows the
+    // real-money readiness gate can never count.
+    if (ladderPortfolioEntries.length > 0) {
+      const ladderEnv = executionEnvironmentFor(
+        resolvedExchange,
+        args.live,
+        useTestnet || useSandbox,
+      );
+      const manifest = strategyManifestForLadder(args, "portfolio", ladderEnv);
+      const fingerprint = fingerprintStrategyManifest(manifest);
+      setLadderTradeProvenance({
+        fingerprint,
+        cohortId: `ladder-${fingerprint.slice(0, 16)}`,
+        lockedAt: new Date(),
+        executionEnvironment: ladderEnv,
+      });
+    }
+
     // Account-level compounding: periodically re-derive each member's target
     // allocation from LIVE equity (winners fund losers' targets) and express
     // it as a maxPositionPct cap on sizing. initialCapital stays fixed so
@@ -3308,6 +3400,18 @@ function paperTradeProgram(args: PaperTradeArgs) {
         Date.now() - ladderRebalanceAt < ladderRebalanceMs
       ) {
         return [];
+      }
+      // Partial coverage = some members have not reported live capital yet
+      // (fresh start, skipped symbol, or a member that errored all cycle).
+      // Re-deriving targets from a subset would silently mis-scale everyone,
+      // so the plan no-ops — but LOUDLY, so the operator can fix the cause.
+      const missing = ladderPortfolioRows
+        .map((row) => row.key)
+        .filter((key) => !ladderLiveCapital.has(key));
+      if (missing.length > 0) {
+        return [
+          `[${new Date().toISOString()}] REBALANCE SKIPPED: ${missing.length}/${ladderPortfolioRows.length} member(s) missing live capital (${missing.join(", ")})`,
+        ];
       }
       const plan = planLadderPortfolioRebalance(
         ladderPortfolioRows.map((row) => ({
@@ -3464,6 +3568,9 @@ function paperTradeProgram(args: PaperTradeArgs) {
         maxPositionPct: rowOverrides.maxPositionPct,
         maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
         leverage: args.leverage,
+        takerExitFeePct: args.takerExitFeePct,
+        fundingRatePct8h: args.fundingRatePct8h,
+        maintenanceMarginRate: args.maintenanceMarginRatePct / 100,
         onlyWithTrend: args.onlyWithTrend,
         targetRatio: rowOverrides.targetRatio,
         chopGateAdxThreshold: rowOverrides.chopGateAdxThreshold,
@@ -3532,6 +3639,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         configMismatchAction: args.configMismatchAction,
         maxPositionDrawdownPct: args.maxPositionDrawdownPct,
         stopRatio: args.stopRatio,
+        // Account-level realized drawdown kill (flatten + no new seeds).
+        maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+        takerExitFeePct: args.takerExitFeePct,
+        fundingRatePct8h: args.fundingRatePct8h,
+        maintenanceMarginRate: args.maintenanceMarginRatePct / 100,
         replayBars: args.replayBars > 0 ? args.replayBars : undefined,
         forwardOnly: args.live || args.shadow === true,
         isLive: args.live,
@@ -3546,11 +3658,15 @@ function paperTradeProgram(args: PaperTradeArgs) {
         // size + per-position budget (accountScaledLeverageCap), ignoring any
         // static --leverage. No fixed leverage in the config.
         fullyDynamicLeverage: true,
-        // The real cap is the account-scaled one (e.g. 18x at $50, rising to
-        // 150x by $25k) inside ladderRungQty. The configured ceiling stays at
-        // 150 so a large account can use high leverage on a small slice, while
-        // the per-contract max is enforced by the adapter.
-        maxLeverage: 150,
+        // The account-scaled cap is the real ceiling, but it is clamped to
+        // NEURATRADE_MAX_LADDER_LEVERAGE (default 10x): the validated
+        // candidates all run 1-2x, and the old hardcoded 150 let a large
+        // account silently deploy leverage no candidate was ever validated
+        // at. Raise the env deliberately after re-validating at higher lev.
+        maxLeverage: Math.max(
+          1,
+          Number(process.env.NEURATRADE_MAX_LADDER_LEVERAGE ?? "10") || 10,
+        ),
         // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
         // contract rules, but the ladder trades BYBIT — passing them caused
         // false min-orderable rejections (NEAR "min orderable 25.19" from the

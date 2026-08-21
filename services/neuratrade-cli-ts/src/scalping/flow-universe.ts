@@ -113,8 +113,7 @@ export function selectFlowUniverse(
     if (instrument.status !== undefined && instrument.status !== "Trading") {
       continue;
     }
-    const ageDays =
-      (now - instrument.listedTime) / MS_PER_DAY;
+    const ageDays = (now - instrument.listedTime) / MS_PER_DAY;
     ranked.push({
       symbol,
       turnover24h,

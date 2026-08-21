@@ -71,6 +71,18 @@ export interface GridPaperTradingOptions {
   readonly maxDrawdownPct: number;
   /** Leverage multiplier. 1 = spot-style (no liquidation). */
   readonly leverage: number;
+  /** Per-side TAKER fee (percent) for stop / liquidation exits; defaults to feePct. */
+  readonly takerExitFeePct?: number;
+  /**
+   * Funding cost accrued on the open position every 8h held, in percent of
+   * notional per interval (signed: positive = longs pay). Default 0 = off.
+   */
+  readonly fundingRatePct8h?: number;
+  /**
+   * Maintenance-margin rate (fraction of notional) in the liquidation model.
+   * Default 0 keeps the legacy 1/L distance.
+   */
+  readonly maintenanceMarginRate?: number;
   /** When true, only enter long above the trend SMA and short below it. */
   readonly onlyWithTrend?: boolean;
   /** Target distance as a multiple of the grid step (default 1.0). */
@@ -94,7 +106,11 @@ export interface GridPaperTradingOptions {
   readonly productType?: FuturesProductType;
   /** Futures margin mode required for live orders. */
   readonly marginMode?: FuturesMarginMode;
-  readonly executionEnvironment?: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live";
+  readonly executionEnvironment?:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live";
   /** Exchange contract size constraints (minQty, qtyStep, minTradeUSDT) for
    *  this symbol, populated by the CLI from BitgetClient.getContracts on the
    *  live path and by tests directly. When set, entry sizing rounds the order
@@ -105,6 +121,9 @@ export interface GridPaperTradingOptions {
    *  (no step rounding). */
   readonly contractSpecs?: ContractSizeSpec;
 }
+
+/** Funding interval in ms (perpetual funding settles every 8h). */
+const FUNDING_INTERVAL_MS = 8 * 3_600_000;
 
 export interface GridPaperTradingIterationResult {
   readonly action: "opened" | "closed" | "hold";
@@ -142,7 +161,11 @@ function adoptedGridState(
   state: GridPaperState,
   position: FuturesPosition,
   strategyFingerprint: string,
-  executionEnvironment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live",
+  executionEnvironment:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live",
   now: Date,
 ): GridPaperState {
   return {
@@ -238,17 +261,26 @@ function liquidationPrice(
   side: GridPaperPositionSide,
   entryPrice: Decimal,
   leverage: number,
+  mmRate = 0,
 ): Decimal {
   const l = Math.max(1, leverage);
   if (l <= 1) return money(0);
+  // Adverse move to liquidation = initial leverage distance minus the
+  // maintenance-margin buffer (floored at 1% so a huge mmRate can never
+  // produce a non-liquidating or inverted price).
+  const move = Math.max(0.01, 1 / l - mmRate);
   return side === "long"
-    ? entryPrice.times(1 - 1 / l)
-    : entryPrice.times(1 + 1 / l);
+    ? entryPrice.times(1 - move)
+    : entryPrice.times(1 + move);
 }
 
 function strategyManifestFor(
   options: GridPaperTradingOptions,
-  executionEnvironment: "bitget-demo" | "bitget-live" | "bybit-demo" | "bybit-live",
+  executionEnvironment:
+    | "bitget-demo"
+    | "bitget-live"
+    | "bybit-demo"
+    | "bybit-live",
 ): StrategyManifest {
   return {
     ...DEFAULT_STRATEGY_MANIFEST,
@@ -670,7 +702,36 @@ export function runGridPaperTradingIteration(
     const mid = money(current.open);
     const step = mid.times(options.gridStepPct / 100);
     const slippageFactor = 1 + options.slippageBps / 10000;
-    const fee = (options.feePct / 100) * 2;
+    // Round-trip fee: maker both legs for target exits; the exit leg of a
+    // stop/liquidation is a TAKER market order, so charge maker+taker there.
+    const makerFee = options.feePct / 100;
+    const takerFee = (options.takerExitFeePct ?? options.feePct) / 100;
+    const fee = makerFee * 2;
+    const stopFee = makerFee + takerFee;
+
+    // Funding accrued while the position was open (whole 8h intervals,
+    // charged at close; longs pay a positive rate, shorts receive it).
+    const fundingCost = (() => {
+      const ratePct = options.fundingRatePct8h ?? 0;
+      if (
+        ratePct === 0 ||
+        state.side === null ||
+        state.entryOpenedAt === undefined
+      ) {
+        return money(0);
+      }
+      const intervals = Math.floor(
+        (current.timestamp.getTime() - state.entryOpenedAt.getTime()) /
+          FUNDING_INTERVAL_MS,
+      );
+      if (intervals <= 0) return money(0);
+      const notional = state.capital
+        .times(state.maxPositionPct / 100)
+        .times(state.leverage);
+      return notional
+        .times((ratePct / 100) * intervals)
+        .times(state.side === "long" ? -1 : 1);
+    })();
 
     const todayPnl = yield* repo.getTodayRealizedPnl();
     const startOfDayCapital = yield* repo.getStartOfDayCapital(
@@ -702,7 +763,8 @@ export function runGridPaperTradingIteration(
         side === "long"
           ? exitPrice.minus(entryPrice).div(entryPrice)
           : entryPrice.minus(exitPrice).div(entryPrice);
-      const net = pricePnl.minus(fee);
+      const roundTripFee = exitReason === "target" ? fee : stopFee;
+      const net = pricePnl.minus(roundTripFee);
       const allocationFactor = maxPositionPct / 100;
       const leveragedReturn =
         exitReason === "liquidation" ? money(-1) : net.times(leverage);
@@ -715,7 +777,7 @@ export function runGridPaperTradingIteration(
           : Decimal.max(
               stateCapital.times(1 - allocationFactor),
               rawCapitalAfter,
-            );
+            ).plus(fundingCost);
       const pnlPct =
         exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
       const realizedPnlPct =
@@ -1115,10 +1177,21 @@ export function runGridPaperTradingIteration(
     } else if (state.side === "long") {
       const target = state.entryPrice.plus(step.times(targetRatio));
       const stop = state.entryPrice.minus(step.times(options.gridMaxGrids));
-      const liq = liquidationPrice("long", state.entryPrice, state.leverage);
+      const liq = liquidationPrice(
+        "long",
+        state.entryPrice,
+        state.leverage,
+        options.maintenanceMarginRate ?? 0,
+      );
 
       if (liq.greaterThan(0) && money(current.low).lessThanOrEqualTo(liq)) {
-        const close = yield* closeGridPosition("long", "liquidation", liq);
+        // Market exits fill ADVERSE to the trigger: a long stop sells below
+        // the level by the slippage amount.
+        const close = yield* closeGridPosition(
+          "long",
+          "liquidation",
+          liq.div(slippageFactor),
+        );
         state = {
           ...state,
           side: null,
@@ -1145,7 +1218,11 @@ export function runGridPaperTradingIteration(
         };
         note = `${isLive ? "[LIVE] " : ""}closed long target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
       } else if (money(current.low).lessThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition("long", "stop", stop);
+        const close = yield* closeGridPosition(
+          "long",
+          "stop",
+          stop.div(slippageFactor),
+        );
         state = {
           ...state,
           side: null,
@@ -1161,10 +1238,21 @@ export function runGridPaperTradingIteration(
     } else if (state.side === "short") {
       const target = state.entryPrice.minus(step.times(targetRatio));
       const stop = state.entryPrice.plus(step.times(options.gridMaxGrids));
-      const liq = liquidationPrice("short", state.entryPrice, state.leverage);
+      const liq = liquidationPrice(
+        "short",
+        state.entryPrice,
+        state.leverage,
+        options.maintenanceMarginRate ?? 0,
+      );
 
       if (liq.greaterThan(0) && money(current.high).greaterThanOrEqualTo(liq)) {
-        const close = yield* closeGridPosition("short", "liquidation", liq);
+        // Market exits fill ADVERSE to the trigger: a short stop buys above
+        // the level by the slippage amount.
+        const close = yield* closeGridPosition(
+          "short",
+          "liquidation",
+          liq.times(slippageFactor),
+        );
         state = {
           ...state,
           side: null,
@@ -1191,7 +1279,11 @@ export function runGridPaperTradingIteration(
         };
         note = `${isLive ? "[LIVE] " : ""}closed short target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
       } else if (money(current.high).greaterThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition("short", "stop", stop);
+        const close = yield* closeGridPosition(
+          "short",
+          "stop",
+          stop.times(slippageFactor),
+        );
         state = {
           ...state,
           side: null,

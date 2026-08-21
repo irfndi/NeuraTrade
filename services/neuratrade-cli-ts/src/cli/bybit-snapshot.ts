@@ -60,7 +60,9 @@ function sumClosedPnl(rows: readonly BybitClosedPnl[]): SymbolClosedSummary[] {
       reportedClosedPnl: value.pnl,
       fees: value.fees,
     }))
-    .sort((left, right) => right.reportedClosedPnl.comparedTo(left.reportedClosedPnl));
+    .sort((left, right) =>
+      right.reportedClosedPnl.comparedTo(left.reportedClosedPnl),
+    );
 }
 
 function positionJson(position: BybitPosition) {
@@ -102,11 +104,15 @@ export const bybitSnapshotCommand = Command.make(
   (args) =>
     Effect.gen(function* () {
       if (args.limit < 1 || args.limit > 100) {
-        return yield* Effect.fail(new Error("--limit must be between 1 and 100"));
+        return yield* Effect.fail(
+          new Error("--limit must be between 1 and 100"),
+        );
       }
       const startingEquity = money(args.startingEquity);
       if (startingEquity.isNaN() || startingEquity.lessThanOrEqualTo(0)) {
-        return yield* Effect.fail(new Error("--starting-equity must be positive"));
+        return yield* Effect.fail(
+          new Error("--starting-equity must be positive"),
+        );
       }
 
       const client = yield* BybitClient;
@@ -117,7 +123,9 @@ export const bybitSnapshotCommand = Command.make(
         client.getOpenOrders(),
       ]);
       const usdt = coins.find((coin) => coin.coin.toUpperCase() === "USDT");
-      const activePositions = positions.filter((position) => Number(position.size) > 0);
+      const activePositions = positions.filter(
+        (position) => Number(position.size) > 0,
+      );
       const closedBySymbol = sumClosedPnl(closedPnl);
       const equity = money(usdt?.equity ?? 0);
       const report = {
@@ -177,9 +185,7 @@ export const bybitSnapshotCommand = Command.make(
       }
       return report;
     }).pipe(
-      Effect.provide(
-        Layer.provide(BybitClientLiveConfig, BybitConfigLive),
-      ),
+      Effect.provide(Layer.provide(BybitClientLiveConfig, BybitConfigLive)),
     ),
 ).pipe(
   Command.withDescription(

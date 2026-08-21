@@ -23,6 +23,17 @@ interface BybitIntervalMap {
   [key: string]: string;
 }
 
+/** Parse the Retry-After header (seconds or HTTP-date) into ms; 0 if absent
+ *  or unparseable. */
+function retryAfterMsFrom(response: Response): number | undefined {
+  const raw = response.headers.get("retry-after");
+  if (raw === null || raw === "") return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(raw);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
 function getJSON<T>(
   path: string,
   baseUrl = BASE_URL,
@@ -45,11 +56,15 @@ function getJSON<T>(
           `Bybit network error for ${path}: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
-    }).pipe(Effect.tap(() => Effect.sync(() => clearTimeout(timer))));
+    }).pipe(Effect.ensuring(Effect.sync(() => clearTimeout(timer))));
 
     if (!response.ok) {
       return yield* Effect.fail(
-        new MarketDataError(`Bybit HTTP ${response.status} for ${path}`),
+        new MarketDataError(
+          `Bybit HTTP ${response.status} for ${path}`,
+          undefined,
+          response.status === 429 ? retryAfterMsFrom(response) : undefined,
+        ),
       );
     }
 

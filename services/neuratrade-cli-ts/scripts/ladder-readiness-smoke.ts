@@ -1,7 +1,14 @@
 import { Effect } from "effect";
 import { Database } from "bun:sqlite";
-import { MarketDataRepository, MarketDataRepositorySQLiteLive } from "../src/market-data/repository.js";
-import { ladderGateScoredEligibility, type GridUniverseEntry, type GridUniverseOptions } from "../src/scalping/grid-universe.js";
+import {
+  MarketDataRepository,
+  MarketDataRepositorySQLiteLive,
+} from "../src/market-data/repository.js";
+import {
+  ladderGateScoredEligibility,
+  type GridUniverseEntry,
+  type GridUniverseOptions,
+} from "../src/scalping/grid-universe.js";
 
 const DB = `${process.env.HOME}/.neuratrade/data/neuratrade.db`;
 
@@ -22,7 +29,12 @@ const program = Effect.gen(function* () {
   const entry: GridUniverseEntry = {
     symbol,
     candles: candles.length,
-    bestParams: { gridStepPct: 1.25, gridMaxGrids: 3, gridPauseAfterLossBars: 6, rungs: 2 },
+    bestParams: {
+      gridStepPct: 1.25,
+      gridMaxGrids: 3,
+      gridPauseAfterLossBars: 6,
+      rungs: 2,
+    },
     walkForward: {
       windows: [],
       aggregateReturnPct: 10,
@@ -49,7 +61,12 @@ const program = Effect.gen(function* () {
     feePct: 0.02,
     slippageBps: 1,
     trendFilterPeriod: 0,
-    searchSpace: { gridStepPct: [1.25], gridMaxGrids: [3], gridPauseAfterLossBars: [6], rungs: [2] },
+    searchSpace: {
+      gridStepPct: [1.25],
+      gridMaxGrids: [3],
+      gridPauseAfterLossBars: [6],
+      rungs: [2],
+    },
     engine: "ladder",
     tier: "readiness",
   };
@@ -57,7 +74,9 @@ const program = Effect.gen(function* () {
   const started = Date.now();
   const result = ladderGateScoredEligibility(entry, candles, options);
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-  console.log(`readiness ladder eligibility (${elapsed}s): ${result ? `PASS validatedTargetRatio=${result.validatedTargetRatio} chopAdx=${result.validatedChopGateAdx}` : "null (failed a gate)"}`);
+  console.log(
+    `readiness ladder eligibility (${elapsed}s): ${result ? `PASS validatedTargetRatio=${result.validatedTargetRatio} chopAdx=${result.validatedChopGateAdx}` : "null (failed a gate)"}`,
+  );
 });
 
 Effect.runPromise(

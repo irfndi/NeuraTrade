@@ -52,7 +52,12 @@ const grids = [2, 3];
 const pauses = [0, 24, 48];
 const targetsRatio = [2, 3, 4];
 const adxGates = [0, 15, 20, 28];
-const SPACE = steps.length * grids.length * pauses.length * targetsRatio.length * adxGates.length;
+const SPACE =
+  steps.length *
+  grids.length *
+  pauses.length *
+  targetsRatio.length *
+  adxGates.length;
 
 const base: GridOptions = {
   initialCapital: 100,
@@ -90,7 +95,11 @@ interface Row {
 }
 
 const db2 = new Database(`${HOME}/data/neuratrade.db`, { readonly: true });
-const outPath = join(HOME, "tuning", `grid-cohort-${exchange.replace(/[^A-Za-z0-9]/g, "_")}-multi.json`);
+const outPath = join(
+  HOME,
+  "tuning",
+  `grid-cohort-${exchange.replace(/[^A-Za-z0-9]/g, "_")}-multi.json`,
+);
 mkdirSync(dirname(outPath), { recursive: true });
 const all: Row[] = [];
 let evaluated = 0;
@@ -165,22 +174,59 @@ for (const symbol of targets) {
               g.stressLowerBoundPct >= 0;
             all.push({
               symbol,
-              config: { gridStepPct: step, gridMaxGrids: maxGrids, gridPauseAfterLossBars: pause, targetRatio: target, chopGateAdx: adx },
+              config: {
+                gridStepPct: step,
+                gridMaxGrids: maxGrids,
+                gridPauseAfterLossBars: pause,
+                targetRatio: target,
+                chopGateAdx: adx,
+              },
               gates: g,
               pass,
             });
             if (evaluated % 50 === 0) {
-              const passing = all.filter((x) => x.pass).sort((a, b) => b.gates.stressLowerBoundPct - a.gates.stressLowerBoundPct);
-              writeFileSync(outPath, JSON.stringify({ exchange, evaluated, symbols: targets.length, passing, all }, null, 2));
+              const passing = all
+                .filter((x) => x.pass)
+                .sort(
+                  (a, b) =>
+                    b.gates.stressLowerBoundPct - a.gates.stressLowerBoundPct,
+                );
+              writeFileSync(
+                outPath,
+                JSON.stringify(
+                  {
+                    exchange,
+                    evaluated,
+                    symbols: targets.length,
+                    passing,
+                    all,
+                  },
+                  null,
+                  2,
+                ),
+              );
               const min = (Date.now() - t0) / 60000;
-              console.log(`...${evaluated} (${symbol}) after ${min.toFixed(1)}m, ${((min / evaluated) * 60).toFixed(1)}s/conf | pass ${passing.length}`);
+              console.log(
+                `...${evaluated} (${symbol}) after ${min.toFixed(1)}m, ${((min / evaluated) * 60).toFixed(1)}s/conf | pass ${passing.length}`,
+              );
             }
           }
 }
 
-const passing = all.filter((x) => x.pass).sort((a, b) => b.gates.stressLowerBoundPct - a.gates.stressLowerBoundPct);
-writeFileSync(outPath, JSON.stringify({ exchange, evaluated, symbols: targets.length, passing, all }, null, 2));
-console.log(`\n=== ${exchange}: ${targets.length} symbols, ${evaluated} evaluated, ${passing.length} PASS (by stressLB) ===`);
+const passing = all
+  .filter((x) => x.pass)
+  .sort((a, b) => b.gates.stressLowerBoundPct - a.gates.stressLowerBoundPct);
+writeFileSync(
+  outPath,
+  JSON.stringify(
+    { exchange, evaluated, symbols: targets.length, passing, all },
+    null,
+    2,
+  ),
+);
+console.log(
+  `\n=== ${exchange}: ${targets.length} symbols, ${evaluated} evaluated, ${passing.length} PASS (by stressLB) ===`,
+);
 for (const p of passing.slice(0, 30)) {
   console.log(
     `PASS ${p.symbol} step=${p.config.gridStepPct} grids=${p.config.gridMaxGrids} pause=${p.config.gridPauseAfterLossBars} target=${p.config.targetRatio} adx=${p.config.chopGateAdx} | win=${p.gates.profitableWindowPct.toFixed(1)}% ret=${p.gates.compoundedReturnPct.toFixed(2)}% dd=${p.gates.maxDrawdownPct.toFixed(2)}% tpm=${p.gates.tradesPerMonth.toFixed(1)} oos=${p.gates.fixedOosTrades} confLB=${p.gates.confidenceLowerBoundPct.toFixed(5)} stressLB=${p.gates.stressLowerBoundPct.toFixed(5)}`,

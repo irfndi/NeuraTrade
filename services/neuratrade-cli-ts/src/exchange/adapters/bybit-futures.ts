@@ -703,11 +703,9 @@ function makeBybitClientImpl(
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
-      return get(
-        "/v5/position/list",
-        query,
-        BybitPositionListSchema,
-      ).pipe(Effect.map((result) => result.list ?? []));
+      return get("/v5/position/list", query, BybitPositionListSchema).pipe(
+        Effect.map((result) => result.list ?? []),
+      );
     },
     getClosedPnl: (args = {}) => {
       const query: BybitQuery = {
@@ -772,11 +770,9 @@ function makeBybitClientImpl(
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
-      return get(
-        "/v5/order/realtime",
-        query,
-        BybitOrderListSchema,
-      ).pipe(Effect.map((result) => result.list ?? []));
+      return get("/v5/order/realtime", query, BybitOrderListSchema).pipe(
+        Effect.map((result) => result.list ?? []),
+      );
     },
     cancelOrder: ({ symbol, orderId }) =>
       post(
