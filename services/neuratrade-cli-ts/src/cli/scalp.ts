@@ -97,6 +97,10 @@ import {
   type LadderPaperIterationResult,
   type LadderPaperTradingOptions,
 } from "../paper-trading/ladder-engine.js";
+import {
+  allocateLadderPortfolioCapital,
+  summarizeLadderPortfolio,
+} from "../paper-trading/ladder-portfolio.js";
 import { bybitSnapshotCommand } from "./bybit-snapshot.js";
 import {
   freshFlowTradeState,
@@ -105,7 +109,10 @@ import {
   type FlowTradeIterationResult,
   type FlowTradeOptions,
 } from "../scalping/flow-trade.js";
-import type { ContractSizeSpec } from "../paper-trading/types.js";
+import type {
+  ContractSizeSpec,
+  LadderPaperPortfolioMember,
+} from "../paper-trading/types.js";
 import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
@@ -3247,6 +3254,40 @@ function paperTradeProgram(args: PaperTradeArgs) {
       }
     }
 
+    // A ladder watchlist is one paper account, not one $capital account per
+    // symbol. Give every current survivor a stable cash partition and include
+    // the manifest in the portfolio id so a watchlist change starts a new,
+    // auditable cohort instead of silently summing old and new symbols.
+    const ladderPortfolioEntries =
+      entries?.filter((entry) =>
+        isLadderSurvivorRow(entry.gridParams, args.strategyType),
+      ) ?? [];
+    const ladderPortfolioRows = ladderPortfolioEntries
+      .map((entry) => ({
+        entry,
+        key: `${resolveFuturesMarketExchange(entry.exchange ?? args.exchange, true)}:${entry.symbol}:${args.timeframe}`,
+      }))
+      .sort((left, right) => left.key.localeCompare(right.key));
+    const ladderPortfolioKeys = ladderPortfolioRows.map((row) => row.key);
+    const ladderPortfolioId =
+      ladderPortfolioEntries.length > 0
+        ? `ladder:${resolvedExchange}:${args.timeframe}:${args.capital}:${ladderPortfolioKeys.join(",")}`
+        : undefined;
+    const ladderPortfolioAllocations = allocateLadderPortfolioCapital(
+      ladderPortfolioRows.map((row) => ({
+        key: row.key,
+        allocatedWeight: row.entry.gridParams?.allocatedWeight,
+      })),
+      args.capital,
+    );
+    const ladderAllocationFor = (
+      symbol: string,
+      exchange: string,
+    ): Decimal | undefined =>
+      ladderPortfolioAllocations.get(
+        `${resolveFuturesMarketExchange(exchange, true)}:${symbol}:${args.timeframe}`,
+      );
+
     const makeSpotOptions = (
       symbol: string,
       exchange: string,
@@ -3405,11 +3446,25 @@ function paperTradeProgram(args: PaperTradeArgs) {
       symbol: string,
       exchange: string,
       gridParams?: WatchlistEntry["gridParams"],
+      allocatedCapital?: Decimal,
     ): LadderPaperTradingOptions => {
       const resolvedLadderExchange = resolveFuturesMarketExchange(
         exchange,
         true,
       );
+      const capitalPartition = allocatedCapital ?? money(args.capital);
+      const rawWeight = capitalPartition.div(money(args.capital));
+      const basePositionPct = Option.getOrElse(
+        args.maxPositionSizePct,
+        () => 100,
+      );
+      // max-position-size-pct is an account-level cap. Once capital is
+      // partitioned, expand the per-partition cap enough to preserve that
+      // account-level budget without ever exceeding 100% of a partition.
+      const partitionPositionPct =
+        rawWeight.greaterThan(0) && rawWeight.lessThan(1)
+          ? Math.min(100, basePositionPct / rawWeight.toNumber())
+          : basePositionPct;
       return {
         exchange: resolvedLadderExchange,
         symbol,
@@ -3424,7 +3479,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         feePct: args.fee,
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
-        initialCapital: args.capital,
+        initialCapital: capitalPartition.toNumber(),
         leverage: args.leverage,
         onlyWithTrend: args.onlyWithTrend,
         targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
@@ -3438,7 +3493,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         isLive: args.live,
         productType,
         marginMode,
-        maxPositionPct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+        maxPositionPct: partitionPositionPct,
         // Keep gross market exposure bounded separately from the collateral
         // cap enforced by RiskGuard. The latter is leverage-aware; this cap is
         // not, so a future leverage change cannot silently expand notional.
@@ -3596,7 +3651,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         // wallet can actually hold — ~4 at 25% margin each. API-call and
         // order-rate safety is preserved by the market-data/exchange rate
         // limiters; the per-round sleep below bounds overall cadence.
-        yield* Effect.forEach(
+        const sweepResults = yield* Effect.forEach(
           entries,
           (entry) =>
             Effect.gen(function* () {
@@ -3607,12 +3662,16 @@ function paperTradeProgram(args: PaperTradeArgs) {
                 entry.gridParams,
                 args.strategyType,
               );
+              const allocatedCapital = isLadderSurvivor
+                ? ladderAllocationFor(entry.symbol, entryExchange)
+                : undefined;
               const result = isLadderSurvivor
                 ? yield* runLadderIteration(
                     makeLadderOptions(
                       entry.symbol,
                       entryExchange,
                       entry.gridParams,
+                      allocatedCapital,
                     ),
                   )
                 : args.strategyType === "grid"
@@ -3645,13 +3704,58 @@ function paperTradeProgram(args: PaperTradeArgs) {
               yield* Console.log(
                 `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}` : ""} | ${result.note}`,
               );
+              if (
+                isLadderSurvivor &&
+                ladderPortfolioId !== undefined &&
+                allocatedCapital !== undefined &&
+                paperRepo.saveLadderPortfolioMember !== undefined
+              ) {
+                const ladderResult = result as LadderPaperIterationResult;
+                const member: LadderPaperPortfolioMember = {
+                  portfolioId: ladderPortfolioId,
+                  exchange: resolveFuturesMarketExchange(entryExchange, true),
+                  symbol: entry.symbol,
+                  timeframe: args.timeframe,
+                  allocatedCapital,
+                  capital: money(ladderResult.capital),
+                  equity: money(ladderResult.equity ?? ladderResult.capital),
+                  unrealizedPnl: money(ladderResult.unrealizedPnl ?? 0),
+                  active: true,
+                  updatedAt: new Date(),
+                };
+                yield* paperRepo.saveLadderPortfolioMember(member);
+              }
               if (remaining > 0 && args.iterations !== 0) {
                 remaining -= 1;
               }
-              return;
+              return { entry, entryExchange, result, isLadderSurvivor };
             }),
-          { concurrency: 16, discard: true },
+          { concurrency: 16 },
         );
+        if (
+          ladderPortfolioId !== undefined &&
+          paperRepo.listLadderPortfolioMembers !== undefined &&
+          paperRepo.saveLadderPortfolioSummary !== undefined
+        ) {
+          const members =
+            yield* paperRepo.listLadderPortfolioMembers(ladderPortfolioId);
+          const previous =
+            paperRepo.getLadderPortfolioSummary !== undefined
+              ? yield* paperRepo.getLadderPortfolioSummary(ladderPortfolioId)
+              : null;
+          const summary = summarizeLadderPortfolio(
+            ladderPortfolioId,
+            resolvedExchange,
+            args.timeframe,
+            money(args.capital),
+            members,
+            previous?.peakEquity,
+          );
+          yield* paperRepo.saveLadderPortfolioSummary(summary);
+          yield* Console.log(
+            `[${new Date().toISOString()}] PORTFOLIO ${ladderPortfolioId} | capital=${summary.capital.toFixed(2)} | equity=${summary.equity.toFixed(2)} | uPnL=${summary.unrealizedPnl.toFixed(4)} | symbols=${summary.activeSymbols} | evaluated=${sweepResults.length}`,
+          );
+        }
         // Cadence between sweep rounds: bounded by interval, so parallel
         // evaluation never spams the exchanges.
         if (args.iterations === 0 || remaining !== 0) {

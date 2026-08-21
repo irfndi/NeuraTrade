@@ -6,6 +6,8 @@ import type {
   GridPaperTrade,
   LadderPaperTrade,
   LadderPaperState,
+  LadderPaperPortfolioMember,
+  LadderPaperPortfolioSummary,
   PaperPosition,
   PaperTrade,
 } from "./types.js";
@@ -251,6 +253,34 @@ export interface PaperTradingRepositoryService {
     trades: readonly LadderPaperTrade[],
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 
+  /** Persist one symbol's bounded cash partition in a shared ladder portfolio. */
+  readonly saveLadderPortfolioMember?: (
+    member: LadderPaperPortfolioMember,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  /** Read the current symbol partitions for a shared ladder portfolio. */
+  readonly listLadderPortfolioMembers?: (
+    portfolioId: string,
+  ) => Effect.Effect<
+    readonly LadderPaperPortfolioMember[],
+    PaperTradingRepositoryError,
+    never
+  >;
+
+  /** Persist the aggregate shared ladder portfolio mark. */
+  readonly saveLadderPortfolioSummary?: (
+    summary: LadderPaperPortfolioSummary,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  /** Load the previous aggregate mark so peak equity survives restarts. */
+  readonly getLadderPortfolioSummary?: (
+    portfolioId: string,
+  ) => Effect.Effect<
+    LadderPaperPortfolioSummary | null,
+    PaperTradingRepositoryError,
+    never
+  >;
+
   /** Load the persisted flow-trade state for one (exchange, symbol), or null
    *  when no row exists yet (fresh start — flat). */
   readonly getFlowTradeState: (
@@ -458,6 +488,45 @@ CREATE TABLE IF NOT EXISTS ladder_paper_state (
   state_json TEXT NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (exchange, symbol, timeframe)
+);
+
+CREATE TABLE IF NOT EXISTS ladder_paper_portfolio_member (
+  portfolio_id TEXT NOT NULL,
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  allocated_capital REAL NOT NULL,
+  allocated_capital_decimal TEXT NOT NULL,
+  capital REAL NOT NULL,
+  capital_decimal TEXT NOT NULL,
+  equity REAL NOT NULL,
+  equity_decimal TEXT NOT NULL,
+  unrealized_pnl REAL NOT NULL,
+  unrealized_pnl_decimal TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (portfolio_id, exchange, symbol, timeframe)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ladder_paper_portfolio_member_updated
+  ON ladder_paper_portfolio_member(portfolio_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ladder_paper_portfolio_summary (
+  portfolio_id TEXT PRIMARY KEY,
+  exchange TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  initial_capital REAL NOT NULL,
+  initial_capital_decimal TEXT NOT NULL,
+  capital REAL NOT NULL,
+  capital_decimal TEXT NOT NULL,
+  equity REAL NOT NULL,
+  equity_decimal TEXT NOT NULL,
+  peak_equity REAL NOT NULL,
+  peak_equity_decimal TEXT NOT NULL,
+  unrealized_pnl REAL NOT NULL,
+  unrealized_pnl_decimal TEXT NOT NULL,
+  active_symbols INTEGER NOT NULL,
+  updated_at DATETIME NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ladder_paper_trades (
@@ -1696,6 +1765,225 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to save ladder paper state: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveLadderPortfolioMember(
+    member: LadderPaperPortfolioMember,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return retryOnBusy(
+      Effect.try({
+        try: () => {
+          this.db
+            .query(
+              `INSERT INTO ladder_paper_portfolio_member
+               (portfolio_id, exchange, symbol, timeframe,
+                allocated_capital, allocated_capital_decimal,
+                capital, capital_decimal, equity, equity_decimal,
+                unrealized_pnl, unrealized_pnl_decimal, active, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(portfolio_id, exchange, symbol, timeframe) DO UPDATE SET
+                 allocated_capital = excluded.allocated_capital,
+                 allocated_capital_decimal = excluded.allocated_capital_decimal,
+                 capital = excluded.capital,
+                 capital_decimal = excluded.capital_decimal,
+                 equity = excluded.equity,
+                 equity_decimal = excluded.equity_decimal,
+                 unrealized_pnl = excluded.unrealized_pnl,
+                 unrealized_pnl_decimal = excluded.unrealized_pnl_decimal,
+                 active = excluded.active,
+                 updated_at = excluded.updated_at`,
+            )
+            .run(
+              member.portfolioId,
+              member.exchange,
+              member.symbol,
+              member.timeframe,
+              toNumber(member.allocatedCapital),
+              member.allocatedCapital.toString(),
+              toNumber(member.capital),
+              member.capital.toString(),
+              toNumber(member.equity),
+              member.equity.toString(),
+              toNumber(member.unrealizedPnl),
+              member.unrealizedPnl.toString(),
+              member.active ? 1 : 0,
+              member.updatedAt.toISOString(),
+            );
+        },
+        catch: (err) =>
+          new PaperTradingRepositoryError(
+            `Failed to save ladder portfolio member: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      }),
+    );
+  }
+
+  listLadderPortfolioMembers(
+    portfolioId: string,
+  ): Effect.Effect<
+    readonly LadderPaperPortfolioMember[],
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const rows = this.db
+          .query(
+            `SELECT portfolio_id, exchange, symbol, timeframe,
+                    COALESCE(allocated_capital_decimal, CAST(allocated_capital AS TEXT)) AS allocated_capital_value,
+                    COALESCE(capital_decimal, CAST(capital AS TEXT)) AS capital_value,
+                    COALESCE(equity_decimal, CAST(equity AS TEXT)) AS equity_value,
+                    COALESCE(unrealized_pnl_decimal, CAST(unrealized_pnl AS TEXT)) AS unrealized_pnl_value,
+                    active, updated_at
+             FROM ladder_paper_portfolio_member
+             WHERE portfolio_id = ?
+             ORDER BY symbol`,
+          )
+          .all(portfolioId) as Array<{
+          portfolio_id: string;
+          exchange: string;
+          symbol: string;
+          timeframe: string;
+          allocated_capital_value: string;
+          capital_value: string;
+          equity_value: string;
+          unrealized_pnl_value: string;
+          active: number;
+          updated_at: string;
+        }>;
+        return rows.map((row) => ({
+          portfolioId: row.portfolio_id,
+          exchange: row.exchange,
+          symbol: row.symbol,
+          timeframe: row.timeframe,
+          allocatedCapital: new Decimal(row.allocated_capital_value),
+          capital: new Decimal(row.capital_value),
+          equity: new Decimal(row.equity_value),
+          unrealizedPnl: new Decimal(row.unrealized_pnl_value),
+          active: row.active === 1,
+          updatedAt: new Date(row.updated_at),
+        }));
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load ladder portfolio members: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  saveLadderPortfolioSummary(
+    summary: LadderPaperPortfolioSummary,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return retryOnBusy(
+      Effect.try({
+        try: () => {
+          this.db
+            .query(
+              `INSERT INTO ladder_paper_portfolio_summary
+               (portfolio_id, exchange, timeframe,
+                initial_capital, initial_capital_decimal,
+                capital, capital_decimal, equity, equity_decimal,
+                peak_equity, peak_equity_decimal,
+                unrealized_pnl, unrealized_pnl_decimal, active_symbols, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(portfolio_id) DO UPDATE SET
+                 exchange = excluded.exchange,
+                 timeframe = excluded.timeframe,
+                 initial_capital = excluded.initial_capital,
+                 initial_capital_decimal = excluded.initial_capital_decimal,
+                 capital = excluded.capital,
+                 capital_decimal = excluded.capital_decimal,
+                 equity = excluded.equity,
+                 equity_decimal = excluded.equity_decimal,
+                 peak_equity = excluded.peak_equity,
+                 peak_equity_decimal = excluded.peak_equity_decimal,
+                 unrealized_pnl = excluded.unrealized_pnl,
+                 unrealized_pnl_decimal = excluded.unrealized_pnl_decimal,
+                 active_symbols = excluded.active_symbols,
+                 updated_at = excluded.updated_at`,
+            )
+            .run(
+              summary.portfolioId,
+              summary.exchange,
+              summary.timeframe,
+              toNumber(summary.initialCapital),
+              summary.initialCapital.toString(),
+              toNumber(summary.capital),
+              summary.capital.toString(),
+              toNumber(summary.equity),
+              summary.equity.toString(),
+              toNumber(summary.peakEquity),
+              summary.peakEquity.toString(),
+              toNumber(summary.unrealizedPnl),
+              summary.unrealizedPnl.toString(),
+              summary.activeSymbols,
+              summary.updatedAt.toISOString(),
+            );
+        },
+        catch: (err) =>
+          new PaperTradingRepositoryError(
+            `Failed to save ladder portfolio summary: ${err instanceof Error ? err.message : String(err)}`,
+            err,
+          ),
+      }),
+    );
+  }
+
+  getLadderPortfolioSummary(
+    portfolioId: string,
+  ): Effect.Effect<
+    LadderPaperPortfolioSummary | null,
+    PaperTradingRepositoryError,
+    never
+  > {
+    return Effect.try({
+      try: () => {
+        const row = this.db
+          .query(
+            `SELECT portfolio_id, exchange, timeframe,
+                    COALESCE(initial_capital_decimal, CAST(initial_capital AS TEXT)) AS initial_capital_value,
+                    COALESCE(capital_decimal, CAST(capital AS TEXT)) AS capital_value,
+                    COALESCE(equity_decimal, CAST(equity AS TEXT)) AS equity_value,
+                    COALESCE(peak_equity_decimal, CAST(peak_equity AS TEXT)) AS peak_equity_value,
+                    COALESCE(unrealized_pnl_decimal, CAST(unrealized_pnl AS TEXT)) AS unrealized_pnl_value,
+                    active_symbols, updated_at
+             FROM ladder_paper_portfolio_summary
+             WHERE portfolio_id = ?`,
+          )
+          .get(portfolioId) as {
+          portfolio_id: string;
+          exchange: string;
+          timeframe: string;
+          initial_capital_value: string;
+          capital_value: string;
+          equity_value: string;
+          peak_equity_value: string;
+          unrealized_pnl_value: string;
+          active_symbols: number;
+          updated_at: string;
+        } | null;
+        if (row === null) return null;
+        return {
+          portfolioId: row.portfolio_id,
+          exchange: row.exchange,
+          timeframe: row.timeframe,
+          initialCapital: new Decimal(row.initial_capital_value),
+          capital: new Decimal(row.capital_value),
+          equity: new Decimal(row.equity_value),
+          peakEquity: new Decimal(row.peak_equity_value),
+          unrealizedPnl: new Decimal(row.unrealized_pnl_value),
+          activeSymbols: row.active_symbols,
+          updatedAt: new Date(row.updated_at),
+        };
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to load ladder portfolio summary: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });

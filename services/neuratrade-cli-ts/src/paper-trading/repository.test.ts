@@ -27,6 +27,56 @@ describe("PaperTradingRepositorySQLite", () => {
     db.close();
   });
 
+  it("persists shared ladder portfolio members and aggregate marks", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const portfolioId = "ladder:bybit-futures:15m:50:ENA,GPS";
+    const updatedAt = new Date("2026-08-21T00:00:00.000Z");
+    await Effect.runPromise(
+      repository.saveLadderPortfolioMember?.({
+        portfolioId,
+        exchange: "bybit-futures",
+        symbol: "ENA/USDT:USDT",
+        timeframe: "15m",
+        allocatedCapital: money("25.000000000000000001"),
+        capital: money("24.500000000000000001"),
+        equity: money("24.700000000000000001"),
+        unrealizedPnl: money("0.200000000000000000"),
+        active: true,
+        updatedAt,
+      }) ?? Effect.die("missing ladder portfolio member writer"),
+    );
+    const members = await Effect.runPromise(
+      repository.listLadderPortfolioMembers?.(portfolioId) ??
+        Effect.die("missing ladder portfolio member reader"),
+    );
+    expect(members).toHaveLength(1);
+    expect(members[0]?.capital.toString()).toBe("24.500000000000000001");
+
+    await Effect.runPromise(
+      repository.saveLadderPortfolioSummary?.({
+        portfolioId,
+        exchange: "bybit-futures",
+        timeframe: "15m",
+        initialCapital: money(50),
+        capital: money("49.5"),
+        equity: money("49.7"),
+        peakEquity: money("50"),
+        unrealizedPnl: money("0.2"),
+        activeSymbols: 2,
+        updatedAt,
+      }) ?? Effect.die("missing ladder portfolio summary writer"),
+    );
+    const summary = await Effect.runPromise(
+      repository.getLadderPortfolioSummary?.(portfolioId) ??
+        Effect.die("missing ladder portfolio summary reader"),
+    );
+    expect(summary?.equity.toString()).toBe("49.7");
+    expect(summary?.peakEquity.toString()).toBe("50");
+    db.close();
+  });
+
   it("records ladder close history idempotently with exact decimal PnL", async () => {
     const db = new Database(":memory:");
     const repository = new PaperTradingRepositorySQLite(db);

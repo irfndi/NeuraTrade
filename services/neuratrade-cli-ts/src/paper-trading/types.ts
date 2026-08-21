@@ -199,6 +199,38 @@ export interface LadderPaperTrade {
   readonly closedAt: Date;
 }
 
+/**
+ * One symbol's cash partition inside a multi-symbol ladder paper portfolio.
+ * Each partition is bounded by its allocated capital, so a watchlist cannot
+ * accidentally multiply a $50 account into N independent $50 accounts.
+ */
+export interface LadderPaperPortfolioMember {
+  readonly portfolioId: string;
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly allocatedCapital: Money;
+  readonly capital: Money;
+  readonly equity: Money;
+  readonly unrealizedPnl: Money;
+  readonly active: boolean;
+  readonly updatedAt: Date;
+}
+
+/** Aggregated realized and mark-to-market state for a ladder portfolio. */
+export interface LadderPaperPortfolioSummary {
+  readonly portfolioId: string;
+  readonly exchange: string;
+  readonly timeframe: string;
+  readonly initialCapital: Money;
+  readonly capital: Money;
+  readonly equity: Money;
+  readonly peakEquity: Money;
+  readonly unrealizedPnl: Money;
+  readonly activeSymbols: number;
+  readonly updatedAt: Date;
+}
+
 /** One rung of the multi-level ladder grid paper engine. */
 export interface LadderPaperRungState {
   readonly rungIndex: number;
