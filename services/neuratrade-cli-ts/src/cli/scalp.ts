@@ -2958,18 +2958,20 @@ export function strategyManifestForLadder(
     timeframe: args.timeframe,
     // Per-symbol ladder params vary per whitelist row, so the portfolio
     // manifest pins the shared cost/risk surface; per-row geometry stays in
-    // the row itself.
-    gridStepPct: "portfolio",
-    gridMaxGrids: "portfolio",
-    gridPauseAfterLossBars: "portfolio",
-    positionFraction: "portfolio",
+    // the row itself. Placeholder numerics ("0") mark the row-scoped fields
+    // — the fingerprinter parses every field as a decimal, so non-numeric
+    // markers are invalid here.
+    gridStepPct: "0",
+    gridMaxGrids: "0",
+    gridPauseAfterLossBars: "0",
+    positionFraction: "1",
     feePct: args.fee.toString(),
     slippageBps: args.slippageBps.toString(),
     trendFilterPeriod: String(args.trendFilterPeriod ?? 0),
-    adxGate: "portfolio",
-    targetRatio: "portfolio",
+    adxGate: "0",
+    targetRatio: "0",
     onlyWithTrend: (args.onlyWithTrend ?? false).toString(),
-    leverage: "dynamic",
+    leverage: "1",
     productType: "USDT-FUTURES",
     marginMode: "isolated",
     maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100).toString(),
