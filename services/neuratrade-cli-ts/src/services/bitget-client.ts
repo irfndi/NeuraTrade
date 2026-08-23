@@ -127,9 +127,17 @@ export function isBitgetUnsupportedInstrumentError(
   const parameterName = namedParameter?.[1] ?? namedParameter?.[2];
   // Fail closed: an unrecognized named parameter is a config defect.
   if (parameterName === undefined) return false;
-  // A named parameter only counts when it positively identifies a
-  // symbol/contract/instrument. Anything else is a config defect.
-  return SYMBOL_OR_CONTRACT_PARAM_RE.test(parameterName);
+  // A named parameter counts when it identifies a symbol/contract/instrument
+  // OR when it IS a contract value (e.g. "Parameter ONDOUSDT does not exist"
+  // — Bitget echoes the symbol VALUE, uppercase base+quote with no
+  // separator). The demo proxy omits some contracts entirely; querying a
+  // missing one means the position is absent, not that the caller erred.
+  if (SYMBOL_OR_CONTRACT_PARAM_RE.test(parameterName)) return true;
+  if (/^[A-Z0-9]+USDT$/.test(parameterName)) return true;
+  if (/^[A-Z0-9]+$/.test(parameterName) && parameterName.length >= 5) {
+    return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

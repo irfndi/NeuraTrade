@@ -146,6 +146,12 @@ describe("isBitgetUnsupportedInstrumentError", () => {
     ["Parameter symbol does not exist", true],
     ["Parameter symbol not exist", true],
     ["No such parameter instrument", true],
+    // Bitget echoes the CONTRACT VALUE as the "parameter" on demo proxies
+    // that omit the contract entirely (observed live: ONDOUSDT, HYPEUSDT).
+    // The position is absent, not the caller broken.
+    ["Parameter ONDOUSDT does not exist", true],
+    ["Parameter HYPEUSDT not exist", true],
+    ["No such parameter SOLUSDT", true],
     // named non-symbol parameter -> config defect, NOT unsupported
     ["Parameter marginCoin does not exist", false],
     ["Parameter clientType does not exist", false],
