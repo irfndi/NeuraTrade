@@ -142,8 +142,14 @@ export function makeCausalSymbolStats(
 
   void timeframe; // timeframe currently unused (annualizedVolatility is 0, matching batch behavior)
 
+  // Memoize per bar: walk-forward selection hits the same barIndex many
+  // times (per search-space candidate), and each uncached call copies +
+  // sorts the trailing lookback window. Results are deterministic per i.
+  const statsCache = new Map<number, SymbolStatistics>();
   return (barIndex: number): SymbolStatistics => {
     const i = Math.max(0, Math.min(n - 1, barIndex));
+    const cached = statsCache.get(i);
+    if (cached) return cached;
     const from = Math.max(0, i - Math.max(lookback, 20) + 1);
     const windowValues: number[] = [];
     for (let j = from; j <= i; j++) {
@@ -151,7 +157,7 @@ export function makeCausalSymbolStats(
     }
     const sorted = windowValues.sort((a, b) => a - b);
     const adx14 = Number.isNaN(adxSeries[i]) ? 0 : adxSeries[i];
-    return {
+    const stats: SymbolStatistics = {
       atr14Pct: Number.isNaN(atrPctSeries[i]) ? 0 : atrPctSeries[i],
       atrPctMedian: percentile(sorted, 50),
       atrPct20: percentile(sorted, 20),
@@ -164,6 +170,8 @@ export function makeCausalSymbolStats(
       volumeRatio: volumeRatioSeries[i],
       sampleSize: i + 1,
     };
+    statsCache.set(i, stats);
+    return stats;
   };
 }
 

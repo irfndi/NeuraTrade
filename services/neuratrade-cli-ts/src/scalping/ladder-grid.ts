@@ -32,7 +32,30 @@
 import type { CandleLike } from "./types.js";
 import { calculateSMA, calculateEMA } from "./indicators.js";
 import { makeCausalSymbolStats } from "./symbol-stats.js";
+import type { SymbolStatistics } from "./symbol-stats.js";
 
+/**
+ * Causal stats (ATR/ADX series) are a pure function of the candle array +
+ * timeframe. Walk-forward selection backtests the SAME train slice once per
+ * search-space candidate (~768×/window), rebuilding the O(n) ADX series
+ * every time. Memoize by array identity — slices are stable within a window,
+ * fresh across windows, and the WeakMap lets dead slices GC.
+ */
+interface CausalStatsEntry {
+  readonly timeframe: string;
+  readonly provider: (barIndex: number) => SymbolStatistics;
+}
+const causalStatsCache = new WeakMap<readonly CandleLike[], CausalStatsEntry>();
+function cachedCausalStats(
+  candles: readonly CandleLike[],
+  timeframe: string,
+): (barIndex: number) => SymbolStatistics {
+  const hit = causalStatsCache.get(candles);
+  if (hit && hit.timeframe === timeframe) return hit.provider;
+  const provider = makeCausalSymbolStats(candles, timeframe);
+  causalStatsCache.set(candles, { timeframe, provider });
+  return provider;
+}
 export interface LadderOptions {
   /** Number of simultaneous rungs per side (1 = single-position control). */
   readonly rungs: number;
@@ -128,6 +151,19 @@ export interface LadderSearchSpace {
   readonly gridStepPct: readonly number[];
   readonly gridMaxGrids: readonly number[];
   readonly gridPauseAfterLossBars: readonly number[];
+  /**
+   * Optional R:R dial (take-profit = step × targetRatio). Absent = [1] —
+   * the legacy inverted-R:R behavior. The universe funnel passes
+   * GATE_TARGETS so walk-forward selection matches the geometry the gate
+   * stage (and the live book) actually trade.
+   */
+  readonly targetRatio?: readonly number[];
+  /**
+   * Optional chop-gate ADX floor. Absent = [0] (gate disabled). The funnel
+   * passes GATE_ADX_GATES; without it wf selection favors churn configs that
+   * bleed OOS even when the gated combo is profitable.
+   */
+  readonly chopGateAdxThreshold?: readonly number[];
 }
 
 export interface LadderWalkForwardWindow {
@@ -242,7 +278,7 @@ export function runLadderGridBacktest(
 
   const statsProvider =
     chopGateAdxThreshold > 0
-      ? makeCausalSymbolStats(candles, opts.timeframe ?? "15m")
+      ? cachedCausalStats(candles, opts.timeframe ?? "15m")
       : null;
 
   // Pre-calculate trend filter series if enabled
@@ -676,17 +712,22 @@ export function findBestLadderGridParams(
     (baseOptions.stopRatio ?? 0) > 0
       ? [searchSpace.gridMaxGrids[0] ?? 1]
       : searchSpace.gridMaxGrids;
-
+  const targetRatios = searchSpace.targetRatio ?? [1];
+  const chopGates = searchSpace.chopGateAdxThreshold ?? [0];
   for (const rungs of searchSpace.rungs) {
     for (const gridStepPct of searchSpace.gridStepPct) {
       for (const maxGrids of gridMaxGrids) {
         for (const gridPauseAfterLossBars of searchSpace.gridPauseAfterLossBars) {
+          for (const targetRatio of targetRatios) {
+            for (const chopGateAdxThreshold of chopGates) {
           const options: LadderOptions = {
             ...baseOptions,
             rungs,
             gridStepPct,
             gridMaxGrids: maxGrids,
             gridPauseAfterLossBars,
+            targetRatio,
+            chopGateAdxThreshold,
           };
           const result = runLadderGridBacktest(trainCandles, options);
           const candidate = { ...options, result };
@@ -703,9 +744,11 @@ export function findBestLadderGridParams(
           ) {
             bestEligible = candidate;
           }
+          }
         }
       }
     }
+  }
   }
 
   const best = bestEligible ?? bestOverall;

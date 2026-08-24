@@ -78,9 +78,13 @@ export const GATE_TARGETS = [1, 3, 4] as const;
 /**
  * Stage-4 gate-scored eligibility sweep: chop-gate ADX dials validated per
  * survivor (matches the manifest sweep in
- * scripts/gate-scored-grid-search-2026-08-06.ts).
+ * scripts/gate-scored-grid-search-2026-08-06.ts). 12 added 2026-08-14: the
+ * live bybit book's validated configs use adx=12 (probe:
+ * scripts/probe-targetratio-impact.ts — NEAR tr=4 flips -32.8% → +1.5%
+ * with it); excluding it made the gate unable to express the geometry that
+ * actually trades.
  */
-export const GATE_ADX_GATES = [24, 26, 28] as const;
+export const GATE_ADX_GATES = [12, 24, 26, 28] as const;
 
 /**
  * Deep-history target for gate-scored candidates: ~55k 15m bars (~2 years)
@@ -999,6 +1003,22 @@ function evaluateUniverseSymbol(
             gridStepPct: options.searchSpace.gridStepPct,
             gridMaxGrids: options.searchSpace.gridMaxGrids,
             gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars,
+            // Sweep the R:R and chop-gate dials INSIDE walk-forward
+            // selection. Fixed at [1]/[0] the wf objective is inverted-R:R
+            // churn (win one step, lose gridMaxGrids steps) — it selects
+            // configs that bleed OOS on every symbol while the profitable
+            // gated geometry never reaches the gate stage (2026-08-14:
+            // 0/25 survivors on a full-year db-mainnet scan; same configs
+            // flip positive under tr=3-4/adx=12, see
+            // scripts/probe-targetratio-impact.ts).
+            // ponytail: two-stage cost control — wf sweeps only the
+            // live-validated geometry (adx=12; tr 3|4). adx=0 combos always
+            // lose and each ADX-enabled backtest pays per-bar ADX compute,
+            // so sweeping all 4×3 dials here made a full scan >60min. The
+            // gate stage below still sweeps the full GATE_TARGETS ×
+            // GATE_ADX_GATES board for final validation.
+            targetRatio: [3, 4],
+            chopGateAdxThreshold: [12],
           },
           baseOptions: {
             feePct: options.feePct,
@@ -1071,10 +1091,11 @@ function evaluateUniverseSymbol(
   // loses -10.3% over 12 mainnet months despite +17.85% testnet edge).
   const maxBreakevenWinRate = options.maxBreakevenWinRate ?? 0.4;
   const breakevenWinRate = breakevenWinRateFromWalkForward(walkForward);
-  // Ladder: the walk-forward does not sweep targetRatio (default 1 => win 1
-  // step vs loss gridMaxGrids steps), so its avgWin/avgLoss overstates the
-  // structural asymmetry. The ladder gate re-checks asymmetry on the swept
-  // winning combo (targetRatio 3-4 restores the 1.5x+ win/loss ratio).
+  // Ladder: the walk-forward now sweeps targetRatio/ADX itself (same dial
+  // sets as the gate), so avgWin/avgLoss reflects real geometry. The ladder
+  // gate re-checks asymmetry on its own swept winning combo anyway.
+  // (Historical note: when wf ran at fixed tr=1/adx=0 this check compared
+  // apples to oranges — kept engine === "ladder" bypass for continuity.)
   const asymmetryOk =
     engine === "ladder" ||
     breakevenWinRate === undefined ||

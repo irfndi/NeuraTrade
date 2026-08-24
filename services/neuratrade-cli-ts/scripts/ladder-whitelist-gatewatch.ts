@@ -49,6 +49,11 @@ const slippageBps = Number(arg("slippage-bps", "2"));
 const stopRatio = Number(arg("stop-ratio", "1.5"));
 const maxHoldBars = Number(arg("max-hold-bars", "48"));
 const minFillFrequencyPct = Number(arg("min-fill-frequency-pct", "5"));
+// Fallback dials for whitelists whose rows predate the targetRatio/chopGateAdx
+// fields (those rows otherwise score the inverted-R:R churn shape and fail
+// everything). Row values always win when present.
+const fallbackTargetRatio = Number(arg("target-ratio", "1"));
+const fallbackChopGateAdx = Number(arg("chop-gate-adx", "0"));
 const prune = flag("prune");
 
 interface WhitelistRow {
@@ -194,8 +199,8 @@ for (const row of rows) {
     initialCapital: 10000,
     leverage: 1,
     trendFilterPeriod: 0,
-    targetRatio: params?.targetRatio ?? 1,
-    chopGateAdxThreshold: params?.chopGateAdx ?? 0,
+    targetRatio: params?.targetRatio ?? fallbackTargetRatio,
+    chopGateAdxThreshold: params?.chopGateAdx ?? fallbackChopGateAdx,
     stopRatio,
     maxHoldBars,
     conservativeIntrabar: true,

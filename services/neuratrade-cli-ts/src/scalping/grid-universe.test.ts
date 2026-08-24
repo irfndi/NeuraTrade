@@ -655,9 +655,10 @@ describe("gateScoredEligibility (stage-4)", () => {
     expect(gated).not.toBeNull();
     if (gated === null) return;
     // Both ADX gates pass at target 1 with identical compounded return; the
-    // sweep keeps the first best combo → target 1, ADX 24.
+    // sweep keeps the first best combo → target 1, ADX 12 (first entry of
+    // GATE_ADX_GATES since 12 joined the dial set).
     expect(gated.validatedTargetRatio).toBe(1);
-    expect(gated.validatedChopGateAdx).toBe(24);
+    expect(gated.validatedChopGateAdx).toBe(12);
   }, 300_000);
 
   it("drops a walk-forward survivor when no target×ADX combo clears the gates", () => {
