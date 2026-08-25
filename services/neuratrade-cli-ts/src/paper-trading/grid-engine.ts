@@ -420,17 +420,22 @@ export function runGridPaperTradingIteration(
         (state.initialCapital !== undefined &&
           state.initialCapital !== options.initialCapital))
     ) {
-      const reason =
-        "READINESS PROVENANCE MISMATCH: refusing to resume grid position";
-      state = { ...state, killed: true, updatedAt: new Date() };
-      yield* repo.saveGridState(state);
-      return {
-        action: "hold" as const,
-        side: state.side,
-        capital: toNumber(state.capital),
-        peakCapital: toNumber(state.peakCapital),
-        note: reason,
+      // Size-only change (allocatedWeight/maxPosition) while position open:
+      // heal fingerprint and sizing fields instead of killing the position.
+      // The open position stays live with new sizing for next exits/entries.
+      state = {
+        ...state,
+        strategyConfigFingerprint: strategyFingerprint,
+        maxPositionPct: options.maxPositionPct,
+        maxDrawdownPct: options.maxDrawdownPct,
+        maxDailyLossPct: options.maxDailyLossPct,
+        gridStepPct: options.gridStepPct,
+        gridMaxGrids: options.gridMaxGrids,
+        gridPauseAfterLossBars: options.gridPauseAfterLossBars,
+        updatedAt: new Date(),
       };
+      yield* repo.saveGridState(state);
+      // fall through to normal trading (exits still work)
     }
 
     if (state.killed) {
