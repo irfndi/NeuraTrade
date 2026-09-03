@@ -59,12 +59,33 @@ export const DEFAULT_FLOW_UNIVERSE_TOP_N = 100;
 const DEFAULT_ALWAYS_INCLUDE = ["BTC", "ETH", "SOL", "XRP", "DOGE"] as const;
 const MS_PER_DAY = 86_400_000;
 
+function buildFlowEntry(
+  symbol: string,
+  turnover24h: number,
+  instrument: FlowInstrument | undefined,
+  funding: Readonly<Record<string, number>> | undefined,
+  now: number,
+  defaultSpreadBps: number,
+): FlowUniverseEntry | undefined {
+  if (!instrument?.listedTime) return undefined;
+  if (instrument.status !== undefined && instrument.status !== "Trading") {
+    return undefined;
+  }
+  return {
+    symbol,
+    turnover24h,
+    spreadBps: spreadInBps(instrument, defaultSpreadBps),
+    ageDays: (now - instrument.listedTime) / MS_PER_DAY,
+    fundingRate: funding?.[symbol],
+    rank: 0,
+  };
+}
 export function selectFlowUniverse(
   volumes: Readonly<Record<string, number>>,
   symbols: readonly FlowInstrument[],
   funding?: Readonly<Record<string, number>>,
   opts: FlowUniverseOptions = {},
-): readonly FlowUniverseEntry[] {
+ ): readonly FlowUniverseEntry[] {
   const maxSpreadBps = opts.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
   const minAgeDays = opts.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
   const topN = opts.topN ?? DEFAULT_FLOW_UNIVERSE_TOP_N;
@@ -78,50 +99,36 @@ export function selectFlowUniverse(
   const entries: FlowUniverseEntry[] = [];
   for (const [symbol, turnover24h] of Object.entries(volumes)) {
     if (!symbol.toUpperCase().endsWith("USDT")) continue;
-    const instrument = bySymbol.get(symbol);
-    if (!instrument?.listedTime) continue; // age is unknowable without a listing time
-    if (instrument.status !== undefined && instrument.status !== "Trading") {
-      continue;
-    }
-    const ageDays = (now - instrument.listedTime) / MS_PER_DAY;
-    if (ageDays < minAgeDays) continue;
-    const spreadBps = spreadInBps(instrument, defaultSpreadBps);
-    if (spreadBps > maxSpreadBps) continue;
-    entries.push({
+    const entry = buildFlowEntry(
       symbol,
       turnover24h,
-      spreadBps,
-      ageDays,
-      fundingRate: funding?.[symbol],
-      rank: 0,
-    });
+      bySymbol.get(symbol),
+      funding,
+      now,
+      defaultSpreadBps,
+    );
+    if (entry === undefined) continue;
+    if (entry.ageDays < minAgeDays || entry.spreadBps > maxSpreadBps) continue;
+    entries.push(entry);
   }
 
-  // Rank by turnover desc, then trim to topN.
   entries.sort((a, b) => b.turnover24h - a.turnover24h);
   const ranked = entries.slice(0, topN);
 
-  // Majors are always carried, even when below the cutoff or filtered out —
-  // but only when they are actually live tickers (present in `volumes`).
   for (const base of alwaysInclude) {
     const symbol = `${base.toUpperCase()}USDT`;
     if (ranked.some((e) => e.symbol === symbol)) continue;
     const turnover24h = volumes[symbol];
     if (turnover24h === undefined) continue;
-    const instrument = bySymbol.get(symbol);
-    if (!instrument?.listedTime) continue;
-    if (instrument.status !== undefined && instrument.status !== "Trading") {
-      continue;
-    }
-    const ageDays = (now - instrument.listedTime) / MS_PER_DAY;
-    ranked.push({
+    const entry = buildFlowEntry(
       symbol,
       turnover24h,
-      spreadBps: spreadInBps(instrument, defaultSpreadBps),
-      ageDays,
-      fundingRate: funding?.[symbol],
-      rank: 0,
-    });
+      bySymbol.get(symbol),
+      funding,
+      now,
+      defaultSpreadBps,
+    );
+    if (entry !== undefined) ranked.push(entry);
   }
 
   ranked.sort((a, b) => b.turnover24h - a.turnover24h);

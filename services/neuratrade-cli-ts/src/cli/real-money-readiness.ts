@@ -21,8 +21,10 @@ import {
   fingerprintStrategyManifest,
   serializeRealMoneyReadiness,
   strategyManifestFor,
+  type CohortMemberReport,
   type ExecutionParityEvidence,
   type ProspectiveEvidence,
+  type ProvenanceEvidence,
   type ReadinessGate,
   type ReadinessGateId,
   type RealMoneyReadinessInput,
@@ -394,6 +396,123 @@ function computeProspective(trades: readonly RawTrade[]): ProspectiveEvidence {
   };
 }
 
+function timeframeMinutes(timeframe: string): number {
+  return timeframe.endsWith("m") ? Number(timeframe.slice(0, -1)) : 15;
+}
+
+/** Backtest evidence summary used by `buildInput` (fail-closed defaults). */
+interface HistoricalSummary {
+  readonly completeWindows: number;
+  readonly profitableWindowPct: number;
+  readonly compoundedReturnPct: number;
+  readonly maximumDrawdownPct: number;
+  readonly totalTrades: number;
+}
+
+interface ConfidenceSummary {
+  readonly sampleCount: number;
+  readonly lowerBoundPct: number;
+  readonly upperBoundPct: number;
+  readonly resamples: number;
+  readonly blockLength: number;
+  readonly seed: number;
+}
+
+interface StressSummary {
+  readonly worstReturnPct: number;
+  readonly pooledLowerBoundPct: number;
+  readonly seeds: readonly number[];
+}
+
+function historicalEvidence(
+  gridOk: GridValidationOk | null,
+  completeWindows: number,
+): HistoricalSummary {
+  if (gridOk === null) {
+    return {
+      completeWindows,
+      profitableWindowPct: 0,
+      compoundedReturnPct: 0,
+      maximumDrawdownPct: 0,
+      totalTrades: 0,
+    };
+  }
+  return {
+    completeWindows,
+    profitableWindowPct: gridOk.historical.profitableWindowPct,
+    compoundedReturnPct: gridOk.historical.compoundedReturnPct,
+    maximumDrawdownPct: gridOk.historical.maximumDrawdownPct,
+    totalTrades: gridOk.historical.totalTrades,
+  };
+}
+
+function confidenceEvidence(
+  gridOk: GridValidationOk | null,
+): ConfidenceSummary {
+  if (gridOk === null) {
+    return {
+      sampleCount: 0,
+      lowerBoundPct: 0,
+      upperBoundPct: 0,
+      resamples: 0,
+      blockLength: 5,
+      seed: 0,
+    };
+  }
+  return gridOk.confidence;
+}
+
+function stressEvidence(gridOk: GridValidationOk | null): StressSummary {
+  if (gridOk === null) {
+    // Fail closed: no backtest stress evidence → empty seed set trips the
+    // "adverse stress seed set is incomplete" check instead of passing on
+    // zero/zero defaults (regression fix 2026-08-07).
+    return { worstReturnPct: 0, pooledLowerBoundPct: 0, seeds: [] };
+  }
+  return gridOk.stress;
+}
+
+/** Every trade must carry the expected fingerprint + full demo provenance. */
+function provenanceValid(
+  trades: readonly RawTrade[],
+  expectedFingerprint: string,
+): boolean {
+  return (
+    trades.length > 0 &&
+    trades.every(
+      (trade) =>
+        trade.strategy_config_fingerprint === expectedFingerprint &&
+        trade.cohort_id !== null &&
+        trade.candidate_lock_at !== null &&
+        trade.dataset_cutoff_at !== null &&
+        trade.entry_opened_at !== null &&
+        trade.execution_environment === "bybit-demo",
+    )
+  );
+}
+
+function provenanceEvidence(
+  trades: readonly RawTrade[],
+  firstProvenance: RawTrade | undefined,
+  expectedFingerprint: string,
+): ProvenanceEvidence {
+  const earliest =
+    firstProvenance?.entry_opened_at ?? "1970-01-01T00:00:00.000Z";
+  const latest = trades.at(-1)?.closed_at ?? "1970-01-01T00:00:00.000Z";
+  return {
+    valid: provenanceValid(trades, expectedFingerprint),
+    fingerprint: firstProvenance?.strategy_config_fingerprint ?? "",
+    expectedFingerprint,
+    cohortId: firstProvenance?.cohort_id ?? "",
+    candidateLock: firstProvenance?.candidate_lock_at ?? "",
+    datasetCutoff: firstProvenance?.dataset_cutoff_at ?? "",
+    earliestEntry: earliest,
+    latestClose: latest,
+    queriedRows: trades.length,
+    expectedRows: trades.length,
+  };
+}
+
 function buildInput(
   candles: readonly CandleLike[],
   trades: readonly RawTrade[],
@@ -403,14 +522,11 @@ function buildInput(
   candidate: ValidatedGridCandidate,
   prospective: ProspectiveEvidence,
 ): RealMoneyReadinessInput {
-  const firstProvenance = trades.at(0);
   const manifest = strategyManifestFor(candidate);
   const expectedFingerprint = fingerprintStrategyManifest(manifest);
   const grid = validateGridEvidence(candles, {
     now,
-    timeframeMinutes: timeframe.endsWith("m")
-      ? Number(timeframe.slice(0, -1))
-      : 15,
+    timeframeMinutes: timeframeMinutes(timeframe),
     grid: {
       gridStepPct: candidate.gridStepPct,
       gridMaxGrids: candidate.gridMaxGrids,
@@ -429,36 +545,10 @@ function buildInput(
   });
   const dataQuality = grid.dataQuality;
   const gridOk: GridValidationOk | null = grid.kind === "ok" ? grid : null;
-  const historical = gridOk?.historical ?? {
-    completeWindows: dataQuality.completeWindows,
-    profitableWindowPct: 0,
-    compoundedReturnPct: 0,
-    maximumDrawdownPct: 0,
-    totalTrades: 0,
-  };
-  const fixedConfidence = gridOk?.confidence ?? {
-    sampleCount: 0,
-    lowerBoundPct: 0,
-    upperBoundPct: 0,
-    resamples: 0,
-    blockLength: 5,
-    seed: 0,
-  };
-  const stress = gridOk?.stress ?? {
-    // Fail closed: no backtest stress evidence → empty seed set trips the
-    // "adverse stress seed set is incomplete" check instead of passing on
-    // zero/zero defaults (regression fix 2026-08-07).
-    worstReturnPct: 0,
-    pooledLowerBoundPct: 0,
-    seeds: [],
-  };
-  const candidateLock = firstProvenance?.candidate_lock_at ?? "";
-  const datasetCutoff = firstProvenance?.dataset_cutoff_at ?? "";
-  const provenanceFingerprint =
-    firstProvenance?.strategy_config_fingerprint ?? "";
-  const earliest =
-    firstProvenance?.entry_opened_at ?? "1970-01-01T00:00:00.000Z";
-  const latest = trades.at(-1)?.closed_at ?? "1970-01-01T00:00:00.000Z";
+  const historical = historicalEvidence(gridOk, dataQuality.completeWindows);
+  const fixedConfidence = confidenceEvidence(gridOk);
+  const stress = stressEvidence(gridOk);
+  const firstProvenance = trades.at(0);
   return {
     prospectiveEvidence: prospective,
     historicalRobustness: {
@@ -478,33 +568,16 @@ function buildInput(
     },
     executionParity,
     stress: {
-      returnPct: stress.worstReturnPct?.toString() ?? "0",
+      returnPct: stress.worstReturnPct.toString(),
       // Amendment 2026-08-07 (B): gate LB = pooled 5-seed bootstrap.
-      lowerBoundPct: stress.pooledLowerBoundPct?.toString() ?? "0",
+      lowerBoundPct: stress.pooledLowerBoundPct.toString(),
       seeds: stress.seeds,
     },
-    provenance: {
-      valid:
-        trades.length > 0 &&
-        trades.every(
-          (trade) =>
-            trade.strategy_config_fingerprint === expectedFingerprint &&
-            trade.cohort_id !== null &&
-            trade.candidate_lock_at !== null &&
-            trade.dataset_cutoff_at !== null &&
-            trade.entry_opened_at !== null &&
-            trade.execution_environment === "bybit-demo",
-        ),
-      fingerprint: provenanceFingerprint,
+    provenance: provenanceEvidence(
+      trades,
+      firstProvenance,
       expectedFingerprint,
-      cohortId: firstProvenance?.cohort_id ?? "",
-      candidateLock,
-      datasetCutoff,
-      earliestEntry: firstProvenance?.entry_opened_at ?? earliest,
-      latestClose: latest,
-      queriedRows: trades.length,
-      expectedRows: trades.length,
-    },
+    ),
     dataQuality: {
       valid: dataQuality.valid && gridOk !== null,
       candleCount: dataQuality.candleCount,
@@ -513,6 +586,117 @@ function buildInput(
     },
     evaluatedAt: now.toISOString(),
     manifest,
+  };
+}
+
+function resolveCandidates(
+  symbols: readonly string[],
+): readonly ValidatedGridCandidate[] {
+  if (symbols.length === 0) return [...READINESS_COHORT_CANDIDATES];
+  return symbols.map((symbol) => {
+    const candidate = candidateForSymbol(symbol);
+    if (!candidate) {
+      throw new ReadinessInfrastructureError(
+        `not a validated cohort symbol: ${symbol}`,
+      );
+    }
+    return candidate;
+  });
+}
+
+/** Per-gate merge: the gate passes iff it passes for EVERY cohort symbol. */
+function mergedGateFor(
+  gate: ReadinessGate,
+  cohort: readonly CohortMemberReport[],
+): ReadinessGate {
+  const failed = cohort.filter(
+    (member) => !member.gates.find((g) => g.id === gate.id)?.passed,
+  );
+  return {
+    id: gate.id,
+    passed: failed.length === 0,
+    reasons: failed.flatMap((member) =>
+      (member.gates.find((g) => g.id === gate.id)?.reasons ?? []).map(
+        (reason) =>
+          cohort.length > 1 ? `${member.symbol}: ${reason}` : reason,
+      ),
+    ),
+  };
+}
+
+function mergeGates(cohort: readonly CohortMemberReport[]): ReadinessGate[] {
+  const first = cohort[0];
+  if (first === undefined) return [];
+  return first.gates.map((gate) => mergedGateFor(gate, cohort));
+}
+
+function mergedProvenance(
+  cohort: readonly CohortMemberReport[],
+  first: CohortMemberReport["metrics"] | undefined,
+): ProvenanceEvidence {
+  const merged = cohort.reduce<{
+    valid: boolean;
+    queriedRows: number;
+    expectedRows: number;
+  }>(
+    (acc, member) => ({
+      valid: acc.valid && member.metrics.provenance.valid,
+      queriedRows: acc.queriedRows + member.metrics.provenance.queriedRows,
+      expectedRows: acc.expectedRows + member.metrics.provenance.expectedRows,
+    }),
+    { valid: true, queriedRows: 0, expectedRows: 0 },
+  );
+  return {
+    valid: merged.valid,
+    fingerprint: first?.provenance.fingerprint ?? "",
+    expectedFingerprint: first?.provenance.expectedFingerprint ?? "",
+    cohortId: first?.provenance.cohortId ?? "",
+    candidateLock: first?.provenance.candidateLock ?? "",
+    datasetCutoff: first?.provenance.datasetCutoff ?? "",
+    earliestEntry: first?.provenance.earliestEntry ?? "",
+    latestClose: first?.provenance.latestClose ?? "",
+    queriedRows: merged.queriedRows,
+    expectedRows: merged.expectedRows,
+  };
+}
+
+/** Cohort-wide metrics: first member's measurements, unioned provenance. */
+function mergedMetrics(
+  cohort: readonly CohortMemberReport[],
+  prospective: ProspectiveEvidence,
+  evaluatedAt: string,
+): RealMoneyReadinessReport["metrics"] {
+  const first = cohort[0]?.metrics;
+  return {
+    prospective,
+    historical: first?.historical ?? {
+      completeWindows: 0,
+      profitableWindowPct: 0,
+      compoundedReturnPct: "0",
+      maximumDrawdownPct: "0",
+      totalTrades: 0,
+    },
+    confidence: first?.confidence ?? {
+      sampleCount: 0,
+      lowerBoundPct: "0",
+      upperBoundPct: "0",
+      resamples: 0,
+      blockLength: 5,
+      seed: 0,
+    },
+    stress: first?.stress ?? {
+      returnPct: "0",
+      lowerBoundPct: "0",
+      seeds: [],
+    },
+    provenance: mergedProvenance(cohort, first),
+    dataQuality: first?.dataQuality ?? {
+      valid: false,
+      candleCount: 0,
+      completeWindows: 0,
+      latestCandle: "",
+    },
+    evaluatedAt,
   };
 }
 
@@ -528,18 +712,7 @@ function executeReadiness(
     options.parityFixture === "golden"
       ? goldenExecutionParity
       : readExecutionParityFile(home);
-  const candidates: readonly ValidatedGridCandidate[] =
-    args.symbols.length === 0
-      ? [...READINESS_COHORT_CANDIDATES]
-      : args.symbols.map((symbol) => {
-          const candidate = candidateForSymbol(symbol);
-          if (!candidate) {
-            throw new ReadinessInfrastructureError(
-              `not a validated cohort symbol: ${symbol}`,
-            );
-          }
-          return candidate;
-        });
+  const candidates = resolveCandidates(args.symbols);
   const db = new Database(databasePath(home), {
     readonly: true,
     create: false,
@@ -581,40 +754,11 @@ function executeReadiness(
         ),
       };
     });
-    // Merged board: each gate passes iff it passes for EVERY cohort symbol.
-    const mergedGates: ReadinessGate[] =
-      cohort[0]?.gates.map((gate) => {
-        const failed = cohort.filter(
-          (member) => !member.gates.find((g) => g.id === gate.id)?.passed,
-        );
-        return {
-          id: gate.id,
-          passed: failed.length === 0,
-          reasons: failed.flatMap((member) =>
-            (member.gates.find((g) => g.id === gate.id)?.reasons ?? []).map(
-              (reason) =>
-                cohort.length > 1 ? `${member.symbol}: ${reason}` : reason,
-            ),
-          ),
-        };
-      }) ?? [];
+    const mergedGates: ReadinessGate[] = mergeGates(cohort);
     const failedGateIds: readonly ReadinessGateId[] = mergedGates
       .filter((gate) => !gate.passed)
       .map((gate) => gate.id);
     const allPassed = cohort.every((member) => member.status === "PASS");
-    const mergedProvenance = cohort.reduce<{
-      valid: boolean;
-      queriedRows: number;
-      expectedRows: number;
-    }>(
-      (merged, member) => ({
-        valid: merged.valid && member.metrics.provenance.valid,
-        queriedRows: merged.queriedRows + member.metrics.provenance.queriedRows,
-        expectedRows:
-          merged.expectedRows + member.metrics.provenance.expectedRows,
-      }),
-      { valid: true, queriedRows: 0, expectedRows: 0 },
-    );
     const first = cohort[0]?.metrics;
     return {
       schemaVersion: "real-money-readiness/v2",
@@ -626,48 +770,7 @@ function executeReadiness(
       failedGateIds,
       errors: [],
       cohort,
-      metrics: {
-        prospective,
-        historical: first?.historical ?? {
-          completeWindows: 0,
-          profitableWindowPct: 0,
-          compoundedReturnPct: "0",
-          maximumDrawdownPct: "0",
-          totalTrades: 0,
-        },
-        confidence: first?.confidence ?? {
-          sampleCount: 0,
-          lowerBoundPct: "0",
-          upperBoundPct: "0",
-          resamples: 0,
-          blockLength: 5,
-          seed: 0,
-        },
-        stress: first?.stress ?? {
-          returnPct: "0",
-          lowerBoundPct: "0",
-          seeds: [],
-        },
-        provenance: {
-          valid: mergedProvenance.valid,
-          fingerprint: first?.provenance.fingerprint ?? "",
-          expectedFingerprint: first?.provenance.expectedFingerprint ?? "",
-          cohortId: first?.provenance.cohortId ?? "",
-          candidateLock: first?.provenance.candidateLock ?? "",
-          datasetCutoff: first?.provenance.datasetCutoff ?? "",
-          earliestEntry: first?.provenance.earliestEntry ?? "",
-          latestClose: first?.provenance.latestClose ?? "",
-          queriedRows: mergedProvenance.queriedRows,
-          expectedRows: mergedProvenance.expectedRows,
-        },
-        dataQuality: first?.dataQuality ?? {
-          valid: false,
-          candleCount: 0,
-          completeWindows: 0,
-          latestCandle: "",
-        },
-        evaluatedAt: now.toISOString(),
-      },
+      metrics: mergedMetrics(cohort, prospective, now.toISOString()),
     };
   } finally {
     db.close();

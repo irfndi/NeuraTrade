@@ -96,6 +96,14 @@ export interface LadderOptions {
   readonly takerExitFeePct?: number;
   /** Chop gate: when > 0, new ladder seeds are skipped while ADX(14) >= threshold. */
   readonly chopGateAdxThreshold?: number;
+  /**
+   * Account realized-drawdown kill, in percent below peak (0/undefined =
+   * disabled, >= 100 = disabled). While flat and in breach, the engine
+   * re-anchors peak to capital and pauses (paused-then-retry) instead of
+   * dying permanently; live (advanceLadderBar) additionally flattens open
+   * rungs at the breach bar (known residual divergence).
+   */
+  readonly maxDrawdownPct?: number;
   /** Candle timeframe the ADX gate is computed on (default "15m"). */
   readonly timeframe?: string;
   /** Funding cost per 8h held on open notional, in percent (longs pay positive rates). */
@@ -214,23 +222,118 @@ export function liquidationPrice(
   return side === "long" ? entryPrice * (1 - move) : entryPrice * (1 + move);
 }
 
+interface LadderBacktestConfig {
+  readonly leverage: number;
+  readonly positionFraction: number;
+  readonly targetRatio: number;
+  readonly stopRatio: number;
+  readonly maxHoldBars: number;
+  readonly conservativeIntrabar: boolean;
+  readonly makerFeePerSide: number;
+  readonly takerFeePerSide: number;
+  readonly targetFee: number;
+  readonly stopFee: number;
+  readonly onlyWithTrend: boolean;
+  readonly rungs: number;
+  readonly sizePerRung: number;
+  readonly chopGateAdxThreshold: number;
+  readonly makerFillProb: number;
+  readonly adverseSelection: boolean;
+  readonly trendFilterPeriod: number;
+}
+
+function normalizeLadderBacktestConfig(
+  opts: LadderOptions,
+): LadderBacktestConfig {
+  const leverage = Math.max(1, opts.leverage ?? 1);
+  const positionFraction = Math.max(0, Math.min(1, opts.positionFraction ?? 1));
+  const rungs = Math.max(1, Math.floor(opts.rungs ?? 1));
+  const makerFeePerSide = (opts.feePct ?? 0) / 100;
+  const takerFeePerSide = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
+  return {
+    leverage,
+    positionFraction,
+    targetRatio: Math.max(0.001, opts.targetRatio ?? 1),
+    stopRatio: Math.max(0, opts.stopRatio ?? 0),
+    maxHoldBars: Math.max(0, Math.floor(opts.maxHoldBars ?? 0)),
+    conservativeIntrabar: opts.conservativeIntrabar ?? true,
+    makerFeePerSide,
+    takerFeePerSide,
+    targetFee: makerFeePerSide * 2,
+    stopFee: makerFeePerSide + takerFeePerSide,
+    onlyWithTrend: opts.onlyWithTrend ?? false,
+    rungs,
+    sizePerRung: positionFraction / rungs,
+    chopGateAdxThreshold: Math.max(0, opts.chopGateAdxThreshold ?? 0),
+    makerFillProb: Math.max(0, Math.min(1, opts.makerFillProb ?? 1)),
+    adverseSelection: opts.adverseSelection ?? false,
+    trendFilterPeriod: Math.max(0, opts.trendFilterPeriod ?? 0),
+  };
+}
+
+function buildLadderTrendSeries(
+  candles: readonly CandleLike[],
+  opts: LadderOptions,
+  period: number,
+): readonly number[] | null {
+  if (period <= 0) return null;
+  const closes = candles.map((candle) => candle.close);
+  return opts.trendFilterType === "ema"
+    ? calculateEMA(closes, period)
+    : calculateSMA(closes, period);
+}
+
+function emptyLadderResult(): LadderResult {
+  return {
+    totalReturnPct: 0,
+    maxDrawdownPct: 0,
+    winRate: 0,
+    totalTrades: 0,
+    profitFactor: 0,
+    trades: [],
+  };
+}
+
+function finalizeLadderResult(
+  opts: LadderOptions,
+  capital: number,
+  maxDrawdown: number,
+  totalWins: number,
+  totalLosses: number,
+  grossProfit: number,
+  grossLoss: number,
+  trades: readonly LadderTrade[],
+): LadderResult {
+  const totalTrades = totalWins + totalLosses;
+  const totalReturnPct =
+    opts.initialCapital > 0
+      ? ((capital - opts.initialCapital) / opts.initialCapital) * 100
+      : 0;
+  const profitFactor =
+    grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  return {
+    totalReturnPct,
+    maxDrawdownPct: maxDrawdown * 100,
+    winRate: totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0,
+    totalTrades,
+    profitFactor,
+    trades,
+  };
+}
+
 export function runLadderGridBacktest(
   candles: readonly CandleLike[],
   opts: LadderOptions,
 ): LadderResult {
   if (!candles || candles.length === 0) {
-    return {
-      totalReturnPct: 0,
-      maxDrawdownPct: 0,
-      winRate: 0,
-      totalTrades: 0,
-      profitFactor: 0,
-      trades: [],
-    };
+    return emptyLadderResult();
   }
 
   let capital = opts.initialCapital;
   let peak = capital;
+  // statPeak is never re-anchored: maxDrawdown must report the true
+  // peak-to-trough over the whole run, even across kill re-anchors.
+  let statPeak = capital;
   let maxDrawdown = 0;
   let totalWins = 0;
   let totalLosses = 0;
@@ -238,22 +341,24 @@ export function runLadderGridBacktest(
   let grossLoss = 0;
   let paused = 0;
   const trades: LadderTrade[] = [];
-  const leverage = Math.max(1, opts.leverage ?? 1);
-  const positionFraction = Math.max(0, Math.min(1, opts.positionFraction ?? 1));
-  const targetRatio = Math.max(0.001, opts.targetRatio ?? 1);
-  const stopRatio = Math.max(0, opts.stopRatio ?? 0);
-  const maxHoldBars = Math.max(0, Math.floor(opts.maxHoldBars ?? 0));
-  const conservativeIntrabar = opts.conservativeIntrabar ?? true;
-  const makerFeePerSide = (opts.feePct ?? 0) / 100;
-  const takerFeePerSide = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
-  const targetFee = makerFeePerSide * 2;
-  const stopFee = makerFeePerSide + takerFeePerSide;
-  const onlyWithTrend = opts.onlyWithTrend ?? false;
-  const N = Math.max(1, Math.floor(opts.rungs ?? 1));
-  const sizePerRung = positionFraction / N;
-  const chopGateAdxThreshold = Math.max(0, opts.chopGateAdxThreshold ?? 0);
-  const makerFillProb = Math.max(0, Math.min(1, opts.makerFillProb ?? 1));
-  const adverseSelection = opts.adverseSelection ?? false;
+  const config = normalizeLadderBacktestConfig(opts);
+  const {
+    leverage,
+    positionFraction,
+    targetRatio,
+    stopRatio,
+    maxHoldBars,
+    conservativeIntrabar,
+    targetFee,
+    stopFee,
+    onlyWithTrend,
+    rungs: N,
+    sizePerRung,
+    chopGateAdxThreshold,
+    makerFillProb,
+    adverseSelection,
+    trendFilterPeriod,
+  } = config;
 
   let fillSeed = opts.fillSeed ?? 12345;
   const fillRng = (): number => {
@@ -282,25 +387,29 @@ export function runLadderGridBacktest(
       : null;
 
   // Pre-calculate trend filter series if enabled
-  const trendFilterPeriod = Math.max(0, opts.trendFilterPeriod ?? 0);
-  const trendSeries =
-    trendFilterPeriod > 0
-      ? opts.trendFilterType === "ema"
-        ? calculateEMA(
-            candles.map((c) => c.close),
-            trendFilterPeriod,
-          )
-        : calculateSMA(
-            candles.map((c) => c.close),
-            trendFilterPeriod,
-          )
-      : null;
+  const trendSeries = buildLadderTrendSeries(candles, opts, trendFilterPeriod);
 
   let longRungs: Rung[] = [];
   let shortRungs: Rung[] = [];
   let longBase = 0;
   let shortBase = 0;
 
+  const fundingForRung = (r: Rung, bar: number): number => {
+    const rate = opts.fundingRatePct8h ?? 0;
+    if (rate === 0 || r.entryBar === undefined) return 0;
+    const entryMs = candles[r.entryBar]?.timestamp?.getTime() ?? NaN;
+    const exitMs = candles[bar]?.timestamp?.getTime() ?? NaN;
+    if (!Number.isFinite(entryMs) || !Number.isFinite(exitMs)) return 0;
+    const intervals = Math.floor((exitMs - entryMs) / FUNDING_INTERVAL_MS);
+    if (intervals <= 0) return 0;
+    return (
+      capital *
+      positionFraction *
+      leverage *
+      ((rate / 100) * intervals) *
+      (r.side === "long" ? -1 : 1)
+    );
+  };
   const closeRung = (
     r: Rung,
     exitPrice: number,
@@ -319,28 +428,12 @@ export function runLadderGridBacktest(
       ? -sizePerRung
       : sizePerRung * leveragedReturn;
     const capitalBefore = capital;
-    // Funding accrued while the rung was open (whole 8h intervals, charged at
-    // close; longs pay a positive rate, shorts receive it).
-    let funding = 0;
-    if ((opts.fundingRatePct8h ?? 0) !== 0 && r.entryBar !== undefined) {
-      const entryMs = candles[r.entryBar]?.timestamp?.getTime() ?? NaN;
-      const exitMs = candles[bar]?.timestamp?.getTime() ?? NaN;
-      if (Number.isFinite(entryMs) && Number.isFinite(exitMs)) {
-        const intervals = Math.floor((exitMs - entryMs) / FUNDING_INTERVAL_MS);
-        if (intervals > 0) {
-          funding =
-            capitalBefore *
-            positionFraction *
-            leverage *
-            ((opts.fundingRatePct8h! / 100) * intervals) *
-            (r.side === "long" ? -1 : 1);
-        }
-      }
-    }
+    const funding = fundingForRung(r, bar);
     capital = Math.max(0, capitalBefore * (1 + equityReturn) + funding);
     peak = Math.max(peak, capital);
-    const dd = peak > 0 ? (peak - capital) / peak : 0;
-    if (dd > maxDrawdown) maxDrawdown = dd;
+    statPeak = Math.max(statPeak, capital);
+    const statDd = statPeak > 0 ? (statPeak - capital) / statPeak : 0;
+    if (statDd > maxDrawdown) maxDrawdown = statDd;
     const win = !isLiquidation && net >= 0;
     if (isLiquidation || net < 0) {
       totalLosses++;
@@ -380,6 +473,247 @@ export function runLadderGridBacktest(
     return anyLoss;
   };
 
+  interface LadderSideState {
+    rungs: Rung[];
+    base: number;
+  }
+
+  interface LadderSideResult extends LadderSideState {
+    paused: number;
+  }
+
+  const emptySide = (): LadderSideState => ({ rungs: [], base: 0 });
+
+  const buildSideRungs = (
+    side: "long" | "short",
+    base: number,
+    step: number,
+  ): Rung[] => {
+    const rungs: Rung[] = [];
+    for (let k = 1; k <= N; k++) {
+      rungs.push({
+        rungIndex: k,
+        side,
+        level: side === "long" ? base - k * step : base + k * step,
+        step,
+        filled: false,
+        entryPrice: 0,
+        entryBar: 0,
+      });
+    }
+    return rungs;
+  };
+
+  const seedSide = (
+    side: "long" | "short",
+    state: LadderSideState,
+    candle: CandleLike,
+    mid: number,
+    step: number,
+    trend: number | null,
+    chopGateActive: boolean,
+    ddBlocked: boolean,
+  ): LadderSideState => {
+    if (state.rungs.some((r) => r.filled)) return state;
+    const trendPass =
+      trend !== null &&
+      !isNaN(trend) &&
+      (side === "long" ? candle.close > trend : candle.close < trend);
+    const canSeed =
+      !chopGateActive && !ddBlocked && (!onlyWithTrend || trendPass);
+    if (!canSeed) return emptySide();
+    return { rungs: buildSideRungs(side, mid, step), base: mid };
+  };
+
+  const fillSideRungs = (
+    side: "long" | "short",
+    state: LadderSideState,
+    candle: CandleLike,
+    bar: number,
+    slippage: number,
+  ): void => {
+    for (let k = 0; k < state.rungs.length; k++) {
+      const rung = state.rungs[k];
+      if (rung.filled) continue;
+      const previousFilled = k === 0 || state.rungs[k - 1].filled;
+      const touched =
+        side === "long" ? candle.low <= rung.level : candle.high >= rung.level;
+      if (
+        !previousFilled ||
+        !touched ||
+        !fillsAtLevel(candle, rung.level, side)
+      ) {
+        continue;
+      }
+      rung.filled = true;
+      rung.entryPrice =
+        side === "long" ? rung.level * slippage : rung.level / slippage;
+      rung.entryBar = bar;
+    }
+  };
+
+  const pauseAfterLoss = (previousPaused: number, loss: boolean): number =>
+    loss && opts.gridPauseAfterLossBars > 0
+      ? opts.gridPauseAfterLossBars
+      : previousPaused;
+
+  const settleSideExit = (
+    filled: Rung[],
+    exitPrice: number,
+    reason: "stop" | "liquidation",
+    bar: number,
+    previousPaused: number,
+  ): LadderSideResult => {
+    const loss = closeAll(filled, exitPrice, reason, bar);
+    return {
+      ...emptySide(),
+      paused: pauseAfterLoss(previousPaused, loss),
+    };
+  };
+
+  const settleBoundaryExit = (
+    side: "long" | "short",
+    state: LadderSideState,
+    filled: Rung[],
+    candle: CandleLike,
+    step: number,
+    slippage: number,
+    bar: number,
+    previousPaused: number,
+  ): LadderSideResult | null => {
+    const boundary =
+      stopRatio > 0
+        ? side === "long"
+          ? Math.min(...filled.map((r) => r.entryPrice)) - step * stopRatio
+          : Math.max(...filled.map((r) => r.entryPrice)) + step * stopRatio
+        : side === "long"
+          ? state.base - step * (N + opts.gridMaxGrids)
+          : state.base + step * (N + opts.gridMaxGrids);
+    const liquidationLevels = filled
+      .map((r) => liquidationPrice(side, r.entryPrice, leverage))
+      .filter((price) => price > 0);
+    const liquidation =
+      liquidationLevels.length > 0
+        ? side === "long"
+          ? Math.max(...liquidationLevels)
+          : Math.min(...liquidationLevels)
+        : 0;
+    const liquidationTouched =
+      liquidation > 0 &&
+      (side === "long"
+        ? candle.low <= liquidation
+        : candle.high >= liquidation);
+    if (liquidationTouched) {
+      const exitPrice =
+        liquidation *
+        (side === "long"
+          ? 1 - opts.slippageBps / 10000
+          : 1 + opts.slippageBps / 10000);
+      return settleSideExit(
+        filled,
+        exitPrice,
+        "liquidation",
+        bar,
+        previousPaused,
+      );
+    }
+    const boundaryTouched =
+      side === "long" ? candle.low <= boundary : candle.high >= boundary;
+    if (!boundaryTouched) return null;
+    const exitPrice =
+      boundary *
+      (side === "long"
+        ? 1 - opts.slippageBps / 10000
+        : 1 + opts.slippageBps / 10000);
+    return settleSideExit(filled, exitPrice, "stop", bar, previousPaused);
+  };
+
+  const settleTargets = (
+    side: "long" | "short",
+    state: LadderSideState,
+    candle: CandleLike,
+    slippage: number,
+    bar: number,
+    previousPaused: number,
+  ): LadderSideResult => {
+    const stillOpen: Rung[] = [];
+    let anyFillClosed = false;
+    for (const rung of state.rungs) {
+      if (!rung.filled) {
+        stillOpen.push(rung);
+        continue;
+      }
+      const target =
+        side === "long"
+          ? rung.entryPrice + rung.step * targetRatio
+          : rung.entryPrice - rung.step * targetRatio;
+      const targetReached =
+        (side === "long" ? candle.high >= target : candle.low <= target) &&
+        (!conservativeIntrabar || rung.entryBar < bar);
+      const maxHoldReached =
+        maxHoldBars > 0 &&
+        bar - rung.entryBar >= maxHoldBars &&
+        rung.entryBar < bar;
+      if (targetReached) {
+        closeRung(
+          rung,
+          side === "long" ? target / slippage : target * slippage,
+          "target",
+          bar,
+        );
+        anyFillClosed = true;
+      } else if (maxHoldReached) {
+        closeRung(
+          rung,
+          candle.close *
+            (side === "long"
+              ? 1 - opts.slippageBps / 10000
+              : 1 + opts.slippageBps / 10000),
+          "max_hold",
+          bar,
+        );
+        anyFillClosed = true;
+      } else {
+        stillOpen.push(rung);
+      }
+    }
+    const openFilled = stillOpen.filter((r) => r.filled).length;
+    const nextState =
+      openFilled === 0 && anyFillClosed
+        ? emptySide()
+        : { rungs: stillOpen, base: state.base };
+    return { ...nextState, paused: previousPaused };
+  };
+
+  const manageSide = (
+    side: "long" | "short",
+    state: LadderSideState,
+    candle: CandleLike,
+    step: number,
+    slippage: number,
+    bar: number,
+    previousPaused: number,
+  ): LadderSideResult => {
+    if (state.rungs.length === 0) {
+      return { ...state, paused: previousPaused };
+    }
+    fillSideRungs(side, state, candle, bar, slippage);
+    const filled = state.rungs.filter((r) => r.filled);
+    if (filled.length === 0) return { ...state, paused: previousPaused };
+    const boundaryExit = settleBoundaryExit(
+      side,
+      state,
+      filled,
+      candle,
+      step,
+      slippage,
+      bar,
+      previousPaused,
+    );
+    if (boundaryExit) return boundaryExit;
+    return settleTargets(side, state, candle, slippage, bar, previousPaused);
+  };
+
   const startIndex = Math.max(trendFilterPeriod, 1);
   for (let i = startIndex; i < candles.length; i++) {
     const c = candles[i];
@@ -389,8 +723,38 @@ export function runLadderGridBacktest(
 
     capital = Math.max(0, capital);
     peak = Math.max(peak, capital);
-    const dd = peak > 0 ? (peak - capital) / peak : 0;
-    if (dd > maxDrawdown) maxDrawdown = dd;
+    statPeak = Math.max(statPeak, capital);
+    let dd = peak > 0 ? (peak - capital) / peak : 0;
+    const statDdTop = statPeak > 0 ? (statPeak - capital) / statPeak : 0;
+    if (statDdTop > maxDrawdown) maxDrawdown = statDdTop;
+
+    // Drawdown seed block + peak re-anchor, mirroring advanceLadderBar
+    // (ladder-engine.ts). The backtest previously recorded maxDrawdown but
+    // never enforced it, so sweeps fitted configs on recovery trades the
+    // live engine refuses to take. While flat and in breach: re-anchor peak
+    // to capital and pause, so both engines agree paused-then-retry.
+    // NOTE: live also flattens open rungs at the breach bar; the backtest
+    // lets them ride to their own exits (known residual divergence).
+    // Helper keeps runLadderGridBacktest under the complexity gate.
+    const drawdownSeedBlock = (): boolean => {
+      const ddCap = opts.maxDrawdownPct ?? 0;
+      if (!(ddCap > 0 && ddCap < 100 && peak > 0 && dd >= ddCap / 100))
+        return false;
+      if (
+        !longRungs.some((r) => r.filled) &&
+        !shortRungs.some((r) => r.filled)
+      ) {
+        peak = capital;
+        dd = 0;
+        paused = Math.max(
+          paused,
+          Math.max(0, Math.floor(opts.gridPauseAfterLossBars ?? 24)),
+        );
+        return false;
+      }
+      return true;
+    };
+    const ddBlocked = drawdownSeedBlock();
 
     if (paused > 0) {
       paused--;
@@ -404,253 +768,58 @@ export function runLadderGridBacktest(
     const chopGateActive =
       statsProvider !== null && statsProvider(i).adx14 >= chopGateAdxThreshold;
 
-    // --- (Re-)seed long ladder while no rung is filled ---
-    // When flat, re-anchor to the current bar open each bar. Once a rung fills,
-    // the anchor locks so the ladder can fill the remaining staggered levels.
-    {
-      const hasFilledLong = longRungs.some((r) => r.filled);
-      if (!hasFilledLong) {
-        const allowLong =
-          !chopGateActive &&
-          (!onlyWithTrend ||
-            (trend !== null && !isNaN(trend) && c.close > trend));
-        if (allowLong) {
-          longBase = mid;
-          longRungs = [];
-          for (let k = 1; k <= N; k++) {
-            longRungs.push({
-              rungIndex: k,
-              side: "long",
-              level: mid - k * step,
-              step,
-              filled: false,
-              entryPrice: 0,
-              entryBar: 0,
-            });
-          }
-        } else {
-          longRungs = [];
-          longBase = 0;
-        }
-      }
-    }
+    const seededLong = seedSide(
+      "long",
+      { rungs: longRungs, base: longBase },
+      c,
+      mid,
+      step,
+      trend,
+      chopGateActive,
+      ddBlocked,
+    );
+    longRungs = seededLong.rungs;
+    longBase = seededLong.base;
 
-    // --- (Re-)seed short ladder while no rung is filled ---
-    {
-      const hasFilledShort = shortRungs.some((r) => r.filled);
-      if (!hasFilledShort) {
-        const allowShort =
-          !chopGateActive &&
-          (!onlyWithTrend ||
-            (trend !== null && !isNaN(trend) && c.close < trend));
-        if (allowShort) {
-          shortBase = mid;
-          shortRungs = [];
-          for (let k = 1; k <= N; k++) {
-            shortRungs.push({
-              rungIndex: k,
-              side: "short",
-              level: mid + k * step,
-              step,
-              filled: false,
-              entryPrice: 0,
-              entryBar: 0,
-            });
-          }
-        } else {
-          shortRungs = [];
-          shortBase = 0;
-        }
-      }
-    }
+    const seededShort = seedSide(
+      "short",
+      { rungs: shortRungs, base: shortBase },
+      c,
+      mid,
+      step,
+      trend,
+      chopGateActive,
+      ddBlocked,
+    );
+    shortRungs = seededShort.rungs;
+    shortBase = seededShort.base;
 
-    // === Manage LONG ladder ===
-    if (longRungs.length > 0) {
-      // Fill rungs progressively (rung k fills once rung k-1 is filled).
-      for (let k = 0; k < longRungs.length; k++) {
-        const r = longRungs[k];
-        if (r.filled) continue;
-        const prevFilled = k === 0 || longRungs[k - 1].filled;
-        if (
-          prevFilled &&
-          c.low <= r.level &&
-          fillsAtLevel(c, r.level, "long")
-        ) {
-          r.filled = true;
-          r.entryPrice = r.level * slippage;
-          r.entryBar = i;
-        }
-      }
-      const filledLong = longRungs.filter((r) => r.filled);
-      if (filledLong.length > 0) {
-        const boundary =
-          stopRatio > 0
-            ? Math.min(...filledLong.map((r) => r.entryPrice)) -
-              step * stopRatio
-            : longBase - step * (N + opts.gridMaxGrids);
-        const longLiqs = filledLong
-          .map((r) => liquidationPrice("long", r.entryPrice, leverage))
-          .filter((p) => p > 0);
-        const liq = longLiqs.length > 0 ? Math.max(...longLiqs) : 0;
-        if (liq > 0 && c.low <= liq) {
-          const loss = closeAll(
-            filledLong,
-            liq * (1 - opts.slippageBps / 10000),
-            "liquidation",
-            i,
-          );
-          longRungs = [];
-          longBase = 0;
-          if (loss && opts.gridPauseAfterLossBars > 0) {
-            paused = opts.gridPauseAfterLossBars;
-          }
-        } else if (c.low <= boundary) {
-          const loss = closeAll(
-            filledLong,
-            boundary * (1 - opts.slippageBps / 10000),
-            "stop",
-            i,
-          );
-          longRungs = [];
-          longBase = 0;
-          if (loss && opts.gridPauseAfterLossBars > 0) {
-            paused = opts.gridPauseAfterLossBars;
-          }
-        } else {
-          // Take-profits for each filled rung that reached its target.
-          const stillOpen: Rung[] = [];
-          let anyFillClosed = false;
-          for (const r of longRungs) {
-            if (!r.filled) {
-              stillOpen.push(r);
-              continue;
-            }
-            const target = r.entryPrice + r.step * targetRatio;
-            const targetReached =
-              c.high >= target && (!conservativeIntrabar || r.entryBar < i);
-            if (targetReached) {
-              closeRung(r, target / slippage, "target", i);
-              anyFillClosed = true;
-            } else if (
-              maxHoldBars > 0 &&
-              i - r.entryBar >= maxHoldBars &&
-              r.entryBar < i
-            ) {
-              closeRung(
-                r,
-                c.close * (1 - opts.slippageBps / 10000),
-                "max_hold",
-                i,
-              );
-              anyFillClosed = true;
-            } else {
-              stillOpen.push(r);
-            }
-          }
-          longRungs = stillOpen;
-          // If all FILLED rungs closed but unfilled resting rungs remain,
-          // cancel them and go flat (wait for the next oscillation).
-          const openFilled = longRungs.filter((r) => r.filled).length;
-          if (openFilled === 0 && anyFillClosed) {
-            longRungs = [];
-            longBase = 0;
-          }
-        }
-      }
-    }
+    const managedLong = manageSide(
+      "long",
+      { rungs: longRungs, base: longBase },
+      c,
+      step,
+      slippage,
+      i,
+      paused,
+    );
+    longRungs = managedLong.rungs;
+    longBase = managedLong.base;
+    paused = managedLong.paused;
 
-    // === Manage SHORT ladder ===
-    if (shortRungs.length > 0) {
-      for (let k = 0; k < shortRungs.length; k++) {
-        const r = shortRungs[k];
-        if (r.filled) continue;
-        const prevFilled = k === 0 || shortRungs[k - 1].filled;
-        if (
-          prevFilled &&
-          c.high >= r.level &&
-          fillsAtLevel(c, r.level, "short")
-        ) {
-          r.filled = true;
-          r.entryPrice = r.level / slippage;
-          r.entryBar = i;
-        }
-      }
-      const filledShort = shortRungs.filter((r) => r.filled);
-      if (filledShort.length > 0) {
-        const boundary =
-          stopRatio > 0
-            ? Math.max(...filledShort.map((r) => r.entryPrice)) +
-              step * stopRatio
-            : shortBase + step * (N + opts.gridMaxGrids);
-        const shortLiqs = filledShort
-          .map((r) => liquidationPrice("short", r.entryPrice, leverage))
-          .filter((p) => p > 0);
-        const liq = shortLiqs.length > 0 ? Math.min(...shortLiqs) : 0;
-        if (liq > 0 && c.high >= liq) {
-          const loss = closeAll(
-            filledShort,
-            liq * (1 + opts.slippageBps / 10000),
-            "liquidation",
-            i,
-          );
-          shortRungs = [];
-          shortBase = 0;
-          if (loss && opts.gridPauseAfterLossBars > 0) {
-            paused = opts.gridPauseAfterLossBars;
-          }
-        } else if (c.high >= boundary) {
-          const loss = closeAll(
-            filledShort,
-            boundary * (1 + opts.slippageBps / 10000),
-            "stop",
-            i,
-          );
-          shortRungs = [];
-          shortBase = 0;
-          if (loss && opts.gridPauseAfterLossBars > 0) {
-            paused = opts.gridPauseAfterLossBars;
-          }
-        } else {
-          const stillOpen: Rung[] = [];
-          let anyFillClosed = false;
-          for (const r of shortRungs) {
-            if (!r.filled) {
-              stillOpen.push(r);
-              continue;
-            }
-            const target = r.entryPrice - r.step * targetRatio;
-            const targetReached =
-              c.low <= target && (!conservativeIntrabar || r.entryBar < i);
-            if (targetReached) {
-              closeRung(r, target * slippage, "target", i);
-              anyFillClosed = true;
-            } else if (
-              maxHoldBars > 0 &&
-              i - r.entryBar >= maxHoldBars &&
-              r.entryBar < i
-            ) {
-              closeRung(
-                r,
-                c.close * (1 + opts.slippageBps / 10000),
-                "max_hold",
-                i,
-              );
-              anyFillClosed = true;
-            } else {
-              stillOpen.push(r);
-            }
-          }
-          shortRungs = stillOpen;
-          const openFilled = shortRungs.filter((r) => r.filled).length;
-          if (openFilled === 0 && anyFillClosed) {
-            shortRungs = [];
-            shortBase = 0;
-          }
-        }
-      }
-    }
+    const managedShort = manageSide(
+      "short",
+      { rungs: shortRungs, base: shortBase },
+      c,
+      step,
+      slippage,
+      i,
+      paused,
+    );
+    shortRungs = managedShort.rungs;
+    shortBase = managedShort.base;
+    paused = managedShort.paused;
   }
-
   // Mark any still-open filled rungs to market at the final close.
   const lastBarIndex = candles.length - 1;
   const lastClose = candles[lastBarIndex].close;
@@ -671,24 +840,16 @@ export function runLadderGridBacktest(
     );
   }
 
-  const totalTrades = totalWins + totalLosses;
-  const totalReturnPct =
-    opts.initialCapital > 0
-      ? ((capital - opts.initialCapital) / opts.initialCapital) * 100
-      : 0;
-  const maxDrawdownPct = maxDrawdown * 100;
-  const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
-  const profitFactor =
-    grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
-
-  return {
-    totalReturnPct,
-    maxDrawdownPct,
-    winRate,
-    totalTrades,
-    profitFactor,
+  return finalizeLadderResult(
+    opts,
+    capital,
+    maxDrawdown,
+    totalWins,
+    totalLosses,
+    grossProfit,
+    grossLoss,
     trades,
-  };
+  );
 }
 
 export function findBestLadderGridParams(
@@ -720,35 +881,35 @@ export function findBestLadderGridParams(
         for (const gridPauseAfterLossBars of searchSpace.gridPauseAfterLossBars) {
           for (const targetRatio of targetRatios) {
             for (const chopGateAdxThreshold of chopGates) {
-          const options: LadderOptions = {
-            ...baseOptions,
-            rungs,
-            gridStepPct,
-            gridMaxGrids: maxGrids,
-            gridPauseAfterLossBars,
-            targetRatio,
-            chopGateAdxThreshold,
-          };
-          const result = runLadderGridBacktest(trainCandles, options);
-          const candidate = { ...options, result };
-          if (
-            !bestOverall ||
-            result.totalReturnPct > bestOverall.result.totalReturnPct
-          ) {
-            bestOverall = candidate;
-          }
-          if (
-            candidateFilter?.(trainCandles, options, result) !== false &&
-            (!bestEligible ||
-              result.totalReturnPct > bestEligible.result.totalReturnPct)
-          ) {
-            bestEligible = candidate;
-          }
+              const options: LadderOptions = {
+                ...baseOptions,
+                rungs,
+                gridStepPct,
+                gridMaxGrids: maxGrids,
+                gridPauseAfterLossBars,
+                targetRatio,
+                chopGateAdxThreshold,
+              };
+              const result = runLadderGridBacktest(trainCandles, options);
+              const candidate = { ...options, result };
+              if (
+                !bestOverall ||
+                result.totalReturnPct > bestOverall.result.totalReturnPct
+              ) {
+                bestOverall = candidate;
+              }
+              if (
+                candidateFilter?.(trainCandles, options, result) !== false &&
+                (!bestEligible ||
+                  result.totalReturnPct > bestEligible.result.totalReturnPct)
+              ) {
+                bestEligible = candidate;
+              }
+            }
           }
         }
       }
     }
-  }
   }
 
   const best = bestEligible ?? bestOverall;

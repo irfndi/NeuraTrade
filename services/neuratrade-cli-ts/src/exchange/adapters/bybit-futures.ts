@@ -860,6 +860,355 @@ function normalizePrice(price: Money, tickSize: Money): Money {
     : price;
 }
 
+type BybitErrorMapper = <A>(
+  effect: Effect.Effect<A, BybitClientError>,
+) => Effect.Effect<A, ExchangeError>;
+
+interface BybitSizedOrder {
+  readonly qty: Money;
+  readonly leverage: number;
+  readonly balances: ReadonlyArray<BybitWalletCoin>;
+}
+
+interface BybitOrderSizingInput {
+  readonly request: FuturesOrderRequest;
+  readonly symbol: string;
+  readonly contract: BybitContract;
+  readonly price: Money;
+  readonly client: BybitClientImpl;
+  readonly withError: BybitErrorMapper;
+}
+
+function ensureBybitTradableContract(
+  symbol: string,
+  contract: BybitContract,
+): Effect.Effect<void, ExchangeError> {
+  if (contract.symbol.toUpperCase() !== symbol) {
+    return Effect.fail(new ExchangeError(`contract ${symbol} not found`));
+  }
+  if (contract.status !== "" && contract.status !== "Trading") {
+    return Effect.fail(
+      new ExchangeError(
+        `contract ${symbol} is not tradable (status=${contract.status})`,
+      ),
+    );
+  }
+  return Effect.void;
+}
+
+function resolveBybitOrderPrice(
+  request: FuturesOrderRequest,
+  symbol: string,
+  tickSize: Money,
+  gateway: MarketDataGatewayService,
+): Effect.Effect<Money, ExchangeError> {
+  const reference =
+    request.price !== undefined
+      ? Effect.succeed(request.price)
+      : gateway.fetchTick("bybit-futures", request.symbol).pipe(
+          Effect.mapError(
+            (err) =>
+              new ExchangeError(
+                `bybit reference price failed for ${symbol}: ${err.reason}`,
+                err,
+              ),
+          ),
+          Effect.map((tick) => money(tick.price)),
+        );
+  return reference.pipe(
+    Effect.map((price) =>
+      request.type === "limit" ? normalizePrice(price, tickSize) : price,
+    ),
+  );
+}
+
+function validateBybitRawQuantity(
+  rawQty: Money,
+  minQty: Money,
+  symbol: string,
+): Effect.Effect<void, ExchangeError> {
+  if (rawQty.lessThanOrEqualTo(0)) {
+    return Effect.fail(
+      new ExchangeError(
+        `futures guard rejected: order size ${rawQty.toString()} must be positive for ${symbol}`,
+      ),
+    );
+  }
+  // No below-minQty reject here: adjustBybitOrderSize sizes sub-floor
+  // notionals UP to the floor (>= minQty by construction, plus clamp).
+  // 2026-09-03: the old reject stranded yolo-btc (0.0006 < 0.001 min).
+  return Effect.void;
+}
+
+function adjustBybitOrderSize(
+  request: FuturesOrderRequest,
+  contract: BybitContract,
+  price: Money,
+): Pick<BybitSizedOrder, "qty" | "leverage"> {
+  const minQty = money(contract.minOrderQty);
+  const qtyStep = money(contract.qtyStep);
+  const minOrderAmt = money(contract.minOrderAmt);
+  const maxLeverage = money(contract.maxLeverage);
+  let qty = request.size;
+  let leverage = request.leverage;
+  const requestedNotional = qty.times(price);
+  const effectiveFloor = Decimal.max(minOrderAmt, minQty.times(price));
+  if (requestedNotional.lessThan(effectiveFloor)) {
+    qty = qtyStep.greaterThan(0)
+      ? effectiveFloor.div(price).div(qtyStep).ceil().times(qtyStep)
+      : effectiveFloor.div(price);
+    if (qty.lessThan(minQty)) qty = minQty;
+    const raised = Decimal.max(1, effectiveFloor.div(requestedNotional).ceil());
+    leverage = Decimal.min(
+      raised,
+      Decimal.min(money(request.leverage), maxLeverage),
+    ).toNumber();
+  } else if (qtyStep.greaterThan(0)) {
+    qty = qty.div(qtyStep).ceil().times(qtyStep);
+  }
+  return { qty, leverage };
+}
+
+function fetchBybitOrderBalances(
+  client: BybitClientImpl,
+): Effect.Effect<ReadonlyArray<BybitWalletCoin>, ExchangeError> {
+  return client.getBalance().pipe(
+    Effect.catchIf(
+      (err): err is BybitApiError =>
+        err._tag === "BybitApiError" && err.status === 404,
+      () => Effect.succeed([] as ReadonlyArray<BybitWalletCoin>),
+    ),
+    Effect.mapError(toExchangeError),
+  );
+}
+
+function checkBybitAvailableMargin(
+  balances: ReadonlyArray<BybitWalletCoin>,
+  qty: Money,
+  price: Money,
+  leverage: number,
+  symbol: string,
+): Effect.Effect<void, ExchangeError> {
+  if (balances.length === 0) return Effect.void;
+  const usdt = balances.find((coin) => coin.coin.toUpperCase() === "USDT");
+  const available = money(
+    usdt?.availableToWithdraw || usdt?.walletBalance || "0",
+  );
+  if (available.lessThanOrEqualTo(0)) return Effect.void;
+  const margin = qty.times(price).div(money(leverage));
+  return margin.greaterThan(available)
+    ? Effect.fail(
+        new ExchangeError(
+          `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
+        ),
+      )
+    : Effect.void;
+}
+
+function syncBybitLeverage(
+  request: FuturesOrderRequest,
+  symbol: string,
+  leverage: number,
+  client: BybitClientImpl,
+  withError: BybitErrorMapper,
+): Effect.Effect<void, ExchangeError> {
+  if (leverage === request.leverage) return Effect.void;
+  return withError(
+    client
+      .setLeverage({
+        symbol,
+        buyLeverage: String(leverage),
+        sellLeverage: String(leverage),
+      })
+      .pipe(
+        Effect.catchIf(
+          (err): err is BybitApiError =>
+            err._tag === "BybitApiError" &&
+            err.code !== undefined &&
+            (
+              BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE as readonly number[]
+            ).includes(Number(err.code)),
+          () => Effect.void,
+        ),
+      ),
+  );
+}
+
+function validateBybitGuardOrder(
+  request: FuturesOrderRequest,
+  symbol: string,
+  contract: BybitContract,
+  balances: ReadonlyArray<BybitWalletCoin>,
+  price: Money,
+  qty: Money,
+  leverage: number,
+): Effect.Effect<void, ExchangeError> {
+  const guardOrder: BybitGuardOrder = {
+    symbol,
+    side: request.side === "buy" ? "buy" : "sell",
+    orderType: request.type === "market" ? "market" : "limit",
+    size: qty.toString(),
+    leverage: money(leverage).toNumber(),
+  };
+  if (request.type === "limit") guardOrder.price = price.toString();
+  return validateOrder(
+    {
+      order: guardOrder,
+      contract: {
+        symbol: contract.symbol,
+        status: contract.status,
+        minOrderQty: contract.minOrderQty,
+        qtyStep: contract.qtyStep,
+        minOrderAmt: contract.minOrderAmt,
+        tickSize: contract.tickSize,
+        maxLeverage: contract.maxLeverage,
+      },
+      balances: balances.map((coin) => ({
+        asset: coin.coin,
+        available: coin.availableToWithdraw || coin.walletBalance || "0",
+        walletBalance: coin.walletBalance,
+      })),
+      feeRate: "0.0006",
+    },
+    price.toString(),
+  ).pipe(
+    Effect.mapError(
+      (err) => new ExchangeError(`bybit guard rejected: ${err.reason}`, err),
+    ),
+  );
+}
+
+function prepareBybitOrder(
+  input: BybitOrderSizingInput,
+): Effect.Effect<BybitSizedOrder, ExchangeError> {
+  return Effect.gen(function* () {
+    const { request, symbol, contract, price, client, withError } = input;
+    const minQty = money(contract.minOrderQty);
+    yield* validateBybitRawQuantity(request.size, minQty, symbol);
+    const sized = adjustBybitOrderSize(request, contract, price);
+    const balances = yield* fetchBybitOrderBalances(client);
+    yield* checkBybitAvailableMargin(
+      balances,
+      sized.qty,
+      price,
+      sized.leverage,
+      symbol,
+    );
+    yield* syncBybitLeverage(
+      request,
+      symbol,
+      sized.leverage,
+      client,
+      withError,
+    );
+    yield* validateBybitGuardOrder(
+      request,
+      symbol,
+      contract,
+      balances,
+      price,
+      sized.qty,
+      sized.leverage,
+    );
+    return { ...sized, balances };
+  });
+}
+
+function bybitOrderHasFill(order: BybitOrder): boolean {
+  return (
+    money(order.cumExecQty).greaterThan(0) &&
+    money(order.avgPrice).greaterThan(0)
+  );
+}
+
+function bybitOrderCanStillFill(order: BybitOrder): boolean {
+  return bybitOrderStatusCanStillFill(order.orderStatus);
+}
+
+function bybitOrderStatusCanStillFill(status: string): boolean {
+  return ["Created", "New", "PartiallyFilled", "Untriggered"].includes(status);
+}
+
+interface BybitFillInput {
+  readonly request: FuturesOrderRequest;
+  readonly symbol: string;
+  readonly ack: BybitOrderAck;
+  readonly leverage: number;
+  readonly client: BybitClientImpl;
+  readonly withError: <A>(
+    effect: Effect.Effect<A, BybitClientError>,
+  ) => Effect.Effect<A, ExchangeError>;
+}
+
+function cancelUnfilledBybitOrder(
+  client: BybitClientImpl,
+  symbol: string,
+  orderId: string,
+  orderStatus: string,
+): Effect.Effect<string> {
+  if (!bybitOrderStatusCanStillFill(orderStatus)) {
+    return Effect.succeed(`final state ${orderStatus}`);
+  }
+  return client.cancelOrder({ symbol, orderId }).pipe(
+    Effect.mapError(toExchangeError),
+    Effect.match({
+      onSuccess: () => `resting order ${orderId} canceled`,
+      onFailure: (error) =>
+        `cancel failed: ${error.reason}; order ${orderId} may still be resting`,
+    }),
+  );
+}
+
+function pollBybitOrderFill(
+  input: BybitFillInput,
+): Effect.Effect<FuturesOrderFill, ExchangeError> {
+  return Effect.gen(function* () {
+    const { request, symbol, ack, client, withError } = input;
+    const isEntryLimit =
+      request.type === "limit" && request.reduceOnly !== true;
+    const pollAttempts = isEntryLimit ? 10 : 1;
+    let data = yield* withError(
+      client.getOrder({ symbol, orderId: ack.orderId }),
+    );
+    for (let attempt = 1; attempt < pollAttempts; attempt += 1) {
+      if (bybitOrderHasFill(data) || !bybitOrderCanStillFill(data)) break;
+      yield* Effect.sleep("250 millis");
+      data = yield* withError(
+        client.getOrder({ symbol, orderId: ack.orderId }),
+      );
+    }
+    const filledQty = money(data.cumExecQty);
+    const filledPrice = money(data.avgPrice);
+    if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
+      const orderId = data.orderId || ack.orderId;
+      const cleanup = yield* cancelUnfilledBybitOrder(
+        client,
+        symbol,
+        orderId,
+        data.orderStatus,
+      );
+      return yield* Effect.fail(
+        new ExchangeError(
+          `futures order ${orderId} not filled (status=${data.orderStatus}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}); ${cleanup}`,
+        ),
+      );
+    }
+    return {
+      orderId: data.orderId || ack.orderId,
+      clientOid: data.clientOrderId || ack.clientOrderId,
+      symbol: request.symbol,
+      side: request.side,
+      productType: request.productType,
+      marginMode: request.marginMode,
+      filledQty,
+      filledPrice,
+      fee: money(data.cumExecFee).abs(),
+      timestamp: new Date(),
+      leverage: input.leverage,
+    };
+  });
+}
+
 export function makeBybitFuturesAdapter(
   client: BybitClientImpl,
   gateway: MarketDataGatewayService,
@@ -871,189 +1220,27 @@ export function makeBybitFuturesAdapter(
     Effect.gen(function* () {
       const symbol = toBybitSymbol(request.symbol);
       const contract = yield* withError(client.getContract(symbol));
-      if (contract.symbol.toUpperCase() !== symbol) {
-        return yield* Effect.fail(
-          new ExchangeError(`contract ${symbol} not found`),
-        );
-      }
-      const contractStatus = contract.status;
-      if (contractStatus !== "" && contractStatus !== "Trading") {
-        return yield* Effect.fail(
-          new ExchangeError(
-            `contract ${symbol} is not tradable (status=${contractStatus})`,
-          ),
-        );
-      }
-
-      const minQty = money(contract.minOrderQty);
-      const qtyStep = money(contract.qtyStep);
-      const minOrderAmt = money(contract.minOrderAmt);
-      const maxLeverage = money(contract.maxLeverage);
       const tickSize = money(contract.tickSize);
-
-      // Reference price: the order's limit price (tick-normalized) when
-      // present, otherwise the market-data gateway's tick for the canonical
-      // symbol. Market orders drop the price from the request entirely.
-      const reference = yield* request.price !== undefined
-        ? Effect.succeed(request.price)
-        : gateway.fetchTick("bybit-futures", request.symbol).pipe(
-            Effect.mapError(
-              (err) =>
-                new ExchangeError(
-                  `bybit reference price failed for ${request.symbol}: ${err.reason}`,
-                  err,
-                ),
-            ),
-            Effect.map((tick) => money(tick.price)),
-          );
-      const price =
-        request.type === "limit"
-          ? normalizePrice(reference, tickSize)
-          : reference;
-
-      const rawQty = request.size;
-      let qty = rawQty;
-      let leverage = request.leverage;
+      yield* ensureBybitTradableContract(symbol, contract);
+      const price = yield* resolveBybitOrderPrice(
+        request,
+        symbol,
+        tickSize,
+        gateway,
+      );
+      let qty = request.size;
+      let effectiveLeverage = request.leverage;
       if (request.reduceOnly !== true) {
-        if (rawQty.lessThanOrEqualTo(0)) {
-          return yield* Effect.fail(
-            new ExchangeError(
-              `futures guard rejected: order size ${rawQty.toString()} must be positive for ${symbol}`,
-            ),
-          );
-        }
-        if (rawQty.lessThan(minQty)) {
-          return yield* Effect.fail(
-            new ExchangeError(
-              `futures guard rejected: order size ${rawQty.toString()} below min order qty ${minQty.toString()} for ${symbol}`,
-            ),
-          );
-        }
-
-        // Contract-spec sizing: effectiveFloor = max(minOrderAmt, minQty *
-        // price). When the requested notional sits below the floor, size the
-        // qty UP to the floor (rounded UP to qtyStep) and raise leverage so
-        // the floor's margin fits the requested notional budget — bounded by
-        // both the operator's requested leverage and the contract's
-        // maxLeverage.
-        const requestedNotional = rawQty.times(price);
-        const effectiveFloor = Decimal.max(minOrderAmt, minQty.times(price));
-        if (requestedNotional.lessThan(effectiveFloor)) {
-          qty = qtyStep.greaterThan(0)
-            ? effectiveFloor.div(price).div(qtyStep).ceil().times(qtyStep)
-            : effectiveFloor.div(price);
-          if (qty.lessThan(minQty)) qty = minQty;
-          const raised = Decimal.max(
-            1,
-            effectiveFloor.div(requestedNotional).ceil(),
-          );
-          leverage = Decimal.min(
-            raised,
-            Decimal.min(money(request.leverage), maxLeverage),
-          ).toNumber();
-        } else if (qtyStep.greaterThan(0)) {
-          qty = qty.div(qtyStep).ceil().times(qtyStep);
-        }
-
-        // Margin-based cap: the sized order's margin (notional / leverage)
-        // must fit the wallet's available USDT, mirroring the bitget guard's
-        // fail-closed insufficient-margin rejection. Some demo/testnet
-        // accounts do not expose /v5/wallet/balance (HTTP 404); the exchange
-        // still enforces real margin on order placement, so a missing balance
-        // endpoint skips the local cap instead of blocking every order.
-        const coins = yield* client.getBalance().pipe(
-          // Some demo/testnet accounts do not expose /v5/wallet/balance
-          // (HTTP 404); the exchange still enforces real margin on order
-          // placement, so a missing balance endpoint skips the local cap.
-          Effect.catchIf(
-            (err): err is BybitApiError =>
-              err._tag === "BybitApiError" && err.status === 404,
-            () => Effect.succeed([] as ReadonlyArray<BybitWalletCoin>),
-          ),
-          Effect.mapError(toExchangeError),
-        );
-        if (coins.length > 0) {
-          const usdt = coins.find((c) => c.coin.toUpperCase() === "USDT");
-          const available = money(
-            usdt?.availableToWithdraw || usdt?.walletBalance || "0",
-          );
-          // A reported 0 on a funded demo/testnet account is a known
-          // false-negative (the wallet endpoint does not surface demo funds);
-          // the exchange enforces real margin at placement, so a 0 report
-          // skips the local pre-check instead of blocking every order.
-          if (available.greaterThan(0)) {
-            const margin = qty.times(price).div(money(leverage));
-            if (margin.greaterThan(available)) {
-              return yield* Effect.fail(
-                new ExchangeError(
-                  `futures guard rejected: insufficient USDT margin: available ${available.toString()}, required ~${margin.toString()} for ${symbol}`,
-                ),
-              );
-            }
-          }
-        }
-
-        if (leverage !== request.leverage) {
-          yield* withError(
-            client
-              .setLeverage({
-                symbol,
-                buyLeverage: String(leverage),
-                sellLeverage: String(leverage),
-              })
-              .pipe(
-                Effect.catchIf(
-                  (err): err is BybitApiError =>
-                    err._tag === "BybitApiError" &&
-                    err.code !== undefined &&
-                    (
-                      BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE as readonly number[]
-                    ).includes(Number(err.code)),
-                  () => Effect.void,
-                ),
-              ),
-          );
-        }
-
-        // Final pre-trade fail-closed gate: run the BigInt-based bybit guards
-        // against the sized order, the instrument rules, and the wallet so a
-        // real order cannot exceed account balance or violate precision. The
-        // Money-based guards above handle floor sizing and margin; this net is
-        // belt-and-suspenders before any signed request leaves the process.
-        const guardOrder: BybitGuardOrder = {
+        const prepared = yield* prepareBybitOrder({
+          request,
           symbol,
-          side: request.side === "buy" ? "buy" : "sell",
-          orderType: request.type === "market" ? "market" : "limit",
-          size: qty.toString(),
-          leverage: money(leverage).toNumber(),
-        };
-        if (request.type === "limit") guardOrder.price = price.toString();
-        yield* validateOrder(
-          {
-            order: guardOrder,
-            contract: {
-              symbol: contract.symbol,
-              status: contract.status,
-              minOrderQty: contract.minOrderQty,
-              qtyStep: contract.qtyStep,
-              minOrderAmt: contract.minOrderAmt,
-              tickSize: contract.tickSize,
-              maxLeverage: contract.maxLeverage,
-            },
-            balances: coins.map((c) => ({
-              asset: c.coin,
-              available: c.availableToWithdraw || c.walletBalance || "0",
-              walletBalance: c.walletBalance,
-            })),
-            feeRate: "0.0006",
-          },
-          price.toString(),
-        ).pipe(
-          Effect.mapError(
-            (err) =>
-              new ExchangeError(`bybit guard rejected: ${err.reason}`, err),
-          ),
-        );
+          contract,
+          price,
+          client,
+          withError,
+        });
+        qty = prepared.qty;
+        effectiveLeverage = prepared.leverage;
       }
 
       const order: BybitOrderRequest = {
@@ -1071,81 +1258,14 @@ export function makeBybitFuturesAdapter(
         );
       }
 
-      // The create response is an acknowledgement; query the realtime order
-      // for the actual filled size/price/fee before recording the position. A
-      // limit entry placed on a touch may not fill within the first poll — poll
-      // for a short window (bounded, with a metric-worthy emit per poll) so a
-      // touch-then-fill (maker) entry is captured instead of canceled as a
-      // phantom failure. Market orders and reduce-only closes skip the wait.
-      const isEntryLimit =
-        request.type === "limit" && request.reduceOnly !== true;
-      const pollAttempts = isEntryLimit ? 10 : 1;
-      let data = yield* withError(
-        client.getOrder({ symbol, orderId: ack.orderId }),
-      );
-      for (let attempt = 1; attempt < pollAttempts; attempt += 1) {
-        const probeQty = money(data.cumExecQty);
-        const probePrice = money(data.avgPrice);
-        if (probeQty.greaterThan(0) && probePrice.greaterThan(0)) break;
-        const probeStatus = data.orderStatus;
-        if (
-          probeStatus !== "Created" &&
-          probeStatus !== "New" &&
-          probeStatus !== "PartiallyFilled" &&
-          probeStatus !== "Untriggered"
-        ) {
-          break; // final state (Filled/Canceled/Rejected) — no more waiting.
-        }
-        yield* Effect.sleep("250 millis");
-        data = yield* withError(
-          client.getOrder({ symbol, orderId: ack.orderId }),
-        );
-      }
-      const filledQty = money(data.cumExecQty);
-      const filledPrice = money(data.avgPrice);
-      if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
-        // The order did not fill. A limit order may still be resting on the
-        // exchange — failing without cleanup lets a retry open a duplicate.
-        // Cancel it before reporting the error, and say so in the message.
-        const orderId = data.orderId || ack.orderId;
-        const status = data.orderStatus;
-        const resting =
-          status === "Created" ||
-          status === "New" ||
-          status === "Untriggered" ||
-          status === "PartiallyFilled";
-        const cleanup = yield* resting
-          ? client.cancelOrder({ symbol, orderId }).pipe(
-              Effect.mapError(toExchangeError),
-              Effect.match({
-                onSuccess: () => `resting order ${orderId} canceled`,
-                onFailure: (err) =>
-                  `cancel failed: ${err.reason}; order ${orderId} may still be resting`,
-              }),
-            )
-          : Effect.succeed(`final state ${status}`);
-        return yield* Effect.fail(
-          new ExchangeError(
-            `futures order ${orderId} not filled (status=${status}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}); ${cleanup}`,
-          ),
-        );
-      }
-
-      const fill: FuturesOrderFill = {
-        orderId: data.orderId || ack.orderId,
-        clientOid: data.clientOrderId || ack.clientOrderId,
-        symbol: request.symbol,
-        side: request.side,
-        productType: request.productType,
-        marginMode: request.marginMode,
-        filledQty,
-        filledPrice,
-        // Bybit signs fill fees as negative debits; store fees as non-negative
-        // costs like the bitget adapter does.
-        fee: money(data.cumExecFee).abs(),
-        timestamp: new Date(),
-      };
-      return fill;
+      return yield* pollBybitOrderFill({
+        request,
+        symbol,
+        ack,
+        leverage: effectiveLeverage,
+        client,
+        withError,
+      });
     });
 
   const closePosition: FuturesExchangeAdapterService["closePosition"] = (

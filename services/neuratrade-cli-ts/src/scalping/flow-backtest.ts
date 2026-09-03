@@ -626,6 +626,194 @@ interface EngineOptions {
   readonly funding: readonly FlowFundingPoint[] | undefined;
 }
 
+/** One open flow position (mutable while held inside runSymbolEngine). */
+interface OpenFlowPosition {
+  side: "LONG" | "SHORT";
+  entryPrice: number;
+  entryTs: number;
+  atr: number;
+  stop: number;
+  stage: "initial" | "breakeven" | "trail";
+  extreme: number;
+  entryOfiSign: number;
+}
+
+/** A decided exit for an open flow position. */
+interface FlowExit {
+  readonly exitPrice: number;
+  readonly reason: FlowExitReason;
+}
+
+function initialFlowStop(
+  side: "LONG" | "SHORT",
+  ctx: BarContext,
+  atr: number,
+  stopMultiplier: number | null,
+): number {
+  if (stopMultiplier === null) {
+    return side === "LONG" ? -Infinity : Infinity;
+  }
+  return side === "LONG"
+    ? ctx.open - stopMultiplier * atr
+    : ctx.open + stopMultiplier * atr;
+}
+
+function flowEntryOfiSign(sig: FlowSignal): number {
+  return Math.sign(sig.zOfi) !== 0
+    ? Math.sign(sig.zOfi)
+    : Math.sign(sig.zReturn) || 1;
+}
+
+/** Open a position from a signal, or null when any entry gate fails. */
+function openFlowPosition(
+  sig: FlowSignal,
+  ctx: BarContext,
+  opts: FlowBacktestOptions,
+): OpenFlowPosition | null {
+  const side = sig.side;
+  if (
+    (side === "LONG" || side === "SHORT") &&
+    deterministicFillPass(sig, opts.conservativeFillRate)
+  ) {
+    const atr = sig.atr15 > 0 ? sig.atr15 : ctx.atr15;
+    if (atr > 0) {
+      return {
+        side,
+        entryPrice: ctx.open,
+        entryTs: ctx.ts,
+        atr,
+        stop: initialFlowStop(side, ctx, atr, opts.stopMultiplier),
+        stage: "initial",
+        extreme: side === "LONG" ? ctx.high : ctx.low,
+        entryOfiSign: flowEntryOfiSign(sig),
+      };
+    }
+  }
+  return null;
+}
+
+/** Advance the breakeven/trail stop from this bar's extreme. Mutates pos. */
+function updateFlowTrailingStop(pos: OpenFlowPosition, ctx: BarContext): void {
+  const r = ATR_STOP_MULT * pos.atr;
+  if (pos.side === "LONG") {
+    if (ctx.high > pos.extreme) pos.extreme = ctx.high;
+    if (pos.extreme - pos.entryPrice >= BREAKEVEN_R * r) {
+      pos.stage = pos.stop === pos.entryPrice ? pos.stage : "breakeven";
+      pos.stop = Math.max(pos.stop, pos.entryPrice, pos.extreme - r);
+      if (pos.stop > pos.entryPrice) pos.stage = "trail";
+    }
+  } else {
+    if (ctx.low < pos.extreme) pos.extreme = ctx.low;
+    if (pos.entryPrice - pos.extreme >= BREAKEVEN_R * r) {
+      pos.stage = pos.stop === pos.entryPrice ? pos.stage : "breakeven";
+      pos.stop = Math.min(pos.stop, pos.entryPrice, pos.extreme + r);
+      if (pos.stop < pos.entryPrice) pos.stage = "trail";
+    }
+  }
+}
+
+/** 1) Stop hit. */
+function flowStopExit(pos: OpenFlowPosition, ctx: BarContext): FlowExit | null {
+  if (pos.side === "LONG" && ctx.low <= pos.stop) {
+    return {
+      exitPrice: Math.min(ctx.open, pos.stop),
+      reason: pos.stage === "initial" ? "stop" : pos.stage,
+    };
+  }
+  if (pos.side === "SHORT" && ctx.high >= pos.stop) {
+    return {
+      exitPrice: Math.max(ctx.open, pos.stop),
+      reason: pos.stage === "initial" ? "stop" : pos.stage,
+    };
+  }
+  return null;
+}
+
+/** 2) Emergency: OFI flips sign against entry AND |z_dOI| > 1.5. */
+function flowEmergencyExit(
+  pos: OpenFlowPosition,
+  ctx: BarContext,
+  emergencyOiZ: number,
+): FlowExit | null {
+  const ofiSign = Math.sign(ctx.ofiRaw);
+  if (
+    Math.abs(ctx.zOi) > emergencyOiZ &&
+    ofiSign !== 0 &&
+    pos.entryOfiSign !== 0 &&
+    ofiSign !== pos.entryOfiSign
+  ) {
+    return { exitPrice: ctx.close, reason: "emergency" };
+  }
+  return null;
+}
+
+/** 3) Time exit at the hold-time grid, or force-close on the last bar. */
+function flowTimeExit(
+  pos: OpenFlowPosition,
+  ctx: BarContext,
+  holdMs: number,
+  isLastBar: boolean,
+): FlowExit | null {
+  if (ctx.ts >= pos.entryTs + holdMs) {
+    return { exitPrice: ctx.close, reason: "time" };
+  }
+  // End of simulation range — force-close so no trade dangles.
+  if (isLastBar) {
+    return { exitPrice: ctx.close, reason: "time" };
+  }
+  return null;
+}
+
+function flowExitDecision(
+  pos: OpenFlowPosition,
+  ctx: BarContext,
+  opts: FlowBacktestOptions,
+  holdMs: number,
+  isLastBar: boolean,
+): FlowExit | null {
+  return (
+    flowStopExit(pos, ctx) ??
+    flowEmergencyExit(pos, ctx, opts.thresholds.emergencyOiZ) ??
+    flowTimeExit(pos, ctx, holdMs, isLastBar)
+  );
+}
+
+function buildFlowTrade(
+  pos: OpenFlowPosition,
+  ctx: BarContext,
+  exit: FlowExit,
+  engineOpts: EngineOptions,
+  roundTripCostPct: number,
+): FlowBacktestTrade {
+  const grossPct =
+    pos.side === "LONG"
+      ? ((exit.exitPrice - pos.entryPrice) / pos.entryPrice) * 100
+      : ((pos.entryPrice - exit.exitPrice) / pos.entryPrice) * 100;
+  const costPct = roundTripCostPct;
+  const fundingPct = fundingPaidPct(
+    engineOpts.funding,
+    pos.entryTs,
+    ctx.ts,
+    pos.side,
+  );
+  const netEdgePct = grossPct - costPct - fundingPct;
+  return {
+    symbol: engineOpts.symbol,
+    side: pos.side,
+    entryTs: pos.entryTs,
+    exitTs: ctx.ts,
+    entryPrice: pos.entryPrice,
+    exitPrice: exit.exitPrice,
+    holdHours: (ctx.ts - pos.entryTs) / MS_PER_HOUR,
+    exitReason: exit.reason,
+    grossReturnPct: grossPct,
+    costPct,
+    fundingPct,
+    netEdgePct,
+    win: netEdgePct > 0,
+  };
+}
+
 function runSymbolEngine(
   ctxs: readonly BarContext[],
   signals: readonly FlowSignal[],
@@ -640,148 +828,37 @@ function runSymbolEngine(
   const trades: FlowBacktestTrade[] = [];
 
   let sigIdx = 0;
-  let pos: {
-    side: "LONG" | "SHORT";
-    entryPrice: number;
-    entryTs: number;
-    atr: number;
-    stop: number;
-    stage: "initial" | "breakeven" | "trail";
-    extreme: number;
-    entryOfiSign: number;
-  } | null = null;
+  let pos: OpenFlowPosition | null = null;
 
   for (let i = 0; i < ctxs.length; i++) {
     const ctx = ctxs[i];
 
     // Enter: first pending signal whose entry bar is this bar.
-    if (!pos && sigIdx < byEntryTs.length) {
+    if (pos === null && sigIdx < byEntryTs.length) {
       const sig = byEntryTs[sigIdx];
       if (sig.entryTs === ctx.ts) {
         sigIdx++;
-        if (
-          (sig.side === "LONG" || sig.side === "SHORT") &&
-          deterministicFillPass(sig, opts.conservativeFillRate)
-        ) {
-          const atr = sig.atr15 > 0 ? sig.atr15 : ctx.atr15;
-          if (atr > 0) {
-            const side = sig.side;
-            const stopMult = opts.stopMultiplier;
-            const stop =
-              stopMult === null
-                ? side === "LONG"
-                  ? -Infinity
-                  : Infinity
-                : side === "LONG"
-                  ? ctx.open - stopMult * atr
-                  : ctx.open + stopMult * atr;
-            pos = {
-              side,
-              entryPrice: ctx.open,
-              entryTs: ctx.ts,
-              atr,
-              stop,
-              stage: "initial",
-              extreme: side === "LONG" ? ctx.high : ctx.low,
-              entryOfiSign:
-                Math.sign(sig.zOfi) !== 0
-                  ? Math.sign(sig.zOfi)
-                  : Math.sign(sig.zReturn) || 1,
-            };
-          }
-        }
+        pos = openFlowPosition(sig, ctx, opts);
       } else if (sig.entryTs < ctx.ts) {
         // Signal's entry bar never materialized inside the window — drop it.
         sigIdx++;
       }
     }
 
-    if (!pos) continue;
+    if (pos === null) continue;
 
     // Stop/trail management.
-    const side = pos.side;
-    if (side === "LONG") {
-      if (ctx.high > pos.extreme) pos.extreme = ctx.high;
-      const r = ATR_STOP_MULT * pos.atr;
-      if (pos.extreme - pos.entryPrice >= BREAKEVEN_R * r) {
-        pos.stage = pos.stop === pos.entryPrice ? pos.stage : "breakeven";
-        pos.stop = Math.max(pos.stop, pos.entryPrice, pos.extreme - r);
-        if (pos.stop > pos.entryPrice) pos.stage = "trail";
-      }
-    } else {
-      if (ctx.low < pos.extreme) pos.extreme = ctx.low;
-      const r = ATR_STOP_MULT * pos.atr;
-      if (pos.entryPrice - pos.extreme >= BREAKEVEN_R * r) {
-        pos.stage = pos.stop === pos.entryPrice ? pos.stage : "breakeven";
-        pos.stop = Math.min(pos.stop, pos.entryPrice, pos.extreme + r);
-        if (pos.stop < pos.entryPrice) pos.stage = "trail";
-      }
-    }
+    updateFlowTrailingStop(pos, ctx);
 
-    let exitPrice: number | null = null;
-    let reason: FlowExitReason | null = null;
-
-    // 1) Stop hit.
-    if (side === "LONG" && ctx.low <= pos.stop) {
-      exitPrice = Math.min(ctx.open, pos.stop);
-      reason = pos.stage === "initial" ? "stop" : pos.stage;
-    } else if (side === "SHORT" && ctx.high >= pos.stop) {
-      exitPrice = Math.max(ctx.open, pos.stop);
-      reason = pos.stage === "initial" ? "stop" : pos.stage;
-    }
-    // 2) Emergency: OFI flips sign against entry AND |z_dOI| > 1.5.
-    if (reason === null) {
-      const ofiSign = Math.sign(ctx.ofiRaw);
-      if (
-        Math.abs(ctx.zOi) > opts.thresholds.emergencyOiZ &&
-        ofiSign !== 0 &&
-        pos.entryOfiSign !== 0 &&
-        ofiSign !== pos.entryOfiSign
-      ) {
-        exitPrice = ctx.close;
-        reason = "emergency";
-      }
-    }
-    // 3) Time exit at the hold-time grid.
-    if (reason === null && ctx.ts >= pos.entryTs + holdMs) {
-      exitPrice = ctx.close;
-      reason = "time";
-    }
-
-    if (exitPrice === null && reason === null && i === ctxs.length - 1) {
-      // End of simulation range — force-close so no trade dangles.
-      exitPrice = ctx.close;
-      reason = "time";
-    }
-
-    if (exitPrice !== null && reason !== null) {
-      const grossPct =
-        side === "LONG"
-          ? ((exitPrice - pos.entryPrice) / pos.entryPrice) * 100
-          : ((pos.entryPrice - exitPrice) / pos.entryPrice) * 100;
-      const costPct = roundTripCostPct;
-      const fundingPct = fundingPaidPct(
-        engineOpts.funding,
-        pos.entryTs,
-        ctx.ts,
-        side,
-      );
-      const netEdgePct = grossPct - costPct - fundingPct;
-      trades.push({
-        symbol: engineOpts.symbol,
-        side,
-        entryTs: pos.entryTs,
-        exitTs: ctx.ts,
-        entryPrice: pos.entryPrice,
-        exitPrice,
-        holdHours: (ctx.ts - pos.entryTs) / MS_PER_HOUR,
-        exitReason: reason,
-        grossReturnPct: grossPct,
-        costPct,
-        fundingPct,
-        netEdgePct,
-        win: netEdgePct > 0,
-      });
+    const exit = flowExitDecision(
+      pos,
+      ctx,
+      opts,
+      holdMs,
+      i === ctxs.length - 1,
+    );
+    if (exit !== null) {
+      trades.push(buildFlowTrade(pos, ctx, exit, engineOpts, roundTripCostPct));
       pos = null;
     }
   }

@@ -198,7 +198,6 @@ console.log(
 console.log("-".repeat(88));
 let baseLog = 0;
 let fastLog = 0;
-let baseDD = 0;
 for (const cfg of CONFIGS) {
   const a = acc.get(cfg.name)!;
   const perSymMonth = a.trades / Math.max(1, steps * symbols.length) / (months / steps) * steps / Math.max(1, months);
@@ -213,7 +212,6 @@ for (const cfg of CONFIGS) {
   const medLog = median(logs);
   if (cfg.name === "base") {
     baseLog = medLog;
-    baseDD = medDD;
   }
   if (cfg.name === "fast") fastLog = medLog;
   console.log(

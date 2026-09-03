@@ -388,6 +388,161 @@ function parseBoolean(raw: string): boolean | undefined {
   return undefined;
 }
 
+type FlagTokenResult =
+  | { readonly _tag: "err"; readonly message: string }
+  | { readonly _tag: "ok"; readonly advance: number };
+
+/**
+ * Parse one `--name` / `-a` token (with optional `=value`) into `flags`.
+ * `prefix` reproduces the long/short error-message display exactly.
+ */
+function parseNamedFlag(
+  command: AnyCommand,
+  lookup: ReadonlyMap<string, readonly [string, AnyOptionSpec]>,
+  token: string,
+  prefix: "--" | "-",
+  tokens: ReadonlyArray<string>,
+  index: number,
+  flags: ParsedFlag[],
+): FlagTokenResult {
+  const body = token.slice(prefix.length);
+  const eq = body.indexOf("=");
+  const bare = eq >= 0 ? body.slice(0, eq) : body;
+  const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
+  const entry = lookup.get(bare);
+  if (entry === undefined) {
+    return {
+      _tag: "err",
+      message: `Unknown option '${prefix}${bare}' for command '${command.name}'`,
+    };
+  }
+  const [key, spec] = entry;
+  const display = `${prefix}${bare}`;
+  if (spec.kind === "boolean") {
+    return parseBooleanFlag(key, spec, inline, display, flags);
+  }
+  return parseValuedFlag(key, spec, inline, display, tokens, index, flags);
+}
+
+/** Boolean flags are bare (`--flag`) or take an inline `=true|false` value. */
+function parseBooleanFlag(
+  key: string,
+  spec: AnyOptionSpec,
+  inline: string | undefined,
+  display: string,
+  flags: ParsedFlag[],
+): FlagTokenResult {
+  if (inline === undefined) {
+    flags.push({ key, spec, raw: true });
+    return { _tag: "ok", advance: 1 };
+  }
+  const parsed = parseBoolean(inline);
+  if (parsed === undefined) {
+    return {
+      _tag: "err",
+      message: `Invalid value '${inline}' for option '${display}': expected 'true' or 'false'`,
+    };
+  }
+  flags.push({ key, spec, raw: parsed });
+  return { _tag: "ok", advance: 1 };
+}
+
+/** Value flags take an inline `=value` or consume the next token. */
+function parseValuedFlag(
+  key: string,
+  spec: AnyOptionSpec,
+  inline: string | undefined,
+  display: string,
+  tokens: ReadonlyArray<string>,
+  index: number,
+  flags: ParsedFlag[],
+): FlagTokenResult {
+  if (inline !== undefined) {
+    flags.push({ key, spec, raw: inline });
+    return { _tag: "ok", advance: 1 };
+  }
+  if (index + 1 >= tokens.length) {
+    return { _tag: "err", message: `Missing value for option '${display}'` };
+  }
+  flags.push({ key, spec, raw: tokens[index + 1] });
+  return { _tag: "ok", advance: 2 };
+}
+
+/** Value for an option that was never provided (or the required-option error). */
+function applyMissing(
+  command: AnyCommand,
+  key: string,
+  spec: AnyOptionSpec,
+  values: Record<string, ParsedOptionValue>,
+): ParseResult {
+  if (spec.isOptional) {
+    values[key] = Option.none();
+    return { _tag: "ok", values };
+  }
+  if (spec.hasDefault) {
+    values[key] = spec.defaultValue as ParsedScalar;
+    return { _tag: "ok", values };
+  }
+  if (spec.kind === "boolean") {
+    values[key] = false;
+    return { _tag: "ok", values };
+  }
+  return {
+    _tag: "err",
+    message: `Missing required option '--${spec.name}' for command '${command.name}'`,
+  };
+}
+
+function wrapOptional(
+  spec: AnyOptionSpec,
+  value: ParsedScalar,
+): ParsedOptionValue {
+  return spec.isOptional ? Option.some(value) : value;
+}
+
+type ScalarResult =
+  | { readonly _tag: "ok"; readonly value: ParsedOptionValue }
+  | { readonly _tag: "err"; readonly message: string };
+
+/** Validate + convert one provided string value by option kind. */
+function convertScalar(spec: AnyOptionSpec, raw: string): ScalarResult {
+  switch (spec.kind) {
+    case "integer": {
+      if (!/^[+-]?\d+$/.test(raw)) {
+        return {
+          _tag: "err",
+          message: `Invalid value '${raw}' for option '--${spec.name}': expected an integer`,
+        };
+      }
+      return { _tag: "ok", value: wrapOptional(spec, Number.parseInt(raw, 10)) };
+    }
+    case "float": {
+      const n = Number(raw);
+      if (Number.isNaN(n)) {
+        return {
+          _tag: "err",
+          message: `Invalid value '${raw}' for option '--${spec.name}': expected a number`,
+        };
+      }
+      return { _tag: "ok", value: wrapOptional(spec, n) };
+    }
+    case "choice": {
+      const choices = spec.choices ?? [];
+      if (!choices.includes(raw)) {
+        return {
+          _tag: "err",
+          message: `Invalid value '${raw}' for option '--${spec.name}': expected one of ${choices.join(", ")}`,
+        };
+      }
+      return { _tag: "ok", value: wrapOptional(spec, raw) };
+    }
+    default:
+      // text (boolean never reaches here with a string value: boolean flags
+      // are parsed to real booleans during the token walk above).
+      return { _tag: "ok", value: wrapOptional(spec, raw) };
+  }
+}
+
 function parseCommandOptions(
   command: AnyCommand,
   tokens: ReadonlyArray<string>,
@@ -399,91 +554,19 @@ function parseCommandOptions(
   while (i < tokens.length) {
     const token = tokens[i];
 
-    if (token.startsWith("--")) {
-      const body = token.slice(2);
-      const eq = body.indexOf("=");
-      const name = eq >= 0 ? body.slice(0, eq) : body;
-      const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
-      const entry = byName.get(name);
-      if (entry === undefined) {
-        return {
-          _tag: "err",
-          message: `Unknown option '--${name}' for command '${command.name}'`,
-        };
-      }
-      const [key, spec] = entry;
-      if (spec.kind === "boolean") {
-        if (inline === undefined) {
-          flags.push({ key, spec, raw: true });
-        } else {
-          const parsed = parseBoolean(inline);
-          if (parsed === undefined) {
-            return {
-              _tag: "err",
-              message: `Invalid value '${inline}' for option '--${name}': expected 'true' or 'false'`,
-            };
-          }
-          flags.push({ key, spec, raw: parsed });
-        }
-        i += 1;
-      } else {
-        if (inline !== undefined) {
-          flags.push({ key, spec, raw: inline });
-          i += 1;
-        } else if (i + 1 < tokens.length) {
-          flags.push({ key, spec, raw: tokens[i + 1] });
-          i += 2;
-        } else {
-          return {
-            _tag: "err",
-            message: `Missing value for option '--${name}'`,
-          };
-        }
-      }
-      continue;
-    }
-
-    if (token.startsWith("-") && token.length > 1) {
-      const body = token.slice(1);
-      const eq = body.indexOf("=");
-      const alias = eq >= 0 ? body.slice(0, eq) : body;
-      const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
-      const entry = byAlias.get(alias);
-      if (entry === undefined) {
-        return {
-          _tag: "err",
-          message: `Unknown option '-${alias}' for command '${command.name}'`,
-        };
-      }
-      const [key, spec] = entry;
-      if (spec.kind === "boolean") {
-        if (inline === undefined) {
-          flags.push({ key, spec, raw: true });
-        } else {
-          const parsed = parseBoolean(inline);
-          if (parsed === undefined) {
-            return {
-              _tag: "err",
-              message: `Invalid value '${inline}' for option '-${alias}': expected 'true' or 'false'`,
-            };
-          }
-          flags.push({ key, spec, raw: parsed });
-        }
-        i += 1;
-      } else {
-        if (inline !== undefined) {
-          flags.push({ key, spec, raw: inline });
-          i += 1;
-        } else if (i + 1 < tokens.length) {
-          flags.push({ key, spec, raw: tokens[i + 1] });
-          i += 2;
-        } else {
-          return {
-            _tag: "err",
-            message: `Missing value for option '-${alias}'`,
-          };
-        }
-      }
+    if (token.startsWith("--") || (token.startsWith("-") && token.length > 1)) {
+      const isLong = token.startsWith("--");
+      const result = parseNamedFlag(
+        command,
+        isLong ? byName : byAlias,
+        token,
+        isLong ? "--" : "-",
+        tokens,
+        i,
+        flags,
+      );
+      if (result._tag === "err") return result;
+      i += result.advance;
       continue;
     }
 
@@ -508,68 +591,19 @@ function parseCommandOptions(
   for (const [key, spec] of command.options) {
     const raw = provided.get(key);
     if (raw === undefined) {
-      if (spec.isOptional) {
-        values[key] = Option.none();
-      } else if (spec.hasDefault) {
-        values[key] = spec.defaultValue as ParsedScalar;
-      } else if (spec.kind === "boolean") {
-        values[key] = false;
-      } else {
-        return {
-          _tag: "err",
-          message: `Missing required option '--${spec.name}' for command '${command.name}'`,
-        };
-      }
+      const missing = applyMissing(command, key, spec, values);
+      if (missing._tag === "err") return missing;
       continue;
     }
-
     if (raw === true || raw === false) {
       values[key] = spec.isOptional ? Option.some(raw) : raw;
       continue;
     }
-
-    switch (spec.kind) {
-      case "text": {
-        values[key] = spec.isOptional ? Option.some(raw) : raw;
-        break;
-      }
-      case "integer": {
-        if (!/^[+-]?\d+$/.test(raw)) {
-          return {
-            _tag: "err",
-            message: `Invalid value '${raw}' for option '--${spec.name}': expected an integer`,
-          };
-        }
-        const n = Number.parseInt(raw, 10);
-        values[key] = spec.isOptional ? Option.some(n) : n;
-        break;
-      }
-      case "float": {
-        const n = Number(raw);
-        if (Number.isNaN(n)) {
-          return {
-            _tag: "err",
-            message: `Invalid value '${raw}' for option '--${spec.name}': expected a number`,
-          };
-        }
-        values[key] = spec.isOptional ? Option.some(n) : n;
-        break;
-      }
-      case "choice": {
-        if (!(spec.choices ?? []).includes(raw)) {
-          return {
-            _tag: "err",
-            message: `Invalid value '${raw}' for option '--${spec.name}': expected one of ${(spec.choices ?? []).join(", ")}`,
-          };
-        }
-        values[key] = spec.isOptional ? Option.some(raw) : raw;
-        break;
-      }
-      case "boolean": {
-        values[key] = spec.isOptional ? Option.some(raw) : raw;
-        break;
-      }
+    const converted = convertScalar(spec, raw);
+    if (converted._tag === "err") {
+      return { _tag: "err", message: converted.message };
     }
+    values[key] = converted.value;
   }
 
   return { _tag: "ok", values };
@@ -615,6 +649,97 @@ function flagOwner(
   return undefined;
 }
 
+/** True for `--flag` and `-f` tokens (but not a bare `-`). */
+function isFlagToken(token: string): boolean {
+  return token.startsWith("--") || (token.startsWith("-") && token.length > 1);
+}
+
+interface ScannedFlag {
+  readonly bare: string;
+  readonly isAlias: boolean;
+  readonly token: string;
+  readonly valueToken?: string;
+}
+
+/**
+ * Decompose one flag token. Unknown flags still consume a following non-dash
+ * token so it is not mistaken for a subcommand/positional; they error at
+ * attribution below.
+ */
+function scanFlagToken(
+  argv: ReadonlyArray<string>,
+  index: number,
+  treeFlags: ReadonlyMap<string, AnyOptionSpec>,
+): ScannedFlag {
+  const token = argv[index];
+  const isAlias = !token.startsWith("--");
+  const body = token.slice(isAlias ? 1 : 2);
+  const eq = body.indexOf("=");
+  const bare = eq >= 0 ? body.slice(0, eq) : body;
+  const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
+  const spec = treeFlags.get(bare);
+  const takesValue =
+    inline === undefined &&
+    (spec === undefined
+      ? index + 1 < argv.length && !argv[index + 1].startsWith("-")
+      : spec.kind !== "boolean");
+  const valueToken =
+    takesValue && index + 1 < argv.length ? argv[index + 1] : undefined;
+  return { bare, isAlias, token, valueToken };
+}
+
+function findSubcommand(
+  command: AnyCommand,
+  token: string,
+): AnyCommand | undefined {
+  if (command.subcommands.length === 0) return undefined;
+  return command.subcommands.find((s) => s.name === token);
+}
+
+function badPositionalMessage(bad: {
+  readonly token: string;
+  readonly at: AnyCommand;
+}): string {
+  const { token, at } = bad;
+  return at.subcommands.length > 0
+    ? `Invalid subcommand '${token}' for ${at.name} - use one of ${at.subcommands
+        .map((s) => `'${s.name}'`)
+        .join(", ")}`
+    : `Received unknown argument: '${token}'`;
+}
+
+type FlagAttribution =
+  | { readonly _tag: "ok"; readonly buckets: ReadonlyMap<AnyCommand, string[]> }
+  | { readonly _tag: "err"; readonly message: string };
+
+/** Bucket each flag's tokens under the first path command that defines it. */
+function attributeFlags(
+  flags: ReadonlyArray<ScannedFlag>,
+  path: ReadonlyArray<AnyCommand>,
+  current: AnyCommand,
+  config: CliConfig,
+): FlagAttribution {
+  const buckets = new Map<AnyCommand, string[]>();
+  for (const flag of flags) {
+    const owner = flagOwner(path, flag.bare, flag.isAlias);
+    if (owner === undefined) {
+      const help = helpText(current, path, config);
+      return {
+        _tag: "err",
+        message: `Unknown option '--${flag.bare}' for command '${current.name}'\n\n${help}`,
+      };
+    }
+    let bucket = buckets.get(owner);
+    if (bucket === undefined) {
+      bucket = [];
+      buckets.set(owner, bucket);
+    }
+    bucket.push(flag.token);
+    if (flag.valueToken !== undefined) bucket.push(flag.valueToken);
+  }
+  return { _tag: "ok", buckets };
+}
+
 /**
  * Pure evaluation of argv against a command tree. Descends subcommands,
  * parses options at every level, and returns a discriminated outcome.
@@ -645,12 +770,7 @@ export function evaluate(
   const path: AnyCommand[] = [root];
   let current = root;
   let helpRequested = false;
-  const flags: Array<{
-    readonly bare: string;
-    readonly isAlias: boolean;
-    readonly token: string;
-    readonly valueToken?: string;
-  }> = [];
+  const flags: ScannedFlag[] = [];
   let firstBadPositional:
     | { readonly token: string; readonly at: AnyCommand }
     | undefined;
@@ -662,36 +782,20 @@ export function evaluate(
       i += 1;
       continue;
     }
-    if (token.startsWith("--") || (token.startsWith("-") && token.length > 1)) {
-      const body = token.slice(token.startsWith("--") ? 2 : 1);
-      const eq = body.indexOf("=");
-      const bare = eq >= 0 ? body.slice(0, eq) : body;
-      const isAlias = !token.startsWith("--");
-      const inline = eq >= 0 ? body.slice(eq + 1) : undefined;
-      const spec = treeFlags.get(bare);
-      // Unknown flags still consume a following non-dash token so it is not
-      // mistaken for a subcommand/positional; they error at attribution below.
-      const takesValue =
-        inline === undefined &&
-        (spec === undefined
-          ? i + 1 < argv.length && !argv[i + 1].startsWith("-")
-          : spec.kind !== "boolean");
-      const valueToken =
-        takesValue && i + 1 < argv.length ? argv[i + 1] : undefined;
-      flags.push({ bare, isAlias, token, valueToken });
-      i += valueToken !== undefined ? 2 : 1;
+    if (isFlagToken(token)) {
+      const flag = scanFlagToken(argv, i, treeFlags);
+      flags.push(flag);
+      i += flag.valueToken !== undefined ? 2 : 1;
       continue;
     }
     // Positional token: a subcommand name descends; anything else is a
     // stray argument (recorded, reported only when no --help was given).
-    if (current.subcommands.length > 0) {
-      const sub = current.subcommands.find((s) => s.name === token);
-      if (sub !== undefined) {
-        path.push(sub);
-        current = sub;
-        i += 1;
-        continue;
-      }
+    const sub = findSubcommand(current, token);
+    if (sub !== undefined) {
+      path.push(sub);
+      current = sub;
+      i += 1;
+      continue;
     }
     if (firstBadPositional === undefined) {
       firstBadPositional = { token, at: current };
@@ -704,13 +808,8 @@ export function evaluate(
   }
 
   if (firstBadPositional !== undefined) {
-    const { token, at } = firstBadPositional;
-    const message =
-      at.subcommands.length > 0
-        ? `Invalid subcommand '${token}' for ${at.name} - use one of ${at.subcommands
-            .map((s) => `'${s.name}'`)
-            .join(", ")}`
-        : `Received unknown argument: '${token}'`;
+    const { at } = firstBadPositional;
+    const message = badPositionalMessage(firstBadPositional);
     const help = helpText(at, path.slice(0, path.indexOf(at) + 1), config);
     return { _tag: "error", message: `${message}\n\n${help}` };
   }
@@ -719,29 +818,18 @@ export function evaluate(
   // rebuilding that command's token stream in original order so
   // parseCommandOptions sees exactly what it saw when the flag followed
   // the subcommand.
-  const buckets = new Map<AnyCommand, string[]>();
-  for (const flag of flags) {
-    const owner = flagOwner(path, flag.bare, flag.isAlias);
-    if (owner === undefined) {
-      const help = helpText(current, path, config);
-      return {
-        _tag: "error",
-        message: `Unknown option '--${flag.bare}' for command '${current.name}'\n\n${help}`,
-      };
-    }
-    let bucket = buckets.get(owner);
-    if (bucket === undefined) {
-      bucket = [];
-      buckets.set(owner, bucket);
-    }
-    bucket.push(flag.token);
-    if (flag.valueToken !== undefined) bucket.push(flag.valueToken);
+  const attributed = attributeFlags(flags, path, current, config);
+  if (attributed._tag === "err") {
+    return { _tag: "error", message: attributed.message };
   }
 
   // Parse options from the root down so parent-level errors surface first.
   let leafValues: Record<string, ParsedOptionValue> = {};
   for (const command of path) {
-    const parsed = parseCommandOptions(command, buckets.get(command) ?? []);
+    const parsed = parseCommandOptions(
+      command,
+      attributed.buckets.get(command) ?? [],
+    );
     if (parsed._tag === "err") {
       const help = helpText(
         command,

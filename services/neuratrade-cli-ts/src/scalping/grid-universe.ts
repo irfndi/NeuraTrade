@@ -29,7 +29,9 @@ import {
 } from "./ladder-grid.js";
 import {
   validateGridEvidence,
+  type GridValidationInvalid,
   type GridValidationOk,
+  type GridValidationResult,
 } from "./grid-validation.js";
 import {
   validateLadderEvidence,
@@ -695,6 +697,108 @@ export interface LadderGateScoreResult {
  * a high win rate whose many small wins outweigh fewer, larger stops
  * (BE ~0.7), which the win/loss-ratio gate misclassifies as doomed.
  */
+/**
+ * Scale the evidence validator's rolling windows to the available history:
+ * the readiness defaults (11520/4320/10 windows) need ~55k candles, which
+ * young symbols lack. Windows shrink with the data; the fixed-OOS >=30
+ * trades and LB gates still bind regardless of history depth.
+ */
+interface ScaledEvidenceWindows {
+  trainBars: number;
+  testBars: number;
+  minimumWindows: number;
+}
+
+function scaledEvidenceWindows(n: number): ScaledEvidenceWindows {
+  const trainBars = Math.min(11520, Math.max(200, Math.floor(n * 0.6)));
+  const testBars = Math.min(4320, Math.max(50, Math.floor(n * 0.2)));
+  const minimumWindows = Math.max(
+    1,
+    Math.floor((n - trainBars - testBars) / testBars),
+  );
+  return { trainBars, testBars, minimumWindows };
+}
+
+function buildLadderGateOptions(
+  entry: GridUniverseEntry,
+  options: GridUniverseOptions,
+  targetRatio: number,
+  chopGateAdx: number,
+): LadderOptions {
+  return {
+    rungs: entry.bestParams.rungs ?? 1,
+    gridStepPct: entry.bestParams.gridStepPct,
+    gridMaxGrids: entry.bestParams.gridMaxGrids,
+    gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
+    feePct: options.feePct,
+    slippageBps: options.slippageBps,
+    initialCapital: options.initialCapital,
+    trendFilterPeriod: options.trendFilterPeriod,
+    leverage: 1,
+    positionFraction: MAX_POSITION_FRACTION,
+    chopGateAdxThreshold: chopGateAdx,
+    targetRatio,
+    onlyWithTrend: false,
+    stopRatio: options.ladderStopRatio ?? 0,
+    maxHoldBars: options.ladderMaxHoldBars ?? 0,
+    conservativeIntrabar: true,
+  };
+}
+
+/**
+ * Readiness-tier evidence check for one ladder sweep combo: the combo must
+ * ALSO clear the full ladder evidence validator (windows scaled to the
+ * available history, same protocol as the grid board). Adds its failure
+ * reasons to `failureReasons` and returns whether the evidence passed.
+ */
+function passesLadderEvidenceGate(
+  candles: readonly Candle[],
+  ladder: LadderOptions,
+  options: GridUniverseOptions,
+  failureReasons: Set<string>,
+): boolean {
+  const { trainBars, testBars, minimumWindows } = scaledEvidenceWindows(
+    candles.length,
+  );
+  const evidence = validateLadderEvidence(candles, {
+    now: new Date(),
+    timeframeMinutes: timeframeMinutesFor(options.timeframe),
+    trainBars,
+    testBars,
+    minimumWindows,
+    ladder,
+  });
+  if (evidence.kind !== "ok") {
+    failureReasons.add(`evidence_invalid:${evidence.failures[0] ?? "unknown"}`);
+    return false;
+  }
+  const criteriaFailures = ladderGateCriteriaFailures(evidence);
+  if (!passesLadderGateCriteria(evidence)) {
+    for (const failure of criteriaFailures) failureReasons.add(failure);
+    return false;
+  }
+  return true;
+}
+
+/** Failure result when no ladder sweep combo produced a positive return. */
+function ladderSweepFailure(
+  timeSplitPasses: number,
+  tier: UniverseTier,
+  evidenceChecks: number,
+  evidencePasses: number,
+  failureReasons: Set<string>,
+): LadderGateScoreResult {
+  if (timeSplitPasses === 0) failureReasons.add("time_split");
+  if (tier === "readiness" && evidenceChecks > 0 && evidencePasses === 0) {
+    failureReasons.add("readiness_evidence");
+  }
+  if (failureReasons.size === 0) failureReasons.add("tail_return");
+  return {
+    entry: null,
+    failureReasons: [...failureReasons].slice(0, 8),
+  };
+}
+
 export function ladderGateScoredEligibilityDetailed(
   entry: GridUniverseEntry,
   candles: readonly Candle[],
@@ -742,55 +846,19 @@ export function ladderGateScoredEligibilityDetailed(
   let evidencePasses = 0;
   for (const targetRatio of GATE_TARGETS) {
     for (const chopGateAdx of GATE_ADX_GATES) {
-      const ladder: LadderOptions = {
-        rungs: entry.bestParams.rungs ?? 1,
-        gridStepPct: entry.bestParams.gridStepPct,
-        gridMaxGrids: entry.bestParams.gridMaxGrids,
-        gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
-        feePct: options.feePct,
-        slippageBps: options.slippageBps,
-        initialCapital: options.initialCapital,
-        trendFilterPeriod: options.trendFilterPeriod,
-        leverage: 1,
-        positionFraction: MAX_POSITION_FRACTION,
-        chopGateAdxThreshold: chopGateAdx,
+      const ladder = buildLadderGateOptions(
+        entry,
+        options,
         targetRatio,
-        onlyWithTrend: false,
-        stopRatio: options.ladderStopRatio ?? 0,
-        maxHoldBars: options.ladderMaxHoldBars ?? 0,
-        conservativeIntrabar: true,
-      };
+        chopGateAdx,
+      );
       if (!passesLadderTimeSplitGate(candles, ladder)) continue;
       timeSplitPasses += 1;
       if (tier === "readiness") {
-        // Readiness tier: the combo must ALSO clear the full ladder evidence
-        // validator (windows scaled to the available history, same protocol
-        // as the grid board).
-        const n = candles.length;
-        const trainBars = Math.min(11520, Math.max(200, Math.floor(n * 0.6)));
-        const testBars = Math.min(4320, Math.max(50, Math.floor(n * 0.2)));
-        const minimumWindows = Math.max(
-          1,
-          Math.floor((n - trainBars - testBars) / testBars),
-        );
-        const evidence = validateLadderEvidence(candles, {
-          now: new Date(),
-          timeframeMinutes: timeframeMinutesFor(options.timeframe),
-          trainBars,
-          testBars,
-          minimumWindows,
-          ladder,
-        });
         evidenceChecks += 1;
-        if (evidence.kind !== "ok") {
-          failureReasons.add(
-            `evidence_invalid:${evidence.failures[0] ?? "unknown"}`,
-          );
-          continue;
-        }
-        const criteriaFailures = ladderGateCriteriaFailures(evidence);
-        if (!passesLadderGateCriteria(evidence)) {
-          for (const failure of criteriaFailures) failureReasons.add(failure);
+        if (
+          !passesLadderEvidenceGate(candles, ladder, options, failureReasons)
+        ) {
           continue;
         }
         evidencePasses += 1;
@@ -808,15 +876,13 @@ export function ladderGateScoredEligibilityDetailed(
     }
   }
   if (best === null) {
-    if (timeSplitPasses === 0) failureReasons.add("time_split");
-    if (tier === "readiness" && evidenceChecks > 0 && evidencePasses === 0) {
-      failureReasons.add("readiness_evidence");
-    }
-    if (failureReasons.size === 0) failureReasons.add("tail_return");
-    return {
-      entry: null,
-      failureReasons: [...failureReasons].slice(0, 8),
-    };
+    return ladderSweepFailure(
+      timeSplitPasses,
+      tier,
+      evidenceChecks,
+      evidencePasses,
+      failureReasons,
+    );
   }
   return {
     entry: {
@@ -845,6 +911,83 @@ export function ladderGateScoredEligibility(
  * Per-entry (not batch) because the scan holds candles only transiently per
  * symbol.
  */
+function buildGridGateOptions(
+  entry: GridUniverseEntry,
+  options: GridUniverseOptions,
+  targetRatio: number,
+  chopGateAdx: number,
+): GridOptions {
+  return {
+    gridStepPct: entry.bestParams.gridStepPct,
+    gridMaxGrids: entry.bestParams.gridMaxGrids,
+    gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
+    feePct: options.feePct,
+    slippageBps: options.slippageBps,
+    initialCapital: options.initialCapital,
+    trendFilterPeriod: options.trendFilterPeriod,
+    leverage: 1,
+    positionFraction: MAX_POSITION_FRACTION,
+    chopGateAdxThreshold: chopGateAdx,
+    targetRatio,
+    onlyWithTrend: false,
+  };
+}
+
+/**
+ * Fast tier tolerates ONLY history-depth failures (complete-window count
+ * below minimum, fixed-OOS trade count below minimum): a symbol with shallow
+ * history may still be admitted on the light criteria. ANY data-quality
+ * failure (stale/gapped/negative-volume candles, invalid timestamps,
+ * historical return at/below -100%) is a hard drop even in the light tier —
+ * fast admission must not paper over bad data.
+ */
+function isDepthOnlyEvidenceFailure(result: GridValidationInvalid): boolean {
+  return (
+    result.dataQuality.failures.every((failure) =>
+      failure.startsWith("complete window count"),
+    ) &&
+    result.failures.every((failure) =>
+      failure.startsWith("fixed OOS trade count"),
+    )
+  );
+}
+
+/**
+ * Tier acceptance for one gate sweep combo. Returns the combo's ranking
+ * return (compoundedReturnPct for valid evidence; -Infinity when invalid
+ * evidence has depth-only failures and cannot rank), or null when the combo
+ * is rejected.
+ */
+function comboRankingPct(
+  tier: UniverseTier,
+  result: GridValidationResult,
+  candles: readonly Candle[],
+  grid: GridOptions,
+  asymmetryOk: boolean,
+  fastEligible: boolean,
+): number | null {
+  if (tier === "readiness") {
+    // Full readiness board: valid evidence must clear EVERY gate AND
+    // survive the strict time-split (regime-concentration guard) AND
+    // the structural-asymmetry requirement (BE win rate <= 0.40);
+    // invalid evidence fails closed.
+    if (result.kind !== "ok" || !passesGateCriteria(result)) return null;
+    if (!asymmetryOk) return null;
+    if (!passesTimeSplitGate(candles, grid)) return null;
+    return result.historical.compoundedReturnPct;
+  }
+  // Fast tier: the light criteria are the ONLY acceptance — evidence
+  // is used just to rank the sweep combos (young symbols may lack the
+  // deep history valid evidence needs; that alone must not drop them).
+  if (!fastEligible) return null;
+  if (!passesTimeSplitGate(candles, grid)) return null;
+  if (result.kind !== "ok" && !isDepthOnlyEvidenceFailure(result)) return null;
+  // Invalid evidence cannot rank; keep the first passing combo.
+  return result.kind === "ok"
+    ? result.historical.compoundedReturnPct
+    : -Infinity;
+}
+
 export function gateScoredEligibility(
   entry: GridUniverseEntry,
   candles: readonly Candle[],
@@ -891,30 +1034,14 @@ export function gateScoredEligibility(
   } | null = null;
   for (const targetRatio of GATE_TARGETS) {
     for (const chopGateAdx of GATE_ADX_GATES) {
-      const grid: GridOptions = {
-        gridStepPct: entry.bestParams.gridStepPct,
-        gridMaxGrids: entry.bestParams.gridMaxGrids,
-        gridPauseAfterLossBars: entry.bestParams.gridPauseAfterLossBars,
-        feePct: options.feePct,
-        slippageBps: options.slippageBps,
-        initialCapital: options.initialCapital,
-        trendFilterPeriod: options.trendFilterPeriod,
-        leverage: 1,
-        positionFraction: MAX_POSITION_FRACTION,
-        chopGateAdxThreshold: chopGateAdx,
+      const grid = buildGridGateOptions(
+        entry,
+        options,
         targetRatio,
-        onlyWithTrend: false,
-      };
-      // Scale the validator's rolling windows to the available history: the
-      // readiness defaults (11520/4320/10 windows) need ~55k candles, which
-      // young symbols lack. Windows shrink with the data; the fixed-OOS
-      // >=30 trades and LB gates still bind regardless of history depth.
-      const n = candles.length;
-      const trainBars = Math.min(11520, Math.max(200, Math.floor(n * 0.6)));
-      const testBars = Math.min(4320, Math.max(50, Math.floor(n * 0.2)));
-      const minimumWindows = Math.max(
-        1,
-        Math.floor((n - trainBars - testBars) / testBars),
+        chopGateAdx,
+      );
+      const { trainBars, testBars, minimumWindows } = scaledEvidenceWindows(
+        candles.length,
       );
       const result = validateGridEvidence(candles, {
         now: new Date(),
@@ -925,56 +1052,17 @@ export function gateScoredEligibility(
         grid,
         executionParityPassed: options.executionParityPassed ?? false,
       });
-      if (tier === "readiness") {
-        // Full readiness board: valid evidence must clear EVERY gate AND
-        // survive the strict time-split (regime-concentration guard) AND
-        // the structural-asymmetry requirement (BE win rate <= 0.40);
-        // invalid evidence fails closed.
-        if (result.kind !== "ok" || !passesGateCriteria(result)) continue;
-        if (!asymmetryOk) continue;
-        if (!passesTimeSplitGate(candles, grid)) continue;
-      } else {
-        // Fast tier: the light criteria are the ONLY acceptance — evidence
-        // is used just to rank the sweep combos (young symbols may lack the
-        // deep history valid evidence needs; that alone must not drop them).
-        if (!fastEligible) continue;
-        if (!passesTimeSplitGate(candles, grid)) continue;
-        if (result.kind !== "ok") {
-          // Fast tier tolerates ONLY history-depth failures (complete-window
-          // count below minimum, fixed-OOS trade count below minimum): a
-          // symbol with shallow history may still be admitted on the light
-          // criteria. ANY data-quality failure (stale/gapped/negative-volume
-          // candles, invalid timestamps, historical return at/below -100%)
-          // is a hard drop even in the light tier — fast admission must not
-          // paper over bad data.
-          const depthOnlyFailures =
-            result.dataQuality.failures.every((failure) =>
-              failure.startsWith("complete window count"),
-            ) &&
-            result.failures.every((failure) =>
-              failure.startsWith("fixed OOS trade count"),
-            );
-          if (!depthOnlyFailures) continue;
-          // Invalid evidence cannot rank; keep the first passing combo.
-          if (best === null) {
-            best = {
-              targetRatio,
-              chopGateAdx,
-              compoundedReturnPct: -Infinity,
-            };
-          }
-          continue;
-        }
-      }
-      if (
-        best === null ||
-        result.historical.compoundedReturnPct > best.compoundedReturnPct
-      ) {
-        best = {
-          targetRatio,
-          chopGateAdx,
-          compoundedReturnPct: result.historical.compoundedReturnPct,
-        };
+      const ranking = comboRankingPct(
+        tier,
+        result,
+        candles,
+        grid,
+        asymmetryOk,
+        fastEligible,
+      );
+      if (ranking === null) continue;
+      if (best === null || ranking > best.compoundedReturnPct) {
+        best = { targetRatio, chopGateAdx, compoundedReturnPct: ranking };
       }
     }
   }
@@ -986,84 +1074,94 @@ export function gateScoredEligibility(
   };
 }
 
-function evaluateUniverseSymbol(
-  symbol: string,
+function runWalkForwardSelection(
   candles: readonly Candle[],
   options: GridUniverseOptions,
-): GridUniverseEntry {
-  const engine = options.engine ?? "grid";
-  const walkForward: UniverseWalkForwardResult =
-    engine === "ladder"
-      ? runLadderGridWalkForward(candles, {
-          trainWindow: options.trainWindow,
-          testWindow: options.testWindow,
-          initialCapital: options.initialCapital,
-          searchSpace: {
-            rungs: options.searchSpace.rungs ?? [1],
-            gridStepPct: options.searchSpace.gridStepPct,
-            gridMaxGrids: options.searchSpace.gridMaxGrids,
-            gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars,
-            // Sweep the R:R and chop-gate dials INSIDE walk-forward
-            // selection. Fixed at [1]/[0] the wf objective is inverted-R:R
-            // churn (win one step, lose gridMaxGrids steps) — it selects
-            // configs that bleed OOS on every symbol while the profitable
-            // gated geometry never reaches the gate stage (2026-08-14:
-            // 0/25 survivors on a full-year db-mainnet scan; same configs
-            // flip positive under tr=3-4/adx=12, see
-            // scripts/probe-targetratio-impact.ts).
-            // ponytail: two-stage cost control — wf sweeps only the
-            // live-validated geometry (adx=12; tr 3|4). adx=0 combos always
-            // lose and each ADX-enabled backtest pays per-bar ADX compute,
-            // so sweeping all 4×3 dials here made a full scan >60min. The
-            // gate stage below still sweeps the full GATE_TARGETS ×
-            // GATE_ADX_GATES board for final validation.
-            targetRatio: [3, 4],
-            chopGateAdxThreshold: [12],
-          },
-          baseOptions: {
-            feePct: options.feePct,
-            slippageBps: options.slippageBps,
-            trendFilterPeriod: options.trendFilterPeriod,
-            leverage: 1,
-            stopRatio: options.ladderStopRatio ?? 0,
-            maxHoldBars: options.ladderMaxHoldBars ?? 0,
-            conservativeIntrabar: true,
-          },
-          // Select among training-window configurations that are executable
-          // under the same conservative fill model used by the downstream
-          // gate. Without this, the selector can choose a high-return,
-          // wide-step config and reject it later for having too few fills.
-          candidateFilter:
-            (options.minFillFrequencyPct ?? 0) > 0
-              ? (trainCandles, candidate) => {
-                  const minimum = options.minFillFrequencyPct ?? 0;
-                  return (
-                    computeFillFrequencyPct(
-                      trainCandles,
-                      candidate.gridStepPct,
-                      minimum,
-                    ) *
-                      fillModelMultiplier(options) >=
-                    minimum
-                  );
-                }
-              : undefined,
-        })
-      : runGridWalkForward(candles, {
-          trainWindow: options.trainWindow,
-          testWindow: options.testWindow,
-          initialCapital: options.initialCapital,
-          searchSpace: options.searchSpace,
-          baseOptions: {
-            feePct: options.feePct,
-            slippageBps: options.slippageBps,
-            trendFilterPeriod: options.trendFilterPeriod,
-            leverage: 1,
-          },
-        });
+  engine: "grid" | "ladder",
+): UniverseWalkForwardResult {
+  return engine === "ladder"
+    ? runLadderGridWalkForward(candles, {
+        trainWindow: options.trainWindow,
+        testWindow: options.testWindow,
+        initialCapital: options.initialCapital,
+        searchSpace: {
+          rungs: options.searchSpace.rungs ?? [1],
+          gridStepPct: options.searchSpace.gridStepPct,
+          gridMaxGrids: options.searchSpace.gridMaxGrids,
+          gridPauseAfterLossBars: options.searchSpace.gridPauseAfterLossBars,
+          // Sweep the R:R and chop-gate dials INSIDE walk-forward
+          // selection. Fixed at [1]/[0] the wf objective is inverted-R:R
+          // churn (win one step, lose gridMaxGrids steps) — it selects
+          // configs that bleed OOS on every symbol while the profitable
+          // gated geometry never reaches the gate stage (2026-08-14:
+          // 0/25 survivors on a full-year db-mainnet scan; same configs
+          // flip positive under tr=3-4/adx=12, see
+          // scripts/probe-targetratio-impact.ts).
+          // ponytail: two-stage cost control — wf sweeps only the
+          // live-validated geometry (adx=12; tr 3|4). adx=0 combos always
+          // lose and each ADX-enabled backtest pays per-bar ADX compute,
+          // so sweeping all 4×3 dials here made a full scan >60min. The
+          // gate stage below still sweeps the full GATE_TARGETS ×
+          // GATE_ADX_GATES board for final validation.
+          targetRatio: [3, 4],
+          chopGateAdxThreshold: [12],
+        },
+        baseOptions: {
+          feePct: options.feePct,
+          slippageBps: options.slippageBps,
+          trendFilterPeriod: options.trendFilterPeriod,
+          leverage: 1,
+          stopRatio: options.ladderStopRatio ?? 0,
+          maxHoldBars: options.ladderMaxHoldBars ?? 0,
+          conservativeIntrabar: true,
+        },
+        // Select among training-window configurations that are executable
+        // under the same conservative fill model used by the downstream
+        // gate. Without this, the selector can choose a high-return,
+        // wide-step config and reject it later for having too few fills.
+        candidateFilter:
+          (options.minFillFrequencyPct ?? 0) > 0
+            ? (trainCandles, candidate) => {
+                const minimum = options.minFillFrequencyPct ?? 0;
+                return (
+                  computeFillFrequencyPct(
+                    trainCandles,
+                    candidate.gridStepPct,
+                    minimum,
+                  ) *
+                    fillModelMultiplier(options) >=
+                  minimum
+                );
+              }
+            : undefined,
+      })
+    : runGridWalkForward(candles, {
+        trainWindow: options.trainWindow,
+        testWindow: options.testWindow,
+        initialCapital: options.initialCapital,
+        searchSpace: options.searchSpace,
+        baseOptions: {
+          feePct: options.feePct,
+          slippageBps: options.slippageBps,
+          trendFilterPeriod: options.trendFilterPeriod,
+          leverage: 1,
+        },
+      });
+}
 
+interface UniverseBestParams {
+  gridStepPct: number;
+  gridMaxGrids: number;
+  gridPauseAfterLossBars: number;
+  rungs: number | undefined;
+}
+
+function gridUniverseBestParams(
+  walkForward: UniverseWalkForwardResult,
+  options: GridUniverseOptions,
+): UniverseBestParams {
   const lastWindow = walkForward.windows[walkForward.windows.length - 1];
-  const bestParams = {
+  return {
     gridStepPct:
       lastWindow?.params.gridStepPct ?? options.searchSpace.gridStepPct[0] ?? 1,
     gridMaxGrids:
@@ -1076,6 +1174,37 @@ function evaluateUniverseSymbol(
       0,
     rungs: lastWindow?.params.rungs,
   };
+}
+
+function collectRejectionReasons(
+  walkForward: UniverseWalkForwardResult,
+  options: GridUniverseOptions,
+  asymmetryOk: boolean,
+  modeledFillPct: number,
+  fillGate: number,
+): string[] {
+  const rejectionReasons: string[] = [];
+  if (walkForward.windows.length < 1) rejectionReasons.push("no_wf_windows");
+  if (walkForward.profitableWindowsPct < options.minProfitableWindowsPct) {
+    rejectionReasons.push("wf_profit_windows");
+  }
+  if (walkForward.aggregateReturnPct < options.minAggregateReturnPct) {
+    rejectionReasons.push("wf_return");
+  }
+  if (!asymmetryOk) rejectionReasons.push("asymmetry");
+  if (modeledFillPct < fillGate) rejectionReasons.push("fill_frequency");
+  return rejectionReasons;
+}
+
+function evaluateUniverseSymbol(
+  symbol: string,
+  candles: readonly Candle[],
+  options: GridUniverseOptions,
+): GridUniverseEntry {
+  const engine = options.engine ?? "grid";
+  const walkForward = runWalkForwardSelection(candles, options, engine);
+
+  const bestParams = gridUniverseBestParams(walkForward, options);
 
   // Zero windows (candles shorter than train+test) yields profitableWindowsPct
   // and aggregateReturnPct of 0, which a permissive minimum could "pass" with
@@ -1116,16 +1245,13 @@ function evaluateUniverseSymbol(
 
   const passed = passedBase && asymmetryOk && modeledFillPct >= fillGate;
 
-  const rejectionReasons: string[] = [];
-  if (walkForward.windows.length < 1) rejectionReasons.push("no_wf_windows");
-  if (walkForward.profitableWindowsPct < options.minProfitableWindowsPct) {
-    rejectionReasons.push("wf_profit_windows");
-  }
-  if (walkForward.aggregateReturnPct < options.minAggregateReturnPct) {
-    rejectionReasons.push("wf_return");
-  }
-  if (!asymmetryOk) rejectionReasons.push("asymmetry");
-  if (modeledFillPct < fillGate) rejectionReasons.push("fill_frequency");
+  const rejectionReasons = collectRejectionReasons(
+    walkForward,
+    options,
+    asymmetryOk,
+    modeledFillPct,
+    fillGate,
+  );
 
   // Candidate metrics for the frequency-targeted selection stage. All are
   // display/selection hints, not money — plain numbers are fine.

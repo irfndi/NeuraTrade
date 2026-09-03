@@ -270,6 +270,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
             filledPrice: price,
             fee,
             timestamp: new Date(),
+            leverage: request.leverage,
           };
 
           if (request.reduceOnly && existing) {

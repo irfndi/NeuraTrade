@@ -37,6 +37,13 @@ export interface FuturesOrderFill {
   readonly filledPrice: Money;
   readonly fee: Money;
   readonly timestamp: Date;
+  /**
+   * Effective leverage the order was placed with. Adapters that resize
+   * and/or re-leverage sub-floor orders MUST report the leverage actually
+   * set on the exchange here: recording the requested leverage instead
+   * strands reconciliation ("exchange leverage X differs from expected Y").
+   */
+  readonly leverage?: number;
 }
 
 export interface FuturesPosition {

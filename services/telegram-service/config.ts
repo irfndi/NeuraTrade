@@ -75,6 +75,55 @@ const loadNeuratradeConfig = (): NeuratradeConfig | null => {
   }
 };
 
+type ConfigValueLookup = (config: NeuratradeConfig) => string | undefined;
+
+const botTokenFromConfig = (config: NeuratradeConfig): string | undefined => {
+  if (config.telegram?.bot_token) {
+    return config.telegram.bot_token;
+  }
+  return config.services?.telegram?.bot_token;
+};
+
+const apiBaseUrlFromConfig = (config: NeuratradeConfig): string | undefined => {
+  const serviceBaseURL = config.services?.telegram?.api_base_url;
+  if (serviceBaseURL && !serviceBaseURL.includes("api.telegram.org")) {
+    return serviceBaseURL;
+  }
+  if (config.server?.port !== undefined) {
+    const host = config.server.host || "localhost";
+    return `http://${host}:${config.server.port}`;
+  }
+  return undefined;
+};
+
+const usePollingFromConfig = (config: NeuratradeConfig): string | undefined => {
+  if (config.telegram?.use_polling !== undefined) {
+    return config.telegram.use_polling.toString();
+  }
+  return config.services?.telegram?.use_polling?.toString();
+};
+
+const telegramPortFromConfig = (
+  config: NeuratradeConfig,
+): string | undefined => {
+  if (config.telegram?.port !== undefined) {
+    return config.telegram.port.toString();
+  }
+  return config.services?.telegram?.port?.toString();
+};
+
+const adminApiKeyFromConfig = (
+  config: NeuratradeConfig,
+): string | undefined => config.admin_api_key || config.security?.admin_api_key;
+
+const CONFIG_KEY_LOOKUPS = new Map<string, ConfigValueLookup>([
+  ["telegram_bot_token", botTokenFromConfig],
+  ["telegram_api_base_url", apiBaseUrlFromConfig],
+  ["telegram_use_polling", usePollingFromConfig],
+  ["telegram_port", telegramPortFromConfig],
+  ["admin_api_key", adminApiKeyFromConfig],
+]);
+
 export const getEnvWithNeuratradeFallback = (
   key: string,
 ): string | undefined => {
@@ -85,42 +134,7 @@ export const getEnvWithNeuratradeFallback = (
   if (!neuratradeConfig) {
     return undefined;
   }
-  const keyLower = key.toLowerCase();
-  if (keyLower === "telegram_bot_token") {
-    if (neuratradeConfig.telegram?.bot_token) {
-      return neuratradeConfig.telegram.bot_token;
-    }
-    return neuratradeConfig.services?.telegram?.bot_token;
-  }
-  if (keyLower === "telegram_api_base_url") {
-    const serviceBaseURL = neuratradeConfig.services?.telegram?.api_base_url;
-    if (serviceBaseURL && !serviceBaseURL.includes("api.telegram.org")) {
-      return serviceBaseURL;
-    }
-    if (neuratradeConfig.server?.port !== undefined) {
-      const host = neuratradeConfig.server.host || "localhost";
-      return `http://${host}:${neuratradeConfig.server.port}`;
-    }
-    return undefined;
-  }
-  if (keyLower === "telegram_use_polling") {
-    if (neuratradeConfig.telegram?.use_polling !== undefined) {
-      return neuratradeConfig.telegram.use_polling.toString();
-    }
-    return neuratradeConfig.services?.telegram?.use_polling?.toString();
-  }
-  if (keyLower === "telegram_port") {
-    if (neuratradeConfig.telegram?.port !== undefined) {
-      return neuratradeConfig.telegram.port.toString();
-    }
-    return neuratradeConfig.services?.telegram?.port?.toString();
-  }
-  if (keyLower === "admin_api_key") {
-    return (
-      neuratradeConfig.admin_api_key || neuratradeConfig.security?.admin_api_key
-    );
-  }
-  return undefined;
+  return CONFIG_KEY_LOOKUPS.get(key.toLowerCase())?.(neuratradeConfig);
 };
 
 const resolvePort = (raw: string | undefined, fallback: number) => {

@@ -35,6 +35,45 @@ const zeroMetrics: BacktestMetrics = {
   timeInMarketPct: 0,
 };
 
+/** Collapse a NaN metric to the safe zero value. */
+function finiteOrZero(value: number): number {
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function profitFactorRatio(grossProfit: number, grossLoss: number): number {
+  if (grossLoss === 0) {
+    return grossProfit > 0 ? Number.POSITIVE_INFINITY : 0;
+  }
+  return grossProfit / grossLoss;
+}
+
+function calmarRatioOf(totalReturnPct: number, maxDrawdownPct: number): number {
+  if (maxDrawdownPct > 0) return totalReturnPct / maxDrawdownPct;
+  return totalReturnPct > 0 ? Number.POSITIVE_INFINITY : 0;
+}
+
+/** R multiple of a trade; 0 when the trade recorded no usable initial risk. */
+function rMultipleForTrade(trade: BacktestTrade): number {
+  if (!trade.initialRiskPct || trade.initialRiskPct <= 0) return 0;
+  return trade.pnlPct / 100 / trade.initialRiskPct;
+}
+
+function maxConsecutiveLossesOf(trades: readonly BacktestTrade[]): number {
+  let maxConsecutiveLosses = 0;
+  let currentStreak = 0;
+  for (const trade of trades) {
+    if (trade.pnl < 0) {
+      currentStreak += 1;
+      if (currentStreak > maxConsecutiveLosses) {
+        maxConsecutiveLosses = currentStreak;
+      }
+    } else {
+      currentStreak = 0;
+    }
+  }
+  return maxConsecutiveLosses;
+}
+
 /**
  * Compute advanced performance metrics from a sequence of backtest trades.
  *
@@ -62,12 +101,7 @@ export function computePerformanceMetrics(
   const grossProfit = wins.reduce((sum, t) => sum + t.pnl, 0);
   const grossLoss = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0));
 
-  const profitFactor =
-    grossLoss === 0
-      ? grossProfit > 0
-        ? Number.POSITIVE_INFINITY
-        : 0
-      : grossProfit / grossLoss;
+  const profitFactor = profitFactorRatio(grossProfit, grossLoss);
 
   const winRate = wins.length / trades.length;
   const lossRate = losses.length / trades.length;
@@ -84,10 +118,7 @@ export function computePerformanceMetrics(
   const expectancy = winRate * avgWin - lossRate * avgLoss;
 
   const rMultiples = trades
-    .map((t) => {
-      if (!t.initialRiskPct || t.initialRiskPct <= 0) return 0;
-      return t.pnlPct / 100 / t.initialRiskPct;
-    })
+    .map(rMultipleForTrade)
     .filter((r) => Number.isFinite(r));
   const averageRMultiple =
     rMultiples.length > 0
@@ -109,25 +140,9 @@ export function computePerformanceMetrics(
   const sortinoRatio =
     downsideDeviation === 0 ? 0 : excessReturn / downsideDeviation;
 
-  const calmarRatio =
-    maxDrawdownPct > 0
-      ? totalReturnPct / maxDrawdownPct
-      : totalReturnPct > 0
-        ? Number.POSITIVE_INFINITY
-        : 0;
+  const calmarRatio = calmarRatioOf(totalReturnPct, maxDrawdownPct);
 
-  let maxConsecutiveLosses = 0;
-  let currentStreak = 0;
-  for (const trade of trades) {
-    if (trade.pnl < 0) {
-      currentStreak += 1;
-      if (currentStreak > maxConsecutiveLosses) {
-        maxConsecutiveLosses = currentStreak;
-      }
-    } else {
-      currentStreak = 0;
-    }
-  }
+  const maxConsecutiveLosses = maxConsecutiveLossesOf(trades);
 
   const totalDurationMs = trades.reduce(
     (sum, t) => sum + (t.exitTime.getTime() - t.entryTime.getTime()),
@@ -139,11 +154,11 @@ export function computePerformanceMetrics(
     candleSpanMs > 0 ? (totalDurationMs / candleSpanMs) * 100 : 0;
 
   return {
-    profitFactor: Number.isNaN(profitFactor) ? 0 : profitFactor,
-    expectancy: Number.isNaN(expectancy) ? 0 : expectancy,
-    averageRMultiple: Number.isNaN(averageRMultiple) ? 0 : averageRMultiple,
-    sortinoRatio: Number.isNaN(sortinoRatio) ? 0 : sortinoRatio,
-    calmarRatio: Number.isNaN(calmarRatio) ? 0 : calmarRatio,
+    profitFactor: finiteOrZero(profitFactor),
+    expectancy: finiteOrZero(expectancy),
+    averageRMultiple: finiteOrZero(averageRMultiple),
+    sortinoRatio: finiteOrZero(sortinoRatio),
+    calmarRatio: finiteOrZero(calmarRatio),
     maxConsecutiveLosses,
     averageTradeDurationHours,
     timeInMarketPct,

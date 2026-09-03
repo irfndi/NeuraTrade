@@ -1,4 +1,9 @@
-import type { CandleLike, ComposerConfig, FundingRate } from "./types.js";
+import type {
+  CandleLike,
+  ComposerConfig,
+  FundingRate,
+  ScalpingSignal,
+} from "./types.js";
 import { composeSignal } from "./composer.js";
 import { calculateATR } from "./indicators.js";
 import { computeExitLevels } from "./exit-engine.js";
@@ -223,363 +228,475 @@ function computePortfolioMetrics(
   };
 }
 
-export function runPortfolioBacktest(
-  options: PortfolioBacktestOptions,
-): PortfolioBacktestResult {
-  const candles = options.candles;
-  if (candles.length < 20) {
-    return emptyPortfolioResult(options.symbol);
-  }
+interface SinglePortfolioRuntime {
+  readonly options: PortfolioBacktestOptions;
+  readonly feePct: number;
+  readonly makerFeePct?: number;
+  readonly entryOrderType: "market" | "limit";
+  readonly entryLimitOffsetBps: number;
+  readonly slippageBps: number;
+  readonly maxBarsInTrade: number;
+  readonly useAtr: boolean;
+  readonly atrStopMultiplier: number;
+  readonly atrRiskReward: number;
+  readonly scaleOutAtR: number;
+  readonly volatilityLookback: number;
+  readonly volatilityLowPct: number;
+  readonly volatilityHighPct: number;
+  readonly volatilityLowFactor: number;
+  readonly volatilityHighFactor: number;
+  readonly symbolStats: SymbolStatistics;
+  capital: number;
+  peakCapital: number;
+  maxDrawdown: number;
+  tradeId: number;
+  totalFeesPaid: number;
+  readonly positions: PortfolioPosition[];
+  readonly trades: PortfolioBacktestTrade[];
+}
 
-  const feePct = normalizeFeePct(options.feePct);
-  const makerFeePct = normalizeOptionalFeePct(options.makerFeePct, "maker-fee");
-  const entryOrderType = options.entryOrderType ?? "market";
-  const entryLimitOffsetBps = options.entryLimitOffsetBps ?? 0;
-  const slippageBps = options.slippageBps ?? 0;
-  const maxBarsInTrade = Math.max(0, Math.floor(options.maxBarsInTrade ?? 0));
-  const sessionStart = options.sessionStart ?? "";
-  const sessionEnd = options.sessionEnd ?? "";
-  const useAtr = options.useAtrStops ?? false;
+interface SinglePortfolioExit {
+  readonly price: number;
+  readonly time: Date;
+  readonly reason: PortfolioBacktestTrade["exitReason"];
+  readonly barIndex: number;
+}
+
+function createSinglePortfolioRuntime(
+  options: PortfolioBacktestOptions,
+): SinglePortfolioRuntime {
   const atrStopMultiplier = options.atrStopMultiplier ?? 1.5;
   const atrTakeProfitMultiplier = options.atrTakeProfitMultiplier ?? 2.5;
   let atrRiskReward = options.atrRiskReward ?? 0;
-  if (useAtr && atrRiskReward <= 0 && atrTakeProfitMultiplier > 0) {
+  if (
+    options.useAtrStops &&
+    atrRiskReward <= 0 &&
+    atrTakeProfitMultiplier > 0
+  ) {
     atrRiskReward = atrTakeProfitMultiplier / Math.max(1e-9, atrStopMultiplier);
   }
-  const scaleOutAtR = options.scaleOutAtR ?? 0;
-  const volatilityLookback = options.volatilityLookback ?? 0;
-  const volatilityLowPct = options.volatilityLowPct ?? 20;
-  const volatilityHighPct = options.volatilityHighPct ?? 80;
-  const volatilityLowFactor = options.volatilityLowFactor ?? 0.8;
-  const volatilityHighFactor = options.volatilityHighFactor ?? 1.2;
-  const symbolStats = computeSymbolStats(candles, options.timeframe);
-
-  let capital = options.initialCapital;
-  let peakCapital = capital;
-  let maxDrawdown = 0;
-  let tradeId = 0;
-  let totalFeesPaid = 0;
-
-  const positions: PortfolioPosition[] = [];
-  const trades: PortfolioBacktestTrade[] = [];
-
-  const recordTrade = (
-    position: PortfolioPosition,
-    exitPrice: number,
-    exitTime: Date,
-    exitReason: PortfolioBacktestTrade["exitReason"],
-    barIndex: number,
-  ) => {
-    const notional = position.entryPrice * position.size;
-    const rawPnl =
-      position.side === "long"
-        ? (exitPrice - position.entryPrice) * position.size
-        : (position.entryPrice - exitPrice) * position.size;
-    const exitFee = exitPrice * position.size * (feePct / 100);
-    const netPnl = rawPnl - exitFee - position.entryFeePaid;
-    capital += netPnl;
-    totalFeesPaid += exitFee + position.entryFeePaid;
-
-    trades.push({
-      id: position.id,
-      symbol: options.symbol,
-      side: position.side,
-      entryTime: position.entryTime,
-      exitTime,
-      entryPrice: position.entryPrice,
-      exitPrice,
-      pnl: rawPnl,
-      pnlPct: (rawPnl / notional) * 100,
-      netPnl,
-      exitReason,
-      barsHeld: barIndex - position.entryBarIndex,
-    });
-
-    if (capital > peakCapital) peakCapital = capital;
-    const drawdown = (peakCapital - capital) / peakCapital;
-    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+  return {
+    options,
+    feePct: normalizeFeePct(options.feePct),
+    makerFeePct: normalizeOptionalFeePct(options.makerFeePct, "maker-fee"),
+    entryOrderType: options.entryOrderType ?? "market",
+    entryLimitOffsetBps: options.entryLimitOffsetBps ?? 0,
+    slippageBps: options.slippageBps ?? 0,
+    maxBarsInTrade: Math.max(0, Math.floor(options.maxBarsInTrade ?? 0)),
+    useAtr: options.useAtrStops ?? false,
+    atrStopMultiplier,
+    atrRiskReward,
+    scaleOutAtR: options.scaleOutAtR ?? 0,
+    volatilityLookback: options.volatilityLookback ?? 0,
+    volatilityLowPct: options.volatilityLowPct ?? 20,
+    volatilityHighPct: options.volatilityHighPct ?? 80,
+    volatilityLowFactor: options.volatilityLowFactor ?? 0.8,
+    volatilityHighFactor: options.volatilityHighFactor ?? 1.2,
+    symbolStats: computeSymbolStats(options.candles, options.timeframe),
+    capital: options.initialCapital,
+    peakCapital: options.initialCapital,
+    maxDrawdown: 0,
+    tradeId: 0,
+    totalFeesPaid: 0,
+    positions: [],
+    trades: [],
   };
+}
 
-  for (let i = 20; i < candles.length - 1; i++) {
-    const window = candles.slice(Math.max(0, i + 1 - 200), i + 1);
-    const current = candles[i];
-    const next = candles[i + 1];
+function recordSinglePortfolioTrade(
+  runtime: SinglePortfolioRuntime,
+  position: PortfolioPosition,
+  exit: SinglePortfolioExit,
+): void {
+  const { options } = runtime;
+  const notional = position.entryPrice * position.size;
+  const rawPnl =
+    position.side === "long"
+      ? (exit.price - position.entryPrice) * position.size
+      : (position.entryPrice - exit.price) * position.size;
+  const exitFee = exit.price * position.size * (runtime.feePct / 100);
+  const netPnl = rawPnl - exitFee - position.entryFeePaid;
+  runtime.capital += netPnl;
+  runtime.totalFeesPaid += exitFee + position.entryFeePaid;
 
-    if (!isWithinSession(current.timestamp, sessionStart, sessionEnd)) {
-      continue;
+  runtime.trades.push({
+    id: position.id,
+    symbol: options.symbol,
+    side: position.side,
+    entryTime: position.entryTime,
+    exitTime: exit.time,
+    entryPrice: position.entryPrice,
+    exitPrice: exit.price,
+    pnl: rawPnl,
+    pnlPct: (rawPnl / notional) * 100,
+    netPnl,
+    exitReason: exit.reason,
+    barsHeld: exit.barIndex - position.entryBarIndex,
+  });
+
+  if (runtime.capital > runtime.peakCapital) {
+    runtime.peakCapital = runtime.capital;
+  }
+  const drawdown =
+    (runtime.peakCapital - runtime.capital) / runtime.peakCapital;
+  if (drawdown > runtime.maxDrawdown) runtime.maxDrawdown = drawdown;
+}
+
+function composeSinglePortfolioSignal(
+  runtime: SinglePortfolioRuntime,
+  window: readonly CandleLike[],
+  current: CandleLike,
+): ScalpingSignal | null {
+  const { options } = runtime;
+  return composeSignal(
+    {
+      exchange: options.exchange,
+      symbol: options.symbol,
+      timeframe: options.timeframe,
+      candles: window,
+      fundingRates: options.fundingRates,
+    },
+    {
+      exchange: "synthetic",
+      symbol: "synthetic",
+      spread: current.high - current.low,
+      spreadPercent: (current.high - current.low) / current.close,
+      bidDepth:
+        ((current.close - current.low) / (current.high - current.low || 1)) *
+        100,
+      askDepth:
+        ((current.high - current.close) / (current.high - current.low || 1)) *
+        100,
+      imbalance: 0,
+      midPrice: current.close,
+      timestamp: current.timestamp,
+    },
+    options.composerConfig,
+  );
+}
+
+function resolveSinglePortfolioExit(
+  runtime: SinglePortfolioRuntime,
+  position: PortfolioPosition,
+  current: CandleLike,
+  next: CandleLike,
+  signal: ScalpingSignal | null,
+  barIndex: number,
+): SinglePortfolioExit | undefined {
+  const exitSide = position.side === "long" ? "short" : "long";
+  if (position.side === "long") {
+    if (current.low <= position.stopLoss) {
+      return {
+        price: applySlippage(
+          position.stopLoss,
+          exitSide,
+          runtime.slippageBps,
+          current.high,
+          current.low,
+        ),
+        time: current.timestamp,
+        reason: "stop_loss",
+        barIndex,
+      };
     }
-
-    const signal = composeSignal(
-      {
-        exchange: options.exchange,
-        symbol: options.symbol,
-        timeframe: options.timeframe,
-        candles: window,
-        fundingRates: options.fundingRates,
-      },
-      {
-        exchange: "synthetic",
-        symbol: "synthetic",
-        spread: current.high - current.low,
-        spreadPercent: (current.high - current.low) / current.close,
-        bidDepth:
-          ((current.close - current.low) / (current.high - current.low || 1)) *
-          100,
-        askDepth:
-          ((current.high - current.close) / (current.high - current.low || 1)) *
-          100,
-        imbalance: 0,
-        midPrice: current.close,
-        timestamp: current.timestamp,
-      },
-      options.composerConfig,
-    );
-
-    // Manage existing positions
-    const remaining: PortfolioPosition[] = [];
-    for (const position of positions) {
-      let closed = false;
-      const exitSide = position.side === "long" ? "short" : "long";
-
-      // SL/TP checks on current bar
-      if (position.side === "long") {
-        if (current.low <= position.stopLoss) {
-          recordTrade(
-            position,
-            applySlippage(
-              position.stopLoss,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            ),
-            current.timestamp,
-            "stop_loss",
-            i,
-          );
-          closed = true;
-        } else if (current.high >= position.takeProfit) {
-          recordTrade(
-            position,
-            applySlippage(
-              position.takeProfit,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            ),
-            current.timestamp,
-            "take_profit",
-            i,
-          );
-          closed = true;
-        }
-      } else {
-        if (current.high >= position.stopLoss) {
-          recordTrade(
-            position,
-            applySlippage(
-              position.stopLoss,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            ),
-            current.timestamp,
-            "stop_loss",
-            i,
-          );
-          closed = true;
-        } else if (current.low <= position.takeProfit) {
-          recordTrade(
-            position,
-            applySlippage(
-              position.takeProfit,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            ),
-            current.timestamp,
-            "take_profit",
-            i,
-          );
-          closed = true;
-        }
-      }
-
-      if (
-        !closed &&
-        maxBarsInTrade > 0 &&
-        i - position.entryBarIndex >= maxBarsInTrade
-      ) {
-        recordTrade(
-          position,
-          applySlippage(
-            current.close,
-            exitSide,
-            slippageBps,
-            current.high,
-            current.low,
-          ),
-          current.timestamp,
-          "time_stop",
-          i,
-        );
-        closed = true;
-      }
-
-      if (!closed && signal) {
-        const signalSide = signal.direction === "buy" ? "long" : "short";
-        if (signalSide !== position.side) {
-          recordTrade(
-            position,
-            applySlippage(
-              next.open,
-              exitSide,
-              slippageBps,
-              next.high,
-              next.low,
-            ),
-            next.timestamp,
-            "signal",
-            i + 1,
-          );
-          closed = true;
-        }
-      }
-
-      if (!closed) remaining.push(position);
+    if (current.high >= position.takeProfit) {
+      return {
+        price: applySlippage(
+          position.takeProfit,
+          exitSide,
+          runtime.slippageBps,
+          current.high,
+          current.low,
+        ),
+        time: current.timestamp,
+        reason: "take_profit",
+        barIndex,
+      };
     }
-    positions.length = 0;
-    positions.push(...remaining);
-
-    // Open new position if signal and capacity
-    if (
-      signal &&
-      signal.direction !== "hold" &&
-      signal.confidence >= options.minConfidence &&
-      positions.length < options.maxOpenPositions
-    ) {
-      const side = signal.direction === "buy" ? "long" : "short";
-      const rawEntry = next.open;
-      const fillResult = resolveEntryFill(
-        rawEntry,
-        next,
-        side,
-        feePct,
-        makerFeePct,
-        entryOrderType,
-        entryLimitOffsetBps,
-        slippageBps,
-      );
-      if (!fillResult.filled) {
-        continue;
-      }
-      const entryPrice = fillResult.entryPrice;
-      const appliedFeePct = fillResult.appliedFeePct;
-      const fillType = fillResult.fillType;
-      const atr = calculateATR(window, 14);
-      const { stopLoss, takeProfit } = computeExitLevels({
-        side,
-        entryPrice,
-        atr,
-        useAtr,
-        atrStopMultiplier,
-        atrRiskReward,
-        stopLossPct: options.stopLossPct,
-        takeProfitPct: options.takeProfitPct,
-        scaleOutAtR,
-        candles: window,
-        volatilityLookback,
-        volatilityLowPct,
-        volatilityHighPct,
-        volatilityLowFactor,
-        volatilityHighFactor,
-        symbolStats,
-        useAdaptiveStops: options.useAdaptiveStops,
-        adaptiveStopAtrMultiplier: options.adaptiveStopAtrMultiplier,
-        adaptiveRiskReward: options.adaptiveRiskReward,
-      });
-
-      // Size each slot as a fixed fraction of initial capital so multiple
-      // concurrent positions do not silently over-leverage the account.
-      const positionValue =
-        (options.initialCapital * options.positionSizePct) / 100;
-      const size = positionValue / entryPrice;
-      const entryFee = positionValue * (appliedFeePct / 100);
-
-      positions.push({
-        id: `trade-${tradeId++}`,
-        side,
-        entryPrice,
-        entryTime: next.timestamp,
-        entryBarIndex: i + 1,
-        size,
-        stopLoss,
-        takeProfit,
-        entryFeePaid: entryFee,
-        fillType,
-      });
-
-      totalFeesPaid += entryFee;
+  } else {
+    if (current.high >= position.stopLoss) {
+      return {
+        price: applySlippage(
+          position.stopLoss,
+          exitSide,
+          runtime.slippageBps,
+          current.high,
+          current.low,
+        ),
+        time: current.timestamp,
+        reason: "stop_loss",
+        barIndex,
+      };
     }
-
-    const mtmCapital =
-      capital +
-      positions.reduce((sum, p) => {
-        const price = current.close;
-        return (
-          sum +
-          (p.side === "long"
-            ? (price - p.entryPrice) * p.size
-            : (p.entryPrice - price) * p.size)
-        );
-      }, 0);
-    if (mtmCapital > peakCapital) peakCapital = mtmCapital;
-    const drawdown = (peakCapital - mtmCapital) / peakCapital;
-    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    if (current.low <= position.takeProfit) {
+      return {
+        price: applySlippage(
+          position.takeProfit,
+          exitSide,
+          runtime.slippageBps,
+          current.high,
+          current.low,
+        ),
+        time: current.timestamp,
+        reason: "take_profit",
+        barIndex,
+      };
+    }
   }
 
-  // Close all remaining positions at last close
-  const last = candles[candles.length - 1];
-  for (const position of positions) {
-    const exitSide = position.side === "long" ? "short" : "long";
-    recordTrade(
+  if (
+    runtime.maxBarsInTrade > 0 &&
+    barIndex - position.entryBarIndex >= runtime.maxBarsInTrade
+  ) {
+    return {
+      price: applySlippage(
+        current.close,
+        exitSide,
+        runtime.slippageBps,
+        current.high,
+        current.low,
+      ),
+      time: current.timestamp,
+      reason: "time_stop",
+      barIndex,
+    };
+  }
+
+  if (signal) {
+    const signalSide = signal.direction === "buy" ? "long" : "short";
+    if (signalSide !== position.side) {
+      return {
+        price: applySlippage(
+          next.open,
+          exitSide,
+          runtime.slippageBps,
+          next.high,
+          next.low,
+        ),
+        time: next.timestamp,
+        reason: "signal",
+        barIndex: barIndex + 1,
+      };
+    }
+  }
+  return undefined;
+}
+
+function manageSinglePortfolioPositions(
+  runtime: SinglePortfolioRuntime,
+  current: CandleLike,
+  next: CandleLike,
+  signal: ScalpingSignal | null,
+  barIndex: number,
+): void {
+  const remaining: PortfolioPosition[] = [];
+  for (const position of runtime.positions) {
+    const exit = resolveSinglePortfolioExit(
+      runtime,
       position,
-      applySlippage(last.close, exitSide, slippageBps, last.high, last.low),
-      last.timestamp,
-      "signal",
-      candles.length - 1,
+      current,
+      next,
+      signal,
+      barIndex,
     );
+    if (exit) {
+      recordSinglePortfolioTrade(runtime, position, exit);
+    } else {
+      remaining.push(position);
+    }
   }
+  runtime.positions.length = 0;
+  runtime.positions.push(...remaining);
+}
 
-  const winningTrades = trades.filter((t) => t.netPnl > 0).length;
-  const losingTrades = trades.filter((t) => t.netPnl < 0).length;
-  const totalReturnPct =
-    ((capital - options.initialCapital) / options.initialCapital) * 100;
+function hasSinglePortfolioEntrySignal(
+  runtime: SinglePortfolioRuntime,
+  signal: ScalpingSignal | null,
+): signal is ScalpingSignal {
+  return (
+    signal !== null &&
+    signal.direction !== "hold" &&
+    signal.confidence >= runtime.options.minConfidence &&
+    runtime.positions.length < runtime.options.maxOpenPositions
+  );
+}
 
+function openSinglePortfolioPosition(
+  runtime: SinglePortfolioRuntime,
+  signal: ScalpingSignal,
+  window: readonly CandleLike[],
+  next: CandleLike,
+  barIndex: number,
+): boolean {
+  const { options } = runtime;
+  const side = signal.direction === "buy" ? "long" : "short";
+  const fillResult = resolveEntryFill(
+    next.open,
+    next,
+    side,
+    runtime.feePct,
+    runtime.makerFeePct,
+    runtime.entryOrderType,
+    runtime.entryLimitOffsetBps,
+    runtime.slippageBps,
+  );
+  if (!fillResult.filled) return false;
+
+  const entryPrice = fillResult.entryPrice;
+  const { stopLoss, takeProfit } = computeExitLevels({
+    side,
+    entryPrice,
+    atr: calculateATR(window, 14),
+    useAtr: runtime.useAtr,
+    atrStopMultiplier: runtime.atrStopMultiplier,
+    atrRiskReward: runtime.atrRiskReward,
+    stopLossPct: options.stopLossPct,
+    takeProfitPct: options.takeProfitPct,
+    scaleOutAtR: runtime.scaleOutAtR,
+    candles: window,
+    volatilityLookback: runtime.volatilityLookback,
+    volatilityLowPct: runtime.volatilityLowPct,
+    volatilityHighPct: runtime.volatilityHighPct,
+    volatilityLowFactor: runtime.volatilityLowFactor,
+    volatilityHighFactor: runtime.volatilityHighFactor,
+    symbolStats: runtime.symbolStats,
+    useAdaptiveStops: options.useAdaptiveStops,
+    adaptiveStopAtrMultiplier: options.adaptiveStopAtrMultiplier,
+    adaptiveRiskReward: options.adaptiveRiskReward,
+  });
+
+  const positionValue =
+    (options.initialCapital * options.positionSizePct) / 100;
+  const size = positionValue / entryPrice;
+  const entryFee = positionValue * (fillResult.appliedFeePct / 100);
+  runtime.positions.push({
+    id: `trade-${runtime.tradeId++}`,
+    side,
+    entryPrice,
+    entryTime: next.timestamp,
+    entryBarIndex: barIndex + 1,
+    size,
+    stopLoss,
+    takeProfit,
+    entryFeePaid: entryFee,
+    fillType: fillResult.fillType,
+  });
+  runtime.totalFeesPaid += entryFee;
+  return true;
+}
+
+function markSinglePortfolioToMarket(
+  runtime: SinglePortfolioRuntime,
+  currentPrice: number,
+): void {
+  const mtmCapital =
+    runtime.capital +
+    runtime.positions.reduce(
+      (sum, position) =>
+        sum +
+        (position.side === "long"
+          ? (currentPrice - position.entryPrice) * position.size
+          : (position.entryPrice - currentPrice) * position.size),
+      0,
+    );
+  if (mtmCapital > runtime.peakCapital) runtime.peakCapital = mtmCapital;
+  const drawdown = (runtime.peakCapital - mtmCapital) / runtime.peakCapital;
+  if (drawdown > runtime.maxDrawdown) runtime.maxDrawdown = drawdown;
+}
+
+function processSinglePortfolioBar(
+  runtime: SinglePortfolioRuntime,
+  barIndex: number,
+): void {
+  const { candles } = runtime.options;
+  const window = candles.slice(Math.max(0, barIndex + 1 - 200), barIndex + 1);
+  const current = candles[barIndex];
+  const next = candles[barIndex + 1];
+  const signal = composeSinglePortfolioSignal(runtime, window, current);
+
+  manageSinglePortfolioPositions(runtime, current, next, signal, barIndex);
+  if (hasSinglePortfolioEntrySignal(runtime, signal)) {
+    if (!openSinglePortfolioPosition(runtime, signal, window, next, barIndex)) {
+      return;
+    }
+  }
+  markSinglePortfolioToMarket(runtime, current.close);
+}
+
+function closeSinglePortfolioPositions(runtime: SinglePortfolioRuntime): void {
+  const { candles } = runtime.options;
+  const last = candles[candles.length - 1];
+  for (const position of runtime.positions) {
+    const exitSide = position.side === "long" ? "short" : "long";
+    recordSinglePortfolioTrade(runtime, position, {
+      price: applySlippage(
+        last.close,
+        exitSide,
+        runtime.slippageBps,
+        last.high,
+        last.low,
+      ),
+      time: last.timestamp,
+      reason: "signal",
+      barIndex: candles.length - 1,
+    });
+  }
+}
+
+function buildSinglePortfolioResult(
+  runtime: SinglePortfolioRuntime,
+): PortfolioBacktestResult {
+  const { options, trades } = runtime;
+  const winningTrades = trades.filter((trade) => trade.netPnl > 0).length;
+  const losingTrades = trades.filter((trade) => trade.netPnl < 0).length;
   const avgDurationHours =
     trades.length > 0
-      ? (trades.reduce((sum, t) => sum + t.barsHeld, 0) / trades.length) *
+      ? (trades.reduce((sum, trade) => sum + trade.barsHeld, 0) /
+          trades.length) *
         (candleDurationMinutes(options.timeframe) / 60)
       : 0;
-
   return {
     symbol: options.symbol,
     totalTrades: trades.length,
     winningTrades,
     losingTrades,
     winRate: trades.length > 0 ? winningTrades / trades.length : 0,
-    totalReturnPct,
-    maxDrawdownPct: maxDrawdown * 100,
+    totalReturnPct:
+      ((runtime.capital - options.initialCapital) / options.initialCapital) *
+      100,
+    maxDrawdownPct: runtime.maxDrawdown * 100,
     sharpeRatio: 0,
     profitFactor: computePortfolioMetrics(trades).profitFactor,
     avgTradeDurationHours: avgDurationHours,
     trades,
-    totalFeesPaid,
+    totalFeesPaid: runtime.totalFeesPaid,
     metrics: computePortfolioMetrics(trades),
   };
+}
+
+export function runPortfolioBacktest(
+  options: PortfolioBacktestOptions,
+): PortfolioBacktestResult {
+  if (options.candles.length < 20) {
+    return emptyPortfolioResult(options.symbol);
+  }
+
+  const runtime = createSinglePortfolioRuntime(options);
+  for (let i = 20; i < options.candles.length - 1; i++) {
+    const current = options.candles[i];
+    if (
+      !isWithinSession(
+        current.timestamp,
+        options.sessionStart ?? "",
+        options.sessionEnd ?? "",
+      )
+    ) {
+      continue;
+    }
+    processSinglePortfolioBar(runtime, i);
+  }
+  closeSinglePortfolioPositions(runtime);
+  return buildSinglePortfolioResult(runtime);
 }
 
 export interface MultiSymbolPortfolioInput {
@@ -1028,330 +1145,403 @@ function closePosition(
   return trade;
 }
 
-export function runMultiSymbolPortfolioBacktest(
-  baseOptions: PortfolioBacktestEngineOptions & {
+interface GlobalBar {
+  readonly symbolIndex: number;
+  readonly barIndex: number;
+  readonly timestamp: number;
+}
+
+interface MultiSymbolRuntime {
+  readonly options: PortfolioBacktestEngineOptions & {
     readonly initialCapital: number;
     readonly symbols: readonly MultiSymbolPortfolioInput[];
-  },
-): MultiSymbolPortfolioResult {
-  const inputs = baseOptions.symbols;
-  if (inputs.length === 0) {
-    return emptyMultiSymbolResult();
-  }
+  };
+  readonly symbols: SymbolSeries[];
+  readonly state: GlobalState;
+  readonly feePct: number;
+  readonly slippageBps: number;
+  readonly maxBarsInTrade: number;
+  readonly sessionStart: string;
+  readonly sessionEnd: string;
+  readonly minConfidence: number;
+}
 
-  const symbols = inputs.map((input, idx) =>
-    buildSymbolSeries(input, idx, baseOptions.timeframe),
-  );
-
-  const globalBars: {
-    readonly symbolIndex: number;
-    readonly barIndex: number;
-    readonly timestamp: number;
-  }[] = [];
-  for (let s = 0; s < symbols.length; s++) {
-    const series = symbols[s];
-    for (let i = 20; i < series.candles.length; i++) {
+function buildGlobalBars(symbols: readonly SymbolSeries[]): GlobalBar[] {
+  const globalBars: GlobalBar[] = [];
+  for (let symbolIndex = 0; symbolIndex < symbols.length; symbolIndex++) {
+    const series = symbols[symbolIndex];
+    for (let barIndex = 20; barIndex < series.candles.length; barIndex++) {
       globalBars.push({
-        symbolIndex: s,
-        barIndex: i,
-        timestamp: series.candles[i].timestamp.getTime(),
+        symbolIndex,
+        barIndex,
+        timestamp: series.candles[barIndex].timestamp.getTime(),
       });
     }
   }
   globalBars.sort((a, b) => a.timestamp - b.timestamp);
+  return globalBars;
+}
 
-  const state: GlobalState = {
-    cash: baseOptions.initialCapital,
-    positions: [],
-    trades: [],
-    tradeId: 0,
-    peakEquity: baseOptions.initialCapital,
-    maxDrawdown: 0,
-    totalFeesPaid: 0,
-  };
-
-  const feePct = normalizeFeePct(baseOptions.feePct);
-  const slippageBps = baseOptions.slippageBps ?? 0;
-  const maxBarsInTrade = Math.max(
-    0,
-    Math.floor(baseOptions.maxBarsInTrade ?? 0),
+function createMultiSymbolRuntime(
+  options: MultiSymbolRuntime["options"],
+): MultiSymbolRuntime {
+  const symbols = options.symbols.map((input, index) =>
+    buildSymbolSeries(input, index, options.timeframe),
   );
-  const sessionStart = baseOptions.sessionStart ?? "";
-  const sessionEnd = baseOptions.sessionEnd ?? "";
-  const minConfidence = baseOptions.minConfidence;
+  return {
+    options,
+    symbols,
+    state: {
+      cash: options.initialCapital,
+      positions: [],
+      trades: [],
+      tradeId: 0,
+      peakEquity: options.initialCapital,
+      maxDrawdown: 0,
+      totalFeesPaid: 0,
+    },
+    feePct: normalizeFeePct(options.feePct),
+    slippageBps: options.slippageBps ?? 0,
+    maxBarsInTrade: Math.max(0, Math.floor(options.maxBarsInTrade ?? 0)),
+    sessionStart: options.sessionStart ?? "",
+    sessionEnd: options.sessionEnd ?? "",
+    minConfidence: options.minConfidence,
+  };
+}
 
-  for (const bar of globalBars) {
-    const series = symbols[bar.symbolIndex];
-    const candle = series.candles[bar.barIndex];
-    series.currentIndex = bar.barIndex;
-    series.currentPrice = candle.close;
-
-    if (!isWithinSession(candle.timestamp, sessionStart, sessionEnd)) {
-      updateDrawdown(state, computeEquity(state, symbols));
-      continue;
-    }
-
-    // Close any signal-triggered exits scheduled for this bar's open.
-    const afterPendingCloses: GlobalPosition[] = [];
-    for (const position of state.positions) {
-      if (
-        position.symbol === series.symbol &&
-        position.pendingExit &&
-        position.pendingExit.targetBarIndex === bar.barIndex
-      ) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        closePosition(
-          state,
-          position,
-          applySlippage(
-            candle.open,
-            exitSide,
-            slippageBps,
-            candle.high,
-            candle.low,
-          ),
-          candle.timestamp,
-          position.pendingExit.reason,
-          bar.barIndex,
-          feePct,
-        );
-        continue;
-      }
-      afterPendingCloses.push(position);
-    }
-    state.positions = afterPendingCloses;
-
-    // Open any pending entry scheduled for this bar's open.
-    if (series.pendingEntry) {
-      if (
-        canEnter(
-          state,
-          series,
-          series.pendingEntry.side,
-          bar.barIndex,
-          baseOptions,
-          symbols,
-          candle.open,
-        )
-      ) {
-        openPosition(
-          state,
-          series,
-          bar.barIndex,
-          candle,
-          series.pendingEntry.side,
-          baseOptions,
-          symbols,
-        );
-      }
-      series.pendingEntry = undefined;
-    }
-
-    const signal = computeSignal(
-      series,
-      bar.barIndex,
-      baseOptions.composerConfig,
-      baseOptions.timeframe,
-    );
-
-    // Manage existing positions for this symbol on the current candle.
-    const remaining: GlobalPosition[] = [];
-    for (const position of state.positions) {
-      if (position.symbol !== series.symbol) {
-        remaining.push(position);
-        continue;
-      }
-      let closed = false;
-      const exitSide = position.side === "long" ? "short" : "long";
-
-      if (position.side === "long") {
-        if (candle.low <= position.stopLoss) {
-          closePosition(
-            state,
-            position,
-            applySlippage(
-              position.stopLoss,
-              exitSide,
-              slippageBps,
-              candle.high,
-              candle.low,
-            ),
-            candle.timestamp,
-            "stop_loss",
-            bar.barIndex,
-            feePct,
-          );
-          closed = true;
-        } else if (candle.high >= position.takeProfit) {
-          closePosition(
-            state,
-            position,
-            applySlippage(
-              position.takeProfit,
-              exitSide,
-              slippageBps,
-              candle.high,
-              candle.low,
-            ),
-            candle.timestamp,
-            "take_profit",
-            bar.barIndex,
-            feePct,
-          );
-          closed = true;
-        }
-      } else {
-        if (candle.high >= position.stopLoss) {
-          closePosition(
-            state,
-            position,
-            applySlippage(
-              position.stopLoss,
-              exitSide,
-              slippageBps,
-              candle.high,
-              candle.low,
-            ),
-            candle.timestamp,
-            "stop_loss",
-            bar.barIndex,
-            feePct,
-          );
-          closed = true;
-        } else if (candle.low <= position.takeProfit) {
-          closePosition(
-            state,
-            position,
-            applySlippage(
-              position.takeProfit,
-              exitSide,
-              slippageBps,
-              candle.high,
-              candle.low,
-            ),
-            candle.timestamp,
-            "take_profit",
-            bar.barIndex,
-            feePct,
-          );
-          closed = true;
-        }
-      }
-
-      if (
-        !closed &&
-        maxBarsInTrade > 0 &&
-        bar.barIndex - position.entryBarIndex >= maxBarsInTrade
-      ) {
-        closePosition(
-          state,
-          position,
-          applySlippage(
-            candle.close,
-            exitSide,
-            slippageBps,
-            candle.high,
-            candle.low,
-          ),
-          candle.timestamp,
-          "time_stop",
-          bar.barIndex,
-          feePct,
-        );
-        closed = true;
-      }
-
-      if (!closed && signal) {
-        const signalSide = signal.direction === "buy" ? "long" : "short";
-        if (signalSide !== position.side) {
-          if (bar.barIndex + 1 < series.candles.length) {
-            position.pendingExit = {
-              reason: "signal",
-              targetBarIndex: bar.barIndex + 1,
-            };
-            remaining.push(position);
-          } else {
-            closePosition(
-              state,
-              position,
-              applySlippage(
-                candle.close,
-                exitSide,
-                slippageBps,
-                candle.high,
-                candle.low,
-              ),
-              candle.timestamp,
-              "signal",
-              bar.barIndex,
-              feePct,
-            );
-          }
-          continue;
-        }
-      }
-
-      if (!closed) remaining.push(position);
-    }
-    state.positions = remaining;
-
-    // Schedule a new entry for the next bar if we have a fresh signal.
+function closePendingMultiSymbolExits(
+  runtime: MultiSymbolRuntime,
+  series: SymbolSeries,
+  candle: CandleLike,
+  barIndex: number,
+): void {
+  const remaining: GlobalPosition[] = [];
+  for (const position of runtime.state.positions) {
     if (
-      signal &&
-      signal.direction !== "hold" &&
-      signal.confidence >= minConfidence &&
-      bar.barIndex + 1 < series.candles.length &&
-      !state.positions.some((p) => p.symbol === series.symbol)
+      position.symbol === series.symbol &&
+      position.pendingExit?.targetBarIndex === barIndex
     ) {
-      const signalSide = signal.direction === "buy" ? "long" : "short";
-      series.pendingEntry = {
-        side: signalSide,
-        signalBarIndex: bar.barIndex,
+      const exitSide = position.side === "long" ? "short" : "long";
+      closePosition(
+        runtime.state,
+        position,
+        applySlippage(
+          candle.open,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        candle.timestamp,
+        position.pendingExit.reason,
+        barIndex,
+        runtime.feePct,
+      );
+    } else {
+      remaining.push(position);
+    }
+  }
+  runtime.state.positions = remaining;
+}
+
+function openPendingMultiSymbolEntry(
+  runtime: MultiSymbolRuntime,
+  series: SymbolSeries,
+  candle: CandleLike,
+  barIndex: number,
+): void {
+  const pendingEntry = series.pendingEntry;
+  if (!pendingEntry) return;
+  if (
+    canEnter(
+      runtime.state,
+      series,
+      pendingEntry.side,
+      barIndex,
+      runtime.options,
+      runtime.symbols,
+      candle.open,
+    )
+  ) {
+    openPosition(
+      runtime.state,
+      series,
+      barIndex,
+      candle,
+      pendingEntry.side,
+      runtime.options,
+      runtime.symbols,
+    );
+  }
+  series.pendingEntry = undefined;
+}
+
+function resolveGlobalStopTargetExit(
+  runtime: MultiSymbolRuntime,
+  position: GlobalPosition,
+  candle: CandleLike,
+  barIndex: number,
+): SinglePortfolioExit | undefined {
+  const exitSide = position.side === "long" ? "short" : "long";
+  if (position.side === "long") {
+    if (candle.low <= position.stopLoss) {
+      return {
+        price: applySlippage(
+          position.stopLoss,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        time: candle.timestamp,
+        reason: "stop_loss",
+        barIndex,
       };
     }
+    if (candle.high >= position.takeProfit) {
+      return {
+        price: applySlippage(
+          position.takeProfit,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        time: candle.timestamp,
+        reason: "take_profit",
+        barIndex,
+      };
+    }
+  } else {
+    if (candle.high >= position.stopLoss) {
+      return {
+        price: applySlippage(
+          position.stopLoss,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        time: candle.timestamp,
+        reason: "stop_loss",
+        barIndex,
+      };
+    }
+    if (candle.low <= position.takeProfit) {
+      return {
+        price: applySlippage(
+          position.takeProfit,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        time: candle.timestamp,
+        reason: "take_profit",
+        barIndex,
+      };
+    }
+  }
+  return undefined;
+}
 
-    updateDrawdown(state, computeEquity(state, symbols));
+function manageGlobalPosition(
+  runtime: MultiSymbolRuntime,
+  series: SymbolSeries,
+  candle: CandleLike,
+  position: GlobalPosition,
+  signal: ScalpingSignal | null,
+  barIndex: number,
+): boolean {
+  const exit = resolveGlobalStopTargetExit(runtime, position, candle, barIndex);
+  if (exit) {
+    closePosition(
+      runtime.state,
+      position,
+      exit.price,
+      exit.time,
+      exit.reason,
+      exit.barIndex,
+      runtime.feePct,
+    );
+    return false;
   }
 
-  // Close any remaining positions at each symbol's last known price.
-  for (const position of state.positions) {
-    const series = symbols[position.symbolIndex];
+  if (
+    runtime.maxBarsInTrade > 0 &&
+    barIndex - position.entryBarIndex >= runtime.maxBarsInTrade
+  ) {
+    const exitSide = position.side === "long" ? "short" : "long";
+    closePosition(
+      runtime.state,
+      position,
+      applySlippage(
+        candle.close,
+        exitSide,
+        runtime.slippageBps,
+        candle.high,
+        candle.low,
+      ),
+      candle.timestamp,
+      "time_stop",
+      barIndex,
+      runtime.feePct,
+    );
+    return false;
+  }
+
+  if (signal) {
+    const signalSide = signal.direction === "buy" ? "long" : "short";
+    if (signalSide !== position.side) {
+      if (barIndex + 1 < series.candles.length) {
+        position.pendingExit = {
+          reason: "signal",
+          targetBarIndex: barIndex + 1,
+        };
+        return true;
+      }
+      const exitSide = position.side === "long" ? "short" : "long";
+      closePosition(
+        runtime.state,
+        position,
+        applySlippage(
+          candle.close,
+          exitSide,
+          runtime.slippageBps,
+          candle.high,
+          candle.low,
+        ),
+        candle.timestamp,
+        "signal",
+        barIndex,
+        runtime.feePct,
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+function manageMultiSymbolPositions(
+  runtime: MultiSymbolRuntime,
+  series: SymbolSeries,
+  candle: CandleLike,
+  signal: ScalpingSignal | null,
+  barIndex: number,
+): void {
+  const remaining: GlobalPosition[] = [];
+  for (const position of runtime.state.positions) {
+    if (position.symbol !== series.symbol) {
+      remaining.push(position);
+      continue;
+    }
+    if (
+      manageGlobalPosition(runtime, series, candle, position, signal, barIndex)
+    ) {
+      remaining.push(position);
+    }
+  }
+  runtime.state.positions = remaining;
+}
+
+function scheduleMultiSymbolEntry(
+  runtime: MultiSymbolRuntime,
+  series: SymbolSeries,
+  signal: ScalpingSignal | null,
+  barIndex: number,
+): void {
+  if (
+    signal &&
+    signal.direction !== "hold" &&
+    signal.confidence >= runtime.minConfidence &&
+    barIndex + 1 < series.candles.length &&
+    !runtime.state.positions.some(
+      (position) => position.symbol === series.symbol,
+    )
+  ) {
+    series.pendingEntry = {
+      side: signal.direction === "buy" ? "long" : "short",
+      signalBarIndex: barIndex,
+    };
+  }
+}
+
+function processMultiSymbolBar(
+  runtime: MultiSymbolRuntime,
+  bar: GlobalBar,
+): void {
+  const series = runtime.symbols[bar.symbolIndex];
+  const candle = series.candles[bar.barIndex];
+  series.currentIndex = bar.barIndex;
+  series.currentPrice = candle.close;
+
+  if (
+    !isWithinSession(candle.timestamp, runtime.sessionStart, runtime.sessionEnd)
+  ) {
+    updateDrawdown(
+      runtime.state,
+      computeEquity(runtime.state, runtime.symbols),
+    );
+    return;
+  }
+
+  closePendingMultiSymbolExits(runtime, series, candle, bar.barIndex);
+  openPendingMultiSymbolEntry(runtime, series, candle, bar.barIndex);
+  const signal = computeSignal(
+    series,
+    bar.barIndex,
+    runtime.options.composerConfig,
+    runtime.options.timeframe,
+  );
+  manageMultiSymbolPositions(runtime, series, candle, signal, bar.barIndex);
+  scheduleMultiSymbolEntry(runtime, series, signal, bar.barIndex);
+  updateDrawdown(runtime.state, computeEquity(runtime.state, runtime.symbols));
+}
+
+function closeRemainingMultiSymbolPositions(runtime: MultiSymbolRuntime): void {
+  for (const position of runtime.state.positions) {
+    const series = runtime.symbols[position.symbolIndex];
     const lastCandle = series.candles[series.candles.length - 1];
     const exitSide = position.side === "long" ? "short" : "long";
     closePosition(
-      state,
+      runtime.state,
       position,
       applySlippage(
         series.currentPrice,
         exitSide,
-        slippageBps,
+        runtime.slippageBps,
         lastCandle ? lastCandle.high : series.currentPrice,
         lastCandle ? lastCandle.low : series.currentPrice,
       ),
       lastCandle ? lastCandle.timestamp : new Date(0),
       "signal",
       series.candles.length - 1,
-      feePct,
+      runtime.feePct,
     );
   }
-  state.positions = [];
+  runtime.state.positions = [];
+}
 
+function buildMultiSymbolResult(
+  runtime: MultiSymbolRuntime,
+): MultiSymbolPortfolioResult {
+  const { options, state, symbols } = runtime;
   const symbolResults = symbols.map((series) =>
-    computeSymbolResult(series, state.trades, baseOptions),
+    computeSymbolResult(series, state.trades, options),
   );
   const allTrades = state.trades
     .slice()
     .sort((a, b) => a.exitTime.getTime() - b.exitTime.getTime());
-
-  const winningTrades = allTrades.filter((t) => t.netPnl > 0).length;
-  const losingTrades = allTrades.filter((t) => t.netPnl < 0).length;
+  const winningTrades = allTrades.filter((trade) => trade.netPnl > 0).length;
+  const losingTrades = allTrades.filter((trade) => trade.netPnl < 0).length;
   const grossProfit = allTrades
-    .filter((t) => t.netPnl > 0)
-    .reduce((sum, t) => sum + t.netPnl, 0);
+    .filter((trade) => trade.netPnl > 0)
+    .reduce((sum, trade) => sum + trade.netPnl, 0);
   const grossLoss = Math.abs(
-    allTrades.filter((t) => t.netPnl < 0).reduce((sum, t) => sum + t.netPnl, 0),
+    allTrades
+      .filter((trade) => trade.netPnl < 0)
+      .reduce((sum, trade) => sum + trade.netPnl, 0),
   );
-
   let maxConsecLosses = 0;
   let currentStreak = 0;
   for (const trade of allTrades) {
@@ -1362,13 +1552,12 @@ export function runMultiSymbolPortfolioBacktest(
       currentStreak = 0;
     }
   }
-
   const avgDurationHours =
     allTrades.length > 0
-      ? (allTrades.reduce((sum, t) => sum + t.barsHeld, 0) / allTrades.length) *
-        (candleDurationMinutes(baseOptions.timeframe) / 60)
+      ? (allTrades.reduce((sum, trade) => sum + trade.barsHeld, 0) /
+          allTrades.length) *
+        (candleDurationMinutes(options.timeframe) / 60)
       : 0;
-
   return {
     symbolCount: symbols.length,
     totalTrades: allTrades.length,
@@ -1376,8 +1565,7 @@ export function runMultiSymbolPortfolioBacktest(
     losingTrades,
     winRate: allTrades.length > 0 ? winningTrades / allTrades.length : 0,
     totalReturnPct:
-      ((state.cash - baseOptions.initialCapital) / baseOptions.initialCapital) *
-      100,
+      ((state.cash - options.initialCapital) / options.initialCapital) * 100,
     maxDrawdownPct: state.maxDrawdown * 100,
     profitFactor:
       grossLoss === 0
@@ -1389,6 +1577,23 @@ export function runMultiSymbolPortfolioBacktest(
     maxConsecutiveLosses: maxConsecLosses,
     symbolResults,
   };
+}
+
+export function runMultiSymbolPortfolioBacktest(
+  baseOptions: PortfolioBacktestEngineOptions & {
+    readonly initialCapital: number;
+    readonly symbols: readonly MultiSymbolPortfolioInput[];
+  },
+): MultiSymbolPortfolioResult {
+  if (baseOptions.symbols.length === 0) {
+    return emptyMultiSymbolResult();
+  }
+  const runtime = createMultiSymbolRuntime(baseOptions);
+  for (const bar of buildGlobalBars(runtime.symbols)) {
+    processMultiSymbolBar(runtime, bar);
+  }
+  closeRemainingMultiSymbolPositions(runtime);
+  return buildMultiSymbolResult(runtime);
 }
 
 function computeSymbolResult(

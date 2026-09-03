@@ -824,29 +824,45 @@ function parseInstrument(data: BitgetApiRecord): BitgetInstrument {
   };
 }
 
+function contractField(
+  data: BitgetApiRecord,
+  key: string,
+  fallback: string = "0",
+): string {
+  return String(data[key] ?? fallback);
+}
+
+function contractFieldAlias(
+  data: BitgetApiRecord,
+  key: string,
+  alias: string,
+  fallback: string = "0",
+ ): string {
+  return String(data[key] ?? data[alias] ?? fallback);
+}
 function parseContract(data: BitgetApiRecord): BitgetContract {
   return {
-    symbol: String(data.symbol ?? ""),
-    baseCoin: String(data.baseCoin ?? ""),
-    quoteCoin: String(data.quoteCoin ?? ""),
-    productType: String(
-      data.productType ?? "USDT-FUTURES",
-    ) as BitgetProductType,
-    status: String(data.status ?? ""),
-    symbolStatus: String(data.symbolStatus ?? data.status ?? ""),
+    symbol: contractField(data, "symbol", ""),
+    baseCoin: contractField(data, "baseCoin", ""),
+    quoteCoin: contractField(data, "quoteCoin", ""),
+    productType: contractField(data, "productType", "USDT-FUTURES") as BitgetProductType,
+    status: contractField(data, "status", ""),
+    symbolStatus: contractFieldAlias(data, "symbolStatus", "status", ""),
     // The futures contracts endpoint reports decimal places as pricePlace
     // (e.g. ADA "4" => tick 0.0001); pricePrecision is absent there.
-    pricePrecision: String(data.pricePlace ?? data.pricePrecision ?? "0"),
-    quantityPrecision: String(
-      data.volumePlace ?? data.quantityPrecision ?? "0",
+    pricePrecision: contractFieldAlias(data, "pricePlace", "pricePrecision"),
+    quantityPrecision: contractFieldAlias(
+      data,
+      "volumePlace",
+      "quantityPrecision",
     ),
-    minTradeAmount: String(data.minTradeAmount ?? "0"),
-    minTradeNum: String(data.minTradeNum ?? data.minTradeAmount ?? "0"),
-    minTradeUSDT: String(data.minTradeUSDT ?? "0"),
-    maxLeverage: String(data.maxLever ?? data.maxLeverage ?? "0"),
-    minLeverage: String(data.minLever ?? data.minLeverage ?? "0"),
-    takerFeeRate: String(data.takerFeeRate ?? "0"),
-    makerFeeRate: String(data.makerFeeRate ?? "0"),
+    minTradeAmount: contractField(data, "minTradeAmount"),
+    minTradeNum: contractFieldAlias(data, "minTradeNum", "minTradeAmount"),
+    minTradeUSDT: contractField(data, "minTradeUSDT"),
+    maxLeverage: contractFieldAlias(data, "maxLever", "maxLeverage"),
+    minLeverage: contractFieldAlias(data, "minLever", "minLeverage"),
+    takerFeeRate: contractField(data, "takerFeeRate"),
+    makerFeeRate: contractField(data, "makerFeeRate"),
   };
 }
 

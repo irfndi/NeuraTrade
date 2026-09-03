@@ -44,6 +44,45 @@ interface Opts {
   targetRatio: number; // target = step * targetRatio
 }
 
+function closeOpenGridPosition(
+  positionSize: number,
+  entryPrice: number,
+  step: number,
+  candle: CandleLike,
+  slippage: number,
+  leverage: number,
+  targetRatio: number,
+  maxGrids: number,
+  closeTrade: (
+    exitPrice: number,
+    side: "long" | "short",
+    liquidation: boolean,
+  ) => void,
+ ): void {
+  if (positionSize > 0) {
+    const target = entryPrice + step * targetRatio;
+    const stop = entryPrice - step * maxGrids;
+    const liq = entryPrice * (1 - 1 / leverage);
+    if (leverage > 1 && candle.low <= liq) {
+      closeTrade(liq * slippage, "long", true);
+    } else if (candle.high >= target) {
+      closeTrade(target / slippage, "long", false);
+    } else if (candle.low <= stop) {
+      closeTrade(stop * slippage, "long", false);
+    }
+    return;
+  }
+  const target = entryPrice - step * targetRatio;
+  const stop = entryPrice + step * maxGrids;
+  const liq = entryPrice * (1 + 1 / leverage);
+  if (leverage > 1 && candle.high >= liq) {
+    closeTrade(liq / slippage, "short", true);
+  } else if (candle.low <= target) {
+    closeTrade(target * slippage, "short", false);
+  } else if (candle.high >= stop) {
+    closeTrade(stop / slippage, "short", false);
+  }
+}
 function run(candles: CandleLike[], options: Opts) {
   let capital = options.initialCapital;
   let peak = capital;
@@ -110,23 +149,17 @@ function run(candles: CandleLike[], options: Opts) {
       positionSize = 0;
     };
 
-    if (positionSize > 0) {
-      const target = entryPrice + step * options.targetRatio;
-      const stop = entryPrice - step * options.gridMaxGrids;
-      const liq = entryPrice * (1 - 1 / leverage);
-      if (leverage > 1 && c.low <= liq)
-        closeTrade(liq * slippage, "long", true);
-      else if (c.high >= target) closeTrade(target / slippage, "long", false);
-      else if (c.low <= stop) closeTrade(stop * slippage, "long", false);
-    } else {
-      const target = entryPrice - step * options.targetRatio;
-      const stop = entryPrice + step * options.gridMaxGrids;
-      const liq = entryPrice * (1 + 1 / leverage);
-      if (leverage > 1 && c.high >= liq)
-        closeTrade(liq / slippage, "short", true);
-      else if (c.low <= target) closeTrade(target * slippage, "short", false);
-      else if (c.high >= stop) closeTrade(stop / slippage, "short", false);
-    }
+    closeOpenGridPosition(
+      positionSize,
+      entryPrice,
+      step,
+      c,
+      slippage,
+      leverage,
+      options.targetRatio,
+      options.gridMaxGrids,
+      closeTrade,
+    );
   }
 
   const totalTrades = totalWins + totalLosses;

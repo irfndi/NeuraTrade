@@ -5,7 +5,12 @@ import {
   calculateAnnualizedVolatility,
   calculateATR,
 } from "../scalping/indicators.js";
-import { ExitEngine, SignalComposer } from "../scalping/services.js";
+import {
+  ExitEngine,
+  SignalComposer,
+  type ExitEngineImpl,
+  type SignalComposerImpl,
+} from "../scalping/services.js";
 import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import {
   MarketDataError,
@@ -18,6 +23,7 @@ import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
   type FuturesMarginMode,
+  type FuturesOrderFill,
   type FuturesProductType,
 } from "../exchange/futures-adapter.js";
 import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
@@ -114,6 +120,153 @@ interface FuturesNotionalSizing {
    *  contract specs are present; passed to the risk guard so it can fail
    *  closed locally for paths that bypass this sizing. */
   minOrderableNotional?: number;
+}
+
+interface FuturesEntryPlan {
+  readonly side: "long" | "short";
+  readonly atr: number | null;
+  readonly useAtr: boolean;
+  readonly entryPrice: Money;
+  readonly stopDistancePct: Money;
+  readonly currentVolatility: number;
+  readonly sizing: FuturesNotionalSizing;
+}
+
+interface FuturesEntryPreparation {
+  readonly plan?: FuturesEntryPlan;
+  readonly holdNote?: string;
+}
+
+interface FuturesIterationServices {
+  readonly repo: PaperTradingRepositoryService;
+  readonly adapter: FuturesExchangeAdapterService;
+  readonly killSwitch: KillSwitchService;
+  readonly circuitBreaker: CircuitBreakerService;
+  readonly riskGuard: RiskGuardService;
+  readonly composer: SignalComposerImpl;
+  readonly exitEngine: ExitEngineImpl;
+}
+
+type FuturesIterationError =
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | ExchangeError
+  | RiskError
+  | KillSwitchError
+  | CircuitBreakerError;
+
+interface FuturesIterationState {
+  readonly capital: Decimal;
+  readonly peakCapital: Decimal;
+  readonly todayPnl: Decimal;
+  readonly startOfDayCapital: Decimal;
+}
+
+function futuresHoldResult(
+  position: PaperPosition | null,
+  capital: Decimal,
+  note: string,
+): FuturesPaperTradingIterationResult {
+  return {
+    action: "hold",
+    position,
+    capital: toNumber(capital),
+    note,
+  };
+}
+
+function prepareFuturesEntry(
+  options: FuturesPaperTradingOptions,
+  signal: ScalpingSignal,
+  candles: readonly Candle[],
+  orderBook: OrderBook,
+  capital: Decimal,
+): FuturesEntryPreparation {
+  const side = signal.direction === "buy" ? "long" : "short";
+  const needsAtr = options.useAtrStops || options.minAtrPct > 0;
+  const atr = needsAtr ? calculateATR(candles, 14) : null;
+  const useAtr = options.useAtrStops && atr !== null && atr > 0;
+  const entryPrice = midPriceMoney(orderBook);
+  const estimatedStopLoss = useAtr
+    ? side === "long"
+      ? entryPrice.minus(money(atr).times(options.atrStopMultiplier))
+      : entryPrice.plus(money(atr).times(options.atrStopMultiplier))
+    : side === "long"
+      ? entryPrice.times(1 - options.stopLossPct / 100)
+      : entryPrice.times(1 + options.stopLossPct / 100);
+  const stopDistancePct = entryPrice.greaterThan(0)
+    ? entryPrice.minus(estimatedStopLoss).abs().div(entryPrice)
+    : money(0);
+  const currentVolatility = calculateAnnualizedVolatility(
+    candles,
+    options.volatilityLookback,
+    options.timeframe,
+  );
+
+  if (options.minAtrPct > 0) {
+    const atrPct =
+      atr !== null && entryPrice.greaterThan(0)
+        ? money(atr).div(entryPrice).toNumber()
+        : 0;
+    if (atrPct < options.minAtrPct / 100) {
+      return {
+        holdNote: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
+      };
+    }
+  }
+
+  const sizing = calculateFuturesNotionalValue(
+    capital,
+    entryPrice,
+    stopDistancePct,
+    currentVolatility,
+    options,
+  );
+  if (sizing.skipReason !== undefined) {
+    return {
+      holdNote: `RISK BLOCKED (orderability): ${sizing.skipReason}`,
+    };
+  }
+  return {
+    plan: {
+      side,
+      atr,
+      useAtr,
+      entryPrice,
+      stopDistancePct,
+      currentVolatility,
+      sizing,
+    },
+  };
+}
+
+function buildFuturesPosition(
+  options: FuturesPaperTradingOptions,
+  signal: ScalpingSignal,
+  plan: FuturesEntryPlan,
+  fill: FuturesOrderFill,
+  exitLevels: {
+    readonly stopLoss: number;
+    readonly takeProfit: number;
+    readonly scaleOutPrice?: number | null;
+  },
+): PaperPosition {
+  return {
+    id: randomUUID(),
+    exchange: options.exchange,
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    side: plan.side,
+    entryPrice: money(fill.filledPrice),
+    size: money(fill.filledQty),
+    stopLoss: money(exitLevels.stopLoss),
+    takeProfit: money(exitLevels.takeProfit),
+    openedAt: new Date(),
+    signalId: signal.id,
+    leverage: plan.sizing.leverage,
+    scaledOut: false,
+    scaleOutPrice: money(exitLevels.scaleOutPrice ?? 0),
+  };
 }
 
 function calculateFuturesNotionalValue(
@@ -257,6 +410,382 @@ function calculateFuturesNotionalValue(
   return { notional, size: notional.div(entryPrice), leverage };
 }
 
+function handleFuturesScaleOut(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  position: PaperPosition,
+  currentCandle: Candle,
+  state: FuturesIterationState,
+): Effect.Effect<FuturesPaperTradingIterationResult, FuturesIterationError> {
+  return Effect.gen(function* () {
+    if (options.isLive) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          "live futures scale-out is disabled until exchange-fill reconciliation is implemented",
+        ),
+      );
+    }
+    const exitPrice = fallbackExitPrice(position, currentCandle, "scale_out");
+    const scaleOut = yield* services.repo.scaleOutPosition(
+      position,
+      exitPrice,
+      options.scaleOutPct,
+      currentCandle.timestamp,
+    );
+    const closeFee = exitPrice
+      .times(scaleOut.trade.size)
+      .times(options.feePct / 100);
+    const capital = state.capital.plus(scaleOut.trade.pnl).minus(closeFee);
+    const peakCapital = Decimal.max(state.peakCapital, capital);
+    yield* services.repo.setPortfolio(capital, peakCapital);
+    yield* services.repo.saveOpenPosition(scaleOut.updatedPosition);
+    yield* services.circuitBreaker.recordTradeResult(
+      toNumber(scaleOut.trade.pnl),
+      toNumber(state.startOfDayCapital),
+    );
+    return {
+      action: "scaled_out" as const,
+      position: scaleOut.updatedPosition,
+      capital: toNumber(capital),
+      note: `SCALE-OUT ${scaleOut.trade.side} ${scaleOut.trade.entryPrice.toFixed(2)} → ${scaleOut.trade.exitPrice.toFixed(2)} size=${scaleOut.trade.size.toFixed(6)} | PnL ${scaleOut.trade.pnlPct.toFixed(2)}%`,
+    };
+  });
+}
+
+function handleFuturesClose(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  position: PaperPosition,
+  currentCandle: Candle,
+  exitReason: "stop_loss" | "take_profit" | "signal",
+  state: FuturesIterationState,
+): Effect.Effect<FuturesPaperTradingIterationResult, FuturesIterationError> {
+  return Effect.gen(function* () {
+    const fill = yield* services.adapter.closePosition({
+      symbol: options.symbol,
+      side: position.side === "long" ? "sell" : "buy",
+      productType: options.productType,
+      marginMode: options.marginMode,
+      leverage: position.leverage ?? options.leverage,
+      size: position.size,
+      price: money(currentCandle.close),
+    });
+    if (!fill && options.isLive) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          "live futures close returned no exchange fill; preserving the local position",
+        ),
+      );
+    }
+
+    const exitPrice = fill
+      ? money(fill.filledPrice)
+      : fallbackExitPrice(position, currentCandle, exitReason);
+    const closeFee = fill
+      ? money(fill.fee)
+      : exitPrice.times(position.size).times(options.feePct / 100);
+    const trade = yield* services.repo.closePosition(
+      position,
+      exitPrice,
+      exitReason,
+      currentCandle.timestamp,
+    );
+    const capital = state.capital.plus(trade.pnl).minus(closeFee);
+    const peakCapital = Decimal.max(state.peakCapital, capital);
+    yield* services.repo.setPortfolio(capital, peakCapital);
+    yield* services.circuitBreaker.recordTradeResult(
+      toNumber(trade.pnl),
+      toNumber(state.startOfDayCapital),
+    );
+    return {
+      action: "closed" as const,
+      position: null,
+      capital: toNumber(capital),
+      note: `${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
+    };
+  });
+}
+
+function handleFuturesExistingPosition(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  position: PaperPosition,
+  currentCandle: Candle,
+  signal: ScalpingSignal | null,
+  state: FuturesIterationState,
+): Effect.Effect<
+  FuturesPaperTradingIterationResult | null,
+  FuturesIterationError
+> {
+  return Effect.gen(function* () {
+    const exitReason = checkExitReason(
+      position,
+      currentCandle,
+      signal,
+      options,
+    );
+    if (exitReason === "scale_out") {
+      return yield* handleFuturesScaleOut(
+        services,
+        options,
+        position,
+        currentCandle,
+        state,
+      );
+    }
+    if (exitReason === null) return null;
+    return yield* handleFuturesClose(
+      services,
+      options,
+      position,
+      currentCandle,
+      exitReason,
+      state,
+    );
+  });
+}
+
+function checkFuturesEntrySafety(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  signal: ScalpingSignal,
+  plan: FuturesEntryPlan,
+  state: FuturesIterationState,
+): Effect.Effect<
+  FuturesPaperTradingIterationResult | "ready",
+  FuturesIterationError
+> {
+  return Effect.gen(function* () {
+    if (yield* services.killSwitch.isEngaged()) {
+      const reason = yield* services.killSwitch.getReason();
+      return futuresHoldResult(
+        null,
+        state.capital,
+        `KILL SWITCH ENGAGED: ${reason}`,
+      );
+    }
+    if (yield* services.circuitBreaker.isOpen()) {
+      const reason = yield* services.circuitBreaker.getReason();
+      return futuresHoldResult(
+        null,
+        state.capital,
+        `CIRCUIT BREAKER OPEN: ${reason}`,
+      );
+    }
+
+    const tradesTodayCount = yield* services.repo.countTradesForDate(
+      new Date(),
+    );
+    const riskCheck = yield* services.riskGuard
+      .check({
+        isLive: options.isLive,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
+        startOfDayCapital: toNumber(state.startOfDayCapital),
+        dailyRealizedPnl: toNumber(state.todayPnl),
+        tradesTodayCount,
+        positionValue: toNumber(plan.sizing.notional),
+        symbol: options.symbol,
+        side: signal.direction as "buy" | "sell",
+        leverage: plan.sizing.leverage,
+        productType: options.productType,
+        minOrderableNotional: plan.sizing.minOrderableNotional,
+      })
+      .pipe(Effect.result);
+    if (riskCheck._tag === "Failure") {
+      yield* services.repo.setPortfolio(state.capital, state.peakCapital);
+      return futuresHoldResult(
+        null,
+        state.capital,
+        `RISK BLOCKED: ${riskCheck.failure.violations.join("; ")}`,
+      );
+    }
+    return "ready" as const;
+  });
+}
+
+function executeFuturesEntry(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  signal: ScalpingSignal,
+  plan: FuturesEntryPlan,
+  candles: readonly Candle[],
+  currentCandle: Candle,
+  state: FuturesIterationState,
+): Effect.Effect<FuturesPaperTradingIterationResult, FuturesIterationError> {
+  return Effect.gen(function* () {
+    yield* services.adapter.setLeverage(
+      options.symbol,
+      options.productType,
+      options.marginMode,
+      plan.sizing.leverage,
+    );
+    yield* services.adapter.setMarginMode(
+      options.symbol,
+      options.productType,
+      options.marginMode,
+    );
+    const fill = yield* services.adapter.placeOrder({
+      symbol: options.symbol,
+      side: signal.direction as "buy" | "sell",
+      type: "market",
+      size: plan.sizing.size,
+      productType: options.productType,
+      marginMode: options.marginMode,
+      leverage: plan.sizing.leverage,
+      price: money(currentCandle.close),
+    });
+    const capital = state.capital.minus(money(fill.fee));
+    const stopMult = options.atrStopMultiplier;
+    const tpMult = options.atrTakeProfitMultiplier;
+    const atrRiskReward =
+      options.atrRiskReward > 0 ? options.atrRiskReward : tpMult / stopMult;
+    const exitLevels = yield* services.exitEngine.computeExitLevels({
+      side: plan.side,
+      entryPrice: toNumber(fill.filledPrice, 8),
+      atr: plan.atr,
+      useAtr: plan.useAtr,
+      atrStopMultiplier: stopMult,
+      atrRiskReward,
+      stopLossPct: options.stopLossPct,
+      takeProfitPct: options.takeProfitPct,
+      scaleOutAtR: options.scaleOutAtR,
+      candles,
+      volatilityLookback: options.volatilityLookback,
+      volatilityLowPct: options.volatilityLowPct,
+      volatilityHighPct: options.volatilityHighPct,
+      volatilityLowFactor: options.volatilityLowFactor,
+      volatilityHighFactor: options.volatilityHighFactor,
+    });
+    const newPosition = buildFuturesPosition(
+      options,
+      signal,
+      plan,
+      fill,
+      exitLevels,
+    );
+    yield* services.repo.saveOpenPosition(newPosition);
+    yield* services.repo.setPortfolio(capital, state.peakCapital);
+    return {
+      action: "opened" as const,
+      position: newPosition,
+      capital: toNumber(capital),
+      note: `${plan.side} ${fill.filledPrice.toFixed(2)} size=${fill.filledQty.toFixed(6)} leverage=${plan.sizing.leverage}x SL=${newPosition.stopLoss.toFixed(2)} TP=${newPosition.takeProfit.toFixed(2)}`,
+    };
+  });
+}
+
+function openFuturesEntry(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  signal: ScalpingSignal,
+  candles: readonly Candle[],
+  orderBook: OrderBook,
+  state: FuturesIterationState,
+): Effect.Effect<FuturesPaperTradingIterationResult, FuturesIterationError> {
+  return Effect.gen(function* () {
+    if (state.capital.lessThanOrEqualTo(0)) {
+      return futuresHoldResult(
+        null,
+        state.capital,
+        "capital exhausted (blown paper account)",
+      );
+    }
+    const preparation = prepareFuturesEntry(
+      options,
+      signal,
+      candles,
+      orderBook,
+      state.capital,
+    );
+    if (preparation.holdNote !== undefined) {
+      return futuresHoldResult(null, state.capital, preparation.holdNote);
+    }
+    const plan = preparation.plan;
+    if (plan === undefined) {
+      return futuresHoldResult(null, state.capital, "entry plan unavailable");
+    }
+    const safety = yield* checkFuturesEntrySafety(
+      services,
+      options,
+      signal,
+      plan,
+      state,
+    );
+    if (safety !== "ready") return safety;
+    return yield* executeFuturesEntry(
+      services,
+      options,
+      signal,
+      plan,
+      candles,
+      candles[candles.length - 1],
+      state,
+    );
+  });
+}
+
+function processFuturesMarket(
+  services: FuturesIterationServices,
+  options: FuturesPaperTradingOptions,
+  position: PaperPosition | null,
+  candles: readonly Candle[],
+  orderBook: OrderBook,
+  state: Pick<FuturesIterationState, "capital" | "peakCapital">,
+): Effect.Effect<FuturesPaperTradingIterationResult, FuturesIterationError> {
+  return Effect.gen(function* () {
+    const currentCandle = candles[candles.length - 1];
+    const obMetrics = toOrderBookMetrics(orderBook);
+    const signal = yield* services.composer.composeSignal(
+      {
+        exchange: options.exchange,
+        symbol: options.symbol,
+        timeframe: options.timeframe,
+        candles,
+      },
+      obMetrics,
+      options.composerConfig,
+    );
+    const todayPnl = yield* services.repo.getTodayRealizedPnl();
+    const startOfDayCapital = yield* services.repo.getStartOfDayCapital(
+      new Date(),
+      state.capital,
+    );
+    const iterationState = { ...state, todayPnl, startOfDayCapital };
+
+    if (position) {
+      const existingOutcome = yield* handleFuturesExistingPosition(
+        services,
+        options,
+        position,
+        currentCandle,
+        signal,
+        iterationState,
+      );
+      if (existingOutcome) return existingOutcome;
+    }
+    if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
+      return yield* openFuturesEntry(
+        services,
+        options,
+        signal,
+        candles,
+        orderBook,
+        iterationState,
+      );
+    }
+
+    yield* services.repo.setPortfolio(
+      iterationState.capital,
+      iterationState.peakCapital,
+    );
+    const note = signal
+      ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})`
+      : "no signal";
+    return futuresHoldResult(position, iterationState.capital, note);
+  });
+}
+
 /**
  * Run a single futures paper-trading iteration.
  *
@@ -293,34 +822,30 @@ export function runFuturesPaperTradingIteration(
   | ExitEngine
 > {
   return Effect.gen(function* () {
-    const repo = yield* PaperTradingRepository;
+    const services: FuturesIterationServices = {
+      repo: yield* PaperTradingRepository,
+      adapter: yield* FuturesExchangeAdapter,
+      killSwitch: yield* KillSwitch,
+      circuitBreaker: yield* CircuitBreaker,
+      riskGuard: yield* RiskGuard,
+      composer: yield* SignalComposer,
+      exitEngine: yield* ExitEngine,
+    };
     const gateway = yield* MarketDataGateway;
-    const adapter = yield* FuturesExchangeAdapter;
-    const killSwitch = yield* KillSwitch;
-    const circuitBreaker = yield* CircuitBreaker;
-    const composer = yield* SignalComposer;
-    const exitEngine = yield* ExitEngine;
+    yield* services.repo.ensureTables();
 
-    yield* repo.ensureTables();
-
-    const portfolio = yield* repo.getPortfolio();
-    // Seed initial capital only for a FRESH portfolio (no row persisted yet:
-    // the repository reports capital 0/peak 0). A blown account — persisted
-    // capital <= 0 with a positive peak — is a terminal state and must NOT
-    // be silently resurrected, or soak/drawdown results are falsified.
+    const portfolio = yield* services.repo.getPortfolio();
     const isFreshPortfolio =
       portfolio.capital.lessThanOrEqualTo(0) &&
       portfolio.peakCapital.lessThanOrEqualTo(0);
-    let capital = isFreshPortfolio
+    const capital = isFreshPortfolio
       ? money(options.initialCapital)
       : portfolio.capital;
-    let peakCapital = Decimal.max(portfolio.peakCapital, capital);
-
-    let position = yield* repo.getOpenPosition(
+    const peakCapital = Decimal.max(portfolio.peakCapital, capital);
+    const position = yield* services.repo.getOpenPosition(
       options.exchange,
       options.symbol,
     );
-
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
       options.symbol,
@@ -334,373 +859,19 @@ export function runFuturesPaperTradingIteration(
     );
 
     if (candles.length < 30) {
-      return {
-        action: "hold" as const,
-        position,
-        capital: toNumber(capital),
-        note: "insufficient candles",
-      };
+      return futuresHoldResult(position, capital, "insufficient candles");
     }
-
     if (orderBook.bids.length === 0 && orderBook.asks.length === 0) {
-      return {
-        action: "hold" as const,
-        position,
-        capital: toNumber(capital),
-        note: "empty order book",
-      };
+      return futuresHoldResult(position, capital, "empty order book");
     }
-
-    const currentCandle = candles[candles.length - 1];
-    const obMetrics = toOrderBookMetrics(orderBook);
-
-    const signal = yield* composer.composeSignal(
-      {
-        exchange: options.exchange,
-        symbol: options.symbol,
-        timeframe: options.timeframe,
-        candles,
-      },
-      obMetrics,
-      options.composerConfig,
-    );
-
-    const todayPnl = yield* repo.getTodayRealizedPnl();
-    const startOfDayCapital = yield* repo.getStartOfDayCapital(
-      new Date(),
-      capital,
-    );
-
-    // Exit existing position first.
-    if (position) {
-      const exitReason = checkExitReason(
-        position,
-        currentCandle,
-        signal,
-        options,
-      );
-      if (exitReason === "scale_out") {
-        if (options.isLive) {
-          return yield* Effect.fail(
-            new ExchangeError(
-              "live futures scale-out is disabled until exchange-fill reconciliation is implemented",
-            ),
-          );
-        }
-
-        const exitPrice = fallbackExitPrice(
-          position,
-          currentCandle,
-          exitReason,
-        );
-        const scaleOut = yield* repo.scaleOutPosition(
-          position,
-          exitPrice,
-          options.scaleOutPct,
-          currentCandle.timestamp,
-        );
-        const closeFee = exitPrice
-          .times(scaleOut.trade.size)
-          .times(options.feePct / 100);
-        capital = capital.plus(scaleOut.trade.pnl).minus(closeFee);
-        peakCapital = Decimal.max(peakCapital, capital);
-        yield* repo.setPortfolio(capital, peakCapital);
-        position = scaleOut.updatedPosition;
-        yield* repo.saveOpenPosition(position);
-        yield* circuitBreaker.recordTradeResult(
-          toNumber(scaleOut.trade.pnl),
-          toNumber(startOfDayCapital),
-        );
-
-        return {
-          action: "scaled_out" as const,
-          position,
-          capital: toNumber(capital),
-          note: `SCALE-OUT ${scaleOut.trade.side} ${scaleOut.trade.entryPrice.toFixed(2)} → ${scaleOut.trade.exitPrice.toFixed(2)} size=${scaleOut.trade.size.toFixed(6)} | PnL ${scaleOut.trade.pnlPct.toFixed(2)}%`,
-        };
-      }
-
-      if (exitReason) {
-        const fill = yield* adapter.closePosition({
-          symbol: options.symbol,
-          side: position.side === "long" ? "sell" : "buy",
-          productType: options.productType,
-          marginMode: options.marginMode,
-          // Reduce-only closes must use the leverage the position was
-          // actually opened at (sizing may lift it above the config value),
-          // or the adapter's pre-trade leverage-mismatch guard trips.
-          leverage: position.leverage ?? options.leverage,
-          size: position.size,
-          price: money(currentCandle.close),
-        });
-
-        if (!fill && options.isLive) {
-          return yield* Effect.fail(
-            new ExchangeError(
-              "live futures close returned no exchange fill; preserving the local position",
-            ),
-          );
-        }
-
-        let exitPrice: Decimal;
-        let closeFee: Decimal;
-        if (fill) {
-          exitPrice = money(fill.filledPrice);
-          closeFee = money(fill.fee);
-        } else {
-          exitPrice = fallbackExitPrice(position, currentCandle, exitReason);
-          closeFee = exitPrice.times(position.size).times(options.feePct / 100);
-        }
-
-        const trade = yield* repo.closePosition(
-          position,
-          exitPrice,
-          exitReason,
-          currentCandle.timestamp,
-        );
-
-        capital = capital.plus(trade.pnl).minus(closeFee);
-        peakCapital = Decimal.max(peakCapital, capital);
-        yield* repo.setPortfolio(capital, peakCapital);
-
-        yield* circuitBreaker.recordTradeResult(
-          toNumber(trade.pnl),
-          toNumber(startOfDayCapital),
-        );
-
-        return {
-          action: "closed" as const,
-          position: null,
-          capital: toNumber(capital),
-          note: `${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
-        };
-      }
-    }
-
-    // Open new position if signal is strong enough and no position.
-    if (!position && signal && isEntrySignal(signal, options.minConfidence)) {
-      if (capital.lessThanOrEqualTo(0)) {
-        // Blown paper account: capital is exhausted. Exits above may still
-        // recover it; entry is terminal until the position closes with a win.
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: "capital exhausted (blown paper account)",
-        };
-      }
-
-      const side = signal.direction === "buy" ? "long" : "short";
-
-      // Pre-compute ATR and estimate stop distance from orderbook mid so we
-      // can size the order by risk if requested.
-      const needsAtr = options.useAtrStops || options.minAtrPct > 0;
-      const atr = needsAtr ? calculateATR(candles, 14) : null;
-      const useAtr = options.useAtrStops && atr !== null && atr > 0;
-      const entryPrice = midPriceMoney(orderBook);
-
-      let estimatedStopLoss: Money;
-      if (useAtr) {
-        const stopDistance = money(atr).times(options.atrStopMultiplier);
-        estimatedStopLoss =
-          side === "long"
-            ? entryPrice.minus(stopDistance)
-            : entryPrice.plus(stopDistance);
-      } else {
-        estimatedStopLoss =
-          side === "long"
-            ? entryPrice.times(1 - options.stopLossPct / 100)
-            : entryPrice.times(1 + options.stopLossPct / 100);
-      }
-      const stopDistancePct = entryPrice.greaterThan(0)
-        ? entryPrice.minus(estimatedStopLoss).abs().div(entryPrice)
-        : money(0);
-      const currentVolatility = calculateAnnualizedVolatility(
-        candles,
-        options.volatilityLookback,
-        options.timeframe,
-      );
-
-      if (options.minAtrPct > 0) {
-        const atrPct =
-          atr && entryPrice.greaterThan(0)
-            ? money(atr).div(entryPrice).toNumber()
-            : 0;
-        if (atrPct < options.minAtrPct / 100) {
-          return {
-            action: "hold" as const,
-            position,
-            capital: toNumber(capital),
-            note: `LOW VOLATILITY: atrPct=${(atrPct * 100).toFixed(3)}% < ${options.minAtrPct}%`,
-          };
-        }
-      }
-
-      const sized = calculateFuturesNotionalValue(
-        capital,
-        entryPrice,
-        stopDistancePct,
-        currentVolatility,
-        options,
-      );
-      const notionalValue = sized.notional;
-      const orderLeverage = sized.leverage;
-      const size = sized.size;
-
-      if (sized.skipReason !== undefined) {
-        // Never attempt an unorderable or over-cap order: sizing determined
-        // the minimum orderable position cannot fit the position cap, so
-        // hold instead of sending an order the exchange would reject.
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `RISK BLOCKED (orderability): ${sized.skipReason}`,
-        };
-      }
-
-      if (yield* killSwitch.isEngaged()) {
-        const reason = yield* killSwitch.getReason();
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `KILL SWITCH ENGAGED: ${reason}`,
-        };
-      }
-
-      if (yield* circuitBreaker.isOpen()) {
-        const reason = yield* circuitBreaker.getReason();
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `CIRCUIT BREAKER OPEN: ${reason}`,
-        };
-      }
-
-      const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const riskGuard = yield* RiskGuard;
-      const riskCheck = yield* riskGuard
-        .check({
-          isLive: options.isLive,
-          capital: toNumber(capital),
-          peakCapital: toNumber(peakCapital),
-          startOfDayCapital: toNumber(startOfDayCapital),
-          dailyRealizedPnl: toNumber(todayPnl),
-          tradesTodayCount,
-          positionValue: toNumber(notionalValue),
-          symbol: options.symbol,
-          side: signal.direction as "buy" | "sell",
-          leverage: orderLeverage,
-          productType: options.productType,
-          minOrderableNotional: sized.minOrderableNotional,
-        })
-        .pipe(Effect.result);
-
-      if (riskCheck._tag === "Failure") {
-        yield* repo.setPortfolio(capital, peakCapital);
-        return {
-          action: "hold" as const,
-          position,
-          capital: toNumber(capital),
-          note: `RISK BLOCKED: ${riskCheck.failure.violations.join("; ")}`,
-        };
-      }
-
-      yield* adapter.setLeverage(
-        options.symbol,
-        options.productType,
-        options.marginMode,
-        orderLeverage,
-      );
-      yield* adapter.setMarginMode(
-        options.symbol,
-        options.productType,
-        options.marginMode,
-      );
-
-      const fill = yield* adapter.placeOrder({
-        symbol: options.symbol,
-        side: signal.direction as "buy" | "sell",
-        type: "market",
-        size,
-        productType: options.productType,
-        marginMode: options.marginMode,
-        leverage: orderLeverage,
-        price: money(currentCandle.close),
-      });
-
-      const filledPrice = money(fill.filledPrice);
-      const openFee = money(fill.fee);
-      capital = capital.minus(openFee);
-
-      const stopMult = options.atrStopMultiplier;
-      const tpMult = options.atrTakeProfitMultiplier;
-      const atrRiskReward =
-        options.atrRiskReward > 0 ? options.atrRiskReward : tpMult / stopMult;
-      const filledPriceNum = toNumber(filledPrice, 8);
-      const {
-        stopLoss: stopLossNum,
-        takeProfit: takeProfitNum,
-        scaleOutPrice,
-      } = yield* exitEngine.computeExitLevels({
-        side,
-        entryPrice: filledPriceNum,
-        atr,
-        useAtr,
-        atrStopMultiplier: stopMult,
-        atrRiskReward,
-        stopLossPct: options.stopLossPct,
-        takeProfitPct: options.takeProfitPct,
-        scaleOutAtR: options.scaleOutAtR,
-        candles,
-        volatilityLookback: options.volatilityLookback,
-        volatilityLowPct: options.volatilityLowPct,
-        volatilityHighPct: options.volatilityHighPct,
-        volatilityLowFactor: options.volatilityLowFactor,
-        volatilityHighFactor: options.volatilityHighFactor,
-      });
-      const stopLoss = money(stopLossNum);
-      const takeProfit = money(takeProfitNum);
-
-      const newPosition: PaperPosition = {
-        id: randomUUID(),
-        exchange: options.exchange,
-        symbol: options.symbol,
-        timeframe: options.timeframe,
-        side,
-        entryPrice: filledPrice,
-        size: money(fill.filledQty),
-        stopLoss,
-        takeProfit,
-        openedAt: new Date(),
-        signalId: signal.id,
-        leverage: orderLeverage,
-        scaledOut: false,
-        scaleOutPrice: money(scaleOutPrice ?? 0),
-      };
-
-      yield* repo.saveOpenPosition(newPosition);
-      yield* repo.setPortfolio(capital, peakCapital);
-
-      return {
-        action: "opened" as const,
-        position: newPosition,
-        capital: toNumber(capital),
-        note: `${side} ${fill.filledPrice.toFixed(2)} size=${fill.filledQty.toFixed(6)} leverage=${orderLeverage}x SL=${newPosition.stopLoss.toFixed(2)} TP=${newPosition.takeProfit.toFixed(2)}`,
-      };
-    }
-
-    yield* repo.setPortfolio(capital, peakCapital);
-    return {
-      action: "hold" as const,
+    return yield* processFuturesMarket(
+      services,
+      options,
       position,
-      capital: toNumber(capital),
-      note: signal
-        ? `${signal.direction} (conf=${signal.confidence.toFixed(2)})`
-        : "no signal",
-    };
+      candles,
+      orderBook,
+      { capital, peakCapital },
+    );
   });
 }
 

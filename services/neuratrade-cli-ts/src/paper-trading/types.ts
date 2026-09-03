@@ -3,24 +3,25 @@ import type { Money } from "../utils/money.js";
 
 /**
  * Exchange contract size constraints used to make paper/live order sizes
- * orderable (Bitget: minTradeNum, quantityPrecision, minTradeUSDT). Populated
- * by the CLI from BitgetClient.getContracts on the live path; tests provide
- * them directly. Absent => legacy sizing (no step rounding, flat 5 USDT floor).
+ * orderable (for example Bitget minTradeNum/quantityPrecision or Bybit
+ * minOrderQty/qtyStep). Populated by the CLI from the selected venue on the
+ * live path; tests provide them directly. Absent => legacy sizing (no step
+ * rounding, flat 5 USDT floor).
  */
 export interface ContractSizeSpec {
-  /** Minimum order quantity in base units (Bitget minTradeNum). */
+  /** Minimum order quantity in base/contract units. */
   readonly minQty: number;
-  /** Quantity step, 10^-quantityPrecision on Bitget (0 = no step rounding). */
+  /** Quantity step (0 = no step rounding). */
   readonly qtyStep: number;
-  /** Minimum notional in quote units (Bitget minTradeUSDT). */
+  /** Minimum notional in quote units. */
   readonly minTradeUSDT: number;
 }
 
 /**
  * Round a raw order qty to an exchange-orderable size.
  *
- * Bitget rejects sizes that are not a multiple of the contract's quantity
- * step and below minTradeNum. The qty is rounded UP to the step (a raw qty
+ * Venues reject sizes that are not a multiple of the contract's quantity step
+ * or below the minimum quantity. The qty is rounded UP to the step (a raw qty
  * below one step, e.g. 0.000077 BTC, is unorderable as-is), then raised to
  * minQty. If the up-rounded size would breach the notional `cap` but a
  * down-rounded step multiple >= minQty fits, that is used instead — equally
@@ -132,6 +133,7 @@ export interface GridPaperState {
   readonly trendFilterPeriod: number;
   readonly maxPositionPct: number;
   readonly maxDrawdownPct: number;
+  readonly maxDailyLossPct?: number;
   readonly leverage: number;
   readonly killed: boolean;
   /** Timestamp of the last processed candle; used in replay mode to avoid reprocessing bars. */

@@ -200,6 +200,80 @@ function countWindows(
   return count;
 }
 
+function pushCandleValueFailures(
+  candle: CandleLike,
+  index: number,
+  failures: string[],
+): void {
+  const values = [
+    candle.open,
+    candle.high,
+    candle.low,
+    candle.close,
+    candle.volume,
+  ];
+  if (!values.every((value) => Number.isFinite(value))) {
+    failures.push(`candle ${index} contains a non-finite OHLCV value`);
+  }
+  if (
+    candle.open <= 0 ||
+    candle.high <= 0 ||
+    candle.low <= 0 ||
+    candle.close <= 0
+  ) {
+    failures.push(`candle ${index} contains a non-positive price`);
+  }
+  if (candle.volume < 0)
+    failures.push(`candle ${index} contains negative volume`);
+  if (candle.high < Math.max(candle.open, candle.close)) {
+    failures.push(`candle ${index} high is below open or close`);
+  }
+  if (candle.low > Math.min(candle.open, candle.close)) {
+    failures.push(`candle ${index} low is above open or close`);
+  }
+}
+
+/** Returns the candle's timestamp so the caller can chain freshness checks. */
+function pushCandleTimestampFailures(
+  candle: CandleLike,
+  index: number,
+  previousTimestamp: number | null,
+  barMillis: number,
+  timeframeMinutes: number,
+  failures: string[],
+): number {
+  const timestamp = candle.timestamp.getTime();
+  if (!Number.isFinite(timestamp)) {
+    failures.push(`candle ${index} timestamp is invalid`);
+  } else if (previousTimestamp !== null) {
+    const delta = timestamp - previousTimestamp;
+    if (delta !== barMillis) {
+      failures.push(
+        `candle ${index} is not exactly ${timeframeMinutes}m after the previous candle`,
+      );
+    }
+  }
+  return timestamp;
+}
+
+function pushFreshnessFailures(
+  candleCount: number,
+  latestMillis: number,
+  nowMillis: number,
+  failures: string[],
+): void {
+  if (candleCount === 0) failures.push("candle evidence is empty");
+  if (Number.isFinite(latestMillis) && latestMillis > nowMillis) {
+    failures.push("latest candle is in the future");
+  }
+  if (
+    Number.isFinite(latestMillis) &&
+    nowMillis - latestMillis > MAX_FRESHNESS_HOURS * 60 * 60 * 1000
+  ) {
+    failures.push("latest candle is stale");
+  }
+}
+
 export function validateCandleDataQuality(
   candles: readonly CandleLike[],
   now: Date,
@@ -212,58 +286,19 @@ export function validateCandleDataQuality(
   const barMillis = timeframeMinutes * 60 * 1000;
   let previousTimestamp: number | null = null;
   for (const [index, candle] of candles.entries()) {
-    const values = [
-      candle.open,
-      candle.high,
-      candle.low,
-      candle.close,
-      candle.volume,
-    ];
-    if (!values.every((value) => Number.isFinite(value))) {
-      failures.push(`candle ${index} contains a non-finite OHLCV value`);
-    }
-    if (
-      candle.open <= 0 ||
-      candle.high <= 0 ||
-      candle.low <= 0 ||
-      candle.close <= 0
-    ) {
-      failures.push(`candle ${index} contains a non-positive price`);
-    }
-    if (candle.volume < 0)
-      failures.push(`candle ${index} contains negative volume`);
-    if (candle.high < Math.max(candle.open, candle.close)) {
-      failures.push(`candle ${index} high is below open or close`);
-    }
-    if (candle.low > Math.min(candle.open, candle.close)) {
-      failures.push(`candle ${index} low is above open or close`);
-    }
-    const timestamp = candle.timestamp.getTime();
-    if (!Number.isFinite(timestamp)) {
-      failures.push(`candle ${index} timestamp is invalid`);
-    } else if (previousTimestamp !== null) {
-      const delta = timestamp - previousTimestamp;
-      if (delta !== barMillis) {
-        failures.push(
-          `candle ${index} is not exactly ${timeframeMinutes}m after the previous candle`,
-        );
-      }
-    }
-    previousTimestamp = timestamp;
+    pushCandleValueFailures(candle, index, failures);
+    previousTimestamp = pushCandleTimestampFailures(
+      candle,
+      index,
+      previousTimestamp,
+      barMillis,
+      timeframeMinutes,
+      failures,
+    );
   }
   const latestCandle = candles.at(-1)?.timestamp ?? null;
   const latestMillis = latestCandle?.getTime() ?? Number.NaN;
-  const nowMillis = now.getTime();
-  if (candles.length === 0) failures.push("candle evidence is empty");
-  if (Number.isFinite(latestMillis) && latestMillis > nowMillis) {
-    failures.push("latest candle is in the future");
-  }
-  if (
-    Number.isFinite(latestMillis) &&
-    nowMillis - latestMillis > MAX_FRESHNESS_HOURS * 60 * 60 * 1000
-  ) {
-    failures.push("latest candle is stale");
-  }
+  pushFreshnessFailures(candles.length, latestMillis, now.getTime(), failures);
   const completeWindows = countWindows(candles.length, trainBars, testBars);
   if (completeWindows < minimumWindows) {
     failures.push(`complete window count is below ${minimumWindows}`);

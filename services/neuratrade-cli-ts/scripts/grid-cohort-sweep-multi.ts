@@ -52,13 +52,6 @@ const grids = [2, 3];
 const pauses = [0, 24, 48];
 const targetsRatio = [2, 3, 4];
 const adxGates = [0, 15, 20, 28];
-const SPACE =
-  steps.length *
-  grids.length *
-  pauses.length *
-  targetsRatio.length *
-  adxGates.length;
-
 const base: GridOptions = {
   initialCapital: 100,
   gridStepPct: 0.75,

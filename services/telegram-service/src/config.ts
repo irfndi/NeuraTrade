@@ -87,6 +87,54 @@ const invalidConfig = (
     ),
   );
 
+const parseWebhookUrlPathname = (
+  url: string,
+): Effect.Effect<string, Config.ConfigError> =>
+  Effect.gen(function* () {
+    try {
+      return new URL(url).pathname;
+    } catch (err) {
+      return yield* invalidConfig(
+        [],
+        `Invalid TELEGRAM_WEBHOOK_URL: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  });
+
+const validateAdminApiKey = (
+  adminApiKey: string,
+  isProduction: boolean,
+): Effect.Effect<void, Config.ConfigError> =>
+  Effect.gen(function* () {
+    if (isProduction) {
+      if (!adminApiKey) {
+        return yield* invalidConfig(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY environment variable must be set in production",
+        );
+      }
+      if (
+        adminApiKey === "admin-secret-key-change-me" ||
+        adminApiKey === "admin-dev-key-change-in-production"
+      ) {
+        return yield* invalidConfig(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY cannot use default/example values. Please set a secure API key.",
+        );
+      }
+      if (adminApiKey.length < 32) {
+        return yield* invalidConfig(
+          ["ADMIN_API_KEY"],
+          "ADMIN_API_KEY must be at least 32 characters long for security",
+        );
+      }
+    } else if (!adminApiKey) {
+      console.warn(
+        "WARNING: ADMIN_API_KEY is not set. Admin endpoints will be disabled.",
+      );
+    }
+  });
+
 const fromConfigWithFallback = (
   key: string,
 ): Effect.Effect<string, Config.ConfigError> =>
@@ -144,33 +192,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
     );
     const isProduction = nodeEnv === "production" || sentryEnv === "production";
 
-    if (isProduction) {
-      if (!adminApiKey) {
-        return yield* invalidConfig(
-          ["ADMIN_API_KEY"],
-          "ADMIN_API_KEY environment variable must be set in production",
-        );
-      }
-      if (
-        adminApiKey === "admin-secret-key-change-me" ||
-        adminApiKey === "admin-dev-key-change-in-production"
-      ) {
-        return yield* invalidConfig(
-          ["ADMIN_API_KEY"],
-          "ADMIN_API_KEY cannot use default/example values. Please set a secure API key.",
-        );
-      }
-      if (adminApiKey.length < 32) {
-        return yield* invalidConfig(
-          ["ADMIN_API_KEY"],
-          "ADMIN_API_KEY must be at least 32 characters long for security",
-        );
-      }
-    } else if (!adminApiKey) {
-      console.warn(
-        "WARNING: ADMIN_API_KEY is not set. Admin endpoints will be disabled.",
-      );
-    }
+    yield* validateAdminApiKey(adminApiKey, isProduction);
 
     const rawApiBaseUrl = yield* fromConfigWithFallback(
       "TELEGRAM_API_BASE_URL",
@@ -201,17 +223,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
     const resolvedWebhookPath = webhookPath
       ? webhookPath
       : webhookUrl
-        ? yield* Effect.try({
-            try: () => new URL(webhookUrl).pathname,
-            catch: (err) =>
-              new Config.ConfigError(
-                new Schema.SchemaError(
-                  new SchemaIssue.InvalidValue({
-                    message: `Invalid TELEGRAM_WEBHOOK_URL: ${err instanceof Error ? err.message : String(err)}`,
-                  }),
-                ),
-              ),
-          })
+        ? yield* parseWebhookUrlPathname(webhookUrl)
         : "/telegram/webhook";
 
     const webhookSecret =

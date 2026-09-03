@@ -11,6 +11,38 @@ import type {
   PaperPosition,
 } from "./types.js";
 
+function assertLiveGridFillEvidence(
+  loaded: readonly GridPaperTrade[],
+  trade: GridPaperTrade,
+): void {
+  expect(loaded).toHaveLength(1);
+  const loadedTrade = loaded[0]!;
+  expect(loadedTrade.fillSource).toBe("live");
+  expect(loadedTrade.entryOrderId).toBe(trade.entryOrderId);
+  expect(loadedTrade.exitOrderId).toBe(trade.exitOrderId);
+  expect(loadedTrade.entryFilledQty?.toString()).toBe(
+    trade.entryFilledQty?.toString(),
+  );
+  expect(loadedTrade.exitFee?.toString()).toBe(trade.exitFee?.toString());
+  expect(loadedTrade.realizedPnlPct?.toString()).toBe(
+    trade.realizedPnlPct?.toString(),
+  );
+  expect(loadedTrade.strategyConfigFingerprint).toBe(
+    trade.strategyConfigFingerprint,
+  );
+  expect(loadedTrade.cohortId).toBe(trade.cohortId);
+  expect(loadedTrade.candidateLockAt?.toISOString()).toBe(
+    trade.candidateLockAt?.toISOString(),
+  );
+  expect(loadedTrade.datasetCutoffAt?.toISOString()).toBe(
+    trade.datasetCutoffAt?.toISOString(),
+  );
+  expect(loadedTrade.entryOpenedAt?.toISOString()).toBe(
+    trade.entryOpenedAt?.toISOString(),
+  );
+  expect(loadedTrade.executionEnvironment).toBe(trade.executionEnvironment);
+}
+
 describe("PaperTradingRepositorySQLite", () => {
   it("round-trips monetary values without SQLite REAL precision loss", async () => {
     const db = new Database(":memory:");
@@ -264,30 +296,7 @@ describe("PaperTradingRepositorySQLite", () => {
       ),
     );
 
-    expect(loaded[0]?.fillSource).toBe("live");
-    expect(loaded[0]?.entryOrderId).toBe(trade.entryOrderId);
-    expect(loaded[0]?.exitOrderId).toBe(trade.exitOrderId);
-    expect(loaded[0]?.entryFilledQty?.toString()).toBe(
-      trade.entryFilledQty?.toString(),
-    );
-    expect(loaded[0]?.exitFee?.toString()).toBe(trade.exitFee?.toString());
-    expect(loaded[0]?.realizedPnlPct?.toString()).toBe(
-      trade.realizedPnlPct?.toString(),
-    );
-    expect(loaded[0]?.strategyConfigFingerprint).toBe(
-      trade.strategyConfigFingerprint,
-    );
-    expect(loaded[0]?.cohortId).toBe(trade.cohortId);
-    expect(loaded[0]?.candidateLockAt?.toISOString()).toBe(
-      trade.candidateLockAt?.toISOString(),
-    );
-    expect(loaded[0]?.datasetCutoffAt?.toISOString()).toBe(
-      trade.datasetCutoffAt?.toISOString(),
-    );
-    expect(loaded[0]?.entryOpenedAt?.toISOString()).toBe(
-      trade.entryOpenedAt?.toISOString(),
-    );
-    expect(loaded[0]?.executionEnvironment).toBe(trade.executionEnvironment);
+    assertLiveGridFillEvidence(loaded, trade);
     db.close();
   });
 

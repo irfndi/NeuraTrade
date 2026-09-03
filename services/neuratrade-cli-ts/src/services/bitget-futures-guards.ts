@@ -92,163 +92,127 @@ export interface BitgetFuturesGuardResult {
 // Guards
 // ---------------------------------------------------------------------------
 
+function findBasicFuturesOrderError(
+  ctx: BitgetFuturesGuardContext,
+ ): string | undefined {
+  const numericFields: Array<readonly [string, string]> = [
+    ["order size", ctx.order.size],
+    ["last price", ctx.lastPrice],
+    ["leverage", ctx.leverage],
+    ["contract minimum leverage", ctx.contract.minLeverage],
+    ["contract maximum leverage", ctx.contract.maxLeverage],
+    ["contract minimum trade amount", ctx.contract.minTradeAmount],
+    ["contract minimum trade number", ctx.contract.minTradeNum],
+    ["contract minimum USDT trade amount", ctx.contract.minTradeUSDT],
+  ];
+  if (ctx.order.price !== undefined) {
+    numericFields.push(["order price", ctx.order.price]);
+  }
+  for (const balance of ctx.balances) {
+    numericFields.push([
+      `available ${balance.marginCoin} balance`,
+      balance.available,
+    ]);
+  }
+  const invalidField = numericFields.find(([, value]) => !isDecimalString(value));
+  if (invalidField !== undefined) {
+    return `${invalidField[0]} must be a decimal string`;
+  }
+  const orderSymbol = ctx.order.symbol
+    .replace("/", "")
+    .split(":")[0]
+    .toUpperCase();
+  const contractSymbol = ctx.contract.symbol.toUpperCase();
+  if (orderSymbol !== contractSymbol) {
+    return `contract mismatch: order ${ctx.order.symbol} vs contract ${ctx.contract.symbol}`;
+  }
+  const contractStatus = ctx.contract.symbolStatus || ctx.contract.status;
+  if (contractStatus !== "online" && contractStatus !== "normal" && contractStatus !== "") {
+    return `contract ${ctx.contract.symbol} is not tradable`;
+  }
+  if (compare(ctx.leverage, ctx.contract.minLeverage) < 0) {
+    return `leverage ${ctx.leverage} below minimum ${ctx.contract.minLeverage}`;
+  }
+  if (compare(ctx.leverage, ctx.contract.maxLeverage) > 0) {
+    return `leverage ${ctx.leverage} above maximum ${ctx.contract.maxLeverage}`;
+  }
+  return undefined;
+}
+
+type FuturesSizingCheck =
+  | { readonly ok: true; readonly notional: string; readonly marginRequired: string }
+  | { readonly ok: false; readonly reason: string };
+
+function validateFuturesSizing(ctx: BitgetFuturesGuardContext): FuturesSizingCheck {
+  const price = ctx.order.price && ctx.order.price.trim() !== ""
+    ? ctx.order.price
+    : ctx.lastPrice;
+  const notional = multiply(ctx.order.size, price);
+  if (ctx.order.reduceOnly) {
+    return { ok: true, notional, marginRequired: "0" };
+  }
+  const isUsdtMargined =
+    ctx.contract.productType === "USDT-FUTURES" ||
+    ctx.contract.productType === "USDC-FUTURES";
+  const minNotional =
+    isUsdtMargined && compare(ctx.contract.minTradeUSDT, "0") > 0
+      ? ctx.contract.minTradeUSDT
+      : compare(ctx.contract.minTradeAmount, "0") > 0
+        ? ctx.contract.minTradeAmount
+        : ctx.contract.minTradeNum;
+  if (compare(notional, minNotional) < 0) {
+    return {
+      ok: false,
+      reason: `notional ${notional} below min trade amount ${minNotional} for ${ctx.contract.symbol}`,
+    };
+  }
+  if (isUsdtMargined && compare(ctx.order.size, ctx.contract.minTradeNum) < 0) {
+    return {
+      ok: false,
+      reason: `order size ${ctx.order.size} below min trade number ${ctx.contract.minTradeNum} for ${ctx.contract.symbol}`,
+    };
+  }
+  const qtyPrecision = Number(ctx.contract.quantityPrecision);
+  if (
+    isUsdtMargined &&
+    Number.isInteger(qtyPrecision) &&
+    qtyPrecision > 0 &&
+    countDecimals(ctx.order.size) > qtyPrecision
+  ) {
+    return {
+      ok: false,
+      reason: `order size ${ctx.order.size} is not a multiple of the quantity step 1e-${qtyPrecision} for ${ctx.contract.symbol}`,
+    };
+  }
+  const marginRequired = divide(notional, ctx.leverage);
+  const marginCoin = ctx.contract.quoteCoin.toUpperCase();
+  const balance = ctx.balances.find(
+    (b) => b.marginCoin.toUpperCase() === marginCoin,
+  );
+  if (balance === undefined || compare(balance.available, marginRequired) < 0) {
+    return {
+      ok: false,
+      reason: `insufficient ${marginCoin} margin: available ${balance?.available ?? "0"}, required ~${marginRequired}`,
+    };
+  }
+  return { ok: true, notional, marginRequired };
+}
 export function validateFuturesOrder(
   ctx: BitgetFuturesGuardContext,
 ): Effect.Effect<BitgetFuturesGuardResult, BitgetFuturesGuardError> {
   return Effect.gen(function* () {
-    const numericFields: Array<readonly [string, string]> = [
-      ["order size", ctx.order.size],
-      ["last price", ctx.lastPrice],
-      ["leverage", ctx.leverage],
-      ["contract minimum leverage", ctx.contract.minLeverage],
-      ["contract maximum leverage", ctx.contract.maxLeverage],
-      ["contract minimum trade amount", ctx.contract.minTradeAmount],
-      ["contract minimum trade number", ctx.contract.minTradeNum],
-      ["contract minimum USDT trade amount", ctx.contract.minTradeUSDT],
-    ];
-    if (ctx.order.price !== undefined) {
-      numericFields.push(["order price", ctx.order.price]);
-    }
-    for (const balance of ctx.balances) {
-      numericFields.push([
-        `available ${balance.marginCoin} balance`,
-        balance.available,
-      ]);
-    }
-    const invalidField = numericFields.find(
-      ([, value]) => !isDecimalString(value),
-    );
-    if (invalidField !== undefined) {
+    const basicError = findBasicFuturesOrderError(ctx);
+    if (basicError !== undefined) {
       return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `${invalidField[0]} must be a decimal string`,
-        }),
+        new BitgetFuturesGuardError({ reason: basicError }),
       );
     }
-    const orderSymbol = ctx.order.symbol
-      .replace("/", "")
-      .split(":")[0]
-      .toUpperCase();
-    const contractSymbol = ctx.contract.symbol.toUpperCase();
-    if (orderSymbol !== contractSymbol) {
+    const sizing = validateFuturesSizing(ctx);
+    if (!sizing.ok) {
       return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `contract mismatch: order ${ctx.order.symbol} vs contract ${ctx.contract.symbol}`,
-        }),
+        new BitgetFuturesGuardError({ reason: sizing.reason }),
       );
     }
-    const contractStatus = ctx.contract.symbolStatus || ctx.contract.status;
-    if (
-      contractStatus !== "online" &&
-      contractStatus !== "normal" &&
-      contractStatus !== ""
-    ) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `contract ${ctx.contract.symbol} is not tradable`,
-        }),
-      );
-    }
-
-    // Leverage range
-    const lev = ctx.leverage;
-    if (compare(lev, ctx.contract.minLeverage) < 0) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `leverage ${lev} below minimum ${ctx.contract.minLeverage}`,
-        }),
-      );
-    }
-    if (compare(lev, ctx.contract.maxLeverage) > 0) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `leverage ${lev} above maximum ${ctx.contract.maxLeverage}`,
-        }),
-      );
-    }
-
-    // Notional and size: use the order limit price when available; otherwise
-    // fall back to the last/mark price. USDT-margined contracts publish a
-    // USDT minimum notional (minTradeUSDT); coin-margined contracts publish a
-    // base-quantity minimum (minTradeNum). Keep minTradeAmount as a legacy fallback.
-    const price =
-      ctx.order.price && ctx.order.price.trim() !== ""
-        ? ctx.order.price
-        : ctx.lastPrice;
-    const notional = multiply(ctx.order.size, price);
-
-    // Reduce-only closes only need the contract/leverage checks above; they do
-    // not consume new margin or require a fresh balance allocation.
-    if (ctx.order.reduceOnly) {
-      return { ok: true as const, notional, marginRequired: "0" };
-    }
-
-    const isUsdtMargined =
-      ctx.contract.productType === "USDT-FUTURES" ||
-      ctx.contract.productType === "USDC-FUTURES";
-    const minNotional =
-      isUsdtMargined && compare(ctx.contract.minTradeUSDT, "0") > 0
-        ? ctx.contract.minTradeUSDT
-        : compare(ctx.contract.minTradeAmount, "0") > 0
-          ? ctx.contract.minTradeAmount
-          : ctx.contract.minTradeNum;
-    if (compare(notional, minNotional) < 0) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `notional ${notional} below min trade amount ${minNotional} for ${ctx.contract.symbol}`,
-        }),
-      );
-    }
-
-    // Quantity-level fail-closed (USDT/USDC-margined): the notional floor
-    // above does not catch a size below minTradeNum or off the quantity step.
-    // Example: 0.000077 BTC at $64,795 passes the 5 USDT notional floor but
-    // is below the 0.0001 minTradeNum — the exchange would reject it. Block
-    // locally so the paper/live loop gets a clean rejection instead of
-    // repeated exchange errors.
-    if (
-      isUsdtMargined &&
-      compare(ctx.order.size, ctx.contract.minTradeNum) < 0
-    ) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `order size ${ctx.order.size} below min trade number ${ctx.contract.minTradeNum} for ${ctx.contract.symbol}`,
-        }),
-      );
-    }
-    const qtyPrecision = Number(ctx.contract.quantityPrecision);
-    if (
-      isUsdtMargined &&
-      Number.isInteger(qtyPrecision) &&
-      qtyPrecision > 0 &&
-      countDecimals(ctx.order.size) > qtyPrecision
-    ) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `order size ${ctx.order.size} is not a multiple of the quantity step 1e-${qtyPrecision} for ${ctx.contract.symbol}`,
-        }),
-      );
-    }
-
-    // Margin required (notional / leverage)
-    const marginRequired = divide(notional, lev);
-
-    // Balance check
-    const marginCoin = ctx.contract.quoteCoin.toUpperCase();
-    const balance = ctx.balances.find(
-      (b) => b.marginCoin.toUpperCase() === marginCoin,
-    );
-    if (
-      balance === undefined ||
-      compare(balance.available, marginRequired) < 0
-    ) {
-      return yield* Effect.fail(
-        new BitgetFuturesGuardError({
-          reason: `insufficient ${marginCoin} margin: available ${balance?.available ?? "0"}, required ~${marginRequired}`,
-        }),
-      );
-    }
-
-    return { ok: true as const, notional, marginRequired };
+    return sizing;
   });
 }

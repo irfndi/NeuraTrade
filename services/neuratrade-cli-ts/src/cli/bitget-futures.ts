@@ -166,6 +166,24 @@ export function handleErr(
   );
 }
 
+/** First validation error for raw order CLI args, if any. */
+function orderArgError(
+  side: string,
+  type: string,
+  price: string,
+): Error | undefined {
+  if (side !== "buy" && side !== "sell") {
+    return new Error(`invalid side: ${side}`);
+  }
+  if (type !== "market" && type !== "limit") {
+    return new Error(`invalid type: ${type}`);
+  }
+  if (type === "limit" && price.trim() === "") {
+    return new Error("--price is required for limit orders");
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // contracts
 // ---------------------------------------------------------------------------
@@ -384,16 +402,9 @@ const orderPlaceCommand = Command.make(
     Effect.gen(function* () {
       const config = yield* BitgetConfig;
       yield* requireBitgetCredentials(config);
-      if (args.side !== "buy" && args.side !== "sell") {
-        return yield* Effect.fail(new Error(`invalid side: ${args.side}`));
-      }
-      if (args.type !== "market" && args.type !== "limit") {
-        return yield* Effect.fail(new Error(`invalid type: ${args.type}`));
-      }
-      if (args.type === "limit" && args.price.trim() === "") {
-        return yield* Effect.fail(
-          new Error("--price is required for limit orders"),
-        );
+      const argError = orderArgError(args.side, args.type, args.price);
+      if (argError !== undefined) {
+        return yield* Effect.fail(argError);
       }
       const client = yield* BitgetClient;
       const pt = parseProductType(args.productType);
@@ -437,12 +448,12 @@ const orderPlaceCommand = Command.make(
         leverageInfo,
         intendedLeverage,
       }).pipe(Effect.result);
-      if (Result.isFailure(safetyCheck) && !args.force) {
-        return yield* Effect.fail(
-          new Error(`safety check failed: ${safetyCheck.failure.reason}`),
-        );
-      }
-      if (Result.isFailure(safetyCheck) && args.force) {
+      if (Result.isFailure(safetyCheck)) {
+        if (!args.force) {
+          return yield* Effect.fail(
+            new Error(`safety check failed: ${safetyCheck.failure.reason}`),
+          );
+        }
         yield* Console.log(
           `⚠️  safety check bypassed: ${safetyCheck.failure.reason}`,
         );

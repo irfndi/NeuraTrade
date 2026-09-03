@@ -215,3 +215,10 @@ skills-lock.json
 
 # CodeGraphContext local ignore (auto-generated tool state)
 .cgcignore
+
+# TimesFM sidecar local Python environment and caches
+services/timesfm-forecast/.venv/
+services/timesfm-forecast/.pytest_cache/
+services/timesfm-forecast/.ruff_cache/
+services/timesfm-forecast/**/__pycache__/
+services/timesfm-forecast/src/*.egg-info/

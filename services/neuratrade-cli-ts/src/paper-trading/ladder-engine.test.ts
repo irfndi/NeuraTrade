@@ -158,9 +158,116 @@ describe("advanceLadderBar (incremental ladder engine)", () => {
     expect(filled[0].rungIndex).toBe(1);
     expect(w.longRungs.length).toBe(3); // resting rungs remain armed
   });
+
+  it("re-anchors peak and pauses instead of latching dead on flat drawdown breach", () => {
+    // 2026-09-03: the ENA shadow (+2.64 book) went permanently silent after
+    // an 8% peak-to-capital slide — flat capital can never trade its way back.
+    const opts = baseOptions({
+      maxDrawdownPct: 8,
+      gridPauseAfterLossBars: 3,
+      chopGateAdxThreshold: 0,
+    });
+    const candles = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 100.1, 99.9, 100, 1),
+      candle(100, 100.1, 99.9, 100, 2),
+      candle(100, 100.1, 99.9, 100, 3),
+      candle(100, 100.1, 99.9, 100, 4),
+      candle(100, 99.0, 98.9, 99.3, 5), // 1% dip fills the reseeded rung
+    ];
+    const w = freshWorkingState(100);
+    w.capital = money(91); // 9% under peak while flat
+    advanceLadderBar(w, candles, 1, opts, null);
+    expect(toNumber(w.peak)).toBeCloseTo(91, 6);
+    expect(w.paused).toBe(3);
+    // Pause decrements without reseeding…
+    advanceLadderBar(w, candles, 2, opts, null);
+    advanceLadderBar(w, candles, 3, opts, null);
+    advanceLadderBar(w, candles, 4, opts, null);
+    expect(w.paused).toBe(0);
+    // …then the engine seeds again instead of staying dead.
+    advanceLadderBar(w, candles, 5, opts, null);
+    expect(w.longRungs.length).toBeGreaterThan(0);
+    expect(w.longRungs.filter((r) => r.filled)).toHaveLength(1);
+  });
+
+  it("holds parity with the backtest through a drawdown-kill breach and recovery", () => {
+    // Both engines must agree that a flat breach is paused-then-retry, not
+    // death: previously the backtest never enforced the kill at all, so
+    // sweeps fitted configs on recovery trades live refuses to take.
+    const opts = baseOptions({
+      rungs: 1,
+      gridStepPct: 0.5,
+      gridPauseAfterLossBars: 0,
+      leverage: 3,
+      maxDrawdownPct: 8,
+      chopGateAdxThreshold: 0,
+    });
+    const candles: CandleLike[] = [];
+    let price = 100;
+    let n = 0;
+    const bar = (o: number, h: number, l: number, c: number) => {
+      candles.push({
+        timestamp: new Date(1000 * 60 * 15 * n++),
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: 1000,
+      });
+      price = c;
+    };
+    bar(100, 100, 100, 100);
+    for (let i = 0; i < 20; i++) {
+      const s = i % 2 === 0 ? 1 : -1;
+      bar(price, price + 0.6, price - 0.6, price + 0.4 * s);
+    }
+    for (let k = 0; k < 3; k++) {
+      bar(price, price, price * 0.994, price * 0.996);
+      bar(price, price, price * 0.7, price * 0.72);
+    }
+    for (let i = 0; i < 60; i++) {
+      const s = i % 2 === 0 ? 1 : -1;
+      bar(price, price + 0.6, price - 0.6, price + 0.4 * s);
+    }
+    expect(incrementalCapital(candles, opts)).toBeCloseTo(
+      backtestCapital(candles, opts),
+      6,
+    );
+  });
 });
 
 describe("runLadderPaperTradingIteration (persistence + resume)", () => {
+  it("round-trips the confirmed rung quantity across a restart", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts = baseOptions();
+    const state = {
+      ...freshLadderState(opts),
+      longRungs: [
+        {
+          rungIndex: 1,
+          side: "long" as const,
+          level: 99,
+          step: 1,
+          filled: true,
+          entryPrice: 99,
+          entryBar: 1,
+          entryTimestamp: 1000 * 60 * 15,
+          filledQty: 0.123,
+        },
+      ],
+    };
+
+    await Effect.runPromise(repo.ensureTables());
+    await Effect.runPromise(repo.saveLadderState(state));
+    const loaded = await Effect.runPromise(
+      repo.getLadderState(opts.exchange, opts.symbol, opts.timeframe),
+    );
+
+    expect(loaded?.longRungs[0]?.filledQty).toBe(0.123);
+  });
+
   it("persists state and resumes from the last processed candle", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);
@@ -637,7 +744,7 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     let placeCalls = 0;
     const termsAdapter: FuturesExchangeAdapterService = {
       ...base,
-      placeOrder: (req) => {
+      placeOrder: (_req) => {
         placeCalls += 1;
         return Effect.fail(
           new ExchangeError(

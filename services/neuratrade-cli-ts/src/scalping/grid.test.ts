@@ -122,6 +122,24 @@ describe("runGridBacktest", () => {
     expect(result.totalReturnPct).toBe(0);
   });
 
+  it("allows a causal research overlay to block new entries", () => {
+    const candles = makeOscillatingCandles(300);
+    const result = runGridBacktest(candles, {
+      gridStepPct: 0.5,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.04,
+      slippageBps: 1,
+      initialCapital: 20,
+      trendFilterPeriod: 96,
+      leverage: 1,
+      entryDirectionByBar: candles.map(() => "flat"),
+    });
+
+    expect(result.totalTrades).toBe(0);
+    expect(result.totalReturnPct).toBe(0);
+  });
+
   it("chop gate blocks new entries while the market is trending", () => {
     // Strong directional drift with pullback wobble: grids would touch, but
     // ADX is high, so a gated engine must stay out entirely.

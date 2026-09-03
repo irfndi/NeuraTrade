@@ -590,18 +590,804 @@ export function attachMonteCarlo(
   };
 }
 
-/**
- * Internal engine: run a single backtest on the provided candles.
- */
-function runBacktestCore(options: BacktestOptions): BacktestResult {
-  const candles = options.candles;
-  if (candles.length < 20) {
-    return emptyResult(options.symbol);
-  }
+interface BacktestCoreRuntime {
+  readonly options: BacktestOptions;
+  readonly feePct: number;
+  readonly makerFeePct: number | undefined;
+  readonly entryOrderType: "market" | "limit";
+  readonly entryLimitOffsetBps: number;
+  readonly slippageBps: number;
+  readonly fundingRatePct: number;
+  readonly fundingIntervalMs: number;
+  readonly isFutures: boolean;
+  readonly leverage: number;
+  readonly breakevenAtR: number;
+  readonly maxBarsInTrade: number;
+  readonly lossCooldownBars: number;
+  readonly sessionStart: string;
+  readonly sessionEnd: string;
+  readonly autoRegimeFilter: boolean;
+  readonly autoRegimeAdxThreshold: number;
+  readonly useObservedPrice: boolean;
+  readonly signalPersistence: number;
+  readonly lossConfidencePenalty: number;
+  readonly lossConfidenceDecay: number;
+  readonly trades: BacktestTrade[];
+  equityCurve: BacktestEquityPoint[] | undefined;
+  position: BacktestPosition | null;
+  capital: number;
+  peakCapital: number;
+  maxDrawdown: number;
+  tradeId: number;
+  totalFeesPaid: number;
+  totalFundingCost: number;
+  lastFundingTime: Date | null;
+  entryAttempts: number;
+  makerFills: number;
+  priorSignalDirection: Direction;
+  signalStreak: number;
+  lossPenalty: number;
+  cooldownBarsRemaining: number;
+}
 
-  // Fail fast on bad timestamps: an Invalid Date (or a non-Date) silently
-  // poisons funding accrual, duration metrics, and trade-level analysis
-  // (entryTime/exitTime serialize as null), which is far worse than a throw.
+interface BacktestBarContext {
+  readonly index: number;
+  readonly current: CandleLike;
+  readonly next: CandleLike;
+  readonly window: readonly CandleLike[];
+  readonly signal: ScalpingSignal | null;
+  readonly symbolStats: SymbolStatistics;
+}
+
+interface BacktestEntryPlan {
+  readonly entryPrice: number;
+  readonly entryFeePct: number;
+  readonly fillType: "maker" | "taker";
+  readonly stopLoss: number;
+  readonly takeProfit: number;
+  readonly scaleOutPrice: number;
+  readonly trailingStopAtr: number | undefined;
+  readonly initialRiskPct: number;
+  readonly size: number;
+  readonly entryFee: number;
+}
+
+function recordBacktestEquityPoint(
+  runtime: BacktestCoreRuntime,
+  timestamp: Date,
+): void {
+  if (!runtime.equityCurve) return;
+  runtime.equityCurve.push({
+    tradeIndex: runtime.trades.length - 1,
+    timestamp,
+    capital: runtime.capital,
+  });
+}
+
+function closeBacktestPosition(
+  runtime: BacktestCoreRuntime,
+  exitPrice: number,
+  exitTime: Date,
+  fundingTime: Date,
+  exitReason: BacktestTrade["exitReason"],
+  pnlOverride?: number,
+  liquidation = false,
+): void {
+  const current = runtime.position;
+  if (!current) return;
+  const notional = current.entryPrice * current.size;
+  const pnl = pnlOverride ?? calculatePnl(current, exitPrice);
+  const exitFee = exitPrice * current.size * (runtime.feePct / 100);
+  const funding = chargeFunding(
+    current,
+    runtime.lastFundingTime!,
+    fundingTime,
+    runtime.fundingRatePct,
+    runtime.fundingIntervalMs,
+    runtime.isFutures,
+    runtime.options.fundingRates,
+  );
+  const actualPnl = liquidation ? -notional / runtime.leverage : pnl;
+  const pnlPct = ((actualPnl - exitFee) / notional) * 100;
+  runtime.capital += actualPnl - exitFee - funding.funding;
+  runtime.totalFeesPaid += exitFee;
+  runtime.totalFundingCost += funding.funding;
+  runtime.lastFundingTime = funding.newLastFundingTime;
+  runtime.trades.push({
+    id: `trade-${runtime.tradeId++}`,
+    symbol: runtime.options.symbol,
+    side: current.side,
+    entryTime: current.entryTime,
+    exitTime,
+    entryPrice: current.entryPrice,
+    exitPrice,
+    pnl: actualPnl,
+    pnlPct,
+    netPnl: actualPnl - exitFee - current.entryFeePaid - funding.funding,
+    exitReason,
+    initialRiskPct: current.initialRiskPct,
+    fillType: current.fillType,
+    entryFeePct: current.entryFeePct,
+    exitFeePct: runtime.feePct,
+  });
+  recordBacktestEquityPoint(runtime, exitTime);
+  if (actualPnl - exitFee - funding.funding < 0) {
+    runtime.lossPenalty = runtime.lossConfidencePenalty;
+    runtime.cooldownBarsRemaining = runtime.lossCooldownBars;
+  }
+  runtime.position = null;
+  runtime.lastFundingTime = null;
+}
+
+function backtestExitSide(position: BacktestPosition): "long" | "short" {
+  return position.side === "long" ? "short" : "long";
+}
+
+function backtestExitPrice(
+  runtime: BacktestCoreRuntime,
+  price: number,
+  side: "long" | "short",
+  candle: CandleLike,
+): number {
+  if (runtime.useObservedPrice) {
+    return applyObservedSlippage(price, side, runtime.slippageBps);
+  }
+  return applySlippage(
+    price,
+    side,
+    runtime.slippageBps,
+    candle.high,
+    candle.low,
+  );
+}
+
+function updateBacktestMarketState(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): void {
+  const position = runtime.position;
+  if (!position) return;
+  const mtmPnl = calculatePnl(position, bar.current.close);
+  const mtmCapital = runtime.capital + mtmPnl;
+  if (mtmCapital > runtime.peakCapital) runtime.peakCapital = mtmCapital;
+  const drawdown = (runtime.peakCapital - mtmCapital) / runtime.peakCapital;
+  if (drawdown > runtime.maxDrawdown) runtime.maxDrawdown = drawdown;
+  updateTrailingStop(
+    position,
+    bar.current,
+    runtime.options,
+    runtime.useObservedPrice,
+  );
+  if (runtime.breakevenAtR > 0) {
+    applyBreakevenStop(position, bar.current.close, runtime.breakevenAtR);
+  }
+}
+
+function handleBacktestLiquidation(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  const position = runtime.position;
+  if (
+    !position ||
+    runtime.leverage <= 1 ||
+    !isLiquidated(position, bar.current.close, runtime.leverage)
+  ) {
+    return false;
+  }
+  const exitSide = backtestExitSide(position);
+  const exitPrice = backtestExitPrice(
+    runtime,
+    bar.current.close,
+    exitSide,
+    bar.current,
+  );
+  const notional = position.entryPrice * position.size;
+  closeBacktestPosition(
+    runtime,
+    exitPrice,
+    bar.current.timestamp,
+    bar.current.timestamp,
+    "liquidation",
+    -notional / runtime.leverage,
+    true,
+  );
+  return true;
+}
+
+function handleBacktestTimeStop(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  const position = runtime.position;
+  if (
+    !position ||
+    runtime.maxBarsInTrade <= 0 ||
+    bar.index - position.entryBarIndex + 1 < runtime.maxBarsInTrade
+  ) {
+    return false;
+  }
+  const exitSide = backtestExitSide(position);
+  const exitPrice = backtestExitPrice(
+    runtime,
+    bar.current.close,
+    exitSide,
+    bar.current,
+  );
+  closeBacktestPosition(
+    runtime,
+    exitPrice,
+    bar.current.timestamp,
+    bar.current.timestamp,
+    "time_stop",
+  );
+  return true;
+}
+
+function recordBacktestScaleOut(
+  runtime: BacktestCoreRuntime,
+  position: BacktestPosition,
+  partialSize: number,
+  exitPrice: number,
+  timestamp: Date,
+): void {
+  const pnl = calculatePnl({ ...position, size: partialSize }, exitPrice);
+  const exitFee = exitPrice * partialSize * (runtime.feePct / 100);
+  const entryFee =
+    position.size > 0
+      ? position.entryFeePaid * (partialSize / position.size)
+      : 0;
+  const pnlPct = ((pnl - exitFee) / (position.entryPrice * partialSize)) * 100;
+  runtime.capital += pnl - exitFee;
+  runtime.totalFeesPaid += exitFee;
+  runtime.trades.push({
+    id: `trade-${runtime.tradeId++}`,
+    symbol: runtime.options.symbol,
+    side: position.side,
+    entryTime: position.entryTime,
+    exitTime: timestamp,
+    entryPrice: position.entryPrice,
+    exitPrice,
+    pnl,
+    pnlPct,
+    netPnl: pnl - exitFee - entryFee,
+    exitReason: "scale_out",
+    initialRiskPct: position.initialRiskPct,
+    fillType: position.fillType,
+    entryFeePct: position.entryFeePct,
+    exitFeePct: runtime.feePct,
+  });
+  recordBacktestEquityPoint(runtime, timestamp);
+  if (pnl - exitFee < 0)
+    runtime.cooldownBarsRemaining = runtime.lossCooldownBars;
+}
+
+function backtestScaleOutPct(runtime: BacktestCoreRuntime): number {
+  return Math.max(0, Math.min(100, runtime.options.scaleOutPct ?? 50));
+}
+
+function handleBacktestScaleOut(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  const position = runtime.position;
+  if (
+    !position ||
+    !checkScaleOut(position, bar.current, runtime.useObservedPrice)
+  ) {
+    return false;
+  }
+  const partialSize = position.size * (backtestScaleOutPct(runtime) / 100);
+  if (partialSize <= 0) return true;
+  const exitSide = backtestExitSide(position);
+  const exitPrice = backtestExitPrice(
+    runtime,
+    position.scaleOutPrice,
+    exitSide,
+    bar.current,
+  );
+  recordBacktestScaleOut(
+    runtime,
+    position,
+    partialSize,
+    exitPrice,
+    bar.current.timestamp,
+  );
+  position.size -= partialSize;
+  position.stopLoss = position.entryPrice;
+  position.scaledOut = true;
+  return true;
+}
+
+function handleBacktestPriceExit(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  const position = runtime.position;
+  if (!position) return false;
+  const exits = checkExitLevels(
+    position,
+    bar.current,
+    runtime.useObservedPrice,
+  );
+  if (!exits.stopLoss && !exits.takeProfit) return false;
+  const exitSide = backtestExitSide(position);
+  const exitLevel = exits.stopLoss ? position.stopLoss : position.takeProfit;
+  const exitPrice = backtestExitPrice(
+    runtime,
+    exitLevel,
+    exitSide,
+    bar.current,
+  );
+  closeBacktestPosition(
+    runtime,
+    exitPrice,
+    bar.current.timestamp,
+    bar.current.timestamp,
+    exits.stopLoss ? "stop_loss" : "take_profit",
+  );
+  return true;
+}
+
+function handleBacktestRsiExit(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  const position = runtime.position;
+  if (
+    !position ||
+    !checkRsiExit({
+      side: position.side,
+      candles: bar.window,
+      exitRsiPeriod: runtime.options.exitRsiPeriod,
+      exitRsiLongLevel: runtime.options.exitRsiLongLevel,
+      exitRsiShortLevel: runtime.options.exitRsiShortLevel,
+    })
+  ) {
+    return false;
+  }
+  const exitSide = backtestExitSide(position);
+  const exitCandle = runtime.useObservedPrice ? bar.current : bar.next;
+  const exitPrice = backtestExitPrice(
+    runtime,
+    runtime.useObservedPrice ? bar.current.close : bar.next.open,
+    exitSide,
+    exitCandle,
+  );
+  const exitTime = runtime.useObservedPrice
+    ? bar.current.timestamp
+    : bar.next.timestamp;
+  closeBacktestPosition(runtime, exitPrice, exitTime, exitTime, "rsi_exit");
+  return true;
+}
+
+function handleBacktestSignalExit(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): void {
+  const position = runtime.position;
+  if (
+    !position ||
+    runtime.options.holdUntilStop ||
+    !bar.signal ||
+    !shouldExitPosition(position, bar.signal)
+  ) {
+    return;
+  }
+  const exitSide = backtestExitSide(position);
+  const exitPrice = backtestExitPrice(
+    runtime,
+    bar.next.open,
+    exitSide,
+    bar.next,
+  );
+  closeBacktestPosition(
+    runtime,
+    exitPrice,
+    bar.next.timestamp,
+    bar.next.timestamp,
+    "signal",
+  );
+}
+
+function manageBacktestPosition(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  if (!runtime.position) return false;
+  updateBacktestMarketState(runtime, bar);
+  if (handleBacktestLiquidation(runtime, bar)) return true;
+  if (handleBacktestTimeStop(runtime, bar)) return true;
+  if (handleBacktestScaleOut(runtime, bar)) return true;
+  if (handleBacktestPriceExit(runtime, bar)) return true;
+  if (handleBacktestRsiExit(runtime, bar)) return true;
+  handleBacktestSignalExit(runtime, bar);
+  return false;
+}
+
+function updateBacktestSignalState(
+  runtime: BacktestCoreRuntime,
+  signal: ScalpingSignal | null,
+): void {
+  const direction = signal?.direction ?? "hold";
+  if (direction !== "hold" && direction === runtime.priorSignalDirection) {
+    runtime.signalStreak += 1;
+  } else {
+    runtime.signalStreak = direction === "hold" ? 0 : 1;
+  }
+  runtime.priorSignalDirection = direction;
+  if (runtime.lossPenalty > 0 && runtime.lossConfidenceDecay > 0) {
+    runtime.lossPenalty = Math.max(
+      0,
+      runtime.lossPenalty - runtime.lossConfidenceDecay,
+    );
+  }
+}
+
+function passesBacktestBollingerFilter(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+  side: "long" | "short",
+): boolean {
+  const { bollingerLongMaxPctB, bollingerShortMinPctB } = runtime.options;
+  const useLong =
+    bollingerLongMaxPctB !== undefined &&
+    bollingerLongMaxPctB >= 0 &&
+    bollingerLongMaxPctB <= 1;
+  const useShort =
+    bollingerShortMinPctB !== undefined &&
+    bollingerShortMinPctB >= 0 &&
+    bollingerShortMinPctB <= 1;
+  if (!useLong && !useShort) return true;
+  return passesBollingerPullback(
+    bar.window,
+    side,
+    useLong ? bollingerLongMaxPctB! : 1,
+    useShort ? bollingerShortMinPctB! : 0,
+  );
+}
+
+function passesBacktestEntryFilters(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+  side: "long" | "short",
+): boolean {
+  const options = runtime.options;
+  if (options.htfCandles && options.htfCandles.length > 0) {
+    const closedHtfCandles = options.htfCandles.filter(
+      (htf) => htf.timestamp.getTime() <= bar.current.timestamp.getTime(),
+    );
+    if (
+      !alignsWithHigherTimeframeTrend(
+        side,
+        closedHtfCandles,
+        options.htfTrendFastPeriod,
+        options.htfTrendSlowPeriod,
+      )
+    ) {
+      return false;
+    }
+  }
+  if (
+    options.entryPullbackEmaPeriod &&
+    options.entryPullbackEmaPeriod > 0 &&
+    !priceWithinEmaPullback(
+      bar.current.close,
+      bar.window,
+      options.entryPullbackEmaPeriod,
+      options.entryPullbackMarginPct ?? 0.1,
+    )
+  ) {
+    return false;
+  }
+  if (
+    options.minEfficiencyRatio &&
+    options.minEfficiencyRatio > 0 &&
+    efficiencyRatio(bar.window, options.efficiencyRatioPeriod ?? 20) <
+      options.minEfficiencyRatio
+  ) {
+    return false;
+  }
+  if (
+    (options.rsiLongMax || options.rsiShortMin) &&
+    !passesRsiNeutralZone(
+      bar.window,
+      side,
+      options.rsiLongMax ?? 100,
+      options.rsiShortMin ?? 0,
+    )
+  ) {
+    return false;
+  }
+  return passesBacktestBollingerFilter(runtime, bar, side);
+}
+
+function isBacktestEntryEligible(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): boolean {
+  if (runtime.position) return false;
+  if (runtime.cooldownBarsRemaining !== 0) return false;
+  if (
+    !bar.signal ||
+    !isEntrySignal(
+      bar.signal,
+      runtime.options.minConfidence + runtime.lossPenalty,
+    )
+  ) {
+    return false;
+  }
+  const persistenceMet =
+    runtime.signalPersistence <= 1 ||
+    runtime.signalStreak >= runtime.signalPersistence;
+  if (!persistenceMet) return false;
+  if (
+    !isWithinSession(
+      bar.current.timestamp,
+      runtime.sessionStart,
+      runtime.sessionEnd,
+    )
+  ) {
+    return false;
+  }
+  if (
+    runtime.autoRegimeFilter &&
+    !passesAutoRegimeFilter(
+      bar.window,
+      bar.signal.direction === "buy" ? "long" : "short",
+      runtime.autoRegimeAdxThreshold,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+interface BacktestAtrPlan {
+  readonly atr: number | null;
+  readonly useAtr: boolean;
+  readonly stopMultiplier: number;
+  readonly riskReward: number;
+}
+
+function resolveBacktestAtrPlan(
+  options: BacktestOptions,
+  window: readonly CandleLike[],
+  entryPrice: number,
+): BacktestAtrPlan | null {
+  const needsAtr =
+    options.useAtrStops ||
+    options.trailingStopAtrMultiplier ||
+    options.minAtrPct;
+  const atr = needsAtr ? calculateATR(window, 14) : null;
+  const useAtr = options.useAtrStops && atr !== null && atr > 0;
+  const stopMultiplier = options.atrStopMultiplier ?? 1.5;
+  const takeProfitMultiplier = options.atrTakeProfitMultiplier ?? 2.5;
+  if (options.minAtrPct && options.minAtrPct > 0) {
+    const atrPct = atr && entryPrice > 0 ? atr / entryPrice : 0;
+    if (atrPct < options.minAtrPct / 100) return null;
+  }
+  const riskReward =
+    options.atrRiskReward && options.atrRiskReward > 0
+      ? options.atrRiskReward
+      : takeProfitMultiplier / stopMultiplier;
+  return { atr, useAtr: !!useAtr, stopMultiplier, riskReward };
+}
+
+function computeBacktestEntryExits(
+  options: BacktestOptions,
+  bar: BacktestBarContext,
+  side: "long" | "short",
+  entryPrice: number,
+  atrPlan: BacktestAtrPlan,
+): ReturnType<typeof computeExitLevels> {
+  return computeExitLevels({
+    side,
+    entryPrice,
+    atr: atrPlan.atr,
+    useAtr: atrPlan.useAtr,
+    atrStopMultiplier: atrPlan.stopMultiplier,
+    atrRiskReward: atrPlan.riskReward,
+    stopLossPct: options.stopLossPct,
+    takeProfitPct: options.takeProfitPct,
+    scaleOutAtR: options.scaleOutAtR ?? 0,
+    candles: bar.window,
+    volatilityLookback: options.volatilityLookback ?? 0,
+    volatilityLowPct: options.volatilityLowPct ?? 20,
+    volatilityHighPct: options.volatilityHighPct ?? 80,
+    volatilityLowFactor: options.volatilityLowFactor ?? 0.8,
+    volatilityHighFactor: options.volatilityHighFactor ?? 1.2,
+    symbolStats: bar.symbolStats,
+    useAdaptiveStops: options.useAdaptiveStops,
+    adaptiveStopAtrMultiplier: options.adaptiveStopAtrMultiplier,
+    adaptiveRiskReward: options.adaptiveRiskReward,
+  });
+}
+
+function resolveBacktestEntryPlan(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+  side: "long" | "short",
+  fill: EntryFillResult,
+): BacktestEntryPlan | null {
+  const options = runtime.options;
+  const atrPlan = resolveBacktestAtrPlan(options, bar.window, fill.entryPrice);
+  if (!atrPlan) return null;
+  const exits = computeBacktestEntryExits(
+    options,
+    bar,
+    side,
+    fill.entryPrice,
+    atrPlan,
+  );
+  const stopDistancePct =
+    fill.entryPrice > 0
+      ? Math.abs(fill.entryPrice - exits.stopLoss) / fill.entryPrice
+      : 0;
+  const currentVolatility = calculateAnnualizedVolatility(
+    bar.window,
+    options.volatilityLookback ?? 0,
+    options.timeframe,
+  );
+  const positionValue = calculatePositionValue(
+    runtime.capital,
+    fill.entryPrice,
+    stopDistancePct,
+    currentVolatility,
+    options,
+  );
+  const size = positionValue / fill.entryPrice;
+  return {
+    entryPrice: fill.entryPrice,
+    entryFeePct: fill.appliedFeePct,
+    fillType: fill.fillType,
+    stopLoss: exits.stopLoss,
+    takeProfit: exits.takeProfit,
+    scaleOutPrice: exits.scaleOutPrice ?? 0,
+    trailingStopAtr: atrPlan.useAtr ? (atrPlan.atr ?? undefined) : undefined,
+    initialRiskPct: stopDistancePct,
+    size,
+    entryFee: positionValue * (fill.appliedFeePct / 100),
+  };
+}
+
+function tryOpenBacktestPosition(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): void {
+  if (!isBacktestEntryEligible(runtime, bar) || !bar.signal) return;
+  const side = bar.signal.direction === "buy" ? "long" : "short";
+  if (!passesBacktestEntryFilters(runtime, bar, side)) return;
+  const entryOnClose = runtime.options.entryOnClose ?? false;
+  const rawEntry = entryOnClose ? bar.current.close : bar.next.open;
+  const entryCandle = entryOnClose ? bar.current : bar.next;
+  runtime.entryAttempts += 1;
+  const fill = resolveEntryFill(
+    rawEntry,
+    entryCandle,
+    side,
+    runtime.feePct,
+    runtime.makerFeePct,
+    runtime.entryOrderType,
+    runtime.entryLimitOffsetBps,
+    runtime.slippageBps,
+  );
+  if (!fill.filled) return;
+  if (fill.fillType === "maker") runtime.makerFills += 1;
+  const plan = resolveBacktestEntryPlan(runtime, bar, side, fill);
+  if (!plan) return;
+  runtime.position = {
+    entrySignal: bar.signal,
+    entryPrice: plan.entryPrice,
+    entryTime: entryCandle.timestamp,
+    entryBarIndex: bar.index,
+    side,
+    size: plan.size,
+    stopLoss: plan.stopLoss,
+    takeProfit: plan.takeProfit,
+    trailingStopAtr: plan.trailingStopAtr,
+    highestPrice: plan.entryPrice,
+    lowestPrice: plan.entryPrice,
+    scaledOut: false,
+    scaleOutPrice: plan.scaleOutPrice,
+    initialRiskPct: plan.initialRiskPct,
+    entryFeePaid: plan.entryFee,
+    entryFeePct: plan.entryFeePct,
+    fillType: plan.fillType,
+  };
+  runtime.capital -= plan.entryFee;
+  runtime.totalFeesPaid += plan.entryFee;
+  runtime.lastFundingTime = entryCandle.timestamp;
+}
+
+function processBacktestBar(
+  runtime: BacktestCoreRuntime,
+  bar: BacktestBarContext,
+): void {
+  updateBacktestSignalState(runtime, bar.signal);
+  if (manageBacktestPosition(runtime, bar)) return;
+  if (runtime.cooldownBarsRemaining > 0) {
+    runtime.cooldownBarsRemaining--;
+  }
+  tryOpenBacktestPosition(runtime, bar);
+}
+
+function closeRemainingBacktestPosition(
+  runtime: BacktestCoreRuntime,
+  candles: readonly CandleLike[],
+): void {
+  const position = runtime.position;
+  if (!position || candles.length === 0) return;
+  const last = candles[candles.length - 1];
+  const exitSide = backtestExitSide(position);
+  const exitPrice = backtestExitPrice(runtime, last.close, exitSide, last);
+  closeBacktestPosition(
+    runtime,
+    exitPrice,
+    last.timestamp,
+    last.timestamp,
+    "signal",
+  );
+}
+
+function finalizeBacktestResult(
+  runtime: BacktestCoreRuntime,
+  candles: readonly CandleLike[],
+): BacktestResult {
+  const winningTrades = runtime.trades.filter((t) => t.pnl > 0).length;
+  const losingTrades = runtime.trades.filter((t) => t.pnl < 0).length;
+  const totalReturnPct =
+    ((runtime.capital - runtime.options.initialCapital) /
+      runtime.options.initialCapital) *
+    100;
+  const candleSpanMs =
+    candles.length > 1
+      ? candles[candles.length - 1].timestamp.getTime() -
+        candles[0].timestamp.getTime()
+      : 0;
+  const metrics = computePerformanceMetrics({
+    trades: runtime.trades,
+    initialCapital: runtime.options.initialCapital,
+    maxDrawdownPct: runtime.maxDrawdown * 100,
+    totalReturnPct,
+    candleSpanMs,
+  });
+  const result: BacktestResult = {
+    symbol: runtime.options.symbol,
+    totalTrades: runtime.trades.length,
+    winningTrades,
+    losingTrades,
+    winRate:
+      runtime.trades.length > 0 ? winningTrades / runtime.trades.length : 0,
+    totalReturnPct,
+    maxDrawdownPct: runtime.maxDrawdown * 100,
+    sharpeRatio: calculateSharpe(runtime.trades.map((t) => t.pnlPct)),
+    trades: runtime.trades,
+    totalFeesPaid: runtime.totalFeesPaid,
+    totalFundingCost: runtime.totalFundingCost,
+    benchmarkReturnPct: computeBenchmark(candles),
+    metrics,
+    equityCurve: runtime.equityCurve,
+    makerFillRate:
+      runtime.entryAttempts > 0
+        ? runtime.makerFills / runtime.entryAttempts
+        : undefined,
+    robustnessScore: 0,
+  };
+  return { ...result, robustnessScore: robustnessScore(result) };
+}
+
+interface BacktestStatsContext {
+  readonly statsSeries: readonly CandleLike[];
+  readonly statsOffset: number;
+  readonly statsForBar: (barIndex: number) => SymbolStatistics;
+  readonly composerConfigFor: (barStats: SymbolStatistics) => ComposerConfig;
+}
+
+function validateBacktestCandleTimestamps(
+  options: BacktestOptions,
+  candles: readonly CandleLike[],
+): void {
   for (let i = 0; i < candles.length; i++) {
     const ts = candles[i].timestamp;
     if (!(ts instanceof Date) || Number.isNaN(ts.getTime())) {
@@ -611,18 +1397,12 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
       );
     }
   }
+}
 
-  // Causal per-bar symbol stats: each bar's signal and exit levels must see
-  // only data available at that bar. A single whole-series stats object is
-  // look-ahead bias (bd clever-cabin-dt8). The explicit options.symbolStats
-  // override stays static — it exists for tests needing a fixed fixture.
-  //
-  // `warmupCandles` (set by the OOS split path) prepend history so BOTH the
-  // causal symbol stats AND the indicator windows at every trading bar match a
-  // continuous full-period run. `statsSeries` is the warmup-augmented series
-  // and `statsOffset` maps a trading-bar index `i` (into `candles`) to its
-  // position in `statsSeries` (bd clever-cabin-dt8). A run without warmup has
-  // statsOffset=0 and behaves exactly as before — the baseline is preserved.
+function makeBacktestStatsContext(
+  options: BacktestOptions,
+  candles: readonly CandleLike[],
+): BacktestStatsContext {
   const statsSeries = options.warmupCandles?.length
     ? [...options.warmupCandles, ...candles]
     : candles;
@@ -639,65 +1419,134 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
       symbolStats: barStats,
     },
   });
+  return { statsSeries, statsOffset, statsForBar, composerConfigFor };
+}
 
-  const feePct = normalizeFeePct(options.feePct);
-  const makerFeePct = normalizeOptionalFeePct(options.makerFeePct, "maker-fee");
-  const entryOrderType = options.entryOrderType ?? "market";
-  const entryLimitOffsetBps = options.entryLimitOffsetBps ?? 0;
+interface BacktestExecutionSettings {
+  readonly feePct: number;
+  readonly makerFeePct: number | undefined;
+  readonly entryOrderType: "market" | "limit";
+  readonly entryLimitOffsetBps: number;
+  readonly slippageBps: number;
+  readonly fundingRatePct: number;
+  readonly fundingIntervalMs: number;
+  readonly isFutures: boolean;
+  readonly leverage: number;
+}
 
-  const trades: BacktestTrade[] = [];
-  let equityCurve: BacktestEquityPoint[] | undefined = options.recordEquityCurve
-    ? []
-    : undefined;
-  const recordEquityPoint = (timestamp: Date) => {
-    if (equityCurve) {
-      equityCurve.push({
-        tradeIndex: trades.length - 1,
-        timestamp,
-        capital,
-      });
-    }
-  };
-  let position: BacktestPosition | null = null;
-  let capital = options.initialCapital;
-  let peakCapital = capital;
-  let maxDrawdown = 0;
-  let tradeId = 0;
-  let totalFeesPaid = 0;
-  let totalFundingCost = 0;
-  let lastFundingTime: Date | null = null;
-  let entryAttempts = 0;
-  let makerFills = 0;
-  let priorSignalDirection: Direction = "hold";
-  let signalStreak = 0;
-  const signalPersistence = Math.max(
-    0,
-    Math.floor(options.signalPersistence ?? 0),
-  );
-  let lossPenalty = 0;
-  const lossConfidencePenalty = options.lossConfidencePenalty ?? 0;
-  const lossConfidenceDecay = options.lossConfidenceDecay ?? 0;
-
-  const slippageBps = options.slippageBps ?? 0;
-  const fundingRatePct = options.fundingRatePct ?? 0;
-  const fundingIntervalMs = (options.fundingIntervalHours ?? 8) * 3600_000;
+function normalizeBacktestExecutionSettings(
+  options: BacktestOptions,
+): BacktestExecutionSettings {
   const isFutures = options.isFutures ?? false;
-  const leverage = isFutures ? Math.max(1, options.leverage ?? 1) : 1;
-  const breakevenAtR = Math.max(0, options.breakevenAtR ?? 0);
-  const maxBarsInTrade = Math.max(0, Math.floor(options.maxBarsInTrade ?? 0));
-  const lossCooldownBars = Math.max(
-    0,
-    Math.floor(options.lossCooldownBars ?? 0),
-  );
-  let cooldownBarsRemaining = 0;
-  const sessionStart = options.sessionStart ?? "";
-  const sessionEnd = options.sessionEnd ?? "";
-  const autoRegimeFilter = options.autoRegimeFilter ?? false;
-  const autoRegimeAdxThreshold = Math.max(
-    0,
-    options.autoRegimeAdxThreshold ?? 25,
-  );
-  const useObservedPrice = options.useObservedPrice ?? false;
+  return {
+    feePct: normalizeFeePct(options.feePct),
+    makerFeePct: normalizeOptionalFeePct(options.makerFeePct, "maker-fee"),
+    entryOrderType: options.entryOrderType ?? "market",
+    entryLimitOffsetBps: options.entryLimitOffsetBps ?? 0,
+    slippageBps: options.slippageBps ?? 0,
+    fundingRatePct: options.fundingRatePct ?? 0,
+    fundingIntervalMs: (options.fundingIntervalHours ?? 8) * 3600_000,
+    isFutures,
+    leverage: isFutures ? Math.max(1, options.leverage ?? 1) : 1,
+  };
+}
+
+interface BacktestRiskSettings {
+  readonly breakevenAtR: number;
+  readonly maxBarsInTrade: number;
+  readonly lossCooldownBars: number;
+  readonly signalPersistence: number;
+  readonly lossConfidencePenalty: number;
+  readonly lossConfidenceDecay: number;
+}
+
+function normalizeBacktestRiskSettings(
+  options: BacktestOptions,
+): BacktestRiskSettings {
+  return {
+    breakevenAtR: Math.max(0, options.breakevenAtR ?? 0),
+    maxBarsInTrade: Math.max(0, Math.floor(options.maxBarsInTrade ?? 0)),
+    lossCooldownBars: Math.max(0, Math.floor(options.lossCooldownBars ?? 0)),
+    signalPersistence: Math.max(0, Math.floor(options.signalPersistence ?? 0)),
+    lossConfidencePenalty: options.lossConfidencePenalty ?? 0,
+    lossConfidenceDecay: options.lossConfidenceDecay ?? 0,
+  };
+}
+
+interface BacktestFilterSettings {
+  readonly sessionStart: string;
+  readonly sessionEnd: string;
+  readonly autoRegimeFilter: boolean;
+  readonly autoRegimeAdxThreshold: number;
+  readonly useObservedPrice: boolean;
+}
+
+function normalizeBacktestFilterSettings(
+  options: BacktestOptions,
+): BacktestFilterSettings {
+  return {
+    sessionStart: options.sessionStart ?? "",
+    sessionEnd: options.sessionEnd ?? "",
+    autoRegimeFilter: options.autoRegimeFilter ?? false,
+    autoRegimeAdxThreshold: Math.max(0, options.autoRegimeAdxThreshold ?? 25),
+    useObservedPrice: options.useObservedPrice ?? false,
+  };
+}
+
+function createBacktestRuntime(options: BacktestOptions): BacktestCoreRuntime {
+  const execution = normalizeBacktestExecutionSettings(options);
+  const risk = normalizeBacktestRiskSettings(options);
+  const filters = normalizeBacktestFilterSettings(options);
+  return {
+    options,
+    ...execution,
+    ...risk,
+    ...filters,
+    trades: [],
+    equityCurve: options.recordEquityCurve ? [] : undefined,
+    position: null,
+    capital: options.initialCapital,
+    peakCapital: options.initialCapital,
+    maxDrawdown: 0,
+    tradeId: 0,
+    totalFeesPaid: 0,
+    totalFundingCost: 0,
+    lastFundingTime: null,
+    entryAttempts: 0,
+    makerFills: 0,
+    priorSignalDirection: "hold",
+    signalStreak: 0,
+    lossPenalty: 0,
+    cooldownBarsRemaining: 0,
+  };
+}
+
+/**
+ * Internal engine: run a single backtest on the provided candles.
+ */
+function runBacktestCore(options: BacktestOptions): BacktestResult {
+  const candles = options.candles;
+  if (candles.length < 20) {
+    return emptyResult(options.symbol);
+  }
+
+  // Fail fast before a malformed timestamp can poison funding and metrics.
+  validateBacktestCandleTimestamps(options, candles);
+
+  // Causal per-bar symbol stats: each bar's signal and exit levels must see
+  // only data available at that bar. A single whole-series stats object is
+  // look-ahead bias (bd clever-cabin-dt8). The explicit options.symbolStats
+  // override stays static — it exists for tests needing a fixed fixture.
+  //
+  // `warmupCandles` (set by the OOS split path) prepend history so BOTH the
+  // causal symbol stats AND the indicator windows at every trading bar match a
+  // continuous full-period run. `statsSeries` is the warmup-augmented series
+  // and `statsOffset` maps a trading-bar index `i` (into `candles`) to its
+  // position in `statsSeries` (bd clever-cabin-dt8). A run without warmup has
+  // statsOffset=0 and behaves exactly as before — the baseline is preserved.
+  const stats = makeBacktestStatsContext(options, candles);
+
+  const runtime = createBacktestRuntime(options);
 
   // We need a rolling window of candles plus current OB metrics.
   // For backtesting, derive synthetic order-book metrics from the candle.
@@ -706,9 +1555,9 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
   // continuous full-period run would (bd clever-cabin-dt8). Trades still only
   // execute on the actual `candles` (`current`/`next`), never on warmup bars.
   for (let i = 0; i < candles.length - 1; i++) {
-    const augIndex = i + statsOffset;
+    const augIndex = i + stats.statsOffset;
     if (augIndex < 20) continue;
-    const window = statsSeries.slice(
+    const window = stats.statsSeries.slice(
       Math.max(0, augIndex + 1 - 200),
       augIndex + 1,
     );
@@ -724,706 +1573,25 @@ function runBacktestCore(options: BacktestOptions): BacktestResult {
       fundingRates: options.fundingRates,
     };
 
-    const symbolStats = statsForBar(i);
+    const symbolStats = stats.statsForBar(i);
     const signal = composeSignal(
       ohlcv,
       obMetrics,
-      composerConfigFor(symbolStats),
+      stats.composerConfigFor(symbolStats),
     );
-    const currentDirection = signal?.direction ?? "hold";
-    if (
-      currentDirection !== "hold" &&
-      currentDirection === priorSignalDirection
-    ) {
-      signalStreak += 1;
-    } else {
-      signalStreak = currentDirection === "hold" ? 0 : 1;
-    }
-    priorSignalDirection = currentDirection;
-    if (lossPenalty > 0 && lossConfidenceDecay > 0) {
-      lossPenalty = Math.max(0, lossPenalty - lossConfidenceDecay);
-    }
-
-    // Update running capital/drawdown if position open
-    if (position) {
-      const mtmPrice = current.close;
-      const mtmPnl = calculatePnl(position, mtmPrice);
-      const mtmCapital = capital + mtmPnl;
-      if (mtmCapital > peakCapital) peakCapital = mtmCapital;
-      const drawdown = (peakCapital - mtmCapital) / peakCapital;
-      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-
-      // Update trailing stop based on favorable price movement.
-      updateTrailingStop(position, current, options, useObservedPrice);
-
-      // Move stop-loss to breakeven once the trade has reached +R profit.
-      if (breakevenAtR > 0) {
-        applyBreakevenStop(position, current.close, breakevenAtR);
-      }
-
-      // Liquidation check for leveraged futures.
-      if (leverage > 1 && isLiquidated(position, current.close, leverage)) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        const exitPrice = useObservedPrice
-          ? applyObservedSlippage(current.close, exitSide, slippageBps)
-          : applySlippage(
-              current.close,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            );
-        const notional = position.entryPrice * position.size;
-        const pnl = -notional / leverage;
-        const exitFee = exitPrice * position.size * (feePct / 100);
-        const entryFee = position.entryFeePaid;
-        const funding = chargeFunding(
-          position,
-          lastFundingTime!,
-          current.timestamp,
-          fundingRatePct,
-          fundingIntervalMs,
-          isFutures,
-          options.fundingRates,
-        );
-        const pnlPct = ((pnl - exitFee) / notional) * 100;
-        capital += pnl - exitFee - funding.funding;
-        totalFeesPaid += exitFee;
-        totalFundingCost += funding.funding;
-        lastFundingTime = funding.newLastFundingTime;
-        trades.push({
-          id: `trade-${tradeId++}`,
-          symbol: options.symbol,
-          side: position.side,
-          entryTime: position.entryTime,
-          exitTime: current.timestamp,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl,
-          pnlPct,
-          netPnl: pnl - exitFee - entryFee - funding.funding,
-          exitReason: "liquidation",
-          initialRiskPct: position.initialRiskPct,
-          fillType: position.fillType,
-          entryFeePct: position.entryFeePct,
-          exitFeePct: feePct,
-        });
-        recordEquityPoint(current.timestamp);
-        if (pnl - exitFee - funding.funding < 0) {
-          lossPenalty = lossConfidencePenalty;
-          cooldownBarsRemaining = lossCooldownBars;
-        }
-        position = null;
-        lastFundingTime = null;
-        continue;
-      }
-
-      // Time-stop: close position after max allowed bars.
-      if (
-        maxBarsInTrade > 0 &&
-        i - position.entryBarIndex + 1 >= maxBarsInTrade
-      ) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        const exitPrice = useObservedPrice
-          ? applyObservedSlippage(current.close, exitSide, slippageBps)
-          : applySlippage(
-              current.close,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            );
-        const pnl = calculatePnl(position, exitPrice);
-        const exitFee = exitPrice * position.size * (feePct / 100);
-        const entryFee = position.entryFeePaid;
-        const funding = chargeFunding(
-          position,
-          lastFundingTime!,
-          current.timestamp,
-          fundingRatePct,
-          fundingIntervalMs,
-          isFutures,
-          options.fundingRates,
-        );
-        const pnlPct =
-          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding.funding;
-        totalFeesPaid += exitFee;
-        totalFundingCost += funding.funding;
-        lastFundingTime = funding.newLastFundingTime;
-        trades.push({
-          id: `trade-${tradeId++}`,
-          symbol: options.symbol,
-          side: position.side,
-          entryTime: position.entryTime,
-          exitTime: current.timestamp,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl,
-          pnlPct,
-          netPnl: pnl - exitFee - entryFee - funding.funding,
-          exitReason: "time_stop",
-          initialRiskPct: position.initialRiskPct,
-          fillType: position.fillType,
-          entryFeePct: position.entryFeePct,
-          exitFeePct: feePct,
-        });
-        recordEquityPoint(current.timestamp);
-        if (pnl - exitFee - funding.funding < 0) {
-          lossPenalty = lossConfidencePenalty;
-          cooldownBarsRemaining = lossCooldownBars;
-        }
-        position = null;
-        lastFundingTime = null;
-        continue;
-      }
-
-      // Check partial scale-out before stop/take-profit.
-      if (checkScaleOut(position, current, useObservedPrice)) {
-        const scaleOutPct = Math.max(
-          0,
-          Math.min(100, options.scaleOutPct ?? 50),
-        );
-        const partialSize = position.size * (scaleOutPct / 100);
-        if (partialSize > 0) {
-          const exitSide = position.side === "long" ? "short" : "long";
-          const exitPrice = useObservedPrice
-            ? applyObservedSlippage(current.close, exitSide, slippageBps)
-            : applySlippage(
-                position.scaleOutPrice,
-                exitSide,
-                slippageBps,
-                current.high,
-                current.low,
-              );
-          const pnl = calculatePnl(
-            { ...position, size: partialSize },
-            exitPrice,
-          );
-          const exitFee = exitPrice * partialSize * (feePct / 100);
-          const entryFee =
-            position.size > 0
-              ? position.entryFeePaid * (partialSize / position.size)
-              : 0;
-          const pnlPct =
-            ((pnl - exitFee) / (position.entryPrice * partialSize)) * 100;
-          capital += pnl - exitFee;
-          totalFeesPaid += exitFee;
-          trades.push({
-            id: `trade-${tradeId++}`,
-            symbol: options.symbol,
-            side: position.side,
-            entryTime: position.entryTime,
-            exitTime: current.timestamp,
-            entryPrice: position.entryPrice,
-            exitPrice,
-            pnl,
-            pnlPct,
-            netPnl: pnl - exitFee - entryFee,
-            exitReason: "scale_out",
-            initialRiskPct: position.initialRiskPct,
-            fillType: position.fillType,
-            entryFeePct: position.entryFeePct,
-            exitFeePct: feePct,
-          });
-          recordEquityPoint(current.timestamp);
-          position.size -= partialSize;
-          position.stopLoss = position.entryPrice;
-          position.scaledOut = true;
-          if (pnl - exitFee < 0) {
-            cooldownBarsRemaining = lossCooldownBars;
-          }
-        }
-        continue;
-      }
-
-      // Check stop-loss / take-profit on current candle
-      const { stopLoss, takeProfit } = checkExitLevels(
-        position,
-        current,
-        useObservedPrice,
-      );
-      if (stopLoss || takeProfit) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        const exitPrice = useObservedPrice
-          ? applyObservedSlippage(current.close, exitSide, slippageBps)
-          : applySlippage(
-              stopLoss ? position.stopLoss : position.takeProfit,
-              exitSide,
-              slippageBps,
-              current.high,
-              current.low,
-            );
-        const reason = stopLoss ? "stop_loss" : "take_profit";
-        const pnl = calculatePnl(position, exitPrice);
-        const exitFee = exitPrice * position.size * (feePct / 100);
-        const entryFee = position.entryFeePaid;
-        const funding = chargeFunding(
-          position,
-          lastFundingTime!,
-          current.timestamp,
-          fundingRatePct,
-          fundingIntervalMs,
-          isFutures,
-          options.fundingRates,
-        );
-        const pnlPct =
-          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding.funding;
-        totalFeesPaid += exitFee;
-        totalFundingCost += funding.funding;
-        lastFundingTime = funding.newLastFundingTime;
-        trades.push({
-          id: `trade-${tradeId++}`,
-          symbol: options.symbol,
-          side: position.side,
-          entryTime: position.entryTime,
-          exitTime: current.timestamp,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl,
-          pnlPct,
-          netPnl: pnl - exitFee - entryFee - funding.funding,
-          exitReason: reason,
-          initialRiskPct: position.initialRiskPct,
-          fillType: position.fillType,
-          entryFeePct: position.entryFeePct,
-          exitFeePct: feePct,
-        });
-        recordEquityPoint(current.timestamp);
-        if (pnl - exitFee - funding.funding < 0) {
-          lossPenalty = lossConfidencePenalty;
-          cooldownBarsRemaining = lossCooldownBars;
-        }
-        position = null;
-        lastFundingTime = null;
-        continue;
-      }
-
-      // RSI normalization exit.
-      if (
-        checkRsiExit({
-          side: position.side,
-          candles: window,
-          exitRsiPeriod: options.exitRsiPeriod,
-          exitRsiLongLevel: options.exitRsiLongLevel,
-          exitRsiShortLevel: options.exitRsiShortLevel,
-        })
-      ) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        const exitPrice = useObservedPrice
-          ? applyObservedSlippage(current.close, exitSide, slippageBps)
-          : applySlippage(
-              next.open,
-              exitSide,
-              slippageBps,
-              next.high,
-              next.low,
-            );
-        const pnl = calculatePnl(position, exitPrice);
-        const exitFee = exitPrice * position.size * (feePct / 100);
-        const entryFee = position.entryFeePaid;
-        const funding = chargeFunding(
-          position,
-          lastFundingTime!,
-          useObservedPrice ? current.timestamp : next.timestamp,
-          fundingRatePct,
-          fundingIntervalMs,
-          isFutures,
-          options.fundingRates,
-        );
-        const pnlPct =
-          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding.funding;
-        totalFeesPaid += exitFee;
-        totalFundingCost += funding.funding;
-        lastFundingTime = funding.newLastFundingTime;
-        trades.push({
-          id: `trade-${tradeId++}`,
-          symbol: options.symbol,
-          side: position.side,
-          entryTime: position.entryTime,
-          exitTime: useObservedPrice ? current.timestamp : next.timestamp,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl,
-          pnlPct,
-          netPnl: pnl - exitFee - entryFee - funding.funding,
-          exitReason: "rsi_exit",
-          initialRiskPct: position.initialRiskPct,
-          fillType: position.fillType,
-          entryFeePct: position.entryFeePct,
-          exitFeePct: feePct,
-        });
-        recordEquityPoint(
-          useObservedPrice ? current.timestamp : next.timestamp,
-        );
-        if (pnl - exitFee - funding.funding < 0) {
-          lossPenalty = lossConfidencePenalty;
-          cooldownBarsRemaining = lossCooldownBars;
-        }
-        position = null;
-        lastFundingTime = null;
-        continue;
-      }
-
-      // Exit on signal reversal unless holding until stop/take-profit.
-      if (
-        !options.holdUntilStop &&
-        signal &&
-        shouldExitPosition(position, signal)
-      ) {
-        const exitSide = position.side === "long" ? "short" : "long";
-        const exitPrice = applySlippage(
-          next.open,
-          exitSide,
-          slippageBps,
-          next.high,
-          next.low,
-        );
-        const pnl = calculatePnl(position, exitPrice);
-        const exitFee = exitPrice * position.size * (feePct / 100);
-        const entryFee = position.entryFeePaid;
-        const funding = chargeFunding(
-          position,
-          lastFundingTime!,
-          next.timestamp,
-          fundingRatePct,
-          fundingIntervalMs,
-          isFutures,
-          options.fundingRates,
-        );
-        const pnlPct =
-          ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-        capital += pnl - exitFee - funding.funding;
-        totalFeesPaid += exitFee;
-        totalFundingCost += funding.funding;
-        lastFundingTime = funding.newLastFundingTime;
-        trades.push({
-          id: `trade-${tradeId++}`,
-          symbol: options.symbol,
-          side: position.side,
-          entryTime: position.entryTime,
-          exitTime: next.timestamp,
-          entryPrice: position.entryPrice,
-          exitPrice,
-          pnl,
-          pnlPct,
-          netPnl: pnl - exitFee - entryFee - funding.funding,
-          exitReason: "signal",
-          initialRiskPct: position.initialRiskPct,
-          fillType: position.fillType,
-          entryFeePct: position.entryFeePct,
-          exitFeePct: feePct,
-        });
-        recordEquityPoint(next.timestamp);
-        if (pnl - exitFee - funding.funding < 0) {
-          lossPenalty = lossConfidencePenalty;
-          cooldownBarsRemaining = lossCooldownBars;
-        }
-        position = null;
-        lastFundingTime = null;
-      }
-    }
-
-    // Decrement loss cooldown before considering a new entry.
-    if (cooldownBarsRemaining > 0) {
-      cooldownBarsRemaining--;
-    }
-
-    // Open new position if signal is strong enough and no position
-    const persistenceMet =
-      signalPersistence <= 1 || signalStreak >= signalPersistence;
-    const effectiveMinConfidence = options.minConfidence + lossPenalty;
-    if (
-      !position &&
-      cooldownBarsRemaining === 0 &&
-      signal &&
-      isEntrySignal(signal, effectiveMinConfidence) &&
-      persistenceMet &&
-      isWithinSession(current.timestamp, sessionStart, sessionEnd) &&
-      (!autoRegimeFilter ||
-        passesAutoRegimeFilter(
-          window,
-          signal.direction === "buy" ? "long" : "short",
-          autoRegimeAdxThreshold,
-        ))
-    ) {
-      const side = signal.direction === "buy" ? "long" : "short";
-
-      if (
-        options.htfCandles &&
-        options.htfCandles.length > 0 &&
-        !alignsWithHigherTimeframeTrend(
-          side,
-          // Only consider HTF candles already closed by the decision time;
-          // otherwise the trend reflects future information (look-ahead bias).
-          options.htfCandles.filter(
-            (htf) => htf.timestamp.getTime() <= current.timestamp.getTime(),
-          ),
-          options.htfTrendFastPeriod,
-          options.htfTrendSlowPeriod,
-        )
-      ) {
-        continue;
-      }
-
-      if (
-        options.entryPullbackEmaPeriod &&
-        options.entryPullbackEmaPeriod > 0 &&
-        !priceWithinEmaPullback(
-          current.close,
-          window,
-          options.entryPullbackEmaPeriod,
-          options.entryPullbackMarginPct ?? 0.1,
-        )
-      ) {
-        continue;
-      }
-
-      if (
-        options.minEfficiencyRatio &&
-        options.minEfficiencyRatio > 0 &&
-        efficiencyRatio(window, options.efficiencyRatioPeriod ?? 20) <
-          options.minEfficiencyRatio
-      ) {
-        continue;
-      }
-
-      if (
-        (options.rsiLongMax || options.rsiShortMin) &&
-        !passesRsiNeutralZone(
-          window,
-          side,
-          options.rsiLongMax ?? 100,
-          options.rsiShortMin ?? 0,
-        )
-      ) {
-        continue;
-      }
-
-      const useBollingerLong =
-        options.bollingerLongMaxPctB !== undefined &&
-        options.bollingerLongMaxPctB >= 0 &&
-        options.bollingerLongMaxPctB <= 1;
-      const useBollingerShort =
-        options.bollingerShortMinPctB !== undefined &&
-        options.bollingerShortMinPctB >= 0 &&
-        options.bollingerShortMinPctB <= 1;
-      if (
-        (useBollingerLong || useBollingerShort) &&
-        !passesBollingerPullback(
-          window,
-          side,
-          useBollingerLong ? options.bollingerLongMaxPctB! : 1,
-          useBollingerShort ? options.bollingerShortMinPctB! : 0,
-        )
-      ) {
-        continue;
-      }
-
-      const entryOnClose = options.entryOnClose ?? false;
-      const rawEntry = entryOnClose ? current.close : next.open;
-      const entryCandle = entryOnClose ? current : next;
-      entryAttempts += 1;
-      const fill = resolveEntryFill(
-        rawEntry,
-        entryCandle,
-        side,
-        feePct,
-        makerFeePct,
-        entryOrderType,
-        entryLimitOffsetBps,
-        slippageBps,
-      );
-      if (!fill.filled) {
-        continue;
-      }
-      if (fill.fillType === "maker") {
-        makerFills += 1;
-      }
-      const entryPrice = fill.entryPrice;
-      const entryFeePct = fill.appliedFeePct;
-
-      const needsAtr =
-        options.useAtrStops ||
-        options.trailingStopAtrMultiplier ||
-        options.minAtrPct;
-      const atr = needsAtr ? calculateATR(window, 14) : null;
-      const useAtr = options.useAtrStops && atr !== null && atr > 0;
-      const stopMult = options.atrStopMultiplier ?? 1.5;
-      const tpMult = options.atrTakeProfitMultiplier ?? 2.5;
-
-      if (options.minAtrPct && options.minAtrPct > 0) {
-        const atrPct = atr && entryPrice > 0 ? atr / entryPrice : 0;
-        if (atrPct < options.minAtrPct / 100) {
-          continue;
-        }
-      }
-
-      const atrRiskReward =
-        options.atrRiskReward && options.atrRiskReward > 0
-          ? options.atrRiskReward
-          : tpMult / stopMult;
-      const { stopLoss, takeProfit, scaleOutPrice } = computeExitLevels({
-        side,
-        entryPrice,
-        atr,
-        useAtr: !!useAtr,
-        atrStopMultiplier: stopMult,
-        atrRiskReward,
-        stopLossPct: options.stopLossPct,
-        takeProfitPct: options.takeProfitPct,
-        scaleOutAtR: options.scaleOutAtR ?? 0,
-        candles: window,
-        volatilityLookback: options.volatilityLookback ?? 0,
-        volatilityLowPct: options.volatilityLowPct ?? 20,
-        volatilityHighPct: options.volatilityHighPct ?? 80,
-        volatilityLowFactor: options.volatilityLowFactor ?? 0.8,
-        volatilityHighFactor: options.volatilityHighFactor ?? 1.2,
-        symbolStats,
-        useAdaptiveStops: options.useAdaptiveStops,
-        adaptiveStopAtrMultiplier: options.adaptiveStopAtrMultiplier,
-        adaptiveRiskReward: options.adaptiveRiskReward,
-      });
-
-      const stopDistancePct =
-        entryPrice > 0 ? Math.abs(entryPrice - stopLoss) / entryPrice : 0;
-      const initialRiskPct = stopDistancePct;
-      const currentVolatility = calculateAnnualizedVolatility(
-        window,
-        options.volatilityLookback ?? 0,
-        options.timeframe,
-      );
-      const positionValue = calculatePositionValue(
-        capital,
-        entryPrice,
-        stopDistancePct,
-        currentVolatility,
-        options,
-      );
-      const size = positionValue / entryPrice;
-
-      const entryFee = positionValue * (entryFeePct / 100);
-      position = {
-        entrySignal: signal,
-        entryPrice,
-        entryTime: next.timestamp,
-        entryBarIndex: i,
-        side,
-        size,
-        stopLoss,
-        takeProfit,
-        trailingStopAtr: useAtr ? atr : undefined,
-        highestPrice: entryPrice,
-        lowestPrice: entryPrice,
-        scaledOut: false,
-        scaleOutPrice: scaleOutPrice ?? 0,
-        initialRiskPct,
-        entryFeePaid: entryFee,
-        entryFeePct,
-        fillType: fill.fillType,
-      };
-
-      capital -= entryFee;
-      totalFeesPaid += entryFee;
-      lastFundingTime = next.timestamp;
-    }
+    const bar: BacktestBarContext = {
+      index: i,
+      current,
+      next,
+      window,
+      signal,
+      symbolStats,
+    };
+    processBacktestBar(runtime, bar);
   }
 
-  // Close any open position at the last candle
-  if (position && candles.length > 0) {
-    const last = candles[candles.length - 1];
-    const exitSide = position.side === "long" ? "short" : "long";
-    const exitPrice = useObservedPrice
-      ? applyObservedSlippage(last.close, exitSide, slippageBps)
-      : applySlippage(last.close, exitSide, slippageBps, last.high, last.low);
-    const pnl = calculatePnl(position, exitPrice);
-    const exitFee = exitPrice * position.size * (feePct / 100);
-    const entryFee = position.entryFeePaid;
-    const funding = chargeFunding(
-      position,
-      lastFundingTime!,
-      last.timestamp,
-      fundingRatePct,
-      fundingIntervalMs,
-      isFutures,
-      options.fundingRates,
-    );
-    const pnlPct =
-      ((pnl - exitFee) / (position.entryPrice * position.size)) * 100;
-    capital += pnl - exitFee - funding.funding;
-    totalFeesPaid += exitFee;
-    totalFundingCost += funding.funding;
-    lastFundingTime = funding.newLastFundingTime;
-    trades.push({
-      id: `trade-${tradeId++}`,
-      symbol: options.symbol,
-      side: position.side,
-      entryTime: position.entryTime,
-      exitTime: last.timestamp,
-      entryPrice: position.entryPrice,
-      exitPrice,
-      pnl,
-      pnlPct,
-      netPnl: pnl - exitFee - entryFee - funding.funding,
-      exitReason: "signal",
-      initialRiskPct: position.initialRiskPct,
-      fillType: position.fillType,
-      entryFeePct: position.entryFeePct,
-      exitFeePct: feePct,
-    });
-    recordEquityPoint(last.timestamp);
-    if (pnl - exitFee - funding.funding < 0) {
-      lossPenalty = lossConfidencePenalty;
-      cooldownBarsRemaining = lossCooldownBars;
-    }
-  }
-
-  const winningTrades = trades.filter((t) => t.pnl > 0).length;
-  const losingTrades = trades.filter((t) => t.pnl < 0).length;
-  const totalReturnPct =
-    ((capital - options.initialCapital) / options.initialCapital) * 100;
-  const returns = trades.map((t) => t.pnlPct);
-  const sharpe = calculateSharpe(returns);
-
-  const candleSpanMs =
-    candles.length > 1
-      ? candles[candles.length - 1].timestamp.getTime() -
-        candles[0].timestamp.getTime()
-      : 0;
-
-  const metrics = computePerformanceMetrics({
-    trades,
-    initialCapital: options.initialCapital,
-    maxDrawdownPct: maxDrawdown * 100,
-    totalReturnPct,
-    candleSpanMs,
-  });
-
-  const result: BacktestResult = {
-    symbol: options.symbol,
-    totalTrades: trades.length,
-    winningTrades,
-    losingTrades,
-    winRate: trades.length > 0 ? winningTrades / trades.length : 0,
-    totalReturnPct,
-    maxDrawdownPct: maxDrawdown * 100,
-    sharpeRatio: sharpe,
-    trades,
-    totalFeesPaid,
-    totalFundingCost,
-    benchmarkReturnPct: computeBenchmark(candles),
-    metrics,
-    equityCurve,
-    makerFillRate: entryAttempts > 0 ? makerFills / entryAttempts : undefined,
-    robustnessScore: 0,
-  };
-
-  return {
-    ...result,
-    robustnessScore: robustnessScore(result),
-  };
+  closeRemainingBacktestPosition(runtime, candles);
+  return finalizeBacktestResult(runtime, candles);
 }
 
 function emptyResult(symbol: string): BacktestResult {

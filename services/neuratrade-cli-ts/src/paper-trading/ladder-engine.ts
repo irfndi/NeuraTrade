@@ -21,7 +21,6 @@ import { Effect, Option } from "effect";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
-  type FuturesOrderRequest,
   type FuturesProductType,
   type FuturesMarginMode,
   type FuturesOrderSide,
@@ -36,8 +35,13 @@ import { RiskError, RiskGuard, type RiskGuardService } from "../risk/guards.js";
 import {
   CircuitBreaker,
   CircuitBreakerError,
+  type CircuitBreakerService,
 } from "../risk/circuit-breaker.js";
-import { KillSwitch, KillSwitchError } from "../risk/kill-switch.js";
+import {
+  KillSwitch,
+  KillSwitchError,
+  type KillSwitchService,
+} from "../risk/kill-switch.js";
 import type { CandleLike } from "../scalping/types.js";
 import { calculateSMA } from "../scalping/indicators.js";
 import { makeCausalSymbolStats } from "../scalping/symbol-stats.js";
@@ -503,6 +507,413 @@ function accountDrawdownBreached(
   return ddPct.greaterThanOrEqualTo(cap);
 }
 
+interface LadderBarContext {
+  readonly w: WorkingState;
+  readonly candle: CandleLike;
+  readonly barIndex: number;
+  readonly opts: LadderPaperTradingOptions;
+  readonly events: MutableBarEvents;
+  readonly step: number;
+  readonly slippage: number;
+  readonly rungCount: number;
+  readonly targetRatio: number;
+  readonly leverage: number;
+  readonly maxHoldBars: number;
+  readonly millisecondsPerBar: number;
+  readonly trend: number;
+  readonly chopGateActive: boolean;
+  readonly onlyWithTrend: boolean;
+}
+
+type LadderSide = "long" | "short";
+
+interface LadderRiskExit {
+  readonly closeRungs: readonly LadderPaperRungState[];
+  readonly exitPrice: number;
+  readonly reason: "stop" | "liquidation";
+  readonly resetAll: boolean;
+  readonly pauseAfterLoss: boolean;
+}
+
+function sideRungs(w: WorkingState, side: LadderSide): LadderPaperRungState[] {
+  return side === "long" ? w.longRungs : w.shortRungs;
+}
+
+function setSideRungs(
+  w: WorkingState,
+  side: LadderSide,
+  rungs: LadderPaperRungState[],
+): void {
+  if (side === "long") w.longRungs = rungs;
+  else w.shortRungs = rungs;
+}
+
+function sideBase(w: WorkingState, side: LadderSide): number {
+  return side === "long" ? w.longBase : w.shortBase;
+}
+
+function setSideBase(w: WorkingState, side: LadderSide, base: number): void {
+  if (side === "long") w.longBase = base;
+  else w.shortBase = base;
+}
+
+function buildSideRungs(
+  side: LadderSide,
+  base: number,
+  step: number,
+  rungCount: number,
+): LadderPaperRungState[] {
+  const rungs: LadderPaperRungState[] = [];
+  for (let rungIndex = 1; rungIndex <= rungCount; rungIndex++) {
+    rungs.push({
+      rungIndex,
+      side,
+      level:
+        side === "long" ? base - rungIndex * step : base + rungIndex * step,
+      step,
+      filled: false,
+      entryPrice: 0,
+      entryBar: 0,
+      entryTimestamp: 0,
+    });
+  }
+  return rungs;
+}
+
+function seedLadderSide(ctx: LadderBarContext, side: LadderSide): void {
+  const { w, candle, opts } = ctx;
+  const rungs = sideRungs(w, side);
+  if (rungs.some((rung) => rung.filled)) return;
+  const trendAllows =
+    !ctx.onlyWithTrend ||
+    (ctx.trend !== null &&
+      !isNaN(ctx.trend) &&
+      (side === "long" ? candle.close > ctx.trend : candle.close < ctx.trend));
+  const allowed =
+    !accountDrawdownBreached(w, opts) && !ctx.chopGateActive && trendAllows;
+  if (!allowed) {
+    setSideRungs(w, side, []);
+    setSideBase(w, side, 0);
+    return;
+  }
+  setSideBase(w, side, candle.open);
+  setSideRungs(
+    w,
+    side,
+    buildSideRungs(side, candle.open, ctx.step, ctx.rungCount),
+  );
+}
+
+function sideLevelTouched(
+  side: LadderSide,
+  candle: CandleLike,
+  level: number,
+): boolean {
+  return side === "long" ? candle.low <= level : candle.high >= level;
+}
+
+function fillLadderSide(ctx: LadderBarContext, side: LadderSide): void {
+  const { w, candle, opts, events } = ctx;
+  const rungs = sideRungs(w, side);
+  for (let index = 0; index < rungs.length; index++) {
+    const rung = rungs[index];
+    if (rung.filled) continue;
+    const previousFilled = index === 0 || rungs[index - 1].filled;
+    if (!previousFilled || !sideLevelTouched(side, candle, rung.level))
+      continue;
+    const fillPrice =
+      side === "long" ? rung.level * ctx.slippage : rung.level / ctx.slippage;
+    const sized = ladderRungQty(w.capital, opts, money(fillPrice));
+    rungs[index] = {
+      ...rung,
+      filled: true,
+      entryPrice: fillPrice,
+      entryBar: ctx.barIndex,
+      entryTimestamp: candle.timestamp.getTime(),
+      filledQty: sized.qty.greaterThan(0) ? toNumber(sized.qty) : undefined,
+    };
+    events.fills.push({
+      rungIndex: rung.rungIndex,
+      side,
+      fillPrice,
+      level: rung.level,
+      qty: toNumber(sized.qty),
+    });
+  }
+}
+
+function sideStopBoundary(
+  ctx: LadderBarContext,
+  side: LadderSide,
+  filled: readonly LadderPaperRungState[],
+): number {
+  const { opts, w } = ctx;
+  const stopRatio = opts.stopRatio ?? 0;
+  if (stopRatio > 0) {
+    const entries = filled.map((rung) => rung.entryPrice);
+    return side === "long"
+      ? Math.min(...entries) - ctx.step * stopRatio
+      : Math.max(...entries) + ctx.step * stopRatio;
+  }
+  return side === "long"
+    ? sideBase(w, side) - ctx.step * (ctx.rungCount + opts.gridMaxGrids)
+    : sideBase(w, side) + ctx.step * (ctx.rungCount + opts.gridMaxGrids);
+}
+
+function sideLiquidationLevel(
+  ctx: LadderBarContext,
+  side: LadderSide,
+  filled: readonly LadderPaperRungState[],
+): number {
+  const levels = filled
+    .map((rung) =>
+      liquidationPrice(
+        side,
+        rung.entryPrice,
+        ctx.leverage,
+        ctx.opts.maintenanceMarginRate ?? 0,
+      ),
+    )
+    .filter((price) => price > 0);
+  if (levels.length === 0) return 0;
+  return side === "long" ? Math.max(...levels) : Math.min(...levels);
+}
+
+function sideExitPrice(
+  side: LadderSide,
+  price: number,
+  slippageBps: number,
+): number {
+  return side === "long"
+    ? price * (1 - slippageBps / 10000)
+    : price * (1 + slippageBps / 10000);
+}
+
+function positionLossesBeyondLimit(
+  side: LadderSide,
+  filled: readonly LadderPaperRungState[],
+  close: number,
+  limit: number,
+): LadderPaperRungState[] {
+  return filled.filter((rung) => {
+    if (rung.entryPrice <= 0) return false;
+    const lossPct =
+      side === "long"
+        ? ((rung.entryPrice - close) / rung.entryPrice) * 100
+        : ((close - rung.entryPrice) / rung.entryPrice) * 100;
+    return lossPct > limit;
+  });
+}
+
+function resolveLadderRiskExit(
+  ctx: LadderBarContext,
+  side: LadderSide,
+  filled: readonly LadderPaperRungState[],
+): LadderRiskExit | undefined {
+  const { candle, opts } = ctx;
+  const liquidation = sideLiquidationLevel(ctx, side, filled);
+  const liquidationTouched =
+    liquidation > 0 && sideLevelTouched(side, candle, liquidation);
+  if (liquidationTouched) {
+    return {
+      closeRungs: filled,
+      exitPrice: sideExitPrice(side, liquidation, opts.slippageBps),
+      reason: "liquidation",
+      resetAll: true,
+      pauseAfterLoss: true,
+    };
+  }
+
+  const boundary = sideStopBoundary(ctx, side, filled);
+  if (sideLevelTouched(side, candle, boundary)) {
+    return {
+      closeRungs: filled,
+      exitPrice: sideExitPrice(side, boundary, opts.slippageBps),
+      reason: "stop",
+      resetAll: true,
+      pauseAfterLoss: true,
+    };
+  }
+
+  const maxPositionDrawdownPct = opts.maxPositionDrawdownPct ?? 0;
+  if (maxPositionDrawdownPct > 0) {
+    const killed = positionLossesBeyondLimit(
+      side,
+      filled,
+      candle.close,
+      maxPositionDrawdownPct,
+    );
+    if (killed.length > 0) {
+      return {
+        closeRungs: killed,
+        exitPrice: sideExitPrice(side, candle.close, opts.slippageBps),
+        reason: "stop",
+        resetAll: false,
+        pauseAfterLoss: true,
+      };
+    }
+  }
+
+  if (accountDrawdownBreached(ctx.w, opts)) {
+    return {
+      closeRungs: filled,
+      exitPrice: sideExitPrice(side, candle.close, opts.slippageBps),
+      reason: "stop",
+      resetAll: true,
+      pauseAfterLoss: false,
+    };
+  }
+  return undefined;
+}
+
+function applyLadderRiskExit(
+  ctx: LadderBarContext,
+  side: LadderSide,
+  filled: readonly LadderPaperRungState[],
+  exit: LadderRiskExit,
+): void {
+  const { w, opts, events } = ctx;
+  for (const rung of exit.closeRungs) {
+    closeRung(
+      w,
+      rung,
+      exit.exitPrice,
+      exit.reason,
+      opts,
+      events,
+      ctx.candle.timestamp,
+    );
+  }
+  if (exit.resetAll) {
+    setSideRungs(w, side, []);
+    setSideBase(w, side, 0);
+    if (exit.pauseAfterLoss && opts.gridPauseAfterLossBars > 0) {
+      w.paused = opts.gridPauseAfterLossBars;
+    }
+    return;
+  }
+  const survivors = filled.filter((rung) => !exit.closeRungs.includes(rung));
+  if (survivors.length === 0) {
+    setSideRungs(w, side, []);
+    setSideBase(w, side, 0);
+    if (exit.pauseAfterLoss && opts.gridPauseAfterLossBars > 0) {
+      w.paused = opts.gridPauseAfterLossBars;
+    }
+  } else {
+    setSideRungs(w, side, survivors);
+  }
+}
+
+function closeLadderTargets(ctx: LadderBarContext, side: LadderSide): void {
+  const { w, candle, opts, events } = ctx;
+  const rungs = sideRungs(w, side);
+  const stillOpen: LadderPaperRungState[] = [];
+  let anyFillClosed = false;
+  for (const rung of rungs) {
+    if (!rung.filled) {
+      stillOpen.push(rung);
+      continue;
+    }
+    const target =
+      side === "long"
+        ? rung.entryPrice + rung.step * ctx.targetRatio
+        : rung.entryPrice - rung.step * ctx.targetRatio;
+    const targetTouched =
+      side === "long" ? candle.high >= target : candle.low <= target;
+    const canCloseOnSameBar =
+      (opts.conservativeIntrabar ?? true) === false ||
+      rung.entryBar < ctx.barIndex;
+    if (targetTouched && canCloseOnSameBar) {
+      closeRung(
+        w,
+        rung,
+        side === "long" ? target / ctx.slippage : target * ctx.slippage,
+        "target",
+        opts,
+        events,
+        candle.timestamp,
+      );
+      anyFillClosed = true;
+      continue;
+    }
+    if (
+      ctx.maxHoldBars > 0 &&
+      rung.entryTimestamp > 0 &&
+      candle.timestamp.getTime() - rung.entryTimestamp >=
+        ctx.maxHoldBars * ctx.millisecondsPerBar
+    ) {
+      closeRung(
+        w,
+        rung,
+        sideExitPrice(side, candle.close, opts.slippageBps),
+        "max_hold",
+        opts,
+        events,
+        candle.timestamp,
+      );
+      anyFillClosed = true;
+      continue;
+    }
+    stillOpen.push(rung);
+  }
+  setSideRungs(w, side, stillOpen);
+  if (stillOpen.filter((rung) => rung.filled).length === 0 && anyFillClosed) {
+    setSideRungs(w, side, []);
+    setSideBase(w, side, 0);
+  }
+}
+
+function manageLadderSide(ctx: LadderBarContext, side: LadderSide): void {
+  if (sideRungs(ctx.w, side).length === 0) return;
+  fillLadderSide(ctx, side);
+  const filled = sideRungs(ctx.w, side).filter((rung) => rung.filled);
+  if (filled.length === 0) return;
+  const riskExit = resolveLadderRiskExit(ctx, side, filled);
+  if (riskExit) {
+    applyLadderRiskExit(ctx, side, filled, riskExit);
+    return;
+  }
+  closeLadderTargets(ctx, side);
+}
+
+function createLadderBarContext(
+  w: WorkingState,
+  candles: readonly CandleLike[],
+  i: number,
+  opts: LadderPaperTradingOptions,
+  events: MutableBarEvents,
+  trendSeries: readonly number[] | null,
+): LadderBarContext | undefined {
+  const candle = candles[i];
+  const trendFilterPeriod = Math.max(0, opts.trendFilterPeriod ?? 0);
+  const trend =
+    trendSeries !== null && trendSeries.length > i ? trendSeries[i] : NaN;
+  if (trendFilterPeriod > 0 && (trend === null || isNaN(trend))) {
+    return undefined;
+  }
+  const chopGateThreshold = opts.chopGateAdxThreshold ?? 0;
+  return {
+    w,
+    candle,
+    barIndex: i,
+    opts,
+    events,
+    step: candle.open * (opts.gridStepPct / 100),
+    slippage: 1 + opts.slippageBps / 10000,
+    rungCount: Math.max(1, Math.floor(opts.rungs ?? 1)),
+    targetRatio: Math.max(0.001, opts.targetRatio ?? 1),
+    leverage: Math.max(1, opts.leverage ?? 1),
+    maxHoldBars: Math.max(0, Math.floor(opts.maxHoldBars ?? 0)),
+    millisecondsPerBar: timeframeMs(opts.timeframe),
+    trend,
+    chopGateActive:
+      chopGateThreshold > 0 &&
+      makeCausalSymbolStats(candles, opts.timeframe)(i).adx14 >=
+        chopGateThreshold,
+    onlyWithTrend: opts.onlyWithTrend ?? false,
+  };
+}
+
 /**
  * Advance the ladder by ONE candle (`candles[i]`). Mirrors the backtest's
  * per-bar loop: re-seed when flat, fill rungs progressively on touch, then
@@ -523,447 +934,46 @@ export function advanceLadderBar(
     w.paused -= 1;
     return { fills, closes };
   }
-  const c = candles[i];
-  const mid = c.open;
-  const step = mid * (opts.gridStepPct / 100);
-  const slippage = 1 + opts.slippageBps / 10000;
-  const N = Math.max(1, Math.floor(opts.rungs ?? 1));
-  const targetRatio = Math.max(0.001, opts.targetRatio ?? 1);
-  const leverage = Math.max(1, opts.leverage ?? 1);
-  const maxHoldBars = Math.max(0, Math.floor(opts.maxHoldBars ?? 0));
-  const msPerBar = timeframeMs(opts.timeframe);
-
-  const chopGateActive =
-    (opts.chopGateAdxThreshold ?? 0) > 0 &&
-    makeCausalSymbolStats(candles, opts.timeframe)(i).adx14 >=
-      (opts.chopGateAdxThreshold ?? 0);
-  const trendFilterPeriod = Math.max(0, opts.trendFilterPeriod ?? 0);
-  const onlyWithTrend = opts.onlyWithTrend ?? false;
-  const trend =
-    trendSeries !== null && trendSeries.length > i ? trendSeries[i] : NaN;
-  if (trendFilterPeriod > 0 && (trend === null || isNaN(trend)))
-    return { fills, closes };
+  const context = createLadderBarContext(
+    w,
+    candles,
+    i,
+    opts,
+    events,
+    trendSeries,
+  );
+  if (!context) return { fills, closes };
+  // Drawdown-peak re-anchor: a flat account blocked by realized drawdown
+  // can never trade its way back (no open rungs to recover with), so the
+  // kill latched forever with no operator reset path (ENA shadow 2026-09-03:
+  // a +2.64 book went permanently silent after an 8% peak-to-capital slide).
+  // Re-anchor peak to capital while flat and take the post-loss pause
+  // instead: permanent death becomes paused-then-retry. The per-bar pause
+  // decrement above guarantees the pause expires; the chop gate still
+  // applies every bar. Mirrored in runLadderGridBacktest (ladder-grid.ts).
+  if (
+    !w.longRungs.some((r) => r.filled) &&
+    !w.shortRungs.some((r) => r.filled) &&
+    accountDrawdownBreached(w, opts)
+  ) {
+    w.peak = w.capital;
+    w.paused = Math.max(
+      w.paused,
+      Math.max(0, Math.floor(opts.gridPauseAfterLossBars ?? 24)),
+    );
+  }
 
   // Re-seed long ladder while flat.
-  if (!w.longRungs.some((r) => r.filled)) {
-    const ddBlocked = accountDrawdownBreached(w, opts);
-    const allowLong =
-      !ddBlocked &&
-      !chopGateActive &&
-      (!onlyWithTrend || (trend !== null && !isNaN(trend) && c.close > trend));
-    if (allowLong) {
-      w.longBase = mid;
-      w.longRungs = [];
-      for (let k = 1; k <= N; k++) {
-        w.longRungs.push({
-          rungIndex: k,
-          side: "long",
-          level: mid - k * step,
-          step,
-          filled: false,
-          entryPrice: 0,
-          entryBar: 0,
-          entryTimestamp: 0,
-        });
-      }
-    } else {
-      w.longRungs = [];
-      w.longBase = 0;
-    }
-  }
+  seedLadderSide(context, "long");
 
   // Re-seed short ladder while flat.
-  if (!w.shortRungs.some((r) => r.filled)) {
-    const ddBlocked = accountDrawdownBreached(w, opts);
-    const allowShort =
-      !ddBlocked &&
-      !chopGateActive &&
-      (!onlyWithTrend || (trend !== null && !isNaN(trend) && c.close < trend));
-    if (allowShort) {
-      w.shortBase = mid;
-      w.shortRungs = [];
-      for (let k = 1; k <= N; k++) {
-        w.shortRungs.push({
-          rungIndex: k,
-          side: "short",
-          level: mid + k * step,
-          step,
-          filled: false,
-          entryPrice: 0,
-          entryBar: 0,
-          entryTimestamp: 0,
-        });
-      }
-    } else {
-      w.shortRungs = [];
-      w.shortBase = 0;
-    }
-  }
+  seedLadderSide(context, "short");
 
   // Manage LONG ladder.
-  if (w.longRungs.length > 0) {
-    for (let k = 0; k < w.longRungs.length; k++) {
-      const r = w.longRungs[k];
-      if (r.filled) continue;
-      const prevFilled = k === 0 || w.longRungs[k - 1].filled;
-      if (prevFilled && c.low <= r.level) {
-        const fillPrice = r.level * slippage;
-        const sized = ladderRungQty(w.capital, opts, money(fillPrice));
-        w.longRungs[k] = {
-          ...r,
-          filled: true,
-          entryPrice: fillPrice,
-          entryBar: i,
-          entryTimestamp: c.timestamp.getTime(),
-          filledQty: sized.qty.greaterThan(0) ? toNumber(sized.qty) : undefined,
-        };
-        fills.push({
-          rungIndex: r.rungIndex,
-          side: "long",
-          fillPrice,
-          level: r.level,
-          qty: toNumber(sized.qty),
-        });
-      }
-    }
-    const filledLong = w.longRungs.filter((r) => r.filled);
-    if (filledLong.length > 0) {
-      const stopRatio = opts.stopRatio ?? 0;
-      // Step-relative stop: each rung exits at entry - step*stopRatio
-      // (long). The deepest filled rung's stop is the ladder's effective
-      // downside; using the shallowest filled rung's stop would let a deep
-      // fill run too far, so the stop level is anchored to the DEEPEST
-      // filled rung's entry for a consistent per-position R:R.
-      const stopLevel =
-        stopRatio > 0
-          ? Math.min(...filledLong.map((r) => r.entryPrice)) - step * stopRatio
-          : w.longBase - step * (N + opts.gridMaxGrids);
-      const boundary = stopLevel;
-      const longLiqs = filledLong
-        .map((r) =>
-          liquidationPrice(
-            "long",
-            r.entryPrice,
-            leverage,
-            opts.maintenanceMarginRate ?? 0,
-          ),
-        )
-        .filter((p) => p > 0);
-      const liq = longLiqs.length > 0 ? Math.max(...longLiqs) : 0;
-      const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
-      if (liq > 0 && c.low <= liq) {
-        for (const r of filledLong)
-          closeRung(
-            w,
-            r,
-            liq * (1 - opts.slippageBps / 10000),
-            "liquidation",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.longRungs = [];
-        w.longBase = 0;
-        if (opts.gridPauseAfterLossBars > 0)
-          w.paused = opts.gridPauseAfterLossBars;
-      } else if (c.low <= boundary) {
-        for (const r of filledLong)
-          closeRung(
-            w,
-            r,
-            boundary * (1 - opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.longRungs = [];
-        w.longBase = 0;
-        if (opts.gridPauseAfterLossBars > 0)
-          w.paused = opts.gridPauseAfterLossBars;
-      } else if (
-        maxPosDd > 0 &&
-        filledLong.some(
-          (r) =>
-            r.entryPrice > 0 &&
-            ((r.entryPrice - c.close) / r.entryPrice) * 100 > maxPosDd,
-        )
-      ) {
-        // Per-position max-drawdown kill: a single leveraged rung bleeding
-        // past the threshold is closed at the current close before the wider
-        // ladder-stop boundary can take it out deeper (or a second rung
-        // compounds the loss). Scoped to the losing rungs only. The market
-        // close fills ADVERSE to the trigger price.
-        const killed = filledLong.filter(
-          (r) =>
-            r.entryPrice > 0 &&
-            ((r.entryPrice - c.close) / r.entryPrice) * 100 > maxPosDd,
-        );
-        const survivors = filledLong.filter((r) => !killed.includes(r));
-        for (const r of killed)
-          closeRung(
-            w,
-            r,
-            c.close * (1 - opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        if (survivors.length === 0) {
-          w.longRungs = [];
-          w.longBase = 0;
-          if (opts.gridPauseAfterLossBars > 0)
-            w.paused = opts.gridPauseAfterLossBars;
-        } else {
-          w.longRungs = survivors;
-        }
-      } else if (accountDrawdownBreached(w, opts)) {
-        // Account-level realized drawdown kill: flatten every open rung at
-        // the current close and refuse further seeds until capital recovers
-        // above the line (the grid engine's realized-DD kill, mirrored).
-        for (const r of filledLong)
-          closeRung(
-            w,
-            r,
-            c.close * (1 - opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.longRungs = [];
-        w.longBase = 0;
-      } else {
-        const stillOpen: LadderPaperRungState[] = [];
-        let anyFillClosed = false;
-        for (const r of w.longRungs) {
-          if (!r.filled) {
-            stillOpen.push(r);
-            continue;
-          }
-          const target = r.entryPrice + r.step * targetRatio;
-          if (
-            c.high >= target &&
-            ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
-          ) {
-            closeRung(
-              w,
-              r,
-              target / slippage,
-              "target",
-              opts,
-              events,
-              c.timestamp,
-            );
-            anyFillClosed = true;
-          } else if (
-            maxHoldBars > 0 &&
-            r.entryTimestamp > 0 &&
-            c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
-          ) {
-            closeRung(
-              w,
-              r,
-              c.close * (1 - opts.slippageBps / 10000),
-              "max_hold",
-              opts,
-              events,
-              c.timestamp,
-            );
-            anyFillClosed = true;
-          } else {
-            stillOpen.push(r);
-          }
-        }
-        w.longRungs = stillOpen;
-        const openFilled = w.longRungs.filter((r) => r.filled).length;
-        if (openFilled === 0 && anyFillClosed) {
-          w.longRungs = [];
-          w.longBase = 0;
-        }
-      }
-    }
-  }
+  manageLadderSide(context, "long");
 
   // Manage SHORT ladder.
-  if (w.shortRungs.length > 0) {
-    for (let k = 0; k < w.shortRungs.length; k++) {
-      const r = w.shortRungs[k];
-      if (r.filled) continue;
-      const prevFilled = k === 0 || w.shortRungs[k - 1].filled;
-      if (prevFilled && c.high >= r.level) {
-        const fillPrice = r.level / slippage;
-        const sized = ladderRungQty(w.capital, opts, money(fillPrice));
-        w.shortRungs[k] = {
-          ...r,
-          filled: true,
-          entryPrice: fillPrice,
-          entryBar: i,
-          entryTimestamp: c.timestamp.getTime(),
-          filledQty: sized.qty.greaterThan(0) ? toNumber(sized.qty) : undefined,
-        };
-        fills.push({
-          rungIndex: r.rungIndex,
-          side: "short",
-          fillPrice,
-          level: r.level,
-          qty: toNumber(sized.qty),
-        });
-      }
-    }
-    const filledShort = w.shortRungs.filter((r) => r.filled);
-    if (filledShort.length > 0) {
-      const stopRatio = opts.stopRatio ?? 0;
-      // Step-relative stop (short mirror): stop at the deepest filled rung's
-      // entry + step*stopRatio.
-      const stopLevel =
-        stopRatio > 0
-          ? Math.max(...filledShort.map((r) => r.entryPrice)) + step * stopRatio
-          : w.shortBase + step * (N + opts.gridMaxGrids);
-      const boundary = stopLevel;
-      const shortLiqs = filledShort
-        .map((r) =>
-          liquidationPrice(
-            "short",
-            r.entryPrice,
-            leverage,
-            opts.maintenanceMarginRate ?? 0,
-          ),
-        )
-        .filter((p) => p > 0);
-      const liq = shortLiqs.length > 0 ? Math.min(...shortLiqs) : 0;
-      const maxPosDd = opts.maxPositionDrawdownPct ?? 0;
-      if (liq > 0 && c.high >= liq) {
-        for (const r of filledShort)
-          closeRung(
-            w,
-            r,
-            liq * (1 + opts.slippageBps / 10000),
-            "liquidation",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.shortRungs = [];
-        w.shortBase = 0;
-        if (opts.gridPauseAfterLossBars > 0)
-          w.paused = opts.gridPauseAfterLossBars;
-      } else if (c.high >= boundary) {
-        for (const r of filledShort)
-          closeRung(
-            w,
-            r,
-            boundary * (1 + opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.shortRungs = [];
-        w.shortBase = 0;
-        if (opts.gridPauseAfterLossBars > 0)
-          w.paused = opts.gridPauseAfterLossBars;
-      } else if (
-        maxPosDd > 0 &&
-        filledShort.some(
-          (r) =>
-            r.entryPrice > 0 &&
-            ((c.close - r.entryPrice) / r.entryPrice) * 100 > maxPosDd,
-        )
-      ) {
-        // Per-position max-drawdown kill (short mirror): a leveraged short
-        // rung bleeding past the threshold is closed at the current close.
-        // The market close fills ADVERSE to the trigger price.
-        const killed = filledShort.filter(
-          (r) =>
-            r.entryPrice > 0 &&
-            ((c.close - r.entryPrice) / r.entryPrice) * 100 > maxPosDd,
-        );
-        const survivors = filledShort.filter((r) => !killed.includes(r));
-        for (const r of killed)
-          closeRung(
-            w,
-            r,
-            c.close * (1 + opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        if (survivors.length === 0) {
-          w.shortRungs = [];
-          w.shortBase = 0;
-          if (opts.gridPauseAfterLossBars > 0)
-            w.paused = opts.gridPauseAfterLossBars;
-        } else {
-          w.shortRungs = survivors;
-        }
-      } else if (accountDrawdownBreached(w, opts)) {
-        // Account-level realized drawdown kill (short mirror).
-        for (const r of filledShort)
-          closeRung(
-            w,
-            r,
-            c.close * (1 + opts.slippageBps / 10000),
-            "stop",
-            opts,
-            events,
-            c.timestamp,
-          );
-        w.shortRungs = [];
-        w.shortBase = 0;
-      } else {
-        const stillOpen: LadderPaperRungState[] = [];
-        let anyFillClosed = false;
-        for (const r of w.shortRungs) {
-          if (!r.filled) {
-            stillOpen.push(r);
-            continue;
-          }
-          const target = r.entryPrice - r.step * targetRatio;
-          if (
-            c.low <= target &&
-            ((opts.conservativeIntrabar ?? true) === false || r.entryBar < i)
-          ) {
-            closeRung(
-              w,
-              r,
-              target * slippage,
-              "target",
-              opts,
-              events,
-              c.timestamp,
-            );
-            anyFillClosed = true;
-          } else if (
-            maxHoldBars > 0 &&
-            r.entryTimestamp > 0 &&
-            c.timestamp.getTime() - r.entryTimestamp >= maxHoldBars * msPerBar
-          ) {
-            closeRung(
-              w,
-              r,
-              c.close * slippage,
-              "max_hold",
-              opts,
-              events,
-              c.timestamp,
-            );
-            anyFillClosed = true;
-          } else {
-            stillOpen.push(r);
-          }
-        }
-        w.shortRungs = stillOpen;
-        const openFilled = w.shortRungs.filter((r) => r.filled).length;
-        if (openFilled === 0 && anyFillClosed) {
-          w.shortRungs = [];
-          w.shortBase = 0;
-        }
-      }
-    }
-  }
+  manageLadderSide(context, "short");
 
   return { fills, closes };
 }
@@ -1036,7 +1046,7 @@ function workingToState(
   };
 }
 
-export function configMatchesLadderState(
+function matchesLadderIdentity(
   state: LadderPaperState,
   options: LadderPaperTradingOptions,
 ): boolean {
@@ -1044,14 +1054,31 @@ export function configMatchesLadderState(
     state.exchange === options.exchange &&
     state.symbol === options.symbol &&
     state.timeframe === options.timeframe &&
-    state.initialCapital === options.initialCapital &&
+    state.initialCapital === options.initialCapital
+  );
+}
+
+function matchesLadderGridSettings(
+  state: LadderPaperState,
+  options: LadderPaperTradingOptions,
+): boolean {
+  return (
     state.gridStepPct === options.gridStepPct &&
     state.gridMaxGrids === options.gridMaxGrids &&
     state.gridPauseAfterLossBars === options.gridPauseAfterLossBars &&
     state.rungs === options.rungs &&
     state.targetRatio === (options.targetRatio ?? 1) &&
     state.onlyWithTrend === (options.onlyWithTrend ?? false) &&
-    state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0) &&
+    state.chopGateAdxThreshold === (options.chopGateAdxThreshold ?? 0)
+  );
+}
+export function configMatchesLadderState(
+  state: LadderPaperState,
+  options: LadderPaperTradingOptions,
+): boolean {
+  return (
+    matchesLadderIdentity(state, options) &&
+    matchesLadderGridSettings(state, options) &&
     state.maxHoldBars === Math.max(0, Math.floor(options.maxHoldBars ?? 0)) &&
     Math.max(0, (state as { stopRatio?: number }).stopRatio ?? 0) ===
       Math.max(0, options.stopRatio ?? 0) &&
@@ -1267,6 +1294,147 @@ function ladderRungQty(
  * immediately); closes market-close the rung's size. Any failure fails the
  * effect so the caller rolls the paper ledger back and retries next bar.
  */
+function executeLadderFillLive(
+  fill: LadderFillEvent,
+  w: WorkingState,
+  options: LadderPaperTradingOptions,
+  adapter: FuturesExchangeAdapterService,
+  riskGuard: RiskGuardService,
+  repo: PaperTradingRepositoryService,
+  productType: FuturesProductType,
+  marginMode: FuturesMarginMode,
+): Effect.Effect<
+  void,
+  ExchangeError | RiskError | PaperTradingRepositoryError,
+  never
+> {
+  return Effect.gen(function* () {
+    const side: FuturesOrderSide = fill.side === "long" ? "buy" : "sell";
+    const fillPrice = money(fill.fillPrice);
+    const sized = ladderRungQty(w.capital, options, fillPrice);
+    if (sized.qty.lessThanOrEqualTo(0)) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
+        ),
+      );
+    }
+    const leverage = Math.max(1, sized.leverage);
+    const tradesTodayCount = yield* repo.countTradesForDate(new Date());
+    const todayPnl = yield* repo
+      .getTodayRealizedPnl()
+      .pipe(Effect.orElseSucceed(() => money(0)));
+    yield* riskGuard.check({
+      isLive: true,
+      capital: toNumber(w.capital),
+      peakCapital: toNumber(w.peak),
+      startOfDayCapital: toNumber(
+        yield* repo.getStartOfDayCapital(new Date(), w.capital),
+      ),
+      dailyRealizedPnl: toNumber(todayPnl),
+      tradesTodayCount,
+      positionValue: toNumber(
+        w.capital.times((options.maxPositionPct ?? 100) / 100).times(0.9999),
+      ),
+      notionalValue: toNumber(sized.qty.times(fillPrice)),
+      symbol: options.symbol,
+      side,
+      leverage,
+      productType,
+    });
+    yield* adapter.setLeverage(
+      options.symbol,
+      productType,
+      marginMode,
+      leverage,
+    );
+    const placed = yield* adapter
+      .placeOrder({
+        symbol: options.symbol,
+        side,
+        type: "limit",
+        productType,
+        marginMode,
+        leverage,
+        size: sized.qty,
+        price: fillPrice,
+        reduceOnly: false,
+      })
+      .pipe(Effect.result);
+    if (
+      placed._tag === "Failure" ||
+      placed.success.filledQty === null ||
+      placed.success.filledQty.lessThan(sized.qty)
+    ) {
+      const detail =
+        placed._tag === "Failure"
+          ? (placed.failure.reason ?? String(placed.failure))
+          : `partial fill ${placed.success.filledQty?.toString() ?? "0"}/${sized.qty.toString()}`;
+      return yield* Effect.fail(
+        new ExchangeError(
+          `ladder rung fill not confirmed (${detail}) — rolling the bar back`,
+        ),
+      );
+    }
+    if (adapter.setTradingStop === undefined) return;
+    const targetRatio = Math.max(0.001, options.targetRatio ?? 1);
+    const stepAbs = toNumber(fillPrice) * (options.gridStepPct / 100);
+    const takeProfit =
+      fill.side === "long"
+        ? toNumber(fillPrice) + stepAbs * targetRatio
+        : toNumber(fillPrice) - stepAbs * targetRatio;
+    const stopRatio = options.stopRatio ?? 0;
+    const stopLoss =
+      stopRatio > 0
+        ? fill.side === "long"
+          ? toNumber(fillPrice) - stepAbs * stopRatio
+          : toNumber(fillPrice) + stepAbs * stopRatio
+        : undefined;
+    yield* adapter
+      .setTradingStop({
+        symbol: options.symbol,
+        productType,
+        marginMode,
+        side: fill.side,
+        takeProfit: money(takeProfit),
+        stopLoss: stopLoss === undefined ? undefined : money(stopLoss),
+      })
+      .pipe(Effect.result);
+  });
+}
+
+function executeLadderCloseLive(
+  close: LadderCloseEvent,
+  w: WorkingState,
+  options: LadderPaperTradingOptions,
+  adapter: FuturesExchangeAdapterService,
+  productType: FuturesProductType,
+  marginMode: FuturesMarginMode,
+  leverage: number,
+): Effect.Effect<
+  void,
+  ExchangeError | RiskError | PaperTradingRepositoryError,
+  never
+> {
+  return Effect.gen(function* () {
+    const side: FuturesOrderSide = close.side === "long" ? "sell" : "buy";
+    const exitPrice = money(close.exitPrice);
+    const closeQty =
+      close.qty !== undefined && close.qty > 0
+        ? money(close.qty)
+        : ladderRungQty(w.capital, options, exitPrice).qty;
+    if (closeQty.lessThanOrEqualTo(0)) return;
+    yield* adapter.closePosition({
+      symbol: options.symbol,
+      side,
+      productType,
+      marginMode,
+      leverage,
+      size: closeQty,
+      price: exitPrice,
+    });
+  });
+}
 function executeLadderBarLive(
   fills: readonly LadderFillEvent[],
   closes: readonly LadderCloseEvent[],
@@ -1285,142 +1453,435 @@ function executeLadderBarLive(
     const marginMode = options.marginMode ?? "isolated";
     const leverage = Math.max(1, options.leverage ?? 1);
     for (const fill of fills) {
-      const side: FuturesOrderSide = fill.side === "long" ? "buy" : "sell";
-      const fillPrice = money(fill.fillPrice);
-      // Size first: resolves the DYNAMIC leverage (fits notional to the
-      // per-rung margin budget, capped at the risk limit) used for the risk
-      // check and the order. The event carries the qty the paper engine
-      // already sized; the live order must match it.
-      const sized = ladderRungQty(w.capital, options, fillPrice);
-      if (sized.qty.lessThanOrEqualTo(0)) {
-        return yield* Effect.fail(
-          new ExchangeError(
-            `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
-          ),
-        );
-      }
-      const leverage = Math.max(1, sized.leverage);
-      const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-      const todayPnl = yield* repo
-        .getTodayRealizedPnl()
-        .pipe(Effect.orElseSucceed(() => money(0)));
-      yield* riskGuard.check({
-        isLive: true,
-        capital: toNumber(w.capital),
-        peakCapital: toNumber(w.peak),
-        startOfDayCapital: toNumber(
-          yield* repo.getStartOfDayCapital(new Date(), w.capital),
-        ),
-        dailyRealizedPnl: toNumber(todayPnl),
-        tradesTodayCount,
-        // A hair under the cap: capital × maxPositionPct/100 at the exact
-        // cap computes to 50.00000000000001% (> 50%) and the guard rejects
-        // every fill on float precision. Real exposure is a hair under the
-        // cap anyway after fee/rounding.
-        positionValue: toNumber(
-          w.capital.times((options.maxPositionPct ?? 100) / 100).times(0.9999),
-        ),
-        notionalValue: toNumber(sized.qty.times(fillPrice)),
-        symbol: options.symbol,
-        side,
-        leverage,
+      yield* executeLadderFillLive(
+        fill,
+        w,
+        options,
+        adapter,
+        riskGuard,
+        repo,
         productType,
-      });
-      yield* adapter.setLeverage(
-        options.symbol,
+        marginMode,
+      );
+    }
+    for (const close of closes) {
+      yield* executeLadderCloseLive(
+        close,
+        w,
+        options,
+        adapter,
         productType,
         marginMode,
         leverage,
       );
-      const request: FuturesOrderRequest = {
-        symbol: options.symbol,
-        side,
-        type: "limit",
-        productType,
-        marginMode,
-        leverage,
-        size: sized.qty,
-        price: fillPrice,
-        reduceOnly: false,
-      };
-      const placed = yield* adapter.placeOrder(request).pipe(Effect.result);
-
-      // FILL CONFIRMATION: a limit at a level the bar already touched
-      // normally fills immediately, but price can run away before the order
-      // lands. If the order failed OR filled less than the paper size, the
-      // paper rung must NOT stay "filled" — otherwise the ledger manages a
-      // position the exchange never held. Fail the effect so the whole bar
-      // rolls back and the rung is retried on the next bar.
-      if (
-        placed._tag === "Failure" ||
-        placed.success.filledQty === null ||
-        placed.success.filledQty.lessThan(sized.qty)
-      ) {
-        const detail =
-          placed._tag === "Failure"
-            ? (placed.failure.reason ?? String(placed.failure))
-            : `partial fill ${placed.success.filledQty?.toString() ?? "0"}/${sized.qty.toString()}`;
-        return yield* Effect.fail(
-          new ExchangeError(
-            `ladder rung fill not confirmed (${detail}) — rolling the bar back`,
-          ),
-        );
-      }
-
-      // Attach exchange-side TP/SL after each live fill so the position is
-      // protected even if this process dies or the polling loop stalls. The
-      // exchange holds the resting orders; the engine's polling closes remain
-      // as a second layer (and the single source of the paper ledger PnL).
-      // TP = one targetRatio step, SL = the step-relative stop when stopRatio
-      // is set, else fall back to the per-position drawdown kill, else skip
-      // (legacy boundary geometry only exists in the engine's close path).
-      if (adapter.setTradingStop !== undefined) {
-        const targetRatio = Math.max(0.001, options.targetRatio ?? 1);
-        const stepAbs = toNumber(fillPrice) * (options.gridStepPct / 100);
-        const tp =
-          fill.side === "long"
-            ? toNumber(fillPrice) + stepAbs * targetRatio
-            : toNumber(fillPrice) - stepAbs * targetRatio;
-        const stopRatio = options.stopRatio ?? 0;
-        const sl =
-          stopRatio > 0
-            ? fill.side === "long"
-              ? toNumber(fillPrice) - stepAbs * stopRatio
-              : toNumber(fillPrice) + stepAbs * stopRatio
-            : undefined;
-        const tradingStop = {
-          symbol: options.symbol,
-          productType,
-          marginMode,
-          side: fill.side,
-          takeProfit: money(tp),
-          stopLoss: sl === undefined ? undefined : money(sl),
-        };
-        yield* adapter.setTradingStop(tradingStop).pipe(Effect.result);
-      }
-    }
-    for (const close of closes) {
-      const side: FuturesOrderSide = close.side === "long" ? "sell" : "buy";
-      const exitPrice = money(close.exitPrice);
-      // Close the rung's PERSISTED entry size, not a size re-derived from
-      // current capital: rebalancing/compounding moves capital between the
-      // fill and the close, and re-deriving over/under-closes the position.
-      const closeQty =
-        close.qty !== undefined && close.qty > 0
-          ? money(close.qty)
-          : ladderRungQty(w.capital, options, exitPrice).qty;
-      if (closeQty.lessThanOrEqualTo(0)) continue;
-      yield* adapter.closePosition({
-        symbol: options.symbol,
-        side,
-        productType,
-        marginMode,
-        leverage,
-        size: closeQty,
-        price: exitPrice,
-      });
     }
   });
+}
+
+interface LoadedLadderState {
+  readonly state: LadderPaperState;
+  readonly earlyResult?: LadderPaperIterationResult;
+}
+
+interface LadderOptionalServices {
+  readonly killSwitch: Option.Option<KillSwitchService>;
+  readonly circuitBreaker: Option.Option<CircuitBreakerService>;
+  readonly adapter: Option.Option<FuturesExchangeAdapterService>;
+  readonly riskGuard: Option.Option<RiskGuardService>;
+}
+
+interface LadderStartIndex {
+  readonly index?: number;
+  readonly holdNote?: string;
+}
+
+function ladderHoldResult(
+  state: LadderPaperState,
+  note: string,
+  w?: WorkingState,
+  markPrice?: number,
+  options?: LadderPaperTradingOptions,
+): LadderPaperIterationResult {
+  const marked = w ?? stateToWorking(state);
+  const result: LadderPaperIterationResult = {
+    action: "hold",
+    capital: toNumber(state.capital),
+    peakCapital: toNumber(state.peakCapital),
+    openRungs: openRungCount(marked),
+    closedThisIteration: 0,
+    note,
+  };
+  if (markPrice === undefined || options === undefined) return result;
+  const unrealizedPnl = estimateUnrealizedPnl(marked, markPrice, options);
+  return {
+    ...result,
+    equity: toNumber(marked.capital.plus(unrealizedPnl)),
+    unrealizedPnl: toNumber(unrealizedPnl),
+    markPrice,
+  };
+}
+
+function forceReseedLadderState(
+  repo: PaperTradingRepositoryService,
+  gateway: MarketDataGatewayService,
+  options: LadderPaperTradingOptions,
+  previous: LadderPaperState,
+): Effect.Effect<LoadedLadderState, PaperTradingRepositoryError> {
+  return Effect.gen(function* () {
+    const candles = yield* gateway
+      .fetchOHLCV(options.exchange, options.symbol, options.timeframe, 2)
+      .pipe(Effect.result);
+    const closePrice =
+      candles._tag === "Success" && candles.success.length > 0
+        ? candles.success[candles.success.length - 1].close
+        : null;
+    const closeTimestamp =
+      candles._tag === "Success" && candles.success.length > 0
+        ? candles.success[candles.success.length - 1].timestamp
+        : new Date();
+    if (closePrice === null || closePrice <= 0) {
+      const state = freshLadderState(options);
+      yield* repo.saveLadderState(state);
+      return { state };
+    }
+
+    const w = stateToWorking(previous);
+    const events: MutableBarEvents = { fills: [], closes: [] };
+    for (const side of ["long", "short"] as const) {
+      for (const rung of sideRungs(w, side)) {
+        if (rung.filled) {
+          closeRung(
+            w,
+            rung,
+            closePrice,
+            "max_hold",
+            options,
+            events,
+            closeTimestamp,
+          );
+        }
+      }
+      setSideRungs(w, side, []);
+    }
+    w.longBase = 0;
+    w.shortBase = 0;
+    const state: LadderPaperState = {
+      ...freshLadderState(options),
+      capital: w.capital,
+      peakCapital: Decimal.max(w.peak, money(options.initialCapital)),
+      totalWins: w.totalWins,
+      totalLosses: w.totalLosses,
+      lastTimestamp: previous.lastTimestamp,
+    };
+    if (events.closes.length > 0 && repo.recordLadderTrades !== undefined) {
+      yield* repo.recordLadderTrades(
+        events.closes.map((close) => ladderTradeFromClose(options, close)),
+      );
+    }
+    if (events.closes.length === 0) {
+      const freshState = freshLadderState(options);
+      yield* repo.saveLadderState(freshState);
+      return { state: freshState };
+    }
+    yield* repo.saveLadderState(state);
+    return {
+      state,
+      earlyResult: {
+        action: "closed",
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
+        openRungs: 0,
+        closedThisIteration: events.closes.length,
+        note: `config mismatch on open ladder — force-closed ${events.closes.length} stale rung(s) at ${closePrice}, re-seed next bar`,
+      },
+    };
+  });
+}
+
+function loadLadderState(
+  repo: PaperTradingRepositoryService,
+  gateway: MarketDataGatewayService,
+  options: LadderPaperTradingOptions,
+): Effect.Effect<LoadedLadderState, PaperTradingRepositoryError> {
+  return Effect.gen(function* () {
+    const stored = yield* repo.getLadderState(
+      options.exchange,
+      options.symbol,
+      options.timeframe,
+    );
+    if (stored === null) {
+      const state = freshLadderState(options);
+      yield* repo.saveLadderState(state);
+      return { state };
+    }
+    if (configMatchesLadderState(stored, options)) return { state: stored };
+    if (isFlat(stored)) {
+      const state = freshLadderState(options);
+      yield* repo.saveLadderState(state);
+      return { state };
+    }
+    if (options.configMismatchAction === "force-reseed") {
+      return yield* forceReseedLadderState(repo, gateway, options, stored);
+    }
+    return {
+      state: stored,
+      earlyResult: ladderHoldResult(
+        stored,
+        "config mismatch on open ladder (flat to re-seed)",
+      ),
+    };
+  });
+}
+
+function resolveLadderStartIndex(
+  state: LadderPaperState,
+  options: LadderPaperTradingOptions,
+  candles: readonly CandleLike[],
+): LadderStartIndex {
+  const replayBars = options.replayBars ?? 0;
+  if (replayBars > 0) {
+    if (state.lastTimestamp === null) {
+      return {
+        index: Math.max(options.trendFilterPeriod, candles.length - replayBars),
+      };
+    }
+    const nextIndex = candles.findIndex(
+      (candle) => candle.timestamp.getTime() > state.lastTimestamp!.getTime(),
+    );
+    return nextIndex === -1
+      ? { holdNote: "no new replay candle" }
+      : { index: nextIndex };
+  }
+  if (state.lastTimestamp === null) {
+    return {
+      index:
+        options.forwardOnly === true
+          ? Math.max(0, candles.length - 1)
+          : Math.max(1, options.trendFilterPeriod),
+    };
+  }
+  const nextIndex = candles.findIndex(
+    (candle) => candle.timestamp.getTime() > state.lastTimestamp!.getTime(),
+  );
+  return nextIndex === -1
+    ? { holdNote: "no new candle" }
+    : { index: nextIndex };
+}
+
+function loadLadderOptionalServices(): Effect.Effect<LadderOptionalServices> {
+  return Effect.gen(function* () {
+    return {
+      killSwitch: yield* Effect.serviceOption(KillSwitch),
+      circuitBreaker: yield* Effect.serviceOption(CircuitBreaker),
+      adapter: yield* Effect.serviceOption(FuturesExchangeAdapter),
+      riskGuard: yield* Effect.serviceOption(RiskGuard),
+    };
+  });
+}
+
+function guardLadderIteration(
+  options: LadderPaperTradingOptions,
+  state: LadderPaperState,
+  w: WorkingState,
+  repo: PaperTradingRepositoryService,
+  services: LadderOptionalServices,
+): Effect.Effect<
+  LadderPaperIterationResult | null,
+  CircuitBreakerError | KillSwitchError
+> {
+  return Effect.gen(function* () {
+    if (
+      Option.isSome(services.killSwitch) &&
+      (yield* services.killSwitch.value.isEngaged())
+    ) {
+      return ladderHoldResult(state, "ladder held: kill switch engaged", w);
+    }
+    if (
+      Option.isSome(services.circuitBreaker) &&
+      (yield* services.circuitBreaker.value.isOpen())
+    ) {
+      return ladderHoldResult(state, "ladder held: circuit breaker open", w);
+    }
+    if (options.isLive === true) {
+      const blockedUntil = agreementBlockedUntil.get(options.symbol) ?? 0;
+      if (blockedUntil > Date.now()) {
+        return ladderHoldResult(
+          state,
+          "symbol blocked: trading terms not accepted (110126) — sign the agreement in the exchange UI",
+          w,
+        );
+      }
+      if (Option.isSome(services.adapter)) {
+        const productType = options.productType ?? "USDT-FUTURES";
+        const realPosition = yield* services.adapter.value
+          .getPosition(options.symbol, productType)
+          .pipe(Effect.result);
+        if (
+          realPosition._tag === "Success" &&
+          realPosition.success !== null &&
+          Number(realPosition.success.quantity) > 0 &&
+          openRungCount(w) === 0
+        ) {
+          yield* services.adapter.value
+            .closePosition({
+              symbol: options.symbol,
+              side: realPosition.success.side === "long" ? "sell" : "buy",
+              productType,
+              marginMode: options.marginMode ?? "isolated",
+              leverage: Math.max(1, options.leverage ?? 1),
+              size: realPosition.success.quantity,
+            })
+            .pipe(Effect.result);
+        }
+      }
+    }
+    return null;
+  });
+}
+
+function rollbackWorkingState(
+  target: WorkingState,
+  snapshot: WorkingState,
+): void {
+  target.capital = snapshot.capital;
+  target.peak = snapshot.peak;
+  target.totalWins = snapshot.totalWins;
+  target.totalLosses = snapshot.totalLosses;
+  target.longRungs = snapshot.longRungs;
+  target.shortRungs = snapshot.shortRungs;
+  target.longBase = snapshot.longBase;
+  target.shortBase = snapshot.shortBase;
+  target.paused = snapshot.paused;
+}
+
+function ladderLiveFailureReason(
+  failure: ExchangeError | RiskError | PaperTradingRepositoryError,
+): string {
+  const violations = "violations" in failure ? failure.violations : [];
+  return `${failure.reason}${violations.length > 0 ? `: ${violations.join("; ")}` : ""}`;
+}
+
+function executeLadderLiveEvents(
+  options: LadderPaperTradingOptions,
+  state: LadderPaperState,
+  w: WorkingState,
+  snapshot: WorkingState,
+  fills: readonly LadderFillEvent[],
+  closes: readonly LadderCloseEvent[],
+  last: CandleLike,
+  repo: PaperTradingRepositoryService,
+  services: LadderOptionalServices,
+): Effect.Effect<
+  LadderPaperIterationResult | null,
+  PaperTradingRepositoryError
+> {
+  return Effect.gen(function* () {
+    if (
+      options.isLive !== true ||
+      (fills.length === 0 && closes.length === 0)
+    ) {
+      return null;
+    }
+    if (Option.isNone(services.adapter) || Option.isNone(services.riskGuard)) {
+      return ladderHoldResult(
+        state,
+        "live ladder requested but FuturesExchangeAdapter/RiskGuard not provided",
+      );
+    }
+    const outcome = yield* executeLadderBarLive(
+      fills,
+      closes,
+      w,
+      options,
+      services.adapter.value,
+      services.riskGuard.value,
+      repo,
+    ).pipe(Effect.result);
+    if (outcome._tag === "Success") return null;
+    const failureReason = ladderLiveFailureReason(outcome.failure);
+    if (/11012[356]/.test(failureReason)) {
+      agreementBlockedUntil.set(
+        options.symbol,
+        Date.now() + AGREEMENT_BLOCK_MS,
+      );
+    }
+    rollbackWorkingState(w, cloneWorking(snapshot));
+    const rolledState = workingToState(options, w, last.timestamp, state);
+    yield* repo.saveLadderState(rolledState);
+    return {
+      action: "hold",
+      capital: toNumber(w.capital),
+      peakCapital: toNumber(w.peak),
+      openRungs: openRungCount(w),
+      closedThisIteration: 0,
+      note: `live ladder execution failed (bar rolled back): ${failureReason}`,
+    };
+  });
+}
+
+function buildLadderIterationResult(
+  state: LadderPaperState,
+  w: WorkingState,
+  options: LadderPaperTradingOptions,
+  candles: readonly CandleLike[],
+  startIndex: number,
+  openBefore: number,
+  closedThisIteration: number,
+  iterationFills: readonly LadderFillEvent[],
+): LadderPaperIterationResult {
+  const openAfter = openRungCount(w);
+  const last = candles[candles.length - 1];
+  const unrealizedPnl = estimateUnrealizedPnl(w, last.close, options);
+  const action: "opened" | "closed" | "hold" =
+    closedThisIteration > 0
+      ? "closed"
+      : openAfter > openBefore
+        ? "opened"
+        : "hold";
+  const chopGateThreshold = options.chopGateAdxThreshold ?? 0;
+  const lastAdx =
+    chopGateThreshold > 0
+      ? makeCausalSymbolStats(candles, options.timeframe)(candles.length - 1)
+          .adx14
+      : 0;
+  const seedsBlockedByChopGate =
+    openBefore === 0 &&
+    openAfter === 0 &&
+    iterationFills.length === 0 &&
+    closedThisIteration === 0 &&
+    chopGateThreshold > 0 &&
+    lastAdx >= chopGateThreshold;
+  const ddKilled = accountDrawdownBreached(w, options);
+  return {
+    action,
+    capital: toNumber(state.capital),
+    peakCapital: toNumber(state.peakCapital),
+    openRungs: openAfter,
+    closedThisIteration,
+    equity: toNumber(w.capital.plus(unrealizedPnl)),
+    unrealizedPnl: toNumber(unrealizedPnl),
+    markPrice: last.close,
+    note:
+      `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}` +
+      (seedsBlockedByChopGate
+        ? `; seeds blocked by ADX gate (${lastAdx.toFixed(2)} >= ${chopGateThreshold})`
+        : "") +
+      (ddKilled
+        ? `; ACCOUNT DRAWDOWN KILL active (max ${options.maxDrawdownPct ?? 0}% from peak — no new seeds)`
+        : ""),
+  };
+}
+
+function ladderRequiredCandles(
+  state: LadderPaperState,
+  options: LadderPaperTradingOptions,
+): number {
+  const replayBars = options.replayBars ?? 0;
+  const adxWarmup = (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
+  const tailWarmup = Math.max(options.trendFilterPeriod + 1, adxWarmup) || 2;
+  return replayBars > 0 && state.lastTimestamp === null
+    ? replayBars + options.trendFilterPeriod + 5
+    : Math.max(tailWarmup + 1, 2);
 }
 
 /**
@@ -1439,288 +1900,43 @@ export function runLadderPaperTradingIteration(
 > {
   return Effect.gen(function* () {
     const repo = yield* PaperTradingRepository;
-    yield* repo.ensureTables();
-
-    let state: LadderPaperState | null = yield* repo.getLadderState(
-      options.exchange,
-      options.symbol,
-      options.timeframe,
-    );
-    if (state === null) {
-      state = freshLadderState(options);
-      yield* repo.saveLadderState(state);
-    } else if (!configMatchesLadderState(state, options)) {
-      if (isFlat(state)) {
-        // Flat state under different params: re-seed fresh so the next entry
-        // trades the current rung geometry.
-        state = freshLadderState(options);
-        yield* repo.saveLadderState(state);
-      } else if (options.configMismatchAction === "force-reseed") {
-        // Open ladder under different params with force-reseed: close any
-        // open rungs at the current close (a market-ish exit on stale
-        // geometry) and re-seed fresh with the new config. Without this an
-        // open ladder under a changed whitelist is deadlocked forever — the
-        // engine refuses to advance, so the stale rung never closes and the
-        // real exchange position it mirrors stays unmanaged (regression
-        // 2026-08-19: FARTCOIN frozen at grids=2 with a filled rung while
-        // the whitelist moved to grids=3).
-        const gateway = yield* MarketDataGateway;
-        const candles = yield* gateway
-          .fetchOHLCV(options.exchange, options.symbol, options.timeframe, 2)
-          .pipe(Effect.result);
-        const closePrice =
-          candles._tag === "Success" && candles.success.length > 0
-            ? candles.success[candles.success.length - 1].close
-            : null;
-        const closeTimestamp =
-          candles._tag === "Success" && candles.success.length > 0
-            ? candles.success[candles.success.length - 1].timestamp
-            : new Date();
-        if (closePrice !== null && closePrice > 0) {
-          const w = stateToWorking(state);
-          const events: MutableBarEvents = { fills: [], closes: [] };
-          for (const side of ["long", "short"] as const) {
-            const rungs = side === "long" ? w.longRungs : w.shortRungs;
-            for (const r of rungs) {
-              if (r.filled) {
-                closeRung(
-                  w,
-                  r,
-                  closePrice,
-                  "max_hold",
-                  options,
-                  events,
-                  closeTimestamp,
-                );
-              }
-            }
-            if (side === "long") w.longRungs = [];
-            else w.shortRungs = [];
-          }
-          w.longBase = 0;
-          w.shortBase = 0;
-          const closed = events.closes.length;
-          // Re-seed with the NEW config but carry the realized capital forward
-          // (workingToState would keep the stale config fields via `previous`).
-          state = {
-            ...freshLadderState(options),
-            capital: w.capital,
-            peakCapital: Decimal.max(w.peak, money(options.initialCapital)),
-            totalWins: w.totalWins,
-            totalLosses: w.totalLosses,
-            lastTimestamp: state.lastTimestamp,
-          };
-          if (
-            events.closes.length > 0 &&
-            repo.recordLadderTrades !== undefined
-          ) {
-            yield* repo.recordLadderTrades(
-              events.closes.map((close) =>
-                ladderTradeFromClose(options, close),
-              ),
-            );
-          }
-          yield* repo.saveLadderState(state);
-          if (closed > 0) {
-            return {
-              action: "closed" as const,
-              capital: toNumber(state.capital),
-              peakCapital: toNumber(state.peakCapital),
-              openRungs: 0,
-              closedThisIteration: closed,
-              note: `config mismatch on open ladder — force-closed ${closed} stale rung(s) at ${closePrice}, re-seed next bar`,
-            };
-          }
-        }
-        state = freshLadderState(options);
-        yield* repo.saveLadderState(state);
-      } else {
-        // Open ladder under different params: refuse rather than silently
-        // trading a stale rung geometry against the new config.
-        return {
-          action: "hold",
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          openRungs: openRungCount(stateToWorking(state)),
-          closedThisIteration: 0,
-          note: "config mismatch on open ladder (flat to re-seed)",
-        };
-      }
-    }
-
     const gateway = yield* MarketDataGateway;
-    const replayBars = options.replayBars ?? 0;
-    const adxWarmup = (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
-    // Incremental tail: once a lastTimestamp exists we only need the bars
-    // newer than it plus the indicator warmup — not the full replay window
-    // again. The gateway serves the newest `limit` bars, so the limit is
-    // warmup + however many new bars can exist since the last poll.
-    const tailWarmup = Math.max(options.trendFilterPeriod + 1, adxWarmup) || 2;
-    const requiredCandles =
-      replayBars > 0 && state.lastTimestamp === null
-        ? replayBars + options.trendFilterPeriod + 5
-        : Math.max(tailWarmup + 1, 2);
+    yield* repo.ensureTables();
+    const loaded = yield* loadLadderState(repo, gateway, options);
+    if (loaded.earlyResult) return loaded.earlyResult;
+    const state = loaded.state;
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
       options.symbol,
       options.timeframe,
-      requiredCandles,
+      ladderRequiredCandles(state, options),
     );
     if (candles.length === 0) {
-      return {
-        action: "hold",
-        capital: toNumber(state.capital),
-        peakCapital: toNumber(state.peakCapital),
-        openRungs: openRungCount(stateToWorking(state)),
-        closedThisIteration: 0,
-        note: "no candles",
-      };
+      return ladderHoldResult(state, "no candles");
     }
-
-    const holdAtLatestCandle = (note: string): LadderPaperIterationResult => {
-      const markedState = stateToWorking(state!);
-      const markPrice = candles[candles.length - 1].close;
-      const unrealizedPnl = estimateUnrealizedPnl(
-        markedState,
-        markPrice,
+    const start = resolveLadderStartIndex(state, options, candles);
+    if (start.holdNote) {
+      return ladderHoldResult(
+        state,
+        start.holdNote,
+        stateToWorking(state),
+        candles[candles.length - 1].close,
         options,
       );
-      return {
-        action: "hold",
-        capital: toNumber(state!.capital),
-        peakCapital: toNumber(state!.peakCapital),
-        openRungs: openRungCount(markedState),
-        closedThisIteration: 0,
-        equity: toNumber(markedState.capital.plus(unrealizedPnl)),
-        unrealizedPnl: toNumber(unrealizedPnl),
-        markPrice,
-        note,
-      };
-    };
-
-    let startIndex: number;
-    if (replayBars > 0) {
-      if (state.lastTimestamp === null) {
-        startIndex = Math.max(
-          options.trendFilterPeriod,
-          candles.length - replayBars,
-        );
-      } else {
-        const nextIndex = candles.findIndex(
-          (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
-        );
-        if (nextIndex === -1) {
-          return holdAtLatestCandle("no new replay candle");
-        }
-        startIndex = nextIndex;
-      }
-    } else {
-      // Live forward stepping: only advance bars NEWER than the last
-      // processed candle. When no new bar exists yet (fetch raced ahead of
-      // the candle close), hold instead of reprocessing history — replaying
-      // already-settled bars would double-count fills and closes.
-      if (state.lastTimestamp === null) {
-        startIndex =
-          options.forwardOnly === true
-            ? Math.max(0, candles.length - 1)
-            : Math.max(1, options.trendFilterPeriod);
-      } else {
-        const nextIndex = candles.findIndex(
-          (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
-        );
-        if (nextIndex === -1) {
-          return holdAtLatestCandle("no new candle");
-        }
-        startIndex = nextIndex;
-      }
     }
+    const startIndex = start.index ?? 0;
 
     const w = stateToWorking(state);
 
-    // Ladder now shares the same account-level circuit/kill controls as the
-    // single-position and grid engines. These services are optional for pure
-    // unit-level paper stepping, but when present they are checked before any
-    // candle is allowed to mutate the ladder.
-    const killSwitch = yield* Effect.serviceOption(KillSwitch);
-    const circuitBreaker = yield* Effect.serviceOption(CircuitBreaker);
-    if (Option.isSome(killSwitch)) {
-      if (yield* killSwitch.value.isEngaged()) {
-        return {
-          action: "hold",
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          openRungs: openRungCount(w),
-          closedThisIteration: 0,
-          note: "ladder held: kill switch engaged",
-        };
-      }
-    }
-    if (Option.isSome(circuitBreaker)) {
-      if (yield* circuitBreaker.value.isOpen()) {
-        return {
-          action: "hold",
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          openRungs: openRungCount(w),
-          closedThisIteration: 0,
-          note: "ladder held: circuit breaker open",
-        };
-      }
-    }
-
-    // Agreement-block cooldown: when a fill failed with a "must agree to the
-    // Trading Terms" error (110123/110125/110126), the contract is untradeable
-    // until the user accepts the terms in the exchange UI. Skip fills for the
-    // cooldown instead of re-attempting on every new bar (the exchange has no
-    // API to accept the agreement, so retrying is pure noise).
-    if (options.isLive === true) {
-      const blockedUntil = agreementBlockedUntil.get(options.symbol) ?? 0;
-      if (blockedUntil > Date.now()) {
-        return {
-          action: "hold",
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          openRungs: openRungCount(stateToWorking(state)),
-          closedThisIteration: 0,
-          note: "symbol blocked: trading terms not accepted (110126) — sign the agreement in the exchange UI",
-        };
-      }
-    }
-
-    // Reconcile orphans: a REAL position the paper ledger does not track (left
-    // by a rolled-back bar whose earlier order filled before a later event
-    // failed) is closed on the exchange so it cannot sit unmanaged and consume
-    // the account's margin. Only closes when the paper ledger is flat for this
-    // symbol; a paper rung with a matching real position is left to manage.
-    if (options.isLive === true) {
-      const adapter = yield* Effect.serviceOption(FuturesExchangeAdapter);
-      if (Option.isSome(adapter)) {
-        const productType = options.productType ?? "USDT-FUTURES";
-        const marginMode = options.marginMode ?? "isolated";
-        const realPos = yield* adapter.value
-          .getPosition(options.symbol, productType)
-          .pipe(Effect.result);
-        if (
-          realPos._tag === "Success" &&
-          realPos.success !== null &&
-          Number(realPos.success.quantity) > 0 &&
-          openRungCount(w) === 0
-        ) {
-          const side: FuturesOrderSide =
-            realPos.success.side === "long" ? "sell" : "buy";
-          yield* adapter.value
-            .closePosition({
-              symbol: options.symbol,
-              side,
-              productType,
-              marginMode,
-              leverage: Math.max(1, options.leverage ?? 1),
-              size: realPos.success.quantity,
-            })
-            .pipe(Effect.result);
-        }
-      }
-    }
+    const services = yield* loadLadderOptionalServices();
+    const guardResult = yield* guardLadderIteration(
+      options,
+      state,
+      w,
+      repo,
+      services,
+    );
+    if (guardResult) return guardResult;
 
     const trendSeries =
       (options.trendFilterPeriod ?? 0) > 0
@@ -1746,130 +1962,43 @@ export function runLadderPaperTradingIteration(
     }
     const last = candles[candles.length - 1];
 
-    // Live path: execute this bar's events on the exchange. On ANY failure the
-    // paper ledger rolls back to the pre-loop snapshot (the state is not
-    // committed) and the iteration holds — the exchange may hold orphan orders
-    // from the partially executed batch, which the operator can review.
-    if (
-      options.isLive === true &&
-      (iterationFills.length > 0 || iterationCloses.length > 0)
-    ) {
-      const adapter = yield* Effect.serviceOption(FuturesExchangeAdapter);
-      const riskGuard = yield* Effect.serviceOption(RiskGuard);
-      if (Option.isNone(adapter) || Option.isNone(riskGuard)) {
-        return {
-          action: "hold",
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          openRungs: openRungCount(stateToWorking(state)),
-          closedThisIteration: 0,
-          note: "live ladder requested but FuturesExchangeAdapter/RiskGuard not provided",
-        };
-      }
-      const outcome = yield* executeLadderBarLive(
-        iterationFills,
-        iterationCloses,
-        w,
-        options,
-        adapter.value,
-        riskGuard.value,
-        repo,
-      ).pipe(Effect.result);
-      if (outcome._tag === "Failure") {
-        // Roll the ledger back but ADVANCE lastTimestamp past the processed
-        // bars: otherwise the same failing bar is reprocessed and re-fails
-        // every cycle (the 'ab not enough' / risk-reject / agreement churn).
-        // The failed bar's fills are not committed; any real orders it placed
-        // are reconciled (closed) at the next iteration's start.
-        const failureReason = outcome.failure.reason ?? String(outcome.failure);
-        if (/11012[356]/.test(failureReason)) {
-          // "must agree to the Trading Terms" — no API accepts it; block the
-          // symbol for the cooldown so it is not re-attempted every bar.
-          agreementBlockedUntil.set(
-            options.symbol,
-            Date.now() + AGREEMENT_BLOCK_MS,
-          );
-        }
-        const rolled = cloneWorking(snapshot);
-        w.capital = rolled.capital;
-        w.peak = rolled.peak;
-        w.totalWins = rolled.totalWins;
-        w.totalLosses = rolled.totalLosses;
-        w.longRungs = rolled.longRungs;
-        w.shortRungs = rolled.shortRungs;
-        w.longBase = rolled.longBase;
-        w.shortBase = rolled.shortBase;
-        w.paused = rolled.paused;
-        const rolledState = workingToState(options, w, last.timestamp, state);
-        yield* repo.saveLadderState(rolledState);
-        return {
-          action: "hold",
-          capital: toNumber(w.capital),
-          peakCapital: toNumber(w.peak),
-          openRungs: openRungCount(w),
-          closedThisIteration: 0,
-          note: `live ladder execution failed (bar rolled back): ${outcome.failure.reason ?? String(outcome.failure)}${"violations" in outcome.failure && Array.isArray(outcome.failure.violations) ? `: ${(outcome.failure as { violations: readonly string[] }).violations.join("; ")}` : ""}`,
-        };
-      }
-    }
+    const liveResult = yield* executeLadderLiveEvents(
+      options,
+      state,
+      w,
+      snapshot,
+      iterationFills,
+      iterationCloses,
+      last,
+      repo,
+      services,
+    );
+    if (liveResult) return liveResult;
 
     if (iterationCloses.length > 0 && repo.recordLadderTrades !== undefined) {
       yield* repo.recordLadderTrades(
         iterationCloses.map((close) => ladderTradeFromClose(options, close)),
       );
     }
-
-    if (Option.isSome(circuitBreaker) && iterationCloses.length > 0) {
-      yield* circuitBreaker.value.recordTradeResult(
+    if (Option.isSome(services.circuitBreaker) && iterationCloses.length > 0) {
+      yield* services.circuitBreaker.value.recordTradeResult(
         toNumber(w.capital.minus(snapshot.capital)),
         toNumber(startOfDayCapital),
       );
     }
 
-    state = workingToState(options, w, last.timestamp, state);
-    yield* repo.saveLadderState(state);
-
-    const openAfter = openRungCount(w);
-    const markPrice = last.close;
-    const unrealizedPnl = estimateUnrealizedPnl(w, markPrice, options);
-    const action: "opened" | "closed" | "hold" =
-      closedThisIteration > 0
-        ? "closed"
-        : openAfter > openBefore
-          ? "opened"
-          : "hold";
-    const chopGateThreshold = options.chopGateAdxThreshold ?? 0;
-    const lastAdx =
-      chopGateThreshold > 0
-        ? makeCausalSymbolStats(candles, options.timeframe)(candles.length - 1)
-            .adx14
-        : 0;
-    const seedsBlockedByChopGate =
-      openBefore === 0 &&
-      openAfter === 0 &&
-      iterationFills.length === 0 &&
-      closedThisIteration === 0 &&
-      chopGateThreshold > 0 &&
-      lastAdx >= chopGateThreshold;
-    const ddKilled = accountDrawdownBreached(w, options);
-    return {
-      action,
-      capital: toNumber(state.capital),
-      peakCapital: toNumber(state.peakCapital),
-      openRungs: openAfter,
+    const nextState = workingToState(options, w, last.timestamp, state);
+    yield* repo.saveLadderState(nextState);
+    return buildLadderIterationResult(
+      nextState,
+      w,
+      options,
+      candles,
+      startIndex,
+      openBefore,
       closedThisIteration,
-      equity: toNumber(w.capital.plus(unrealizedPnl)),
-      unrealizedPnl: toNumber(unrealizedPnl),
-      markPrice,
-      note:
-        `ladder iter over ${candles.length - startIndex} bars${options.isLive ? " [LIVE]" : ""}` +
-        (seedsBlockedByChopGate
-          ? `; seeds blocked by ADX gate (${lastAdx.toFixed(2)} >= ${chopGateThreshold})`
-          : "") +
-        (ddKilled
-          ? `; ACCOUNT DRAWDOWN KILL active (max ${options.maxDrawdownPct ?? 0}% from peak — no new seeds)`
-          : ""),
-    };
+      iterationFills,
+    );
   });
 }
 

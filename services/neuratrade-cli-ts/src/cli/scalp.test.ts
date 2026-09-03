@@ -20,6 +20,7 @@ import {
   buildCandidate,
   buildPaperTradeComposerConfig,
   buildStrategyProfileFromOptimizeResult,
+  bybitContractSpecs,
   combineWalkForwardResults,
   extractExplicitOverrides,
   generateCandidates,
@@ -86,6 +87,31 @@ describe("scalp CLI option surface", () => {
     );
     expect(gridMaxGridsOption.kind).toBe("integer");
     expect(gridMaxGridsOption.defaultValue).toBe(0);
+  });
+
+  it("maps Bybit instrument constraints to shared order sizing", () => {
+    expect(
+      bybitContractSpecs({
+        symbol: "BTCUSDT",
+        status: "Trading",
+        minOrderQty: "0.001",
+        qtyStep: "0.001",
+        minOrderAmt: "0",
+        tickSize: "0.1",
+        maxLeverage: "150",
+      }),
+    ).toEqual({ minQty: 0.001, qtyStep: 0.001, minTradeUSDT: 0 });
+    expect(
+      bybitContractSpecs({
+        symbol: "BTCUSDT",
+        status: "Trading",
+        minOrderQty: "0",
+        qtyStep: "0.001",
+        minOrderAmt: "0",
+        tickSize: "0.1",
+        maxLeverage: "150",
+      }),
+    ).toBeUndefined();
   });
 
   it("rejects a fractional --grid-max-grids (grid-level count)", () => {

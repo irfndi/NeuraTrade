@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schedule } from "effect";
 import { Database } from "bun:sqlite";
-import { Decimal, toNumber } from "../utils/money.js";
+import { Decimal, toNumber, type Money } from "../utils/money.js";
 import type {
   GridPaperState,
   GridPaperTrade,
@@ -23,6 +23,7 @@ interface LadderRungJson {
   readonly entryPrice: number;
   readonly entryBar: number;
   readonly entryTimestamp: number;
+  readonly filledQty?: number;
 }
 
 /**
@@ -80,14 +81,99 @@ export class PaperTradingRepositoryError extends Error {
 
 const SQLITE_BUSY_PATTERN = /database is locked|SQLITE_BUSY|busy/i;
 
-function isSqliteBusy(err: unknown): boolean {
-  const message =
-    err instanceof Error
-      ? err.message
-      : err !== null && typeof err === "object" && "reason" in err
-        ? String((err as { reason: unknown }).reason)
-        : "";
-  return SQLITE_BUSY_PATTERN.test(message);
+type SqlValue = string | number | null;
+
+function nullableString(value: string | undefined): string | null {
+  return value ?? null;
+}
+
+function nullableDate(value: Date | null | undefined): string | null {
+  return value?.toISOString() ?? null;
+}
+
+function nullableMoneyValues(value: Money | undefined): readonly SqlValue[] {
+  if (!value) return [null, null];
+  return [toNumber(value), value.toString()];
+}
+
+function isSqliteBusy(err: PaperTradingRepositoryError): boolean {
+  return SQLITE_BUSY_PATTERN.test(err.reason);
+}
+
+function gridStateSqlValues(state: GridPaperState): readonly SqlValue[] {
+  return [
+    state.initialCapital ?? null,
+    toNumber(state.capital),
+    toNumber(state.peakCapital),
+    state.capital.toString(),
+    state.peakCapital.toString(),
+    state.paused,
+    state.side,
+    toNumber(state.entryPrice),
+    state.entryPrice.toString(),
+    nullableString(state.entryOrderId),
+    nullableString(state.entryClientOid),
+    ...nullableMoneyValues(state.entryFilledQty),
+    ...nullableMoneyValues(state.entryFee),
+    nullableString(state.entryFillSource),
+    nullableString(state.strategyConfigFingerprint),
+    nullableString(state.cohortId),
+    nullableDate(state.candidateLockAt),
+    nullableDate(state.datasetCutoffAt),
+    nullableDate(state.entryOpenedAt),
+    nullableString(state.executionEnvironment),
+    state.gridStepPct,
+    state.gridMaxGrids,
+    state.gridPauseAfterLossBars,
+    state.feePct,
+    state.slippageBps,
+    state.trendFilterPeriod,
+    state.maxPositionPct,
+    state.maxDrawdownPct,
+    state.leverage,
+    state.killed ? 1 : 0,
+    nullableDate(state.lastTimestamp),
+    state.updatedAt.toISOString(),
+  ];
+}
+
+function gridTradeSqlValues(trade: GridPaperTrade): readonly SqlValue[] {
+  return [
+    trade.id,
+    trade.exchange,
+    trade.symbol,
+    trade.timeframe,
+    trade.side,
+    toNumber(trade.entryPrice),
+    toNumber(trade.exitPrice),
+    toNumber(trade.capitalBefore),
+    toNumber(trade.capitalAfter),
+    toNumber(trade.pnlPct),
+    trade.entryPrice.toString(),
+    trade.exitPrice.toString(),
+    trade.capitalBefore.toString(),
+    trade.capitalAfter.toString(),
+    trade.pnlPct.toString(),
+    nullableString(trade.fillSource),
+    nullableString(trade.entryOrderId),
+    nullableString(trade.entryClientOid),
+    nullableString(trade.exitOrderId),
+    nullableString(trade.exitClientOid),
+    ...nullableMoneyValues(trade.entryFilledQty),
+    ...nullableMoneyValues(trade.exitFilledQty),
+    ...nullableMoneyValues(trade.entryFee),
+    ...nullableMoneyValues(trade.exitFee),
+    ...nullableMoneyValues(trade.realizedPnlPct),
+    nullableString(trade.strategyConfigFingerprint),
+    nullableString(trade.cohortId),
+    nullableDate(trade.candidateLockAt),
+    nullableDate(trade.datasetCutoffAt),
+    nullableDate(trade.entryOpenedAt),
+    nullableString(trade.executionEnvironment),
+    trade.exitReason,
+    trade.openedAt.toISOString(),
+    trade.closedAt.toISOString(),
+  ];
 }
 
 /**
@@ -97,7 +183,7 @@ function isSqliteBusy(err: unknown): boolean {
  * soaks); a transient lock that outlasts `busy_timeout` must be retried rather
  * than silently dropped (the flow recorder previously discarded those rows).
  */
-function retryOnBusy<R, E>(
+function retryOnBusy<R, E extends PaperTradingRepositoryError>(
   effect: Effect.Effect<R, E, never>,
 ): Effect.Effect<R, E, never> {
   return Effect.retry(effect, {
@@ -1634,40 +1720,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             state.exchange,
             state.symbol,
             state.timeframe,
-            state.initialCapital ?? null,
-            toNumber(state.capital),
-            toNumber(state.peakCapital),
-            state.capital.toString(),
-            state.peakCapital.toString(),
-            state.paused,
-            state.side,
-            toNumber(state.entryPrice),
-            state.entryPrice.toString(),
-            state.entryOrderId ?? null,
-            state.entryClientOid ?? null,
-            state.entryFilledQty ? toNumber(state.entryFilledQty) : null,
-            state.entryFilledQty?.toString() ?? null,
-            state.entryFee ? toNumber(state.entryFee) : null,
-            state.entryFee?.toString() ?? null,
-            state.entryFillSource ?? null,
-            state.strategyConfigFingerprint ?? null,
-            state.cohortId ?? null,
-            state.candidateLockAt?.toISOString() ?? null,
-            state.datasetCutoffAt?.toISOString() ?? null,
-            state.entryOpenedAt?.toISOString() ?? null,
-            state.executionEnvironment ?? null,
-            state.gridStepPct,
-            state.gridMaxGrids,
-            state.gridPauseAfterLossBars,
-            state.feePct,
-            state.slippageBps,
-            state.trendFilterPeriod,
-            state.maxPositionPct,
-            state.maxDrawdownPct,
-            state.leverage,
-            state.killed ? 1 : 0,
-            state.lastTimestamp ? state.lastTimestamp.toISOString() : null,
-            state.updatedAt.toISOString(),
+            ...gridStateSqlValues(state),
           );
       },
       catch: (err) =>
@@ -1715,6 +1768,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             entryPrice: r.entryPrice,
             entryBar: r.entryBar,
             entryTimestamp: r.entryTimestamp,
+            filledQty: r.filledQty,
           })),
           shortRungs: parsed.shortRungs.map((r) => ({
             rungIndex: r.rungIndex,
@@ -1725,6 +1779,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             entryPrice: r.entryPrice,
             entryBar: r.entryBar,
             entryTimestamp: r.entryTimestamp,
+            filledQty: r.filledQty,
           })),
           longBase: parsed.longBase,
           shortBase: parsed.shortBase,
@@ -2131,47 +2186,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
               entry_opened_at, execution_environment, exit_reason, opened_at, closed_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(
-            trade.id,
-            trade.exchange,
-            trade.symbol,
-            trade.timeframe,
-            trade.side,
-            toNumber(trade.entryPrice),
-            toNumber(trade.exitPrice),
-            toNumber(trade.capitalBefore),
-            toNumber(trade.capitalAfter),
-            toNumber(trade.pnlPct),
-            trade.entryPrice.toString(),
-            trade.exitPrice.toString(),
-            trade.capitalBefore.toString(),
-            trade.capitalAfter.toString(),
-            trade.pnlPct.toString(),
-            trade.fillSource ?? null,
-            trade.entryOrderId ?? null,
-            trade.entryClientOid ?? null,
-            trade.exitOrderId ?? null,
-            trade.exitClientOid ?? null,
-            trade.entryFilledQty ? toNumber(trade.entryFilledQty) : null,
-            trade.entryFilledQty?.toString() ?? null,
-            trade.exitFilledQty ? toNumber(trade.exitFilledQty) : null,
-            trade.exitFilledQty?.toString() ?? null,
-            trade.entryFee ? toNumber(trade.entryFee) : null,
-            trade.entryFee?.toString() ?? null,
-            trade.exitFee ? toNumber(trade.exitFee) : null,
-            trade.exitFee?.toString() ?? null,
-            trade.realizedPnlPct ? toNumber(trade.realizedPnlPct) : null,
-            trade.realizedPnlPct?.toString() ?? null,
-            trade.strategyConfigFingerprint ?? null,
-            trade.cohortId ?? null,
-            trade.candidateLockAt?.toISOString() ?? null,
-            trade.datasetCutoffAt?.toISOString() ?? null,
-            trade.entryOpenedAt?.toISOString() ?? null,
-            trade.executionEnvironment ?? null,
-            trade.exitReason,
-            trade.openedAt.toISOString(),
-            trade.closedAt.toISOString(),
-          );
+          .run(...gridTradeSqlValues(trade));
       },
       catch: (err) =>
         new PaperTradingRepositoryError(

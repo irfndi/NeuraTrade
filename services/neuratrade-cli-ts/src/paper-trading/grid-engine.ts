@@ -112,8 +112,8 @@ export interface GridPaperTradingOptions {
     | "bybit-demo"
     | "bybit-live";
   /** Exchange contract size constraints (minQty, qtyStep, minTradeUSDT) for
-   *  this symbol, populated by the CLI from BitgetClient.getContracts on the
-   *  live path and by tests directly. When set, entry sizing rounds the order
+   *  this symbol, populated by the CLI from the selected venue on the live
+   *  path and by tests directly. When set, entry sizing rounds the order
    *  qty UP to the size step, raises a sub-minimum qty to minQty, lifts
    *  leverage so the minimum orderable margin fits the allocation cap, and
    *  SKIPS the entry (never placing an unorderable or over-cap order) when
@@ -353,10 +353,1383 @@ function stateConfigMatchesOptions(
   );
 }
 
+function gridProvenanceMismatch(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+): string | null {
+  if (!options.isLive || state.side === null) return null;
+  if (state.entryFillSource !== "live" && state.entryFillSource !== "adopted") {
+    return "READINESS PROVENANCE MISMATCH: open state has no live entry source";
+  }
+  if (state.strategyConfigFingerprint === undefined) {
+    return "READINESS PROVENANCE MISMATCH: open state has no strategy fingerprint";
+  }
+  if (
+    state.initialCapital !== undefined &&
+    state.initialCapital !== options.initialCapital
+  ) {
+    return `READINESS PROVENANCE MISMATCH: open state capital ${state.initialCapital} differs from configured ${options.initialCapital}`;
+  }
+  return null;
+}
+
 type GridFillEvidence = Pick<
   FuturesOrderFill,
   "orderId" | "clientOid" | "filledQty" | "fee"
 >;
+
+type GridExecutionEnvironment = NonNullable<
+  GridPaperTradingOptions["executionEnvironment"]
+>;
+
+type GridPaperIterationError =
+  | MarketDataError
+  | PaperTradingRepositoryError
+  | ExchangeError
+  | RiskError
+  | KillSwitchError
+  | CircuitBreakerError;
+
+type GridServiceContext =
+  | MarketDataGatewayService
+  | PaperTradingRepositoryService
+  | FuturesExchangeAdapterService
+  | RiskGuardService
+  | KillSwitchService
+  | CircuitBreakerService;
+
+interface GridIterationServices {
+  readonly repo: PaperTradingRepositoryService;
+  readonly gateway: MarketDataGatewayService;
+  readonly adapter: FuturesExchangeAdapterService;
+  readonly riskGuard: RiskGuardService;
+  readonly killSwitch: KillSwitchService;
+  readonly circuitBreaker: CircuitBreakerService;
+}
+
+interface GridMarketData {
+  readonly candles: readonly Candle[];
+  readonly index: number;
+  readonly current: Candle;
+  readonly trend: number | null;
+}
+
+interface GridMarketResolution {
+  readonly market?: GridMarketData;
+  readonly earlyResult?: GridPaperTradingIterationResult;
+}
+
+interface GridStateResolution {
+  readonly state: GridPaperState;
+  readonly earlyResult?: GridPaperTradingIterationResult;
+  readonly reseedNote?: string;
+}
+
+interface GridBarInput {
+  readonly options: GridPaperTradingOptions;
+  readonly state: GridPaperState;
+  readonly strategyFingerprint: string;
+  readonly executionEnvironment: GridExecutionEnvironment;
+  readonly services: GridIterationServices;
+  readonly market: GridMarketData;
+  readonly note?: string;
+}
+
+interface GridStateOperationResult {
+  readonly state: GridPaperState;
+  readonly note?: string;
+  readonly earlyResult?: GridPaperTradingIterationResult;
+}
+
+interface GridLiveStateInput {
+  readonly state: GridPaperState;
+  readonly options: GridPaperTradingOptions;
+  readonly current: Candle;
+  readonly strategyFingerprint: string;
+  readonly executionEnvironment: GridExecutionEnvironment;
+  readonly services: GridIterationServices;
+}
+
+function gridExecutionEnvironment(
+  options: GridPaperTradingOptions,
+): GridExecutionEnvironment {
+  return (
+    options.executionEnvironment ??
+    (options.isLive
+      ? options.exchange === "bybit-futures"
+        ? "bybit-live"
+        : "bitget-live"
+      : options.exchange === "bybit-futures"
+        ? "bybit-demo"
+        : "bitget-demo")
+  );
+}
+
+function gridHoldResult(
+  state: GridPaperState,
+  note: string,
+): GridPaperTradingIterationResult {
+  return {
+    action: "hold",
+    side: state.side,
+    capital: toNumber(state.capital),
+    peakCapital: toNumber(state.peakCapital),
+    note,
+  };
+}
+
+function loadGridServices(): Effect.Effect<
+  GridIterationServices,
+  never,
+  GridServiceContext
+> {
+  return Effect.gen(function* () {
+    return {
+      repo: yield* PaperTradingRepository,
+      gateway: yield* MarketDataGateway,
+      adapter: yield* FuturesExchangeAdapter,
+      riskGuard: yield* RiskGuard,
+      killSwitch: yield* KillSwitch,
+      circuitBreaker: yield* CircuitBreaker,
+    };
+  });
+}
+
+function loadGridState(
+  repo: PaperTradingRepositoryService,
+  options: GridPaperTradingOptions,
+  strategyFingerprint: string,
+): Effect.Effect<GridStateResolution, PaperTradingRepositoryError> {
+  return Effect.gen(function* () {
+    let state =
+      (yield* repo.getGridState(
+        options.exchange,
+        options.symbol,
+        options.timeframe,
+      )) ?? freshGridState(options);
+
+    const provenanceReason = gridProvenanceMismatch(state, options);
+    if (provenanceReason !== null) {
+      return {
+        state,
+        earlyResult: gridHoldResult(state, provenanceReason),
+      };
+    }
+
+    // Flat config drift: heal the config fields but PRESERVE realized
+    // capital/peak. A full reseed silently vaporized a realized +0.55% BTC
+    // win (50.27 -> 50.00, 2026-09-03): limits come from options, but the
+    // balance is the account's and must survive config drift. Only a changed
+    // initialCapital (a genuinely different account) reseeds the ledger.
+    let flatReseedNote: string | null = null;
+    if (state.side === null && !stateConfigMatchesOptions(state, options)) {
+      const keepLedger =
+        state.initialCapital === undefined ||
+        state.initialCapital === options.initialCapital;
+      const prevCapital = state.capital;
+      const fresh = freshGridState(options);
+      state =
+        keepLedger === false
+          ? fresh
+          : {
+              ...fresh,
+              capital: prevCapital,
+              peakCapital: state.peakCapital,
+            };
+      yield* repo.saveGridState(state);
+      flatReseedNote =
+        keepLedger === false
+          ? "flat reseed on initialCapital change"
+          : `flat config drift healed (capital ${toNumber(prevCapital).toFixed(2)} preserved)`;
+    }
+
+    if (
+      state.side !== null &&
+      (state.strategyConfigFingerprint !== strategyFingerprint ||
+        (state.initialCapital !== undefined &&
+          state.initialCapital !== options.initialCapital))
+    ) {
+      state = {
+        ...state,
+        strategyConfigFingerprint: strategyFingerprint,
+        maxPositionPct: options.maxPositionPct,
+        maxDrawdownPct: options.maxDrawdownPct,
+        gridStepPct: options.gridStepPct,
+        gridMaxGrids: options.gridMaxGrids,
+        gridPauseAfterLossBars: options.gridPauseAfterLossBars,
+        updatedAt: new Date(),
+      };
+      yield* repo.saveGridState(state);
+    }
+
+    return { state, reseedNote: flatReseedNote ?? undefined };
+  });
+}
+
+function guardKilledGridState(
+  state: GridPaperState,
+  repo: PaperTradingRepositoryService,
+  killSwitch: KillSwitchService,
+): Effect.Effect<
+  GridStateResolution,
+  PaperTradingRepositoryError | KillSwitchError
+> {
+  return Effect.gen(function* () {
+    if (!state.killed) return { state };
+    if (state.side === null && !(yield* killSwitch.isEngaged())) {
+      const reset = { ...state, killed: false, updatedAt: new Date() };
+      yield* repo.saveGridState(reset);
+      return { state: reset };
+    }
+    return { state, earlyResult: gridHoldResult(state, "kill switch active") };
+  });
+}
+
+function requiredGridCandles(options: GridPaperTradingOptions): number {
+  const replayBars = options.replayBars ?? 0;
+  const adxWarmup = (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
+  return replayBars > 0
+    ? replayBars + options.trendFilterPeriod + 5
+    : Math.max(options.trendFilterPeriod + 1, 2, adxWarmup);
+}
+
+function resolveGridMarket(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  candles: readonly Candle[],
+): GridMarketResolution {
+  const replayBars = options.replayBars ?? 0;
+  const minCandles =
+    replayBars > 0
+      ? Math.min(replayBars, candles.length)
+      : Math.max(options.trendFilterPeriod + 1, 2);
+  if (candles.length < minCandles) {
+    return {
+      earlyResult: gridHoldResult(
+        state,
+        `insufficient candles (${candles.length}/${minCandles})`,
+      ),
+    };
+  }
+
+  const index = resolveGridCandleIndex(state, options, candles);
+  if (index === null) {
+    return {
+      earlyResult: gridHoldResult(state, "no new replay candle"),
+    };
+  }
+  const trend =
+    options.trendFilterPeriod >= 1
+      ? sma(candles, index, options.trendFilterPeriod)
+      : null;
+  if (options.trendFilterPeriod >= 1 && trend === null) {
+    return {
+      earlyResult: gridHoldResult(state, "trend filter not ready"),
+    };
+  }
+  return {
+    market: { candles, index, current: candles[index], trend },
+  };
+}
+
+function resolveGridCandleIndex(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  candles: readonly Candle[],
+): number | null {
+  const replayBars = options.replayBars ?? 0;
+  if (replayBars === 0) return candles.length - 1;
+  if (state.lastTimestamp === null) {
+    return Math.max(options.trendFilterPeriod, candles.length - replayBars);
+  }
+  const nextIndex = candles.findIndex(
+    (candle) => candle.timestamp.getTime() > state.lastTimestamp!.getTime(),
+  );
+  return nextIndex === -1 ? null : nextIndex;
+}
+
+function saveGridStateWithRetry(
+  repo: PaperTradingRepositoryService,
+  killSwitch: KillSwitchService,
+  state: GridPaperState,
+  failReason: string,
+): Effect.Effect<boolean, KillSwitchError> {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = yield* repo.saveGridState(state).pipe(Effect.result);
+      if (saved._tag === "Success") return true;
+      if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
+    }
+    yield* killSwitch.engage(failReason);
+    return false;
+  });
+}
+
+function cancelGridRestingOrders(
+  adapter: FuturesExchangeAdapterService,
+  symbol: string,
+  productType: FuturesProductType,
+): Effect.Effect<void> {
+  if (adapter.cancelOpenOrders === undefined) return Effect.void;
+  return adapter.cancelOpenOrders(symbol, productType).pipe(
+    Effect.match({
+      onSuccess: () => undefined,
+      onFailure: () => undefined,
+    }),
+  );
+}
+
+function reconcileGridLiveState(
+  input: GridLiveStateInput,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    let state = input.state;
+    const {
+      options,
+      current,
+      strategyFingerprint,
+      executionEnvironment,
+      services,
+    } = input;
+    const { adapter, repo, killSwitch, circuitBreaker } = services;
+    const productType = options.productType ?? "USDT-FUTURES";
+    const marginMode = options.marginMode ?? "isolated";
+    const reconciliation = reconcileLivePosition(
+      state,
+      yield* adapter.getPosition(options.symbol, productType),
+      {
+        productType,
+        marginMode,
+        leverage: state.leverage,
+        entryPrice: state.entryPrice,
+      },
+    );
+    let note: string | undefined;
+
+    if (reconciliation.kind === "adopt") {
+      state = adoptedGridState(
+        state,
+        reconciliation.position,
+        strategyFingerprint,
+        executionEnvironment,
+        current.timestamp,
+      );
+      const persisted = yield* saveGridStateWithRetry(
+        repo,
+        killSwitch,
+        state,
+        "state save failed after position adoption",
+      );
+      if (!persisted) {
+        return {
+          state,
+          earlyResult: gridHoldResult(
+            state,
+            "KILL SWITCH ENGAGED: state save failed after position adoption",
+          ),
+        };
+      }
+      note = `[LIVE] adopted ${reconciliation.position.side} ${reconciliation.position.quantity.toString()} @ ${reconciliation.position.entryPrice.toString()} (untracked exchange position)`;
+    } else if (reconciliation.kind === "unadoptable") {
+      const close = yield* adapter
+        .closePosition({
+          symbol: options.symbol,
+          side: reconciliation.position.side === "long" ? "sell" : "buy",
+          productType,
+          marginMode,
+          leverage: state.leverage,
+          size: reconciliation.position.quantity,
+        })
+        .pipe(Effect.result);
+      if (close._tag === "Success" && close.success !== null) {
+        note = `[LIVE] closed untracked invalid exchange position (${reconciliation.reason})`;
+      } else {
+        return yield* failGridLiveReconciliation(
+          state,
+          options,
+          current,
+          reconciliation.reason,
+          adapter,
+          repo,
+          killSwitch,
+        );
+      }
+    } else if (reconciliation.kind === "mismatch") {
+      return yield* failGridLiveReconciliation(
+        state,
+        options,
+        current,
+        reconciliation.reason,
+        adapter,
+        repo,
+        killSwitch,
+      );
+    }
+
+    if (yield* killSwitch.isEngaged()) {
+      return {
+        state,
+        earlyResult: gridHoldResult(
+          state,
+          `KILL SWITCH ENGAGED: ${yield* killSwitch.getReason()}`,
+        ),
+      };
+    }
+    if (yield* circuitBreaker.isOpen()) {
+      return {
+        state,
+        earlyResult: gridHoldResult(
+          state,
+          `CIRCUIT BREAKER OPEN: ${yield* circuitBreaker.getReason()}`,
+        ),
+      };
+    }
+    return { state, note };
+  });
+}
+
+function failGridLiveReconciliation(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  current: Candle,
+  reconciliationReason: string,
+  adapter: FuturesExchangeAdapterService,
+  repo: PaperTradingRepositoryService,
+  killSwitch: KillSwitchService,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    const reason = `LIVE POSITION MISMATCH: ${reconciliationReason}`;
+    yield* killSwitch.engage(reason);
+    yield* cancelGridRestingOrders(
+      adapter,
+      options.symbol,
+      options.productType ?? "USDT-FUTURES",
+    );
+    const killedState = {
+      ...state,
+      killed: true,
+      lastTimestamp: current.timestamp,
+      updatedAt: new Date(),
+    };
+    yield* repo.saveGridState(killedState);
+    return {
+      state: killedState,
+      earlyResult: gridHoldResult(killedState, reason),
+    };
+  });
+}
+
+export interface GridCloseTradeResult {
+  readonly trade: GridPaperTrade;
+  readonly capitalAfter: Decimal;
+  readonly peakCapital: Decimal;
+}
+
+export interface GridCloseTradeInput {
+  readonly options: GridPaperTradingOptions;
+  readonly state: GridPaperState;
+  readonly side: GridPaperPositionSide;
+  readonly entryPrice: Decimal;
+  readonly exitPrice: Decimal;
+  readonly exitReason: GridPaperTrade["exitReason"];
+  readonly stateCapital: Decimal;
+  readonly peakCapital: Decimal;
+  readonly maxPositionPct: number;
+  readonly leverage: number;
+  readonly openedAt: Date;
+  readonly entryEvidence: GridFillEvidence | null;
+  readonly exitFill: FuturesOrderFill | null;
+  readonly fee: number;
+  readonly stopFee: number;
+  readonly fundingCost: Decimal;
+}
+
+function gridEntryEvidence(state: GridPaperState): GridFillEvidence | null {
+  const liveEntry =
+    state.entryFillSource === "live" || state.entryFillSource === "adopted";
+  if (
+    !liveEntry ||
+    !state.entryOrderId ||
+    !state.entryFilledQty ||
+    !state.entryFee
+  ) {
+    return null;
+  }
+  return {
+    orderId: state.entryOrderId,
+    clientOid: state.entryClientOid,
+    filledQty: state.entryFilledQty,
+    fee: state.entryFee,
+  };
+}
+
+function gridCloseSize(state: GridPaperState, fallback: Decimal): Decimal {
+  const liveEntry =
+    state.entryFillSource === "live" || state.entryFillSource === "adopted";
+  return liveEntry && state.entryFilledQty?.greaterThan(0) === true
+    ? state.entryFilledQty
+    : fallback;
+}
+
+interface GridCloseAccounting {
+  readonly capitalAfter: Decimal;
+  readonly pnlPct: Decimal;
+  readonly realizedPnlPct: Decimal | undefined;
+}
+
+function gridPriceDelta(
+  side: GridPaperPositionSide,
+  entryPrice: Decimal,
+  exitPrice: Decimal,
+): Decimal {
+  return side === "long"
+    ? exitPrice.minus(entryPrice)
+    : entryPrice.minus(exitPrice);
+}
+
+function liveGridCloseAccounting(
+  input: GridCloseTradeInput,
+): GridCloseAccounting | null {
+  const { side, entryPrice, exitPrice, stateCapital, maxPositionPct } = input;
+  const { entryEvidence, exitFill, fundingCost } = input;
+  if (
+    entryEvidence === null ||
+    exitFill === null ||
+    !entryEvidence.filledQty.greaterThan(0) ||
+    !exitFill.filledQty.greaterThan(0)
+  ) {
+    return null;
+  }
+  const matchedQty = Decimal.min(entryEvidence.filledQty, exitFill.filledQty);
+  const fillPnl = gridPriceDelta(side, entryPrice, exitPrice)
+    .times(matchedQty)
+    .minus(entryEvidence.fee.plus(exitFill.fee));
+  const allocationFloor = stateCapital.times(1 - maxPositionPct / 100);
+  const capitalAfter = Decimal.max(
+    allocationFloor,
+    stateCapital.plus(fillPnl).plus(fundingCost),
+  );
+  const pnlPct = stateCapital.greaterThan(0)
+    ? capitalAfter.minus(stateCapital).div(stateCapital).times(100)
+    : money(0);
+  const realizedPnlPct = stateCapital.greaterThan(0)
+    ? fillPnl.div(stateCapital).times(100)
+    : money(0);
+  return { capitalAfter, pnlPct, realizedPnlPct };
+}
+
+function simulatedGridCloseAccounting(
+  input: GridCloseTradeInput,
+): GridCloseAccounting {
+  const {
+    side,
+    entryPrice,
+    exitPrice,
+    exitReason,
+    stateCapital,
+    maxPositionPct,
+    leverage,
+    fee,
+    stopFee,
+    fundingCost,
+  } = input;
+  const pricePnl = gridPriceDelta(side, entryPrice, exitPrice).div(entryPrice);
+  const roundTripFee = exitReason === "target" ? fee : stopFee;
+  const leveragedReturn =
+    exitReason === "liquidation"
+      ? money(-1)
+      : pricePnl.minus(roundTripFee).times(leverage);
+  const allocationFloor = stateCapital.times(1 - maxPositionPct / 100);
+  const rawCapitalAfter = stateCapital.times(
+    money(1).plus(leveragedReturn.times(maxPositionPct / 100)),
+  );
+  const capitalAfter =
+    exitReason === "liquidation"
+      ? allocationFloor
+      : Decimal.max(allocationFloor, rawCapitalAfter).plus(fundingCost);
+  const pnlPct =
+    exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
+  return { capitalAfter, pnlPct, realizedPnlPct: undefined };
+}
+
+export function buildGridCloseTrade(
+  input: GridCloseTradeInput,
+): GridCloseTradeResult {
+  const { options, state, side, entryPrice, exitPrice, openedAt } = input;
+  const liveAccounting = liveGridCloseAccounting(input);
+  const accounting = liveAccounting ?? simulatedGridCloseAccounting(input);
+  const trade: GridPaperTrade = {
+    id: makeId(),
+    exchange: options.exchange,
+    symbol: options.symbol,
+    timeframe: options.timeframe,
+    side,
+    entryPrice,
+    exitPrice,
+    capitalBefore: input.stateCapital,
+    capitalAfter: accounting.capitalAfter,
+    pnlPct: accounting.pnlPct,
+    exitReason: input.exitReason,
+    openedAt,
+    closedAt: new Date(),
+    fillSource: liveAccounting !== null ? "live" : "simulated",
+    entryOrderId: input.entryEvidence?.orderId,
+    entryClientOid: input.entryEvidence?.clientOid,
+    exitOrderId: input.exitFill?.orderId,
+    exitClientOid: input.exitFill?.clientOid,
+    entryFilledQty: input.entryEvidence?.filledQty,
+    exitFilledQty: input.exitFill?.filledQty,
+    entryFee: input.entryEvidence?.fee,
+    exitFee: input.exitFill?.fee,
+    realizedPnlPct: accounting.realizedPnlPct,
+    strategyConfigFingerprint: state.strategyConfigFingerprint,
+    cohortId: state.cohortId,
+    candidateLockAt: state.candidateLockAt,
+    datasetCutoffAt: state.datasetCutoffAt,
+    entryOpenedAt: state.entryOpenedAt,
+    executionEnvironment: state.executionEnvironment,
+  };
+  return {
+    trade,
+    capitalAfter: accounting.capitalAfter,
+    peakCapital: Decimal.max(input.peakCapital, accounting.capitalAfter),
+  };
+}
+
+interface GridClosePositionInput {
+  readonly state: GridPaperState;
+  readonly options: GridPaperTradingOptions;
+  readonly side: GridPaperPositionSide;
+  readonly exitReason: GridPaperTrade["exitReason"];
+  readonly theoreticalExitPrice: Decimal;
+  readonly isLive: boolean;
+  readonly productType: FuturesProductType;
+  readonly marginMode: FuturesMarginMode;
+  readonly adapter: FuturesExchangeAdapterService;
+  readonly repo: PaperTradingRepositoryService;
+  readonly circuitBreaker: CircuitBreakerService;
+  readonly startOfDayCapital: Decimal;
+  readonly fee: number;
+  readonly stopFee: number;
+  readonly fundingCost: Decimal;
+}
+
+interface GridEntrySetup {
+  readonly side: GridPaperPositionSide;
+  readonly entryLevelPrice: Decimal;
+  readonly theoreticalEntryPrice: Decimal;
+}
+
+function gridFundingCost(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  current: Candle,
+): Decimal {
+  const ratePct = options.fundingRatePct8h ?? 0;
+  if (
+    ratePct === 0 ||
+    state.side === null ||
+    state.entryOpenedAt === undefined
+  ) {
+    return money(0);
+  }
+  const intervals = Math.floor(
+    (current.timestamp.getTime() - state.entryOpenedAt.getTime()) /
+      FUNDING_INTERVAL_MS,
+  );
+  if (intervals <= 0) return money(0);
+  const notional =
+    state.entryFilledQty?.greaterThan(0) === true &&
+    state.entryPrice.greaterThan(0)
+      ? state.entryFilledQty.times(state.entryPrice)
+      : state.capital.times(state.maxPositionPct / 100).times(state.leverage);
+  return notional
+    .times((ratePct / 100) * intervals)
+    .times(state.side === "long" ? -1 : 1);
+}
+
+function gridChopGateNote(
+  candles: readonly Candle[],
+  index: number,
+  options: GridPaperTradingOptions,
+): string | null {
+  const threshold = Math.max(0, options.chopGateAdxThreshold ?? 0);
+  if (threshold === 0) return null;
+  const adx = makeCausalSymbolStats(candles, options.timeframe)(index).adx14;
+  return adx >= threshold
+    ? `chop gate active (ADX ${adx.toFixed(1)} >= ${threshold})`
+    : null;
+}
+
+function resolveGridEntry(
+  current: Candle,
+  trend: number | null,
+  mid: Decimal,
+  step: Decimal,
+  slippageFactor: number,
+  options: GridPaperTradingOptions,
+): GridEntrySetup | null {
+  const buyLevel = mid.minus(step);
+  const sellLevel = mid.plus(step);
+  const onlyWithTrend = options.onlyWithTrend ?? false;
+  const allowLong = !onlyWithTrend || trend === null || current.close > trend;
+  const allowShort = !onlyWithTrend || trend === null || current.close < trend;
+  if (allowLong && money(current.low).lessThanOrEqualTo(buyLevel)) {
+    return {
+      side: "long",
+      entryLevelPrice: buyLevel,
+      theoreticalEntryPrice: buyLevel.times(slippageFactor),
+    };
+  }
+  if (allowShort && money(current.high).greaterThanOrEqualTo(sellLevel)) {
+    return {
+      side: "short",
+      entryLevelPrice: sellLevel,
+      theoreticalEntryPrice: sellLevel.div(slippageFactor),
+    };
+  }
+  return null;
+}
+
+function closeGridPosition(
+  input: GridClosePositionInput,
+): Effect.Effect<
+  GridCloseTradeResult & { readonly exitPrice: Decimal },
+  ExchangeError | PaperTradingRepositoryError | CircuitBreakerError
+> {
+  return Effect.gen(function* () {
+    const {
+      state,
+      options,
+      side,
+      exitReason,
+      theoreticalExitPrice,
+      isLive,
+      productType,
+      marginMode,
+      adapter,
+      repo,
+      circuitBreaker,
+      startOfDayCapital,
+      fee,
+      stopFee,
+      fundingCost,
+    } = input;
+    let exitPrice = theoreticalExitPrice;
+    let exitFill: FuturesOrderFill | null = null;
+    if (isLive) {
+      // Existing positions close with their persisted fill size. Contract
+      // orderability rules apply only when opening a new position.
+      const size = orderSizeContracts(
+        state.capital,
+        state.maxPositionPct,
+        state.entryPrice,
+      ).size;
+      const closeSize = gridCloseSize(state, size);
+      if (size.greaterThan(0)) {
+        // Stop and liquidation exits are protected-risk closes. Leave the
+        // price unset so futures adapters submit a MARKET reduce-only order;
+        // passing the theoretical trigger here turns the close into a
+        // resting LIMIT order that can partially fill while the position is
+        // supposed to be leaving immediately.
+        const closePrice =
+          exitReason === "target" ? theoreticalExitPrice : undefined;
+        const fill = yield* adapter.closePosition({
+          symbol: options.symbol,
+          side: side === "long" ? "sell" : "buy",
+          productType,
+          marginMode,
+          leverage: state.leverage,
+          size: closeSize,
+          price: closePrice,
+        });
+        if (!fill) {
+          return yield* Effect.fail(
+            new ExchangeError(`live ${exitReason} close returned no fill`),
+          );
+        }
+        if (fill.filledQty.lessThan(closeSize)) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              `live ${exitReason} close was partially filled (${fill.filledQty.toString()}/${closeSize.toString()})`,
+            ),
+          );
+        }
+        exitPrice = money(fill.filledPrice);
+        exitFill = fill;
+      }
+    }
+    const close = buildGridCloseTrade({
+      options,
+      state,
+      side,
+      entryPrice: state.entryPrice,
+      exitPrice,
+      exitReason,
+      stateCapital: state.capital,
+      peakCapital: state.peakCapital,
+      maxPositionPct: state.maxPositionPct,
+      leverage: state.leverage,
+      openedAt: state.updatedAt,
+      entryEvidence: gridEntryEvidence(state),
+      exitFill,
+      fee,
+      stopFee,
+      fundingCost,
+    });
+    yield* repo.recordGridTrade(close.trade);
+    yield* circuitBreaker.recordTradeResult(
+      toNumber(close.capitalAfter.minus(state.capital)),
+      toNumber(startOfDayCapital),
+    );
+    return { ...close, exitPrice };
+  });
+}
+
+interface GridEntryInput {
+  readonly state: GridPaperState;
+  readonly setup: GridEntrySetup;
+  readonly options: GridPaperTradingOptions;
+  readonly current: Candle;
+  readonly isLive: boolean;
+  readonly productType: FuturesProductType;
+  readonly marginMode: FuturesMarginMode;
+  readonly strategyFingerprint: string;
+  readonly executionEnvironment: GridExecutionEnvironment;
+  readonly todayPnl: Decimal;
+  readonly startOfDayCapital: Decimal;
+  readonly services: GridIterationServices;
+}
+
+function gridMinimumOrderableNotional(
+  options: GridPaperTradingOptions,
+  entryPrice: Decimal,
+): number | undefined {
+  if (options.contractSpecs === undefined) return undefined;
+  return toNumber(
+    Decimal.max(
+      money(options.contractSpecs.minTradeUSDT),
+      money(options.contractSpecs.minQty).times(entryPrice),
+    ),
+  );
+}
+
+function gridOpenedState(
+  input: GridEntryInput,
+  entryPrice: Decimal,
+  size: Decimal,
+  leverage: number,
+  fill: FuturesOrderFill | null,
+): GridPaperState {
+  const { state, current, strategyFingerprint, executionEnvironment } = input;
+  const base = {
+    ...state,
+    side: input.setup.side,
+    entryPrice,
+    leverage,
+    strategyConfigFingerprint: strategyFingerprint,
+    cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
+    candidateLockAt: current.timestamp,
+    datasetCutoffAt: current.timestamp,
+    entryOpenedAt: fill !== null ? new Date() : current.timestamp,
+    executionEnvironment,
+    updatedAt: new Date(),
+    lastTimestamp: current.timestamp,
+  };
+  if (fill !== null) {
+    return {
+      ...base,
+      entryOrderId: fill.orderId,
+      entryClientOid: fill.clientOid,
+      entryFilledQty: fill.filledQty,
+      entryFee: fill.fee,
+      entryFillSource: "live" as const,
+    };
+  }
+  return {
+    ...base,
+    entryFilledQty: size,
+    entryFee: money(0),
+    entryFillSource: "simulated" as const,
+  };
+}
+
+function gridEntryHold(
+  state: GridPaperState,
+  note: string,
+): GridStateOperationResult {
+  return { state, earlyResult: gridHoldResult(state, note) };
+}
+
+function executeLiveGridEntry(
+  input: GridEntryInput,
+  size: Decimal,
+  orderLeverage: number,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    const {
+      state: originalState,
+      setup,
+      options,
+      current,
+      productType,
+      marginMode,
+      strategyFingerprint,
+      executionEnvironment,
+      services,
+    } = input;
+    const { adapter, repo, killSwitch } = services;
+    yield* adapter.setLeverage(
+      options.symbol,
+      productType,
+      marginMode,
+      orderLeverage,
+    );
+    yield* adapter.setMarginMode(options.symbol, productType, marginMode);
+    yield* adapter.setPositionMode(productType, "one_way");
+    const placed = yield* adapter
+      .placeOrder({
+        symbol: options.symbol,
+        side: setup.side === "long" ? "buy" : "sell",
+        type: "limit",
+        size,
+        productType,
+        marginMode,
+        leverage: orderLeverage,
+        price: setup.entryLevelPrice,
+      })
+      .pipe(Effect.result);
+    if (placed._tag === "Failure") {
+      const currentPosition = yield* adapter
+        .getPosition(options.symbol, productType)
+        .pipe(Effect.result);
+      if (
+        currentPosition._tag === "Success" &&
+        currentPosition.success !== null
+      ) {
+        const state = adoptedGridState(
+          originalState,
+          currentPosition.success,
+          strategyFingerprint,
+          executionEnvironment,
+          current.timestamp,
+        );
+        const persisted = yield* saveGridStateWithRetry(
+          repo,
+          killSwitch,
+          state,
+          "state save failed after order placement",
+        );
+        const note = `[LIVE] placed ${setup.side} ${size.toFixed(6)} then adopted ${currentPosition.success.side} ${currentPosition.success.quantity.toString()} @ ${currentPosition.success.entryPrice.toString()} (fill confirmation lost)`;
+        return persisted
+          ? { state, note }
+          : gridEntryHold(
+              state,
+              "KILL SWITCH ENGAGED: state save failed after order placement",
+            );
+      }
+      return yield* Effect.fail(
+        new ExchangeError(
+          `live ${setup.side} entry failed: ${placed.failure.reason}`,
+          placed.failure,
+        ),
+      );
+    }
+
+    const fill = placed.success;
+    // Record the EFFECTIVE leverage the adapter set on the exchange, not
+    // the requested one: floor-sizing can raise it (yolo-btc 2026-09-03:
+    // exchange lev 2 vs recorded 10 froze the account on reconciliation).
+    const state = gridOpenedState(
+      input,
+      money(fill.filledPrice),
+      size,
+      fill.leverage ?? orderLeverage,
+      fill,
+    );
+    const persisted = yield* saveGridStateWithRetry(
+      repo,
+      killSwitch,
+      state,
+      "state save failed after order placement",
+    );
+    const note = `[LIVE] opened ${setup.side} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${orderLeverage}x)`;
+    return persisted
+      ? { state, note }
+      : gridEntryHold(
+          state,
+          "KILL SWITCH ENGAGED: state save failed after order placement",
+        );
+  });
+}
+
+function openGridEntry(
+  input: GridEntryInput,
+  entryPrice: Decimal,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    const {
+      state,
+      setup,
+      options,
+      isLive,
+      productType,
+      todayPnl,
+      startOfDayCapital,
+      services,
+    } = input;
+    const { repo, riskGuard } = services;
+    if (isLive) {
+      const tradesTodayCount = yield* repo.countTradesForDate(new Date());
+      const riskCheck = yield* riskGuard
+        .check({
+          isLive: true,
+          capital: toNumber(state.capital),
+          peakCapital: toNumber(state.peakCapital),
+          startOfDayCapital: toNumber(startOfDayCapital),
+          dailyRealizedPnl: toNumber(todayPnl),
+          tradesTodayCount,
+          positionValue: toNumber(
+            state.capital.times(state.maxPositionPct / 100),
+          ),
+          symbol: options.symbol,
+          side: setup.side === "long" ? "buy" : "sell",
+          leverage: state.leverage,
+          productType,
+          minOrderableNotional: gridMinimumOrderableNotional(
+            options,
+            entryPrice,
+          ),
+        })
+        .pipe(Effect.result);
+      if (riskCheck._tag === "Failure") {
+        return {
+          state,
+          note: `RISK BLOCKED ${setup.side}: ${riskCheck.failure.violations.join("; ")}`,
+        };
+      }
+    }
+
+    const sized = orderSizeContracts(
+      state.capital,
+      state.maxPositionPct,
+      entryPrice,
+      { leverage: state.leverage, contractSpecs: options.contractSpecs },
+    );
+    if (sized.skipReason !== undefined) {
+      return {
+        state,
+        note: `RISK BLOCKED ${setup.side} (orderability): ${sized.skipReason}`,
+      };
+    }
+    if (sized.size.lessThanOrEqualTo(0)) {
+      return { state, note: `RISK BLOCKED ${setup.side}: computed size zero` };
+    }
+    if (isLive) {
+      return yield* executeLiveGridEntry(input, sized.size, sized.leverage);
+    }
+    const nextState = gridOpenedState(
+      input,
+      entryPrice,
+      sized.size,
+      sized.leverage,
+      null,
+    );
+    return {
+      state: nextState,
+      note: `opened ${setup.side} @ ${nextState.entryPrice.toFixed(2)} size=${sized.size.toFixed(6)} (leverage=${sized.leverage}x)`,
+    };
+  });
+}
+
+interface GridFlatBarInput {
+  readonly state: GridPaperState;
+  readonly options: GridPaperTradingOptions;
+  readonly candles: readonly Candle[];
+  readonly index: number;
+  readonly current: Candle;
+  readonly trend: number | null;
+  readonly mid: Decimal;
+  readonly step: Decimal;
+  readonly slippageFactor: number;
+  readonly isLive: boolean;
+  readonly productType: FuturesProductType;
+  readonly marginMode: FuturesMarginMode;
+  readonly strategyFingerprint: string;
+  readonly executionEnvironment: GridExecutionEnvironment;
+  readonly todayPnl: Decimal;
+  readonly startOfDayCapital: Decimal;
+  readonly services: GridIterationServices;
+}
+
+function processFlatGridBar(
+  input: GridFlatBarInput,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    const {
+      state,
+      options,
+      candles,
+      index,
+      current,
+      trend,
+      mid,
+      step,
+      slippageFactor,
+      isLive,
+      productType,
+      marginMode,
+      strategyFingerprint,
+      executionEnvironment,
+      todayPnl,
+      startOfDayCapital,
+      services,
+    } = input;
+    const chopNote = gridChopGateNote(candles, index, options);
+    if (chopNote !== null) {
+      const advancedState = {
+        ...state,
+        lastTimestamp: current.timestamp,
+        updatedAt: new Date(),
+      };
+      yield* services.repo.saveGridState(advancedState);
+      return {
+        state: advancedState,
+        earlyResult: gridHoldResult(advancedState, chopNote),
+      };
+    }
+
+    const setup = resolveGridEntry(
+      current,
+      trend,
+      mid,
+      step,
+      slippageFactor,
+      options,
+    );
+    if (setup === null) return { state };
+    return yield* openGridEntry(
+      {
+        state,
+        setup,
+        options,
+        current,
+        isLive,
+        productType,
+        marginMode,
+        strategyFingerprint,
+        executionEnvironment,
+        todayPnl,
+        startOfDayCapital,
+        services,
+      },
+      setup.theoreticalEntryPrice,
+    );
+  });
+}
+
+interface GridPositionExit {
+  readonly reason: GridPaperTrade["exitReason"];
+  readonly theoreticalExitPrice: Decimal;
+  readonly killed: boolean;
+  readonly paused: number;
+}
+
+type GridClosePosition = (
+  side: GridPaperPositionSide,
+  exitReason: GridPaperTrade["exitReason"],
+  theoreticalExitPrice: Decimal,
+) => Effect.Effect<
+  GridCloseTradeResult & { readonly exitPrice: Decimal },
+  ExchangeError | PaperTradingRepositoryError | CircuitBreakerError
+>;
+
+function resolveGridPositionExit(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  current: Candle,
+  step: Decimal,
+  targetRatio: number,
+  slippageFactor: number,
+): GridPositionExit | null {
+  const { side, entryPrice } = state;
+  if (side === null) return null;
+  const target =
+    side === "long"
+      ? entryPrice.plus(step.times(targetRatio))
+      : entryPrice.minus(step.times(targetRatio));
+  const stop =
+    side === "long"
+      ? entryPrice.minus(step.times(options.gridMaxGrids))
+      : entryPrice.plus(step.times(options.gridMaxGrids));
+  const liquidation = liquidationPrice(
+    side,
+    entryPrice,
+    state.leverage,
+    options.maintenanceMarginRate ?? 0,
+  );
+  if (
+    side === "long" &&
+    liquidation.greaterThan(0) &&
+    money(current.low).lessThanOrEqualTo(liquidation)
+  ) {
+    return {
+      reason: "liquidation",
+      theoreticalExitPrice: liquidation.div(slippageFactor),
+      killed: true,
+      paused: 0,
+    };
+  }
+  if (
+    side === "short" &&
+    liquidation.greaterThan(0) &&
+    money(current.high).greaterThanOrEqualTo(liquidation)
+  ) {
+    return {
+      reason: "liquidation",
+      theoreticalExitPrice: liquidation.times(slippageFactor),
+      killed: true,
+      paused: 0,
+    };
+  }
+  if (
+    (side === "long" && money(current.high).greaterThanOrEqualTo(target)) ||
+    (side === "short" && money(current.low).lessThanOrEqualTo(target))
+  ) {
+    return {
+      reason: "target",
+      theoreticalExitPrice: target,
+      killed: false,
+      paused: 0,
+    };
+  }
+  if (
+    (side === "long" && money(current.low).lessThanOrEqualTo(stop)) ||
+    (side === "short" && money(current.high).greaterThanOrEqualTo(stop))
+  ) {
+    return {
+      reason: "stop",
+      theoreticalExitPrice:
+        side === "long" ? stop.div(slippageFactor) : stop.times(slippageFactor),
+      killed: false,
+      paused: options.gridPauseAfterLossBars,
+    };
+  }
+  return null;
+}
+
+function gridStateAfterPositionExit(
+  state: GridPaperState,
+  current: Candle,
+  exit: GridPositionExit,
+  close: GridCloseTradeResult & { readonly exitPrice: Decimal },
+): GridPaperState {
+  const base = {
+    ...state,
+    side: null,
+    entryPrice: money(0),
+    capital: close.capitalAfter,
+    peakCapital: close.peakCapital,
+    paused: exit.paused,
+    updatedAt: new Date(),
+    lastTimestamp: current.timestamp,
+  };
+  return exit.killed ? { ...base, killed: true } : base;
+}
+
+function gridPositionExitNote(
+  state: GridPaperState,
+  isLive: boolean,
+  exit: GridPositionExit,
+  close: GridCloseTradeResult & { readonly exitPrice: Decimal },
+): string {
+  if (exit.reason === "liquidation") {
+    return `liquidated ${state.side} @ ${close.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
+  }
+  return `${isLive ? "[LIVE] " : ""}closed ${state.side} ${exit.reason} @ ${close.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
+}
+
+function processGridPosition(
+  state: GridPaperState,
+  options: GridPaperTradingOptions,
+  current: Candle,
+  step: Decimal,
+  slippageFactor: number,
+  isLive: boolean,
+  closePosition: GridClosePosition,
+): Effect.Effect<GridStateOperationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    if (state.side === null) return { state };
+    const exit = resolveGridPositionExit(
+      state,
+      options,
+      current,
+      step,
+      options.targetRatio ?? 1,
+      slippageFactor,
+    );
+    if (exit === null) return { state };
+    const close = yield* closePosition(
+      state.side,
+      exit.reason,
+      exit.theoreticalExitPrice,
+    );
+    const nextState = gridStateAfterPositionExit(state, current, exit, close);
+    return {
+      state: nextState,
+      note: gridPositionExitNote(state, isLive, exit, close),
+    };
+  });
+}
+
+interface GridFinalizeInput {
+  readonly state: GridPaperState;
+  readonly options: GridPaperTradingOptions;
+  readonly current: Candle;
+  readonly note: string;
+  readonly repo: PaperTradingRepositoryService;
+}
+
+function finalizeGridBar(
+  input: GridFinalizeInput,
+): Effect.Effect<GridPaperTradingIterationResult, PaperTradingRepositoryError> {
+  return Effect.gen(function* () {
+    let { state, note } = input;
+    const { current, repo } = input;
+    state = {
+      ...state,
+      lastTimestamp: current.timestamp,
+      updatedAt: new Date(),
+    };
+    const drawdownPct = state.peakCapital.greaterThan(0)
+      ? state.peakCapital.minus(state.capital).div(state.peakCapital).times(100)
+      : money(0);
+    if (
+      drawdownPct.greaterThanOrEqualTo(state.maxDrawdownPct) &&
+      state.maxDrawdownPct < 100
+    ) {
+      state = { ...state, killed: true };
+      note =
+        note === "no action"
+          ? "kill switch triggered"
+          : `${note}; kill switch triggered`;
+    }
+    yield* repo.saveGridState(state);
+    const closedLike = note.includes("closed") || note.startsWith("liquidated");
+    return {
+      action:
+        state.side === null && closedLike
+          ? "closed"
+          : state.side !== null && note.includes("opened")
+            ? "opened"
+            : "hold",
+      side: state.side,
+      capital: toNumber(state.capital),
+      peakCapital: toNumber(state.peakCapital),
+      note,
+    };
+  });
+}
 
 export function runGridPaperTradingIteration(
   options: GridPaperTradingOptions,
@@ -376,315 +1749,78 @@ export function runGridPaperTradingIteration(
   | CircuitBreakerService
 > {
   return Effect.gen(function* () {
-    const repo = yield* PaperTradingRepository;
-    const gateway = yield* MarketDataGateway;
-    const adapter = yield* FuturesExchangeAdapter;
-    const killSwitch = yield* KillSwitch;
-    const circuitBreaker = yield* CircuitBreaker;
-
+    const services = yield* loadGridServices();
+    const { repo, gateway, killSwitch } = services;
     yield* repo.ensureTables();
-
-    const executionEnvironment =
-      options.executionEnvironment ??
-      (options.isLive
-        ? options.exchange === "bybit-futures"
-          ? "bybit-live"
-          : "bitget-live"
-        : options.exchange === "bybit-futures"
-          ? "bybit-demo"
-          : "bitget-demo");
+    const executionEnvironment = gridExecutionEnvironment(options);
     const strategyFingerprint = fingerprintStrategyManifest(
       strategyManifestFor(options, executionEnvironment),
     );
-    let state: GridPaperState =
-      (yield* repo.getGridState(
-        options.exchange,
-        options.symbol,
-        options.timeframe,
-      )) ?? freshGridState(options);
-
-    // A persisted state may belong to a previous run with different
-    // parameters (e.g. the demo soak was reconfigured after a candidate
-    // promotion). When the position is flat, the persisted config fields are
-    // still used for sizing/risk — silently reusing a stale config trades the
-    // wrong capital/position/drawdown limits. Re-seed the state from the
-    // current options instead of resuming with the stale parameters.
-    if (state.side === null && !stateConfigMatchesOptions(state, options)) {
-      state = freshGridState(options);
-      yield* repo.saveGridState(state);
-    }
-
-    if (
-      state.side !== null &&
-      (state.strategyConfigFingerprint !== strategyFingerprint ||
-        (state.initialCapital !== undefined &&
-          state.initialCapital !== options.initialCapital))
-    ) {
-      // Size-only change (allocatedWeight/maxPosition) while position open:
-      // heal fingerprint and sizing fields instead of killing the position.
-      // The open position stays live with new sizing for next exits/entries.
-      state = {
-        ...state,
-        strategyConfigFingerprint: strategyFingerprint,
-        maxPositionPct: options.maxPositionPct,
-        maxDrawdownPct: options.maxDrawdownPct,
-        maxDailyLossPct: options.maxDailyLossPct,
-        gridStepPct: options.gridStepPct,
-        gridMaxGrids: options.gridMaxGrids,
-        gridPauseAfterLossBars: options.gridPauseAfterLossBars,
-        updatedAt: new Date(),
-      };
-      yield* repo.saveGridState(state);
-      // fall through to normal trading (exits still work)
-    }
-
-    if (state.killed) {
-      // A stale kill flag on a FLAT state (no open position) must not hold
-      // the soak forever after a transient mismatch (e.g. a phantom
-      // exchange position that has since closed). The account-level kill
-      // switch still gates regardless. Regression 2026-08-09: the SOL
-      // candidate was stranded by a sticky flag with a clean state.
-      if (state.side === null && !(yield* killSwitch.isEngaged())) {
-        state = { ...state, killed: false, updatedAt: new Date() };
-        yield* repo.saveGridState(state);
-      } else {
-        return {
-          action: "hold" as const,
-          side: state.side,
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          note: "kill switch active",
-        };
-      }
-    }
-
-    const replayBars = options.replayBars ?? 0;
-    // The live chop gate computes causal ADX(14) from the fetched candles;
-    // with trendFilterPeriod 0 the engine used to fetch just 2 candles ->
-    // ADX was always 0 and the validated ADX gate never fired live. Fetch
-    // an ADX warmup (14*2+2 bars) whenever the chop gate is enabled.
-    const adxWarmup = (options.chopGateAdxThreshold ?? 0) > 0 ? 14 * 2 + 2 : 0;
-    const requiredCandles =
-      replayBars > 0
-        ? replayBars + options.trendFilterPeriod + 5
-        : Math.max(options.trendFilterPeriod + 1, 2, adxWarmup);
+    const loadedState = yield* loadGridState(
+      repo,
+      options,
+      strategyFingerprint,
+    );
+    if (loadedState.earlyResult) return loadedState.earlyResult;
+    const guardedState = yield* guardKilledGridState(
+      loadedState.state,
+      repo,
+      killSwitch,
+    );
+    if (guardedState.earlyResult) return guardedState.earlyResult;
+    const state = guardedState.state;
     const candles = yield* gateway.fetchOHLCV(
       options.exchange,
       options.symbol,
       options.timeframe,
-      requiredCandles,
+      requiredGridCandles(options),
     );
+    const market = resolveGridMarket(state, options, candles);
+    if (market.earlyResult) return market.earlyResult;
+    return yield* processGridBar({
+      options,
+      state,
+      strategyFingerprint,
+      executionEnvironment,
+      services,
+      market: market.market!,
+      note: loadedState.reseedNote,
+    });
+  });
+}
 
-    const minCandles =
-      replayBars > 0
-        ? Math.min(replayBars, candles.length)
-        : Math.max(options.trendFilterPeriod + 1, 2);
-    if (candles.length < minCandles) {
-      return {
-        action: "hold" as const,
-        side: state.side,
-        capital: toNumber(state.capital),
-        peakCapital: toNumber(state.peakCapital),
-        note: `insufficient candles (${candles.length}/${minCandles})`,
-      };
-    }
-
-    let i: number;
-    if (replayBars > 0) {
-      if (state.lastTimestamp === null) {
-        i = Math.max(options.trendFilterPeriod, candles.length - replayBars);
-      } else {
-        const nextIndex = candles.findIndex(
-          (c) => c.timestamp.getTime() > state!.lastTimestamp!.getTime(),
-        );
-        if (nextIndex === -1) {
-          return {
-            action: "hold" as const,
-            side: state.side,
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            note: "no new replay candle",
-          };
-        }
-        i = nextIndex;
-      }
-    } else {
-      i = candles.length - 1;
-    }
-    const current = candles[i];
-    // trendFilterPeriod 0 disables the trend filter (CLI sets 0 when
-    // onlyWithTrend is off): skip the sma call entirely — a 0-period sma
-    // would be NaN, defeating the null guard and propagating NaN into grid
-    // decisions. Only an enabled-but-not-ready filter holds.
-    const trendFilterEnabled = options.trendFilterPeriod >= 1;
-    const trend = trendFilterEnabled
-      ? sma(candles, i, options.trendFilterPeriod)
-      : null;
-    if (trendFilterEnabled && trend === null) {
-      return {
-        action: "hold" as const,
-        side: state.side,
-        capital: toNumber(state.capital),
-        peakCapital: toNumber(state.peakCapital),
-        note: "trend filter not ready",
-      };
-    }
-
+function processGridBar(
+  input: GridBarInput,
+): Effect.Effect<GridPaperTradingIterationResult, GridPaperIterationError> {
+  return Effect.gen(function* () {
+    const {
+      options,
+      strategyFingerprint,
+      executionEnvironment,
+      services,
+      market,
+    } = input;
+    const { repo, adapter, circuitBreaker } = services;
+    let state = input.state;
+    const { candles, index: i, current, trend } = market;
     const isLive = options.isLive ?? false;
     const productType = options.productType ?? "USDT-FUTURES";
     const marginMode = options.marginMode ?? "isolated";
 
-    let note = "no action";
-
-    // Persist grid state with up to 3 attempts (200ms/400ms backoff). On
-    // final failure, engage the account kill switch fail-closed: a live
-    // position that is not recorded locally must halt trading, never
-    // silently continue. Returns true when the state was persisted.
-    const saveStateWithRetry = (
-      s: GridPaperState,
-      failReason: string,
-    ): Effect.Effect<boolean, KillSwitchError, never> =>
-      Effect.gen(function* () {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const saved = yield* repo.saveGridState(s).pipe(Effect.result);
-          if (saved._tag === "Success") return true;
-          if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
-        }
-        yield* killSwitch.engage(failReason);
-        return false;
-      });
-
-    // Best-effort cancellation of any resting open orders for the symbol.
-    // Adapters without cancellation support omit cancelOpenOrders; the kill
-    // switch remains the fail-closed gate regardless.
-    const cancelRestingOrders = (
-      symbol: string,
-      productType: FuturesProductType,
-    ): Effect.Effect<void, never, never> =>
-      adapter.cancelOpenOrders === undefined
-        ? Effect.void
-        : adapter.cancelOpenOrders(symbol, productType).pipe(
-            Effect.match({
-              onSuccess: () => undefined,
-              onFailure: () => undefined,
-            }),
-          );
+    let note = input.note ?? "no action";
 
     if (isLive) {
-      const reconciliation = reconcileLivePosition(
+      const liveState = yield* reconcileGridLiveState({
         state,
-        yield* adapter.getPosition(options.symbol, productType),
-        {
-          productType,
-          marginMode,
-          leverage: state.leverage,
-          entryPrice: state.entryPrice,
-        },
-      );
-      if (reconciliation.kind === "adopt") {
-        // The exchange holds a position the local state never recorded
-        // (e.g. the fill confirmation was lost between the adapter and the
-        // state save). Adopt it into local state and CONTINUE managing it —
-        // exit rules apply below — instead of holding the kill switch
-        // forever on a position we can see and control.
-        state = adoptedGridState(
-          state,
-          reconciliation.position,
-          strategyFingerprint,
-          executionEnvironment,
-          current.timestamp,
-        );
-        const persisted = yield* saveStateWithRetry(
-          state,
-          "state save failed after position adoption",
-        );
-        if (!persisted) {
-          return {
-            action: "hold" as const,
-            side: state.side,
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            note: "KILL SWITCH ENGAGED: state save failed after position adoption",
-          };
-        }
-        note = `[LIVE] adopted ${reconciliation.position.side} ${reconciliation.position.quantity.toString()} @ ${reconciliation.position.entryPrice.toString()} (untracked exchange position)`;
-      } else if (reconciliation.kind === "unadoptable") {
-        // The exchange position cannot be represented locally (invalid
-        // quantity/price). Close it out instead of adopting garbage.
-        const close = yield* adapter
-          .closePosition({
-            symbol: options.symbol,
-            side: reconciliation.position.side === "long" ? "sell" : "buy",
-            productType,
-            marginMode,
-            leverage: state.leverage,
-            size: reconciliation.position.quantity,
-          })
-          .pipe(Effect.result);
-        if (close._tag === "Success" && close.success !== null) {
-          note = `[LIVE] closed untracked invalid exchange position (${reconciliation.reason})`;
-        } else {
-          const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
-          yield* killSwitch.engage(reason);
-          yield* cancelRestingOrders(options.symbol, productType);
-          state = {
-            ...state,
-            killed: true,
-            lastTimestamp: current.timestamp,
-            updatedAt: new Date(),
-          };
-          yield* repo.saveGridState(state);
-          return {
-            action: "hold" as const,
-            side: state.side,
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            note: reason,
-          };
-        }
-      } else if (reconciliation.kind === "mismatch") {
-        const reason = `LIVE POSITION MISMATCH: ${reconciliation.reason}`;
-        yield* killSwitch.engage(reason);
-        // Cancel any resting open orders for the symbol so pending orders
-        // cannot pile up while the kill switch holds (best-effort).
-        yield* cancelRestingOrders(options.symbol, productType);
-        state = {
-          ...state,
-          killed: true,
-          lastTimestamp: current.timestamp,
-          updatedAt: new Date(),
-        };
-        yield* repo.saveGridState(state);
-        return {
-          action: "hold" as const,
-          side: state.side,
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          note: reason,
-        };
-      }
-
-      if (yield* killSwitch.isEngaged()) {
-        const reason = yield* killSwitch.getReason();
-        return {
-          action: "hold" as const,
-          side: state.side,
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          note: `KILL SWITCH ENGAGED: ${reason}`,
-        };
-      }
-
-      if (yield* circuitBreaker.isOpen()) {
-        const reason = yield* circuitBreaker.getReason();
-        return {
-          action: "hold" as const,
-          side: state.side,
-          capital: toNumber(state.capital),
-          peakCapital: toNumber(state.peakCapital),
-          note: `CIRCUIT BREAKER OPEN: ${reason}`,
-        };
-      }
+        options,
+        current,
+        strategyFingerprint,
+        executionEnvironment,
+        services,
+      });
+      state = liveState.state;
+      if (liveState.note !== undefined) note = liveState.note;
+      if (liveState.earlyResult) return liveState.earlyResult;
     }
 
     // Decrement pause at the start of a new bar.
@@ -714,29 +1850,7 @@ export function runGridPaperTradingIteration(
     const fee = makerFee * 2;
     const stopFee = makerFee + takerFee;
 
-    // Funding accrued while the position was open (whole 8h intervals,
-    // charged at close; longs pay a positive rate, shorts receive it).
-    const fundingCost = (() => {
-      const ratePct = options.fundingRatePct8h ?? 0;
-      if (
-        ratePct === 0 ||
-        state.side === null ||
-        state.entryOpenedAt === undefined
-      ) {
-        return money(0);
-      }
-      const intervals = Math.floor(
-        (current.timestamp.getTime() - state.entryOpenedAt.getTime()) /
-          FUNDING_INTERVAL_MS,
-      );
-      if (intervals <= 0) return money(0);
-      const notional = state.capital
-        .times(state.maxPositionPct / 100)
-        .times(state.leverage);
-      return notional
-        .times((ratePct / 100) * intervals)
-        .times(state.side === "long" ? -1 : 1);
-    })();
+    const fundingCost = gridFundingCost(state, options, current);
 
     const todayPnl = yield* repo.getTodayRealizedPnl();
     const startOfDayCapital = yield* repo.getStartOfDayCapital(
@@ -744,601 +1858,72 @@ export function runGridPaperTradingIteration(
       state.capital,
     );
 
-    /** Result of closing a grid position leg. */
-    interface GridCloseTradeResult {
-      readonly trade: GridPaperTrade;
-      readonly capitalAfter: Decimal;
-      readonly peakCapital: Decimal;
-    }
-
-    const closeTrade = (
-      side: GridPaperPositionSide,
-      entryPrice: Decimal,
-      exitPrice: Decimal,
-      exitReason: GridPaperTrade["exitReason"],
-      stateCapital: Decimal,
-      peakCapital: Decimal,
-      maxPositionPct: number,
-      leverage: number,
-      openedAt: Date,
-      entryEvidence: GridFillEvidence | null,
-      exitFill: FuturesOrderFill | null,
-    ): GridCloseTradeResult => {
-      const pricePnl =
-        side === "long"
-          ? exitPrice.minus(entryPrice).div(entryPrice)
-          : entryPrice.minus(exitPrice).div(entryPrice);
-      const roundTripFee = exitReason === "target" ? fee : stopFee;
-      const net = pricePnl.minus(roundTripFee);
-      const allocationFactor = maxPositionPct / 100;
-      const leveragedReturn =
-        exitReason === "liquidation" ? money(-1) : net.times(leverage);
-      const rawCapitalAfter = stateCapital.times(
-        money(1).plus(leveragedReturn.times(allocationFactor)),
-      );
-      const capitalAfter =
-        exitReason === "liquidation"
-          ? stateCapital.times(1 - allocationFactor)
-          : Decimal.max(
-              stateCapital.times(1 - allocationFactor),
-              rawCapitalAfter,
-            ).plus(fundingCost);
-      const pnlPct =
-        exitReason === "liquidation" ? money(-100) : leveragedReturn.times(100);
-      const realizedPnlPct =
-        entryEvidence !== null && exitFill !== null
-          ? (side === "long"
-              ? exitPrice.minus(entryPrice)
-              : entryPrice.minus(exitPrice)
-            )
-              .times(Decimal.min(entryEvidence.filledQty, exitFill.filledQty))
-              .minus(entryEvidence.fee.plus(exitFill.fee))
-              .div(stateCapital)
-              .times(100)
-          : undefined;
-      const trade: GridPaperTrade = {
-        id: makeId(),
-        exchange: options.exchange,
-        symbol: options.symbol,
-        timeframe: options.timeframe,
-        side,
-        entryPrice,
-        exitPrice,
-        capitalBefore: stateCapital,
-        capitalAfter,
-        pnlPct,
-        exitReason,
-        openedAt,
-        closedAt: new Date(),
-        fillSource:
-          entryEvidence !== null && exitFill !== null ? "live" : "simulated",
-        entryOrderId: entryEvidence?.orderId,
-        entryClientOid: entryEvidence?.clientOid,
-        exitOrderId: exitFill?.orderId,
-        exitClientOid: exitFill?.clientOid,
-        entryFilledQty: entryEvidence?.filledQty,
-        exitFilledQty: exitFill?.filledQty,
-        entryFee: entryEvidence?.fee,
-        exitFee: exitFill?.fee,
-        realizedPnlPct,
-        strategyConfigFingerprint: state.strategyConfigFingerprint,
-        cohortId: state.cohortId,
-        candidateLockAt: state.candidateLockAt,
-        datasetCutoffAt: state.datasetCutoffAt,
-        entryOpenedAt: state.entryOpenedAt,
-        executionEnvironment: state.executionEnvironment,
-      };
-      return {
-        trade,
-        capitalAfter,
-        peakCapital: Decimal.max(peakCapital, capitalAfter),
-      };
-    };
-
-    const closeGridPosition = (
+    const closePosition = (
       side: GridPaperPositionSide,
       exitReason: GridPaperTrade["exitReason"],
       theoreticalExitPrice: Decimal,
-    ) => {
-      const s = state;
-      return Effect.gen(function* () {
-        let exitPrice = theoreticalExitPrice;
-        let exitFill: FuturesOrderFill | null = null;
-        if (isLive) {
-          // Close sizing keeps the legacy allocation/price size: no contract
-          // specs are passed, so closing the position never applies the entry
-          // orderability floor/step (the position already exists on the book).
-          const size = orderSizeContracts(
-            s.capital,
-            s.maxPositionPct,
-            s.entryPrice,
-          ).size;
-          const closeSize =
-            (s.entryFillSource === "live" || s.entryFillSource === "adopted") &&
-            s.entryFilledQty?.greaterThan(0) === true
-              ? s.entryFilledQty
-              : size;
-          if (size.greaterThan(0)) {
-            const fill = yield* adapter.closePosition({
-              symbol: options.symbol,
-              side: side === "long" ? "sell" : "buy",
-              productType,
-              marginMode,
-              leverage: s.leverage,
-              size: closeSize,
-              price: theoreticalExitPrice,
-            });
-            if (!fill) {
-              return yield* Effect.fail(
-                new ExchangeError(`live ${exitReason} close returned no fill`),
-              );
-            }
-            if (fill.filledQty.lessThan(closeSize)) {
-              return yield* Effect.fail(
-                new ExchangeError(
-                  `live ${exitReason} close was partially filled (${fill.filledQty.toString()}/${closeSize.toString()})`,
-                ),
-              );
-            }
-            exitPrice = money(fill.filledPrice);
-            exitFill = fill;
-          }
-        }
-        const close = closeTrade(
-          side,
-          s.entryPrice,
-          exitPrice,
-          exitReason,
-          s.capital,
-          s.peakCapital,
-          s.maxPositionPct,
-          s.leverage,
-          s.updatedAt,
-          (s.entryFillSource === "live" || s.entryFillSource === "adopted") &&
-            s.entryOrderId &&
-            s.entryFilledQty &&
-            s.entryFee
-            ? {
-                orderId: s.entryOrderId,
-                clientOid: s.entryClientOid,
-                filledQty: s.entryFilledQty,
-                fee: s.entryFee,
-              }
-            : null,
-          exitFill,
-        );
-        yield* repo.recordGridTrade(close.trade);
-        yield* circuitBreaker.recordTradeResult(
-          toNumber(close.capitalAfter.minus(s.capital)),
-          toNumber(startOfDayCapital),
-        );
-        return { ...close, exitPrice };
+    ) =>
+      closeGridPosition({
+        state,
+        options,
+        side,
+        exitReason,
+        theoreticalExitPrice,
+        isLive,
+        productType,
+        marginMode,
+        adapter,
+        repo,
+        circuitBreaker,
+        startOfDayCapital,
+        fee,
+        stopFee,
+        fundingCost,
       });
-    };
 
-    const targetRatio = options.targetRatio ?? 1;
     if (state.side === null) {
-      // Chop gate parity with the backtest engine: trending markets are
-      // where grid inventory gets run over; sit out until ADX says ranging.
-      const chopGateAdxThreshold = Math.max(
-        0,
-        options.chopGateAdxThreshold ?? 0,
+      const flatResult = yield* processFlatGridBar({
+        state,
+        options,
+        candles,
+        index: i,
+        current,
+        trend,
+        mid,
+        step,
+        slippageFactor,
+        isLive,
+        productType,
+        marginMode,
+        strategyFingerprint,
+        executionEnvironment,
+        todayPnl,
+        startOfDayCapital,
+        services,
+      });
+      state = flatResult.state;
+      if (flatResult.note !== undefined) note = flatResult.note;
+      if (flatResult.earlyResult) return flatResult.earlyResult;
+    } else {
+      const positionResult = yield* processGridPosition(
+        state,
+        options,
+        current,
+        step,
+        slippageFactor,
+        isLive,
+        closePosition,
       );
-      if (chopGateAdxThreshold > 0) {
-        const stats = makeCausalSymbolStats(candles, options.timeframe)(i);
-        if (stats.adx14 >= chopGateAdxThreshold) {
-          // Persist the advanced pointer — otherwise gate-blocked bars
-          // re-evaluate the same candle forever (replay stalls at the
-          // first blocked bar).
-          state = {
-            ...state,
-            lastTimestamp: current.timestamp,
-            updatedAt: new Date(),
-          };
-          yield* repo.saveGridState(state);
-          return {
-            action: "hold" as const,
-            side: state.side,
-            capital: toNumber(state.capital),
-            peakCapital: toNumber(state.peakCapital),
-            note: `chop gate active (ADX ${stats.adx14.toFixed(1)} >= ${chopGateAdxThreshold})`,
-          };
-        }
-      }
-      const buyLevel = mid.minus(step);
-      const sellLevel = mid.plus(step);
-      const onlyWithTrend = options.onlyWithTrend ?? false;
-      // A disabled trend filter (trendFilterPeriod 0 -> trend null) imposes
-      // no direction constraint, mirroring onlyWithTrend === false.
-      const allowLong =
-        !onlyWithTrend || trend === null || current.close > trend;
-      const allowShort =
-        !onlyWithTrend || trend === null || current.close < trend;
-
-      let entrySide: GridPaperPositionSide | null = null;
-      let theoreticalEntryPrice = money(0);
-      // Maker parity with the validated backtest model: entries are LIMIT
-      // orders resting at the raw grid level (the bar has already touched the
-      // level, so the order fills immediately at that price). The slippage
-      // factor only feeds conservative sizing.
-      let entryLevelPrice = money(0);
-      if (allowLong && money(current.low).lessThanOrEqualTo(buyLevel)) {
-        entrySide = "long";
-        entryLevelPrice = buyLevel;
-        theoreticalEntryPrice = buyLevel.times(slippageFactor);
-      } else if (
-        allowShort &&
-        money(current.high).greaterThanOrEqualTo(sellLevel)
-      ) {
-        entrySide = "short";
-        entryLevelPrice = sellLevel;
-        theoreticalEntryPrice = sellLevel.div(slippageFactor);
-      }
-
-      if (entrySide !== null) {
-        if (isLive) {
-          const tradesTodayCount = yield* repo.countTradesForDate(new Date());
-          const riskGuard = yield* RiskGuard;
-          const riskCheck = yield* riskGuard
-            .check({
-              isLive: true,
-              capital: toNumber(state.capital),
-              peakCapital: toNumber(state.peakCapital),
-              startOfDayCapital: toNumber(startOfDayCapital),
-              dailyRealizedPnl: toNumber(todayPnl),
-              tradesTodayCount,
-              positionValue: toNumber(
-                state.capital.times(state.maxPositionPct / 100),
-              ),
-              symbol: options.symbol,
-              side: entrySide === "long" ? "buy" : "sell",
-              leverage: state.leverage,
-              productType,
-              // Fail closed locally for the minimum orderable position: the
-              // guard blocks (RISK BLOCKED) instead of the exchange rejecting
-              // an unorderable qty, when the floor cannot fit the cap even at
-              // the configured leverage.
-              minOrderableNotional:
-                options.contractSpecs === undefined
-                  ? undefined
-                  : toNumber(
-                      Decimal.max(
-                        money(options.contractSpecs.minTradeUSDT),
-                        money(options.contractSpecs.minQty).times(
-                          theoreticalEntryPrice,
-                        ),
-                      ),
-                    ),
-            })
-            .pipe(Effect.result);
-          if (riskCheck._tag === "Failure") {
-            note = `RISK BLOCKED ${entrySide}: ${riskCheck.failure.violations.join("; ")}`;
-          } else {
-            const sized = orderSizeContracts(
-              state.capital,
-              state.maxPositionPct,
-              theoreticalEntryPrice,
-              {
-                leverage: state.leverage,
-                contractSpecs: options.contractSpecs,
-              },
-            );
-            const size = sized.size;
-            const orderLeverage = sized.leverage;
-            if (sized.skipReason !== undefined) {
-              // Never attempt an unorderable or over-cap order: the minimum
-              // orderable position cannot fit the allocation cap, so skip
-              // instead of sending an order the exchange would reject.
-              note = `RISK BLOCKED ${entrySide} (orderability): ${sized.skipReason}`;
-            } else if (size.lessThanOrEqualTo(0)) {
-              note = `RISK BLOCKED ${entrySide}: computed size zero`;
-            } else {
-              yield* adapter.setLeverage(
-                options.symbol,
-                productType,
-                marginMode,
-                orderLeverage,
-              );
-              yield* adapter.setMarginMode(
-                options.symbol,
-                productType,
-                marginMode,
-              );
-              // Grids trade both directions on one symbol: force one-way
-              // position mode so Bitget doesn't reject orders with 40774
-              // (order type must match the account's position type).
-              yield* adapter.setPositionMode(productType, "one_way");
-              const placed = yield* adapter
-                .placeOrder({
-                  symbol: options.symbol,
-                  side: entrySide === "long" ? "buy" : "sell",
-                  type: "limit",
-                  size,
-                  productType,
-                  marginMode,
-                  leverage: orderLeverage,
-                  price: entryLevelPrice,
-                })
-                .pipe(Effect.result);
-              if (placed._tag === "Failure") {
-                // The adapter may have acked the order and then lost the
-                // fill confirmation (e.g. its fill poll failed after the
-                // order was accepted). Check the exchange directly and
-                // adopt the position if one now exists, so the order cannot
-                // orphan on the book; otherwise surface the original error.
-                const currentPosition = yield* adapter
-                  .getPosition(options.symbol, productType)
-                  .pipe(Effect.result);
-                if (
-                  currentPosition._tag === "Success" &&
-                  currentPosition.success !== null
-                ) {
-                  state = adoptedGridState(
-                    state,
-                    currentPosition.success,
-                    strategyFingerprint,
-                    executionEnvironment,
-                    current.timestamp,
-                  );
-                  const persisted = yield* saveStateWithRetry(
-                    state,
-                    "state save failed after order placement",
-                  );
-                  note = `[LIVE] placed ${entrySide} ${size.toFixed(6)} then adopted ${currentPosition.success.side} ${currentPosition.success.quantity.toString()} @ ${currentPosition.success.entryPrice.toString()} (fill confirmation lost)`;
-                  if (!persisted) {
-                    return {
-                      action: "hold" as const,
-                      side: state.side,
-                      capital: toNumber(state.capital),
-                      peakCapital: toNumber(state.peakCapital),
-                      note: "KILL SWITCH ENGAGED: state save failed after order placement",
-                    };
-                  }
-                } else {
-                  return yield* Effect.fail(
-                    new ExchangeError(
-                      `live ${entrySide} entry failed: ${placed.failure.reason}`,
-                      placed.failure,
-                    ),
-                  );
-                }
-              } else {
-                const fill = placed.success;
-                state = {
-                  ...state,
-                  side: entrySide,
-                  entryPrice: money(fill.filledPrice),
-                  entryOrderId: fill.orderId,
-                  entryClientOid: fill.clientOid,
-                  entryFilledQty: fill.filledQty,
-                  entryFee: fill.fee,
-                  entryFillSource: "live",
-                  leverage: orderLeverage,
-                  strategyConfigFingerprint: strategyFingerprint,
-                  cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
-                  candidateLockAt: current.timestamp,
-                  datasetCutoffAt: current.timestamp,
-                  entryOpenedAt: new Date(),
-                  executionEnvironment,
-                  updatedAt: new Date(),
-                  lastTimestamp: current.timestamp,
-                };
-                // Persist the opened position IMMEDIATELY after the ack —
-                // never defer to the end-of-iteration save. A crash or a
-                // contended DB between the ack and that save orphans the
-                // live position (regression 2026-08-10: ADA short 126 filled
-                // on the Bitget demo with no grid_paper_state row).
-                const persisted = yield* saveStateWithRetry(
-                  state,
-                  "state save failed after order placement",
-                );
-                note = `[LIVE] opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${size.toFixed(6)} (leverage=${orderLeverage}x)`;
-                if (!persisted) {
-                  return {
-                    action: "hold" as const,
-                    side: state.side,
-                    capital: toNumber(state.capital),
-                    peakCapital: toNumber(state.peakCapital),
-                    note: "KILL SWITCH ENGAGED: state save failed after order placement",
-                  };
-                }
-              }
-            }
-          }
-        } else {
-          const sized = orderSizeContracts(
-            state.capital,
-            state.maxPositionPct,
-            theoreticalEntryPrice,
-            {
-              leverage: state.leverage,
-              contractSpecs: options.contractSpecs,
-            },
-          );
-          if (sized.skipReason !== undefined) {
-            note = `RISK BLOCKED ${entrySide} (orderability): ${sized.skipReason}`;
-          } else {
-            state = {
-              ...state,
-              side: entrySide,
-              entryPrice: theoreticalEntryPrice,
-              entryFilledQty: sized.size,
-              entryFee: money(0),
-              entryFillSource: "simulated",
-              leverage: sized.leverage,
-              strategyConfigFingerprint: strategyFingerprint,
-              cohortId: `grid-${strategyFingerprint.slice(0, 16)}`,
-              candidateLockAt: current.timestamp,
-              datasetCutoffAt: current.timestamp,
-              entryOpenedAt: current.timestamp,
-              executionEnvironment,
-              updatedAt: new Date(),
-              lastTimestamp: current.timestamp,
-            };
-            note = `opened ${entrySide} @ ${state.entryPrice.toFixed(2)} size=${sized.size.toFixed(6)} (leverage=${sized.leverage}x)`;
-          }
-        }
-      }
-    } else if (state.side === "long") {
-      const target = state.entryPrice.plus(step.times(targetRatio));
-      const stop = state.entryPrice.minus(step.times(options.gridMaxGrids));
-      const liq = liquidationPrice(
-        "long",
-        state.entryPrice,
-        state.leverage,
-        options.maintenanceMarginRate ?? 0,
-      );
-
-      if (liq.greaterThan(0) && money(current.low).lessThanOrEqualTo(liq)) {
-        // Market exits fill ADVERSE to the trigger: a long stop sells below
-        // the level by the slippage amount.
-        const close = yield* closeGridPosition(
-          "long",
-          "liquidation",
-          liq.div(slippageFactor),
-        );
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: 0,
-          killed: true,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `liquidated long @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
-      } else if (money(current.high).greaterThanOrEqualTo(target)) {
-        const close = yield* closeGridPosition("long", "target", target);
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: 0,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `${isLive ? "[LIVE] " : ""}closed long target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      } else if (money(current.low).lessThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition(
-          "long",
-          "stop",
-          stop.div(slippageFactor),
-        );
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: options.gridPauseAfterLossBars,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `${isLive ? "[LIVE] " : ""}closed long stop @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      }
-    } else if (state.side === "short") {
-      const target = state.entryPrice.minus(step.times(targetRatio));
-      const stop = state.entryPrice.plus(step.times(options.gridMaxGrids));
-      const liq = liquidationPrice(
-        "short",
-        state.entryPrice,
-        state.leverage,
-        options.maintenanceMarginRate ?? 0,
-      );
-
-      if (liq.greaterThan(0) && money(current.high).greaterThanOrEqualTo(liq)) {
-        // Market exits fill ADVERSE to the trigger: a short stop buys above
-        // the level by the slippage amount.
-        const close = yield* closeGridPosition(
-          "short",
-          "liquidation",
-          liq.times(slippageFactor),
-        );
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: 0,
-          killed: true,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `liquidated short @ ${close.trade.exitPrice.toFixed(2)} pnl=-100.000% (leverage=${state.leverage}x)`;
-      } else if (money(current.low).lessThanOrEqualTo(target)) {
-        const close = yield* closeGridPosition("short", "target", target);
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: 0,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `${isLive ? "[LIVE] " : ""}closed short target @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      } else if (money(current.high).greaterThanOrEqualTo(stop)) {
-        const close = yield* closeGridPosition(
-          "short",
-          "stop",
-          stop.times(slippageFactor),
-        );
-        state = {
-          ...state,
-          side: null,
-          entryPrice: money(0),
-          capital: close.capitalAfter,
-          peakCapital: close.peakCapital,
-          paused: options.gridPauseAfterLossBars,
-          updatedAt: new Date(),
-          lastTimestamp: current.timestamp,
-        };
-        note = `${isLive ? "[LIVE] " : ""}closed short stop @ ${close.trade.exitPrice.toFixed(2)} pnl=${close.trade.pnlPct.toFixed(3)}%`;
-      }
+      state = positionResult.state;
+      if (positionResult.note !== undefined) note = positionResult.note;
     }
 
-    state = {
-      ...state,
-      lastTimestamp: current.timestamp,
-      updatedAt: new Date(),
-    };
-
-    // Realized-drawdown kill switch.
-    const drawdownPct = state.peakCapital.greaterThan(0)
-      ? state.peakCapital.minus(state.capital).div(state.peakCapital).times(100)
-      : money(0);
-    if (
-      drawdownPct.greaterThanOrEqualTo(state.maxDrawdownPct) &&
-      state.maxDrawdownPct < 100
-    ) {
-      state = { ...state, killed: true };
-      note =
-        note === "no action"
-          ? "kill switch triggered"
-          : `${note}; kill switch triggered`;
-    }
-
-    yield* repo.saveGridState(state);
-
-    const closedLike = note.includes("closed") || note.startsWith("liquidated");
-
-    return {
-      action:
-        state.side === null && closedLike
-          ? "closed"
-          : state.side !== null && note.includes("opened")
-            ? "opened"
-            : "hold",
-      side: state.side,
-      capital: toNumber(state.capital),
-      peakCapital: toNumber(state.peakCapital),
+    return yield* finalizeGridBar({
+      state,
+      options,
+      current,
       note,
-    };
+      repo,
+    });
   });
 }

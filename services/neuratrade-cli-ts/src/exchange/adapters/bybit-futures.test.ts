@@ -217,7 +217,9 @@ describe("BybitFuturesExchangeAdapter", () => {
     expect(calls).toContain("placeOrder:BTCUSDT:Buy:Market:0.0002:no");
   });
 
-  it("rejects a below-min qty with the orderability error", async () => {
+  it("sizes a below-min qty UP to the notional floor instead of rejecting", async () => {
+    // 0.00005 * 40000 = 2 USDT < floor 5 -> sized to ceil(5/40000/0.0001)*0.0001 = 0.0002.
+    // 2026-09-03: the old early below-minQty reject stranded yolo-btc (0.0006 < 0.001 min).
     const outcome = await run(
       Effect.gen(function* () {
         const adapter = yield* FuturesExchangeAdapter;
@@ -240,14 +242,14 @@ describe("BybitFuturesExchangeAdapter", () => {
       }),
     );
 
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.reason).toContain("futures guard rejected");
-      expect(outcome.reason).toContain("below min order qty");
-      expect(outcome.reason).toContain("0.00005");
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.fill.filledQty.toNumber()).toBe(0.0002);
+      // Floor-sizing raised leverage ceil(5/2)=3; the fill must report it
+      // (yolo-btc 2026-09-03: exchange lev 2 vs recorded 10 froze account).
+      expect(outcome.fill.leverage).toBe(3);
     }
-    // No order reached the exchange.
-    expect(calls.join("\n")).not.toContain("placeOrder:BTCUSDT");
+    expect(calls).toContain("placeOrder:BTCUSDT:Buy:Market:0.0002:no");
   });
 
   it("reads a balance from the wallet response", async () => {

@@ -66,6 +66,20 @@ export interface GridOptions {
   readonly takerExitFeePct?: number;
   /** Deterministic seed for the fill-probability RNG (default 12345). */
   readonly fillSeed?: number;
+  /**
+   * Optional causal entry-direction overlay for research/backtest callers.
+   * A value at bar i limits new entries on that bar to the named side;
+   * `flat` blocks new entries. Undefined entries leave the grid unchanged.
+   * This is deliberately an input array rather than a live model callback so
+   * a walk-forward caller can prove that every decision was available before
+   * the bar being traded.
+   */
+  readonly entryDirectionByBar?: readonly (
+    | "long"
+    | "short"
+    | "flat"
+    | undefined
+  )[];
 }
 
 export interface GridSearchSpace {
@@ -163,10 +177,220 @@ function liquidationPrice(
   return side === "long" ? entryPrice * (1 - 1 / l) : entryPrice * (1 + 1 / l);
 }
 
+/** Option values normalized once per run (defaults applied, ranges clamped). */
+interface GridRuntime {
+  readonly leverage: number;
+  readonly chopGateAdxThreshold: number;
+  readonly positionFraction: number;
+  readonly makerFillProb: number;
+  readonly adverseSelection: boolean;
+  readonly onlyWithTrend: boolean;
+  readonly targetRatio: number;
+  readonly targetFee: number;
+  readonly stopFee: number;
+}
+
+function gridRuntime(options: GridOptions): GridRuntime {
+  const makerFeePerSide = options.feePct / 100;
+  const takerFeePerSide = (options.takerExitFeePct ?? options.feePct) / 100;
+  return {
+    leverage: Math.max(1, options.leverage ?? 1),
+    chopGateAdxThreshold: Math.max(0, options.chopGateAdxThreshold ?? 0),
+    positionFraction: Math.max(0, Math.min(1, options.positionFraction ?? 1)),
+    makerFillProb: Math.max(0, Math.min(1, options.makerFillProb ?? 1)),
+    adverseSelection: options.adverseSelection ?? false,
+    onlyWithTrend: options.onlyWithTrend ?? false,
+    targetRatio: options.targetRatio ?? 1,
+    targetFee: makerFeePerSide * 2,
+    stopFee: makerFeePerSide + takerFeePerSide,
+  };
+}
+
+/** A filled grid entry on one bar (positionSize: 1 = long, -1 = short). */
+interface GridEntry {
+  readonly positionSize: 1 | -1;
+  readonly entryPrice: number;
+  readonly entryBar: number;
+}
+
+type CausalStatsProvider = ReturnType<typeof makeCausalSymbolStats>;
+
+function tryEnterGridPosition(
+  barIndex: number,
+  c: CandleLike,
+  trend: number,
+  mid: number,
+  step: number,
+  slippage: number,
+  runtime: GridRuntime,
+  statsProvider: CausalStatsProvider | null,
+  entryDirectionByBar: GridOptions["entryDirectionByBar"],
+  fillsAtLevel: (
+    candle: CandleLike,
+    level: number,
+    side: "long" | "short",
+  ) => boolean,
+): GridEntry | null {
+  const entryDirection = entryDirectionByBar?.[barIndex];
+  if (entryDirection === "flat") return null;
+
+  // Chop gate: trending markets are where grid inventory gets run over;
+  // sit out until ADX says the market is ranging again.
+  if (
+    statsProvider !== null &&
+    statsProvider(barIndex).adx14 >= runtime.chopGateAdxThreshold
+  ) {
+    return null;
+  }
+  const buyLevel = mid - step;
+  const sellLevel = mid + step;
+  const allowLong =
+    (entryDirection === undefined || entryDirection === "long") &&
+    (!runtime.onlyWithTrend || c.close > trend);
+  const allowShort =
+    (entryDirection === undefined || entryDirection === "short") &&
+    (!runtime.onlyWithTrend || c.close < trend);
+  if (allowLong && c.low <= buyLevel && fillsAtLevel(c, buyLevel, "long")) {
+    return {
+      positionSize: 1,
+      entryPrice: buyLevel * slippage,
+      entryBar: barIndex,
+    };
+  }
+  if (
+    allowShort &&
+    c.high >= sellLevel &&
+    fillsAtLevel(c, sellLevel, "short")
+  ) {
+    return {
+      positionSize: -1,
+      entryPrice: sellLevel / slippage,
+      entryBar: barIndex,
+    };
+  }
+  return null;
+}
+
+/** Exit decision for an open grid position on one bar (null = stay in). */
+interface GridExit {
+  readonly side: "long" | "short";
+  readonly exitPrice: number;
+  readonly exitReason: "target" | "stop" | "liquidation";
+}
+
+function longGridExitDecision(
+  c: CandleLike,
+  entryPrice: number,
+  step: number,
+  slippage: number,
+  options: GridOptions,
+  runtime: GridRuntime,
+): GridExit | null {
+  const target = entryPrice + step * runtime.targetRatio;
+  const stop = entryPrice - step * options.gridMaxGrids;
+  const liq = liquidationPrice("long", entryPrice, runtime.leverage);
+  if (liq > 0 && c.low <= liq) {
+    return {
+      side: "long",
+      exitPrice: liq * slippage,
+      exitReason: "liquidation",
+    };
+  }
+  if (c.high >= target) {
+    return { side: "long", exitPrice: target / slippage, exitReason: "target" };
+  }
+  if (c.low <= stop) {
+    return { side: "long", exitPrice: stop * slippage, exitReason: "stop" };
+  }
+  return null;
+}
+
+function shortGridExitDecision(
+  c: CandleLike,
+  entryPrice: number,
+  step: number,
+  slippage: number,
+  options: GridOptions,
+  runtime: GridRuntime,
+): GridExit | null {
+  const target = entryPrice - step * runtime.targetRatio;
+  const stop = entryPrice + step * options.gridMaxGrids;
+  const liq = liquidationPrice("short", entryPrice, runtime.leverage);
+  if (liq > 0 && c.high >= liq) {
+    return {
+      side: "short",
+      exitPrice: liq / slippage,
+      exitReason: "liquidation",
+    };
+  }
+  if (c.low <= target) {
+    return {
+      side: "short",
+      exitPrice: target * slippage,
+      exitReason: "target",
+    };
+  }
+  if (c.high >= stop) {
+    return { side: "short", exitPrice: stop / slippage, exitReason: "stop" };
+  }
+  return null;
+}
+
+/**
+ * Money math shared by the in-run closeTrade path and the final
+ * mark-to-market settle: price PnL → fees → leverage → positionFraction →
+ * capital. Pure; the caller applies the returned values to its state.
+ */
+interface GridSettlement {
+  readonly capital: number;
+  readonly leveragedReturn: number;
+  readonly pnlQuote: number;
+  readonly win: boolean;
+  /** true = liquidation or net loss (counts toward totalLosses). */
+  readonly isLoss: boolean;
+  readonly lossMagnitude: number;
+  readonly profitMagnitude: number;
+  /** true only for a losing non-liquidation exit (triggers the pause). */
+  readonly pauseAfterLoss: boolean;
+}
+
+function settleGridTrade(
+  side: "long" | "short",
+  exitPrice: number,
+  entryPrice: number,
+  capital: number,
+  isLiquidation: boolean,
+  exitFee: number,
+  leverage: number,
+  positionFraction: number,
+): GridSettlement {
+  const pricePnl =
+    side === "long"
+      ? (exitPrice - entryPrice) / entryPrice
+      : (entryPrice - exitPrice) / entryPrice;
+  const net = pricePnl - exitFee;
+  const leveragedReturn = isLiquidation ? -1 : net * leverage;
+  const equityReturn = isLiquidation
+    ? -positionFraction
+    : positionFraction * leveragedReturn;
+  const win = !isLiquidation && net >= 0;
+  return {
+    capital: Math.max(0, capital * (1 + equityReturn)),
+    leveragedReturn,
+    pnlQuote: capital * equityReturn,
+    win,
+    isLoss: isLiquidation || net < 0,
+    lossMagnitude: Math.abs(leveragedReturn),
+    profitMagnitude: leveragedReturn,
+    pauseAfterLoss: !isLiquidation && net < 0,
+  };
+}
+
 export function runGridBacktest(
   candles: readonly CandleLike[],
   options: GridOptions,
 ): GridResult {
+  const runtime = gridRuntime(options);
   let capital = options.initialCapital;
   let peak = capital;
   let maxDrawdown = 0;
@@ -179,18 +403,6 @@ export function runGridBacktest(
   let grossLoss = 0;
   const trades: GridTrade[] = [];
   let paused = 0;
-  const leverage = Math.max(1, options.leverage ?? 1);
-  const chopGateAdxThreshold = Math.max(0, options.chopGateAdxThreshold ?? 0);
-  const positionFraction = Math.max(
-    0,
-    Math.min(1, options.positionFraction ?? 1),
-  );
-  const makerFillProb = Math.max(0, Math.min(1, options.makerFillProb ?? 1));
-  const adverseSelection = options.adverseSelection ?? false;
-  const makerFeePerSide = options.feePct / 100;
-  const takerFeePerSide = (options.takerExitFeePct ?? options.feePct) / 100;
-  const targetFee = makerFeePerSide * 2;
-  const stopFee = makerFeePerSide + takerFeePerSide;
   let fillSeed = options.fillSeed ?? 12345;
   // mulberry32: deterministic fill decisions so a given fillSeed reproduces an
   // identical trade sequence (stress runs are comparable, not random per run).
@@ -211,14 +423,15 @@ export function runGridBacktest(
     level: number,
     side: "long" | "short",
   ): boolean => {
-    if (makerFillProb >= 1 && !adverseSelection) return true;
+    if (runtime.makerFillProb >= 1 && !runtime.adverseSelection) return true;
     const adverse =
       side === "long" ? candle.close < level : candle.close > level;
-    const prob = adverseSelection && adverse ? 1 : makerFillProb;
+    const prob =
+      runtime.adverseSelection && adverse ? 1 : runtime.makerFillProb;
     return fillRng() < prob;
   };
   const statsProvider =
-    chopGateAdxThreshold > 0
+    runtime.chopGateAdxThreshold > 0
       ? // The provider's timeframe argument is currently unused (the
         // annualized-volatility field is always 0, matching batch behavior).
         makeCausalSymbolStats(candles, "15m")
@@ -245,31 +458,22 @@ export function runGridBacktest(
     const slippage = 1 + options.slippageBps / 10000;
 
     if (positionSize === 0) {
-      // Chop gate: trending markets are where grid inventory gets run over;
-      // sit out until ADX says the market is ranging again.
-      if (
-        statsProvider !== null &&
-        statsProvider(i).adx14 >= chopGateAdxThreshold
-      ) {
-        continue;
-      }
-      const buyLevel = mid - step;
-      const sellLevel = mid + step;
-      const onlyWithTrend = options.onlyWithTrend ?? false;
-      const allowLong = !onlyWithTrend || c.close > trend;
-      const allowShort = !onlyWithTrend || c.close < trend;
-      if (allowLong && c.low <= buyLevel && fillsAtLevel(c, buyLevel, "long")) {
-        entryPrice = buyLevel * slippage;
-        positionSize = 1;
-        entryBar = i;
-      } else if (
-        allowShort &&
-        c.high >= sellLevel &&
-        fillsAtLevel(c, sellLevel, "short")
-      ) {
-        entryPrice = sellLevel / slippage;
-        positionSize = -1;
-        entryBar = i;
+      const entry = tryEnterGridPosition(
+        i,
+        c,
+        trend,
+        mid,
+        step,
+        slippage,
+        runtime,
+        statsProvider,
+        options.entryDirectionByBar,
+        fillsAtLevel,
+      );
+      if (entry !== null) {
+        positionSize = entry.positionSize;
+        entryPrice = entry.entryPrice;
+        entryBar = entry.entryBar;
       }
       continue;
     }
@@ -280,29 +484,23 @@ export function runGridBacktest(
       exitReason: "target" | "stop" | "liquidation",
     ): void => {
       const isLiquidation = exitReason === "liquidation";
-      const fee = exitReason === "target" ? targetFee : stopFee;
-      const pricePnl =
-        exitSide === "long"
-          ? (exitPrice - entryPrice) / entryPrice
-          : (entryPrice - exitPrice) / entryPrice;
-      const net = pricePnl - fee;
-      const leveragedReturn = isLiquidation ? -1 : net * leverage;
-      const capitalBefore = capital;
-      // positionFraction sizes the EQUITY allocated to the trade. Per-trade
-      // edge metrics (win / PF / expectancy from pnlPct) stay sizing-invariant;
-      // only the equity curve and drawdown scale with the fraction. At the
-      // default fraction = 1 this reproduces the original all-in behavior.
-      const equityReturn = isLiquidation
-        ? -positionFraction
-        : positionFraction * leveragedReturn;
-      capital = Math.max(0, capitalBefore * (1 + equityReturn));
-      const win = !isLiquidation && net >= 0;
-      if (isLiquidation || net < 0) {
+      const settled = settleGridTrade(
+        exitSide,
+        exitPrice,
+        entryPrice,
+        capital,
+        isLiquidation,
+        exitReason === "target" ? runtime.targetFee : runtime.stopFee,
+        runtime.leverage,
+        runtime.positionFraction,
+      );
+      capital = settled.capital;
+      if (settled.isLoss) {
         totalLosses++;
-        grossLoss += Math.abs(leveragedReturn);
+        grossLoss += settled.lossMagnitude;
       } else {
         totalWins++;
-        grossProfit += leveragedReturn;
+        grossProfit += settled.profitMagnitude;
       }
       trades.push({
         side: exitSide,
@@ -310,9 +508,9 @@ export function runGridBacktest(
         exitBar: i,
         entryPrice,
         exitPrice,
-        pnlPct: leveragedReturn,
-        pnlQuote: capitalBefore * equityReturn,
-        win,
+        pnlPct: settled.leveragedReturn,
+        pnlQuote: settled.pnlQuote,
+        win: settled.win,
         isLiquidation,
       });
       positionSize = 0;
@@ -320,32 +518,22 @@ export function runGridBacktest(
       // per the option contract); winning target exits and liquidations must
       // not suppress subsequent entries, or the funnel evidence would
       // conflate loss-pauses with a genuine edge.
-      paused = isLiquidation || net >= 0 ? 0 : options.gridPauseAfterLossBars;
+      paused = settled.pauseAfterLoss ? options.gridPauseAfterLossBars : 0;
     };
 
-    const targetRatio = options.targetRatio ?? 1;
-    if (positionSize > 0) {
-      const target = entryPrice + step * targetRatio;
-      const stop = entryPrice - step * options.gridMaxGrids;
-      const liq = liquidationPrice("long", entryPrice, leverage);
-      if (liq > 0 && c.low <= liq) {
-        closeTrade(liq * slippage, "long", "liquidation");
-      } else if (c.high >= target) {
-        closeTrade(target / slippage, "long", "target");
-      } else if (c.low <= stop) {
-        closeTrade(stop * slippage, "long", "stop");
-      }
-    } else {
-      const target = entryPrice - step * targetRatio;
-      const stop = entryPrice + step * options.gridMaxGrids;
-      const liq = liquidationPrice("short", entryPrice, leverage);
-      if (liq > 0 && c.high >= liq) {
-        closeTrade(liq / slippage, "short", "liquidation");
-      } else if (c.low <= target) {
-        closeTrade(target * slippage, "short", "target");
-      } else if (c.high >= stop) {
-        closeTrade(stop / slippage, "short", "stop");
-      }
+    const exit =
+      positionSize > 0
+        ? longGridExitDecision(c, entryPrice, step, slippage, options, runtime)
+        : shortGridExitDecision(
+            c,
+            entryPrice,
+            step,
+            slippage,
+            options,
+            runtime,
+          );
+    if (exit !== null) {
+      closeTrade(exit.exitPrice, exit.side, exit.exitReason);
     }
   }
 
@@ -355,37 +543,36 @@ export function runGridBacktest(
   if (positionSize !== 0) {
     const lastClose = candles[candles.length - 1].close;
     const exitSide = positionSize > 0 ? "long" : "short";
-    const exitPrice = lastClose;
-    const fee = stopFee;
-    const pricePnl =
-      exitSide === "long"
-        ? (exitPrice - entryPrice) / entryPrice
-        : (entryPrice - exitPrice) / entryPrice;
-    const net = pricePnl - fee;
-    const capitalBefore = capital;
-    const leveragedReturn = net * leverage;
-    const equityReturn = positionFraction * leveragedReturn;
-    capital = Math.max(0, capitalBefore * (1 + equityReturn));
+    const settled = settleGridTrade(
+      exitSide,
+      lastClose,
+      entryPrice,
+      capital,
+      false,
+      runtime.stopFee,
+      runtime.leverage,
+      runtime.positionFraction,
+    );
+    capital = settled.capital;
     peak = Math.max(peak, capital);
     const dd = peak > 0 ? (peak - capital) / peak : 0;
     if (dd > maxDrawdown) maxDrawdown = dd;
-    const win = net >= 0;
-    if (net < 0) {
+    if (settled.isLoss) {
       totalLosses++;
-      grossLoss += Math.abs(leveragedReturn);
+      grossLoss += settled.lossMagnitude;
     } else {
       totalWins++;
-      grossProfit += leveragedReturn;
+      grossProfit += settled.profitMagnitude;
     }
     trades.push({
       side: exitSide,
       entryBar,
       exitBar: candles.length - 1,
       entryPrice,
-      exitPrice,
-      pnlPct: leveragedReturn,
-      pnlQuote: capitalBefore * equityReturn,
-      win,
+      exitPrice: lastClose,
+      pnlPct: settled.leveragedReturn,
+      pnlQuote: settled.pnlQuote,
+      win: settled.win,
       isLiquidation: false,
     });
     positionSize = 0;

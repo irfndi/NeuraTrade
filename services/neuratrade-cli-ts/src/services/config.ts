@@ -187,113 +187,73 @@ function envOrDefault(key: string, defaultValue: string): string {
 // Merge: local overrides
 // ---------------------------------------------------------------------------
 
+function nonEmptyLocal(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function positiveLocal(value: number | undefined): number | undefined {
+  return value !== undefined && value > 0 ? value : undefined;
+}
+
+function mergeConfigSection(
+  base: ResolvedConfig,
+  section: keyof ResolvedConfig,
+  fields: ConfigFields,
+ ): ResolvedConfig {
+  const updates = Object.fromEntries(
+    Object.entries(fields).filter(([, value]) => value !== undefined),
+  );
+  if (Object.keys(updates).length === 0) return base;
+  return {
+    ...base,
+    [section]: { ...(base[section] as object), ...updates },
+  } as ResolvedConfig;
+}
+
+function mergeRuntimeSection(
+  base: ResolvedConfig,
+  section: keyof ResolvedConfig,
+  rawSection: ConfigFields | undefined,
+  runtimeSection: ConfigFields,
+  fields: readonly string[],
+ ): ResolvedConfig {
+  if (!isJsonObject(rawSection)) return base;
+  const updates = Object.fromEntries(
+    fields.filter((field) => field in rawSection).map((field) => [
+      field,
+      runtimeSection[field],
+    ]),
+  );
+  return mergeConfigSection(base, section, updates);
+}
 function applyLocalOverrides(
   base: ResolvedConfig,
   local: LocalConfigData,
 ): ResolvedConfig {
-  let result = { ...base };
-
-  // Server
-  if (local.server?.host?.trim()) {
-    result = {
-      ...result,
-      server: { ...result.server, host: local.server.host.trim() },
-    };
-  }
-  if (local.server?.port && local.server.port > 0) {
-    result = {
-      ...result,
-      server: { ...result.server, port: local.server.port },
-    };
-  }
-
-  // Database
-  if (local.database?.driver?.trim()) {
-    result = {
-      ...result,
-      database: { ...result.database, driver: local.database.driver.trim() },
-    };
-  }
-  if (local.database?.sqlite_path?.trim()) {
-    result = {
-      ...result,
-      database: {
-        ...result.database,
-        sqlite_path: local.database.sqlite_path.trim(),
-      },
-    };
-  }
-
-  // CCXT
-  if (local.ccxt?.service_url?.trim()) {
-    result = {
-      ...result,
-      ccxt: {
-        ...result.ccxt,
-        service_url: local.ccxt.service_url.trim(),
-      },
-    };
-  }
-  if (local.ccxt?.grpc_address?.trim()) {
-    result = {
-      ...result,
-      ccxt: {
-        ...result.ccxt,
-        grpc_address: local.ccxt.grpc_address.trim(),
-      },
-    };
-  }
-
-  // Telegram
-  if (local.telegram?.service_url?.trim()) {
-    result = {
-      ...result,
-      telegram: {
-        ...result.telegram,
-        service_url: local.telegram.service_url.trim(),
-      },
-    };
-  }
-  if (local.telegram?.grpc_address?.trim()) {
-    result = {
-      ...result,
-      telegram: {
-        ...result.telegram,
-        grpc_address: local.telegram.grpc_address.trim(),
-      },
-    };
-  }
-  if (local.telegram?.api_base_url?.trim()) {
-    result = {
-      ...result,
-      telegram: {
-        ...result.telegram,
-        api_base_url: local.telegram.api_base_url.trim(),
-      },
-    };
-  }
-
-  // AI
-  if (local.ai?.provider?.trim()) {
-    result = {
-      ...result,
-      ai: { ...result.ai, provider: local.ai.provider.trim() },
-    };
-  }
-  if (local.ai?.model?.trim()) {
-    result = {
-      ...result,
-      ai: { ...result.ai, model: local.ai.model.trim() },
-    };
-  }
-  if (local.ai?.base_url?.trim()) {
-    result = {
-      ...result,
-      ai: { ...result.ai, base_url: local.ai.base_url.trim() },
-    };
-  }
-
-  // Local-only fields
+  let result = base;
+  result = mergeConfigSection(result, "server", {
+    host: nonEmptyLocal(local.server?.host),
+    port: positiveLocal(local.server?.port),
+  });
+  result = mergeConfigSection(result, "database", {
+    driver: nonEmptyLocal(local.database?.driver),
+    sqlite_path: nonEmptyLocal(local.database?.sqlite_path),
+  });
+  result = mergeConfigSection(result, "ccxt", {
+    service_url: nonEmptyLocal(local.ccxt?.service_url),
+    grpc_address: nonEmptyLocal(local.ccxt?.grpc_address),
+  });
+  result = mergeConfigSection(result, "telegram", {
+    service_url: nonEmptyLocal(local.telegram?.service_url),
+    grpc_address: nonEmptyLocal(local.telegram?.grpc_address),
+    api_base_url: nonEmptyLocal(local.telegram?.api_base_url),
+  });
+  result = mergeConfigSection(result, "ai", {
+    provider: nonEmptyLocal(local.ai?.provider),
+    model: nonEmptyLocal(local.ai?.model),
+    base_url: nonEmptyLocal(local.ai?.base_url),
+  });
   return {
     ...result,
     admin_api_key: resolveAdminAPIKey(local),
@@ -308,34 +268,16 @@ function applyLocalOverrides(
 // Merge: runtime overrides (only fields present in the raw JSON)
 // ---------------------------------------------------------------------------
 
+type ConfigFieldValue = string | number | boolean | null | undefined;
+type ConfigFields = Readonly<Record<string, ConfigFieldValue>>;
 /** Runtime-config JSON shape (only the fields the merge logic inspects). */
 interface RawRuntimeConfigJson {
-  readonly server?: { readonly host?: unknown; readonly port?: unknown };
-  readonly database?: {
-    readonly driver?: unknown;
-    readonly sqlite_path?: unknown;
-  };
-  readonly redis?: { readonly host?: unknown; readonly port?: unknown };
-  readonly ccxt?: {
-    readonly service_url?: unknown;
-    readonly grpc_address?: unknown;
-  };
-  readonly telegram?: {
-    readonly service_url?: unknown;
-    readonly grpc_address?: unknown;
-    readonly use_polling?: unknown;
-    readonly api_base_url?: unknown;
-  };
-  readonly ai?: {
-    readonly provider?: unknown;
-    readonly model?: unknown;
-    readonly base_url?: unknown;
-    readonly temperature?: unknown;
-    readonly max_tokens?: unknown;
-    readonly min_confidence?: unknown;
-    readonly daily_budget?: unknown;
-    readonly routing_mode?: unknown;
-  };
+  readonly server?: ConfigFields;
+  readonly database?: ConfigFields;
+  readonly redis?: ConfigFields;
+  readonly ccxt?: ConfigFields;
+  readonly telegram?: ConfigFields;
+  readonly ai?: ConfigFields;
   readonly features?: unknown;
   readonly gateway?: unknown;
 }
@@ -350,157 +292,55 @@ function applyRuntimeOverrides(
   runtime: RuntimeConfigData,
   raw: RawRuntimeConfigJson,
 ): ResolvedConfig {
-  let result = { ...base };
-
-  // Server
-  if (isJsonObject(raw.server)) {
-    if ("host" in raw.server)
-      result = {
-        ...result,
-        server: { ...result.server, host: runtime.server.host },
-      };
-    if ("port" in raw.server)
-      result = {
-        ...result,
-        server: { ...result.server, port: runtime.server.port },
-      };
-  }
-
-  // Database
-  if (isJsonObject(raw.database)) {
-    if ("driver" in raw.database)
-      result = {
-        ...result,
-        database: { ...result.database, driver: runtime.database.driver },
-      };
-    if ("sqlite_path" in raw.database)
-      result = {
-        ...result,
-        database: {
-          ...result.database,
-          sqlite_path: runtime.database.sqlite_path,
-        },
-      };
-  }
-
-  // Redis
-  if (isJsonObject(raw.redis)) {
-    if ("host" in raw.redis)
-      result = {
-        ...result,
-        redis: { ...result.redis, host: runtime.redis.host },
-      };
-    if ("port" in raw.redis)
-      result = {
-        ...result,
-        redis: { ...result.redis, port: runtime.redis.port },
-      };
-  }
-
-  // CCXT
-  if (isJsonObject(raw.ccxt)) {
-    if ("service_url" in raw.ccxt)
-      result = {
-        ...result,
-        ccxt: { ...result.ccxt, service_url: runtime.ccxt.service_url },
-      };
-    if ("grpc_address" in raw.ccxt)
-      result = {
-        ...result,
-        ccxt: { ...result.ccxt, grpc_address: runtime.ccxt.grpc_address },
-      };
-  }
-
-  // Telegram
-  if (isJsonObject(raw.telegram)) {
-    if ("service_url" in raw.telegram)
-      result = {
-        ...result,
-        telegram: {
-          ...result.telegram,
-          service_url: runtime.telegram.service_url,
-        },
-      };
-    if ("grpc_address" in raw.telegram)
-      result = {
-        ...result,
-        telegram: {
-          ...result.telegram,
-          grpc_address: runtime.telegram.grpc_address,
-        },
-      };
-    if ("use_polling" in raw.telegram)
-      result = {
-        ...result,
-        telegram: {
-          ...result.telegram,
-          use_polling: runtime.telegram.use_polling,
-        },
-      };
-    if ("api_base_url" in raw.telegram)
-      result = {
-        ...result,
-        telegram: {
-          ...result.telegram,
-          api_base_url: runtime.telegram.api_base_url,
-        },
-      };
-  }
-
-  // AI
-  if (isJsonObject(raw.ai)) {
-    if ("provider" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, provider: runtime.ai.provider },
-      };
-    if ("model" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, model: runtime.ai.model },
-      };
-    if ("base_url" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, base_url: runtime.ai.base_url },
-      };
-    if ("temperature" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, temperature: runtime.ai.temperature },
-      };
-    if ("max_tokens" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, max_tokens: runtime.ai.max_tokens },
-      };
-    if ("min_confidence" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, min_confidence: runtime.ai.min_confidence },
-      };
-    if ("daily_budget" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, daily_budget: runtime.ai.daily_budget },
-      };
-    if ("routing_mode" in raw.ai)
-      result = {
-        ...result,
-        ai: { ...result.ai, routing_mode: runtime.ai.routing_mode },
-      };
-  }
-
-  // Features (whole-object replacement)
+  let result = base;
+  result = mergeRuntimeSection(result, "server", raw.server, runtime.server, [
+    "host",
+    "port",
+  ]);
+  result = mergeRuntimeSection(
+    result,
+    "database",
+    raw.database,
+    runtime.database,
+    ["driver", "sqlite_path"],
+  );
+  result = mergeRuntimeSection(result, "redis", raw.redis, runtime.redis, [
+    "host",
+    "port",
+  ]);
+  result = mergeRuntimeSection(result, "ccxt", raw.ccxt, runtime.ccxt, [
+    "service_url",
+    "grpc_address",
+  ]);
+  result = mergeRuntimeSection(
+    result,
+    "telegram",
+    raw.telegram,
+    runtime.telegram,
+    ["service_url", "grpc_address", "use_polling", "api_base_url"],
+  );
+  result = mergeRuntimeSection(
+    result,
+    "ai",
+    raw.ai,
+    runtime.ai,
+    [
+      "provider",
+      "model",
+      "base_url",
+      "temperature",
+      "max_tokens",
+      "min_confidence",
+      "daily_budget",
+      "routing_mode",
+    ],
+  );
   if (isJsonObject(raw.features)) {
     result = { ...result, features: runtime.features };
   }
-
-  // Gateway (whole-object replacement)
   if (isJsonObject(raw.gateway)) {
     result = { ...result, gateway: runtime.gateway };
   }
-
   return result;
 }
 

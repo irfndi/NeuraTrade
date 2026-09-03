@@ -39,23 +39,41 @@ export function serializeDemoSoakReport(report: DemoSoakReport): string {
   });
 }
 
-function hasCompleteLiveFillEvidence(trade: GridPaperTrade): boolean {
+function hasValidLiveQuantity(value: Money | undefined): boolean {
+  return value?.isFinite() === true && value.greaterThan(0);
+}
+
+function hasValidLiveFee(value: Money | undefined): boolean {
+  return value?.isFinite() === true && value.greaterThanOrEqualTo(0);
+}
+
+function hasCompleteLiveTradeMetadata(trade: GridPaperTrade): boolean {
   return (
     trade.fillSource === "live" &&
     Number.isFinite(trade.openedAt.getTime()) &&
     Number.isFinite(trade.closedAt.getTime()) &&
     Boolean(trade.entryOrderId) &&
-    Boolean(trade.exitOrderId) &&
-    (trade.entryFilledQty?.greaterThan(0) ?? false) &&
-    (trade.entryFilledQty?.isFinite() ?? false) &&
-    (trade.exitFilledQty?.greaterThan(0) ?? false) &&
-    (trade.exitFilledQty?.isFinite() ?? false) &&
-    (trade.exitFilledQty?.equals(trade.entryFilledQty ?? money(0)) ?? false) &&
-    (trade.entryFee?.greaterThanOrEqualTo(0) ?? false) &&
-    (trade.entryFee?.isFinite() ?? false) &&
-    (trade.exitFee?.greaterThanOrEqualTo(0) ?? false) &&
-    (trade.exitFee?.isFinite() ?? false) &&
-    (trade.realizedPnlPct?.isFinite() ?? false)
+    Boolean(trade.exitOrderId)
+  );
+}
+
+function hasCompleteLiveTradeQuantities(trade: GridPaperTrade): boolean {
+  return (
+    hasValidLiveQuantity(trade.entryFilledQty) &&
+    hasValidLiveQuantity(trade.exitFilledQty) &&
+    trade.exitFilledQty?.equals(trade.entryFilledQty ?? money(0)) === true
+  );
+}
+
+function hasCompleteLiveTradeFees(trade: GridPaperTrade): boolean {
+  return hasValidLiveFee(trade.entryFee) && hasValidLiveFee(trade.exitFee);
+}
+function hasCompleteLiveFillEvidence(trade: GridPaperTrade): boolean {
+  return (
+    hasCompleteLiveTradeMetadata(trade) &&
+    hasCompleteLiveTradeQuantities(trade) &&
+    hasCompleteLiveTradeFees(trade) &&
+    trade.realizedPnlPct?.isFinite() === true
   );
 }
 

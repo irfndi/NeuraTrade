@@ -74,6 +74,61 @@ function getErrorContext(error: Error): ErrorContext {
   return { detail: error.message };
 }
 
+function aiStatusReadinessLines(result: AIStatusResponse): string[] {
+  const lines: string[] = [];
+  const readiness = result.readiness || "unavailable";
+  switch (readiness) {
+    case "ready": {
+      lines.push("✅ AI Ready");
+      lines.push(`📊 Pinned Model: ${result.selected_model}`);
+      lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
+      if (result.provider_chain_configured) {
+        lines.push(
+          `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
+        );
+      }
+      break;
+    }
+    case "ready_auto_route": {
+      lines.push("✅ AI Ready (auto-routing)");
+      lines.push(`📊 No model pinned — using auto-route`);
+      if (result.effective_provider) {
+        lines.push(`🔗 Effective Provider: ${result.effective_provider}`);
+      }
+      if (result.effective_model) {
+        lines.push(`🤖 Effective Model: ${result.effective_model}`);
+      }
+      if (result.provider_chain_configured) {
+        lines.push(
+          `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
+        );
+      }
+      lines.push(
+        "\n💡 AI is available via provider-chain. Pin a model with /ai_select or let the system auto-route.",
+      );
+      break;
+    }
+    case "degraded": {
+      lines.push("⚠️ AI Degraded");
+      lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
+      lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
+      lines.push(
+        `⚡ Provider chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
+      );
+      break;
+    }
+    default: {
+      lines.push("❌ AI Unavailable");
+      lines.push("No provider chain configured.");
+      lines.push(
+        "\n💡 Configure an AI provider in your NeuraTrade config to enable AI features.",
+      );
+      break;
+    }
+  }
+  return lines;
+}
+
 export function registerAICommands(bot: AIBot, api: AIApi): void {
   bot.command("ai_models", async (ctx) => {
     try {
@@ -211,53 +266,7 @@ export function registerAICommands(bot: AIBot, api: AIApi): void {
       }
 
       const lines = ["🤖 AI Status:", ""];
-
-      const readiness = result.readiness || "unavailable";
-      switch (readiness) {
-        case "ready":
-          lines.push("✅ AI Ready");
-          lines.push(`📊 Pinned Model: ${result.selected_model}`);
-          lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
-          if (result.provider_chain_configured) {
-            lines.push(
-              `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
-            );
-          }
-          break;
-        case "ready_auto_route":
-          lines.push("✅ AI Ready (auto-routing)");
-          lines.push(`📊 No model pinned — using auto-route`);
-          if (result.effective_provider) {
-            lines.push(`🔗 Effective Provider: ${result.effective_provider}`);
-          }
-          if (result.effective_model) {
-            lines.push(`🤖 Effective Model: ${result.effective_model}`);
-          }
-          if (result.provider_chain_configured) {
-            lines.push(
-              `⚡ Provider Chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
-            );
-          }
-          lines.push(
-            "\n💡 AI is available via provider-chain. Pin a model with /ai_select or let the system auto-route.",
-          );
-          break;
-        case "degraded":
-          lines.push("⚠️ AI Degraded");
-          lines.push(`📊 Selected Model: ${result.selected_model || "None"}`);
-          lines.push(`🔗 Provider: ${result.provider || "N/A"}`);
-          lines.push(
-            `⚡ Provider chain: ${result.provider_chain_usable ?? 0}/${result.provider_chain_configured} usable`,
-          );
-          break;
-        default:
-          lines.push("❌ AI Unavailable");
-          lines.push("No provider chain configured.");
-          lines.push(
-            "\n💡 Configure an AI provider in your NeuraTrade config to enable AI features.",
-          );
-          break;
-      }
+      lines.push(...aiStatusReadinessLines(result));
 
       lines.push("");
       lines.push(`💰 Daily Spend: $${result.daily_spend || "0.00"}`);

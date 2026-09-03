@@ -97,145 +97,131 @@ export function defaultRiskLimits(isLive: boolean): RiskLimits {
 /**
  * Build a risk guard from explicit limits.
  */
+function basicRiskViolations(
+  context: RiskContext,
+  limits: RiskLimits,
+ ): string[] {
+  const violations: string[] = [];
+  if (context.isLive && !limits.liveTradingEnabled) {
+    violations.push("live trading is disabled");
+  }
+  if (context.capital < limits.minCapital) {
+    violations.push(
+      `capital ${context.capital.toFixed(2)} is below minimum ${limits.minCapital}`,
+    );
+  }
+  const drawdownPct =
+    context.peakCapital > 0
+      ? ((context.peakCapital - context.capital) / context.peakCapital) * 100
+      : 0;
+  if (drawdownPct > limits.maxDrawdownPct) {
+    violations.push(
+      `drawdown ${drawdownPct.toFixed(2)}% exceeds max ${limits.maxDrawdownPct}%`,
+    );
+  }
+  if (context.startOfDayCapital <= 0) {
+    violations.push(
+      `start-of-day capital ${context.startOfDayCapital.toFixed(2)} is not positive`,
+    );
+  } else {
+    const dailyLossPct =
+      (-context.dailyRealizedPnl / context.startOfDayCapital) * 100;
+    if (dailyLossPct > limits.maxDailyLossPct) {
+      violations.push(
+        `daily loss ${dailyLossPct.toFixed(2)}% exceeds max ${limits.maxDailyLossPct}%`,
+      );
+    }
+  }
+  if (context.tradesTodayCount >= limits.maxTradesPerDay) {
+    violations.push(
+      `trades today ${context.tradesTodayCount} meets or exceeds max ${limits.maxTradesPerDay}`,
+    );
+  }
+  return violations;
+}
+
+function positionRiskViolations(
+  context: RiskContext,
+  limits: RiskLimits,
+ ): string[] {
+  const violations: string[] = [];
+  const positionLeverage = Math.max(1, context.leverage ?? 1);
+  const positionSizePct =
+    context.capital > 0
+      ? (context.positionValue / positionLeverage / context.capital) * 100
+      : 0;
+  if (positionSizePct > limits.maxPositionSizePct) {
+    violations.push(
+      `position size ${positionSizePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
+    );
+  }
+  if (
+    limits.maxNotionalPct !== undefined &&
+    context.notionalValue !== undefined &&
+    context.capital > 0
+  ) {
+    const notionalPct = (context.notionalValue / context.capital) * 100;
+    if (notionalPct > limits.maxNotionalPct) {
+      violations.push(
+        `notional size ${notionalPct.toFixed(2)}% exceeds max ${limits.maxNotionalPct}%`,
+      );
+    }
+  }
+  if (
+    context.minOrderableNotional !== undefined &&
+    context.minOrderableNotional > 0 &&
+    context.capital > 0
+  ) {
+    const minOrderablePct =
+      (context.minOrderableNotional / positionLeverage / context.capital) * 100;
+    if (minOrderablePct > limits.maxPositionSizePct) {
+      violations.push(
+        `minimum orderable position ${minOrderablePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
+      );
+    }
+  }
+  return violations;
+}
+
+function allowlistRiskViolations(
+  context: RiskContext,
+  limits: RiskLimits,
+ ): string[] {
+  const violations: string[] = [];
+  if (
+    limits.allowedSymbols &&
+    limits.allowedSymbols.length > 0 &&
+    !limits.allowedSymbols.includes(context.symbol)
+  ) {
+    violations.push(`symbol ${context.symbol} is not in the allowed list`);
+  }
+  if (limits.allowedProductTypes && limits.allowedProductTypes.length > 0) {
+    if (context.productType === undefined) {
+      violations.push("product type unknown is not allowed");
+    } else if (!limits.allowedProductTypes.includes(context.productType)) {
+      violations.push(`product type ${context.productType} is not allowed`);
+    }
+  }
+  if (
+    limits.maxLeverage !== undefined &&
+    context.leverage !== undefined &&
+    context.leverage > limits.maxLeverage
+  ) {
+    violations.push(
+      `leverage ${context.leverage}x exceeds max ${limits.maxLeverage}x`,
+    );
+  }
+  return violations;
+}
 export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
   return {
     check: (context) =>
       Effect.gen(function* () {
-        const violations: string[] = [];
-
-        if (context.isLive && !limits.liveTradingEnabled) {
-          violations.push("live trading is disabled");
-        }
-
-        if (context.capital < limits.minCapital) {
-          violations.push(
-            `capital ${context.capital.toFixed(2)} is below minimum ${limits.minCapital}`,
-          );
-        }
-
-        const drawdownPct =
-          context.peakCapital > 0
-            ? ((context.peakCapital - context.capital) / context.peakCapital) *
-              100
-            : 0;
-        if (drawdownPct > limits.maxDrawdownPct) {
-          violations.push(
-            `drawdown ${drawdownPct.toFixed(2)}% exceeds max ${limits.maxDrawdownPct}%`,
-          );
-        }
-
-        if (context.startOfDayCapital <= 0) {
-          // Cannot express the daily loss limit as a percentage against
-          // zero/negative capital — fail closed rather than recording 0%.
-          violations.push(
-            `start-of-day capital ${context.startOfDayCapital.toFixed(2)} is not positive`,
-          );
-        } else {
-          const dailyLossPct =
-            (-context.dailyRealizedPnl / context.startOfDayCapital) * 100;
-          if (dailyLossPct > limits.maxDailyLossPct) {
-            violations.push(
-              `daily loss ${dailyLossPct.toFixed(2)}% exceeds max ${limits.maxDailyLossPct}%`,
-            );
-          }
-        }
-
-        if (context.tradesTodayCount >= limits.maxTradesPerDay) {
-          violations.push(
-            `trades today ${context.tradesTodayCount} meets or exceeds max ${limits.maxTradesPerDay}`,
-          );
-        }
-
-        // Position-size cap. The cap binds on the collateral at risk (margin
-        // = positionValue / leverage) so leveraged accounts can size above
-        // the notional cap as long as the margin fits — e.g. a $10 account at
-        // 2x can hold a $6.48 BTC min-orderable position on 32% of capital.
-        // At 1x (or without a leverage field) margin == notional, preserving
-        // the legacy check exactly.
-        const positionLeverage = Math.max(1, context.leverage ?? 1);
-        const positionSizePct =
-          context.capital > 0
-            ? (context.positionValue / positionLeverage / context.capital) * 100
-            : 0;
-        if (positionSizePct > limits.maxPositionSizePct) {
-          violations.push(
-            `position size ${positionSizePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
-          );
-        }
-
-        // Notional cap is deliberately separate from the margin cap above:
-        // leverage may reduce collateral without reducing market exposure.
-        if (
-          limits.maxNotionalPct !== undefined &&
-          context.notionalValue !== undefined &&
-          context.capital > 0
-        ) {
-          const notionalPct = (context.notionalValue / context.capital) * 100;
-          if (notionalPct > limits.maxNotionalPct) {
-            violations.push(
-              `notional size ${notionalPct.toFixed(2)}% exceeds max ${limits.maxNotionalPct}%`,
-            );
-          }
-        }
-
-        // Min-orderable fail-closed: when the exchange contract's minimum
-        // orderable notional cannot fit the position cap even at the
-        // requested leverage, block locally (RISK BLOCKED) instead of letting
-        // an unorderable order reach the exchange and get rejected.
-        if (
-          context.minOrderableNotional !== undefined &&
-          context.minOrderableNotional > 0 &&
-          context.capital > 0
-        ) {
-          const minOrderablePct =
-            (context.minOrderableNotional /
-              positionLeverage /
-              context.capital) *
-            100;
-          if (minOrderablePct > limits.maxPositionSizePct) {
-            violations.push(
-              `minimum orderable position ${minOrderablePct.toFixed(2)}% exceeds max ${limits.maxPositionSizePct}%`,
-            );
-          }
-        }
-
-        if (
-          limits.allowedSymbols &&
-          limits.allowedSymbols.length > 0 &&
-          !limits.allowedSymbols.includes(context.symbol)
-        ) {
-          violations.push(
-            `symbol ${context.symbol} is not in the allowed list`,
-          );
-        }
-
-        if (
-          limits.allowedProductTypes &&
-          limits.allowedProductTypes.length > 0
-        ) {
-          // Fail closed: an allowlist is meaningless when the context does not
-          // say what product type it is trading — treat unknown as disallowed.
-          if (context.productType === undefined) {
-            violations.push("product type unknown is not allowed");
-          } else if (
-            !limits.allowedProductTypes.includes(context.productType)
-          ) {
-            violations.push(
-              `product type ${context.productType} is not allowed`,
-            );
-          }
-        }
-
-        if (
-          limits.maxLeverage !== undefined &&
-          context.leverage !== undefined &&
-          context.leverage > limits.maxLeverage
-        ) {
-          violations.push(
-            `leverage ${context.leverage}x exceeds max ${limits.maxLeverage}x`,
-          );
-        }
-
+        const violations = [
+          ...basicRiskViolations(context, limits),
+          ...positionRiskViolations(context, limits),
+          ...allowlistRiskViolations(context, limits),
+        ];
         if (violations.length > 0) {
           return yield* Effect.fail(
             new RiskError("pre-trade risk check failed", violations),

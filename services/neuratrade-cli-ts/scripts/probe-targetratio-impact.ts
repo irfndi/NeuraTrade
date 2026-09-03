@@ -16,6 +16,15 @@ const SYMBOLS = [
   "SOL/USDT:USDT",
 ];
 
+interface CandleRow {
+  readonly open: number;
+  readonly high: number;
+  readonly low: number;
+  readonly close: number;
+  readonly volume: number;
+  readonly ts: string;
+}
+
 const candles5m = (symbol: string) =>
   db
     .query(
@@ -27,9 +36,9 @@ const candles5m = (symbol: string) =>
        WHERE e.name='bybit-futures' AND tp.symbol=? AND o.timeframe='5m'
        ORDER BY o.timestamp ASC`,
     )
-    .all(symbol) as Array<Record<string, unknown>>;
+    .all(symbol) as CandleRow[];
 
-const toCandle = (symbol: string) => (r: Record<string, unknown>): Candle => ({
+const toCandle = (symbol: string) => (r: CandleRow): Candle => ({
   open: Number(r.open),
   high: Number(r.high),
   low: Number(r.low),

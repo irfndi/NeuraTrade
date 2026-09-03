@@ -44,7 +44,10 @@ import {
   type BacktestEngineImpl,
 } from "../scalping/services.js";
 import { MarketDataGatewayLive } from "../market-data/gateways/index.js";
-import { MarketDataGateway } from "../market-data/gateway.js";
+import {
+  MarketDataGateway,
+  type MarketDataGatewayService,
+} from "../market-data/gateway.js";
 import { MarketDataGatewayRepositoryLive } from "../market-data/gateway-repository.js";
 import type { FundingRate } from "../market-data/types.js";
 import { SimulatedExchangeAdapterLive } from "../exchange/adapters/simulated.js";
@@ -53,7 +56,10 @@ import { SimulatedFuturesExchangeAdapterLive } from "../exchange/adapters/simula
 import { BitgetFuturesExchangeAdapterLive } from "../exchange/adapters/bitget-futures.js";
 import {
   BybitFuturesExchangeAdapterLive,
+  BybitClient,
   BybitClientLiveConfig,
+  toBybitSymbol,
+  type BybitContract,
 } from "../exchange/adapters/bybit-futures.js";
 import {
   BitgetClientLiveConfig,
@@ -71,7 +77,6 @@ import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../exchange/futures-adapter.js";
-import type { MarketDataGatewayService } from "../market-data/gateway.js";
 import { RiskGuard, RiskGuardLive } from "../risk/guards.js";
 import { KillSwitch, KillSwitchSQLiteLive } from "../risk/kill-switch.js";
 import {
@@ -117,15 +122,13 @@ import {
   type FlowTradeIterationResult,
   type FlowTradeOptions,
 } from "../scalping/flow-trade.js";
-import type {
-  ContractSizeSpec,
-  LadderPaperPortfolioMember,
-} from "../paper-trading/types.js";
+import type { ContractSizeSpec } from "../paper-trading/types.js";
 import type { BitgetProductType } from "../services/bitget-client.js";
 import {
   PaperTradingRepository,
   PaperTradingRepositorySQLite,
   PaperTradingRepositorySQLiteLive,
+  type PaperTradingRepositoryError,
   type WatchlistEntry as DbWatchlistEntry,
 } from "../paper-trading/repository.js";
 import {
@@ -196,6 +199,7 @@ import {
 } from "../market-data/gateways/bybit.js";
 import { makeDemoReadinessCommand } from "./demo-readiness.js";
 import { makeParityReplayCommand } from "./parity-replay.js";
+import { makeTimesFmForecastCommand } from "./timesfm.js";
 import { tradeCommand } from "./trade.js";
 import {
   exchangeOption,
@@ -651,6 +655,41 @@ export const backtestCommand = Command.make(
 
 export interface BacktestArgs extends ResolvedBacktestArgs {}
 
+/**
+ * True when every strategy-tuning flag matches the default composer — the
+ * caller can reuse `defaultComposerConfig` verbatim instead of rebuilding it.
+ */
+function isDefaultBacktestComposerFlags(
+  priceOnly: boolean,
+  noRsi: boolean,
+  noTrend: boolean,
+  regimeMode: "trend" | "reversion" | "breakout",
+  volumeMinRatio: number,
+  minConfluence: number,
+  entryCandleConfirm: boolean,
+  momentumConfirmBars: number,
+  adxMin: number,
+  breakoutLookback: number,
+  fundingBiasThreshold: number | undefined,
+  useFunding: boolean | undefined,
+): boolean {
+  return (
+    !priceOnly &&
+    !noRsi &&
+    !noTrend &&
+    regimeMode === defaultComposerConfig.thresholds.regimeMode &&
+    volumeMinRatio <= 0 &&
+    minConfluence <= 0 &&
+    !entryCandleConfirm &&
+    momentumConfirmBars <= 0 &&
+    adxMin <= 0 &&
+    (breakoutLookback <= 0 ||
+      breakoutLookback === defaultComposerConfig.thresholds.breakoutLookback) &&
+    fundingBiasThreshold === undefined &&
+    useFunding === undefined
+  );
+}
+
 export function buildBacktestComposerConfig(
   priceOnly: boolean,
   noRsi: boolean,
@@ -667,19 +706,20 @@ export function buildBacktestComposerConfig(
   useFunding?: boolean,
 ): ComposerConfig {
   if (
-    !priceOnly &&
-    !noRsi &&
-    !noTrend &&
-    regimeMode === defaultComposerConfig.thresholds.regimeMode &&
-    volumeMinRatio <= 0 &&
-    minConfluence <= 0 &&
-    !entryCandleConfirm &&
-    momentumConfirmBars <= 0 &&
-    adxMin <= 0 &&
-    (breakoutLookback <= 0 ||
-      breakoutLookback === defaultComposerConfig.thresholds.breakoutLookback) &&
-    fundingBiasThreshold === undefined &&
-    useFunding === undefined
+    isDefaultBacktestComposerFlags(
+      priceOnly,
+      noRsi,
+      noTrend,
+      regimeMode,
+      volumeMinRatio,
+      minConfluence,
+      entryCandleConfirm,
+      momentumConfirmBars,
+      adxMin,
+      breakoutLookback,
+      fundingBiasThreshold,
+      useFunding,
+    )
   ) {
     return defaultComposerConfig;
   }
@@ -2499,6 +2539,16 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly entries?: readonly WatchlistEntry[];
 }
 
+interface PaperTradeRuntime {
+  readonly strategyType: "signal" | "grid";
+  readonly useSandbox: boolean;
+  readonly useTestnet: boolean;
+  readonly resolvedExchange: string;
+  readonly isDemoAccount: boolean;
+  readonly marginMode: FuturesMarginMode;
+  readonly productType: BitgetProductType;
+}
+
 function resolvePaperTradeArgs(
   args: Partial<PaperTradeArgs>,
   profile: Option.Option<StrategyProfile>,
@@ -3022,12 +3072,17 @@ export interface LiveGridConfiguration {
   readonly maxDailyLossPct: number;
 }
 
-export function validateLiveGridConfiguration(
+/**
+ * True when the live grid config exactly reproduces a validated readiness
+ * cohort candidate (leverage may exceed the candidate value: it scales
+ * PnL/variance, not the strategy, and tiny accounts need the sizing's
+ * floor-raise — the risk engine's maxLeverage cap still bounds it).
+ */
+function isLiveGridCohortCandidate(
   config: LiveGridConfiguration,
-  sandbox = false,
-): string | undefined {
-  const candidate = candidateForSymbol(config.symbol);
-  const validatedCandidate =
+  candidate: ReturnType<typeof candidateForSymbol>,
+): boolean {
+  return (
     candidate !== undefined &&
     config.exchange === candidate.exchange &&
     config.timeframe === candidate.timeframe &&
@@ -3041,14 +3096,30 @@ export function validateLiveGridConfiguration(
     config.onlyWithTrend === candidate.onlyWithTrend &&
     config.targetRatio === candidate.targetRatio &&
     config.chopGateAdx === candidate.chopGateAdx &&
-    // Leverage may EXCEED the validated candidate value: it scales
-    // PnL/variance, not the strategy, and tiny accounts need the sizing's
-    // floor-raise (e.g. $10/BTC at 2x = 32% margin vs 65% at 1x). The risk
-    // engine's maxLeverage cap still bounds it.
-    config.leverage >= candidate.leverage;
-  if (!validatedCandidate && !sandbox) {
+    config.leverage >= candidate.leverage
+  );
+}
+
+/** Message for a live-grid risk limit outside (0%, cap]; undefined when valid. */
+function liveGridRiskPctError(
+  value: number,
+  cap: number,
+  message: string,
+): string | undefined {
+  return !Number.isFinite(value) || value <= 0 || value > cap
+    ? message
+    : undefined;
+}
+
+export function validateLiveGridConfiguration(
+  config: LiveGridConfiguration,
+  sandbox = false,
+): string | undefined {
+  const candidate = candidateForSymbol(config.symbol);
+  if (!isLiveGridCohortCandidate(config, candidate) && !sandbox) {
     return "live grid must use a validated readiness cohort candidate";
   }
+  if (sandbox) return undefined;
   const riskCap =
     candidate?.maxPositionSizePct ??
     VALIDATED_BTC_GRID_CANDIDATE.maxPositionSizePct;
@@ -3056,28 +3127,23 @@ export function validateLiveGridConfiguration(
     candidate?.maxDrawdownPct ?? VALIDATED_BTC_GRID_CANDIDATE.maxDrawdownPct;
   const dailyCap =
     candidate?.maxDailyLossPct ?? VALIDATED_BTC_GRID_CANDIDATE.maxDailyLossPct;
-  if (
-    !Number.isFinite(config.maxPositionSizePct) ||
-    config.maxPositionSizePct <= 0 ||
-    config.maxPositionSizePct > riskCap
-  ) {
-    return "live grid max position size must be between 0% and 50%";
-  }
-  if (
-    !Number.isFinite(config.maxDrawdownPct) ||
-    config.maxDrawdownPct <= 0 ||
-    config.maxDrawdownPct > ddCap
-  ) {
-    return "live grid max drawdown must be between 0% and 5%";
-  }
-  if (
-    !Number.isFinite(config.maxDailyLossPct) ||
-    config.maxDailyLossPct <= 0 ||
-    config.maxDailyLossPct > dailyCap
-  ) {
-    return "live grid max daily loss must be between 0% and 2%";
-  }
-  return undefined;
+  return (
+    liveGridRiskPctError(
+      config.maxPositionSizePct,
+      riskCap,
+      "live grid max position size must be between 0% and 50%",
+    ) ??
+    liveGridRiskPctError(
+      config.maxDrawdownPct,
+      ddCap,
+      "live grid max drawdown must be between 0% and 5%",
+    ) ??
+    liveGridRiskPctError(
+      config.maxDailyLossPct,
+      dailyCap,
+      "live grid max daily loss must be between 0% and 2%",
+    )
+  );
 }
 
 export function validateLiveGridWatchlist(
@@ -3172,118 +3238,368 @@ function bitgetContractSpecs(
   };
 }
 
-function paperTradeProgram(args: PaperTradeArgs) {
+/**
+ * Fetch the Bybit linear contract table for the symbols a live command will
+ * touch. The adapter still performs its own authoritative lookup before every
+ * order; this startup snapshot only lets the paper engine calculate an
+ * orderable quantity before it calls that adapter.
+ */
+function fetchBybitContracts(
+  symbols: readonly string[],
+): Effect.Effect<ReadonlyArray<BybitContract>, Error> {
+  const bybitClientLayer = BybitClientLiveConfig.pipe(
+    Layer.provide(BybitConfigLive),
+  );
+  const uniqueSymbols = [...new Set(symbols.map(toBybitSymbol))];
   return Effect.gen(function* () {
-    const strategyType = args.strategyType ?? "signal";
-    // Sandbox/testnet is a property of the resolved venue's client
-    // configuration, not free-floating environment state:
-    // BitgetClientLiveConfig derives isDemo from BitgetConfig.useSandbox and
-    // BybitFuturesExchangeAdapterLive derives testnet from
-    // BybitConfig.useTestnet, so validation relaxation and demo routing can
-    // never disagree.
-    const useSandbox = yield* BitgetConfig.pipe(
-      Effect.map((config) => config.useSandbox),
-      Effect.provide(BitgetConfigLive),
-      Effect.orDie,
+    const client = yield* BybitClient;
+    return yield* Effect.forEach(
+      uniqueSymbols,
+      (symbol) => client.getContract(symbol),
+      { concurrency: 4 },
     );
-    const useTestnet = yield* BybitConfig.pipe(
-      Effect.map((config) => config.useTestnet),
-      Effect.provide(BybitConfigLive),
-      Effect.orDie,
-    );
-    const resolvedExchange = resolveFuturesMarketExchange(args.exchange, true);
-    const isDemoAccount =
-      resolvedExchange === "bybit-futures" ? useTestnet : useSandbox;
-    const liveMarketError = validateLiveExecutionMarket(
-      args.live,
-      args.futures,
-    );
-    if (liveMarketError !== undefined) {
-      return yield* Effect.fail(new Error(liveMarketError));
-    }
-    const shadowError = validateShadowMode(args.shadow ?? false, args.live);
-    if (shadowError !== undefined) {
-      return yield* Effect.fail(new Error(shadowError));
-    }
-    const liveSandboxError = validateLiveSandboxMode(args.live, isDemoAccount);
-    if (liveSandboxError !== undefined) {
-      return yield* Effect.fail(new Error(liveSandboxError));
-    }
-    const liveStrategyError = validateLiveExecutionStrategy(
-      args.live,
-      strategyType,
-    );
-    if (liveStrategyError !== undefined) {
-      return yield* Effect.fail(new Error(liveStrategyError));
-    }
-    const liveGridWatchlistError = validateLiveGridWatchlist(
+  }).pipe(
+    Effect.provide(bybitClientLayer),
+    Effect.mapError((err) => {
+      const detail = "body" in err ? err.body : String(err);
+      return new Error(
+        `failed to fetch Bybit contracts: ${detail.length > 0 ? detail : String(err)}`,
+      );
+    }),
+  );
+}
+
+/** Convert Bybit's instrument fields to the shared order-sizing contract. */
+export function bybitContractSpecs(
+  contract: BybitContract | undefined,
+): ContractSizeSpec | undefined {
+  if (contract === undefined) return undefined;
+  const minQty = Number(contract.minOrderQty);
+  const qtyStep = Number(contract.qtyStep);
+  const minTradeUSDT = Number(contract.minOrderAmt);
+  if (
+    !Number.isFinite(minQty) ||
+    minQty <= 0 ||
+    !Number.isFinite(qtyStep) ||
+    qtyStep < 0 ||
+    !Number.isFinite(minTradeUSDT) ||
+    minTradeUSDT < 0
+  ) {
+    return undefined;
+  }
+  return { minQty, qtyStep, minTradeUSDT };
+}
+
+/**
+ * Per-symbol signal overrides a watchlist entry may layer onto the CLI args
+ * (from entry.bestParams). Only these three fields are ever passed; every
+ * other option flows straight from the resolved args.
+ */
+type EngineSignalOverrides = {
+  readonly minConfidence?: number;
+  readonly atrStopMultiplier?: number;
+  readonly atrTakeProfitMultiplier?: number;
+};
+
+interface LadderGridSettings {
+  readonly rungs: number;
+  readonly gridStepPct: number;
+  readonly gridMaxGrids: number;
+  readonly gridPauseAfterLossBars: number;
+  readonly targetRatio: number;
+  readonly chopGateAdxThreshold: number;
+}
+
+/**
+ * Grid geometry for one ladder member: gate-scored values from the watchlist
+ * row's gridParams when present, CLI defaults otherwise (direct symbol
+ * invocation without a whitelist row).
+ */
+function resolveLadderGridSettings(
+  gridParams: WatchlistEntry["gridParams"] | undefined,
+  args: {
+    readonly gridStepPct: number;
+    readonly gridMaxGrids: number;
+    readonly gridPauseAfterLossBars: number;
+    readonly targetRatio?: number;
+    readonly chopGateAdx?: number;
+  },
+): LadderGridSettings {
+  return {
+    rungs: gridParams?.rungs ?? 1,
+    gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
+    gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
+    gridPauseAfterLossBars:
+      gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
+    targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
+    chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
+  } satisfies LadderGridSettings;
+}
+
+/**
+ * max-position-size-pct is an account-level cap. Once capital is partitioned,
+ * expand the per-partition cap enough to preserve that account-level budget
+ * without ever exceeding 100% of a partition. The rebalance cap (when
+ * present) then keeps deployed size tracking the member's target share of
+ * live portfolio equity.
+ */
+function ladderPartitionPositionPct(
+  rawWeight: Decimal,
+  basePositionPct: number,
+  positionPctCap: number | undefined,
+): number {
+  return Math.min(
+    rawWeight.greaterThan(0) && rawWeight.lessThan(1)
+      ? Math.min(100, basePositionPct / rawWeight.toNumber())
+      : basePositionPct,
+    positionPctCap ?? 100,
+  );
+}
+
+/**
+ * Run the paper-trade live/sandbox/strategy guard rails in order and return
+ * the first violation message, or undefined when the invocation may proceed.
+ */
+function firstPaperTradeValidationError(
+  args: PaperTradeArgs,
+  strategyType: "signal" | "grid",
+  isDemoAccount: boolean,
+): string | undefined {
+  return (
+    validateLiveExecutionMarket(args.live, args.futures) ??
+    validateShadowMode(args.shadow ?? false, args.live) ??
+    validateLiveSandboxMode(args.live, isDemoAccount) ??
+    validateLiveExecutionStrategy(args.live, strategyType) ??
+    validateLiveGridWatchlist(
       args.live,
       strategyType,
       args.entries,
       isDemoAccount,
-    );
-    if (liveGridWatchlistError !== undefined) {
-      return yield* Effect.fail(new Error(liveGridWatchlistError));
-    }
-    const marginMode = parseMarginMode(args.marginMode);
-    const productType = parseProductType(args.productType);
-    if (args.live && strategyType === "grid") {
-      const liveGridError = validateLiveGridConfiguration(
-        {
-          exchange: resolvedExchange,
-          symbol: args.symbol,
-          timeframe: args.timeframe,
+    )
+  );
+}
+
+/**
+ * Assemble the live-grid readiness validation input from the resolved args.
+ */
+function buildLiveGridConfigCandidate(
+  args: PaperTradeArgs,
+  resolvedExchange: string,
+  productType: BitgetProductType,
+): LiveGridConfiguration {
+  return {
+    exchange: resolvedExchange,
+    symbol: args.symbol,
+    timeframe: args.timeframe,
+    productType,
+    gridStepPct: args.gridStepPct,
+    gridMaxGrids: args.gridMaxGrids,
+    gridPauseAfterLossBars: args.gridPauseAfterLossBars,
+    feePct: args.fee,
+    slippageBps: args.slippageBps,
+    trendFilterPeriod: args.trendFilterPeriod,
+    onlyWithTrend: args.onlyWithTrend ?? false,
+    targetRatio: args.targetRatio ?? 0,
+    chopGateAdx: args.chopGateAdx ?? 0,
+    leverage: args.leverage,
+    maxPositionSizePct: Option.getOrElse(args.maxPositionSizePct, () => 100),
+    maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
+    maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
+  };
+}
+
+/** Spot paper-trading adapter layer: live Binance or the in-memory simulator. */
+function paperSpotAdapterLayer(args: {
+  readonly live: boolean;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+}) {
+  return args.live
+    ? BinanceLiveExchangeAdapterLive({
+        apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
+        apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
+      })
+    : SimulatedExchangeAdapterLive();
+}
+
+/**
+ * Futures execution adapter layer for the paper-trading programs: live runs
+ * route to the resolved venue's live adapter, simulated runs to the
+ * in-memory simulator.
+ */
+function paperFuturesAdapterLayer(args: {
+  readonly live: boolean;
+  readonly exchange: string;
+}): Layer.Layer<
+  FuturesExchangeAdapterService,
+  never,
+  MarketDataGatewayService
+> {
+  return (
+    args.live
+      ? resolveFuturesMarketExchange(args.exchange, true) === "bybit-futures"
+        ? BybitFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BybitClientLiveConfig),
+            Layer.provide(BybitConfigLive),
+          )
+        : BitgetFuturesExchangeAdapterLive.pipe(
+            Layer.provide(BitgetClientLiveConfig),
+          )
+      : SimulatedFuturesExchangeAdapterLive()
+  ) as Layer.Layer<
+    FuturesExchangeAdapterService,
+    never,
+    MarketDataGatewayService
+  >;
+}
+
+/**
+ * Ladder portfolio rebalance cadence in ms from
+ * NEURATRADE_LADDER_REBALANCE_HOURS; 0 disables (default 24h).
+ */
+function ladderRebalanceIntervalMs(): number {
+  return (
+    (Number(process.env.NEURATRADE_LADDER_REBALANCE_HOURS ?? "24") || 0) *
+    3_600_000
+  );
+}
+
+/**
+ * Stamp every ladder trade this process records with readiness provenance
+ * (fingerprint + cohort), mirroring the grid engine's per-state fields.
+ * Without it ladder fills are untagged legacy rows the real-money readiness
+ * gate can never count.
+ */
+function stampLadderTradeProvenance(
+  ladderPortfolioEntries: readonly WatchlistEntry[],
+  args: PaperTradeArgs,
+  resolvedExchange: string,
+  useTestnet: boolean,
+  useSandbox: boolean,
+): void {
+  if (ladderPortfolioEntries.length === 0) return;
+  const ladderEnv = executionEnvironmentFor(
+    resolvedExchange,
+    args.live,
+    useTestnet || useSandbox,
+  );
+  const manifest = strategyManifestForLadder(args, "portfolio", ladderEnv);
+  const fingerprint = fingerprintStrategyManifest(manifest);
+  setLadderTradeProvenance({
+    fingerprint,
+    cohortId: `ladder-${fingerprint.slice(0, 16)}`,
+    lockedAt: new Date(),
+    executionEnvironment: ladderEnv,
+  });
+}
+
+type PaperIterationLogResult =
+  | import("../paper-trading/engine.js").PaperTradingIterationResult
+  | import("../paper-trading/futures-engine.js").FuturesPaperTradingIterationResult
+  | GridPaperTradingIterationResult
+  | LadderPaperIterationResult;
+
+function formatPaperIterationLog(
+  scope: string,
+  result: PaperIterationLogResult,
+): string {
+  const rungs =
+    "openRungs" in result && "closedThisIteration" in result
+      ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}`
+      : "";
+  return `[${new Date().toISOString()}] ${scope}${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${rungs} | ${result.note}`;
+}
+
+function paperTradeProgram(args: PaperTradeArgs) {
+  return Effect.gen(function* () {
+    const resolveRuntime = (): Effect.Effect<PaperTradeRuntime, Error, never> =>
+      Effect.gen(function* () {
+        // Sandbox/testnet is read from the resolved client configuration so
+        // validation and demo routing cannot disagree.
+        const useSandbox = yield* BitgetConfig.pipe(
+          Effect.map((config) => config.useSandbox),
+          Effect.provide(BitgetConfigLive),
+          Effect.orDie,
+        );
+        const useTestnet = yield* BybitConfig.pipe(
+          Effect.map((config) => config.useTestnet),
+          Effect.provide(BybitConfigLive),
+          Effect.orDie,
+        );
+        const strategyType = args.strategyType ?? "signal";
+        const resolvedExchange = resolveFuturesMarketExchange(
+          args.exchange,
+          true,
+        );
+        const isDemoAccount =
+          resolvedExchange === "bybit-futures" ? useTestnet : useSandbox;
+        const validationError = firstPaperTradeValidationError(
+          args,
+          strategyType,
+          isDemoAccount,
+        );
+        if (validationError !== undefined) {
+          return yield* Effect.fail(new Error(validationError));
+        }
+        const marginMode = parseMarginMode(args.marginMode);
+        const productType = parseProductType(args.productType);
+        if (args.live && strategyType === "grid") {
+          const liveGridError = validateLiveGridConfiguration(
+            buildLiveGridConfigCandidate(args, resolvedExchange, productType),
+          );
+          if (liveGridError !== undefined) {
+            return yield* Effect.fail(new Error(liveGridError));
+          }
+        }
+        return {
+          strategyType,
+          useSandbox,
+          useTestnet,
+          resolvedExchange,
+          isDemoAccount,
+          marginMode,
           productType,
-          gridStepPct: args.gridStepPct,
-          gridMaxGrids: args.gridMaxGrids,
-          gridPauseAfterLossBars: args.gridPauseAfterLossBars,
-          feePct: args.fee,
-          slippageBps: args.slippageBps,
-          trendFilterPeriod: args.trendFilterPeriod,
-          onlyWithTrend: args.onlyWithTrend ?? false,
-          targetRatio: args.targetRatio ?? 0,
-          chopGateAdx: args.chopGateAdx ?? 0,
-          leverage: args.leverage,
-          maxPositionSizePct: Option.getOrElse(
-            args.maxPositionSizePct,
-            () => 100,
-          ),
-          maxDrawdownPct: Option.getOrElse(args.maxDrawdownPct, () => 100),
-          maxDailyLossPct: Option.getOrElse(args.maxDailyLossPct, () => 100),
-        },
-        // args.live && strategyType === "grid" are guaranteed by the
-        // enclosing if; only multi-symbol demo/testnet runs get relaxed guards.
-        (args.entries?.length ?? 0) > 0 && isDemoAccount,
-      );
-      if (liveGridError !== undefined) {
-        return yield* Effect.fail(new Error(liveGridError));
-      }
-    }
+        };
+      });
+
+    const runtime = yield* resolveRuntime();
+    const {
+      strategyType,
+      useSandbox,
+      useTestnet,
+      resolvedExchange,
+      marginMode,
+      productType,
+    } = runtime;
+
     const repo = yield* MarketDataRepository;
-    yield* repo.ensureTables();
-
     const paperRepo = yield* PaperTradingRepository;
-    yield* paperRepo.ensureTables();
+    const initializePaperAccount = (): Effect.Effect<
+      void,
+      MarketDataRepositoryError | PaperTradingRepositoryError,
+      never
+    > =>
+      Effect.gen(function* () {
+        yield* repo.ensureTables();
+        yield* paperRepo.ensureTables();
+        if (args.replayBars > 0 && args.strategyType === "grid") {
+          yield* paperRepo.resetGridState(
+            args.exchange,
+            args.symbol,
+            args.timeframe,
+          );
+        }
+        const portfolio = yield* paperRepo.getPortfolio();
+        const startCapital = portfolio.capital.lessThanOrEqualTo(0)
+          ? money(args.capital)
+          : portfolio.capital;
+        yield* paperRepo.setPortfolio(
+          startCapital,
+          Decimal.max(portfolio.peakCapital, startCapital),
+        );
+      });
 
-    if (args.replayBars > 0 && args.strategyType === "grid") {
-      // Replay is an explicit diagnostic: always start the pass fresh so a
-      // stale replay pointer from an earlier session cannot lock the walk
-      // out with "no new replay candle" forever.
-      yield* paperRepo.resetGridState(
-        args.exchange,
-        args.symbol,
-        args.timeframe,
-      );
-    }
-
-    const portfolio = yield* paperRepo.getPortfolio();
-    const startCapital = portfolio.capital.lessThanOrEqualTo(0)
-      ? money(args.capital)
-      : portfolio.capital;
-    yield* paperRepo.setPortfolio(
-      startCapital,
-      Decimal.max(portfolio.peakCapital, startCapital),
-    );
+    yield* initializePaperAccount();
 
     const composerConfig = buildBacktestComposerConfig(
       args.priceOnly,
@@ -3297,38 +3613,63 @@ function paperTradeProgram(args: PaperTradeArgs) {
       args.momentumConfirmBars,
     );
 
-    let entries =
-      args.entries && args.entries.length > 0 ? args.entries : undefined;
-
     // Ladder survivors were whitelisted from MAINNET db data, but the live
     // ladder soak reads the trading venue's klines (bybit testnet). Symbols
     // not listed on the venue burn every pass on "no candles" — filter them
     // out once at startup.
-    if (
-      entries !== undefined &&
-      entries.some((e) => isLadderSurvivorRow(e.gridParams, args.strategyType))
-    ) {
-      const gateway = yield* MarketDataGateway;
-      const venueList = yield* gateway
-        .fetchSymbols(resolvedExchange)
-        .pipe(Effect.orElseSucceed(() => [] as readonly string[]));
-      if (venueList.length > 0) {
+    const filterUnlistedLadderEntries = (
+      list: readonly WatchlistEntry[],
+    ): Effect.Effect<
+      readonly WatchlistEntry[],
+      never,
+      MarketDataGatewayService
+    > =>
+      Effect.gen(function* () {
+        const gateway = yield* MarketDataGateway;
+        const venueList = yield* gateway
+          .fetchSymbols(resolvedExchange)
+          .pipe(Effect.orElseSucceed(() => [] as readonly string[]));
+        if (venueList.length === 0) return list;
         const listed = new Set(
           venueList.map((s) => s.replace(/:.*$/, "").toLowerCase()),
         );
-        const before = entries.length;
-        entries = entries.filter(
+        const before = list.length;
+        const filtered = list.filter(
           (e) =>
             !isLadderSurvivorRow(e.gridParams, args.strategyType) ||
             listed.has(e.symbol.replace(/:.*$/, "").toLowerCase()),
         );
-        if (entries.length !== before) {
+        if (filtered.length !== before) {
           yield* Console.warn(
-            `⚠️ Ladder whitelist filtered: ${before - entries.length} symbol(s) not listed on ${resolvedExchange} — removed (${entries.map((e) => e.symbol).join(", ")})`,
+            `⚠️ Ladder whitelist filtered: ${before - filtered.length} symbol(s) not listed on ${resolvedExchange} — removed (${filtered.map((e) => e.symbol).join(", ")})`,
           );
         }
-      }
-    }
+        return filtered;
+      });
+    const resolveEntries = (
+      candidateEntries?: readonly WatchlistEntry[],
+    ): Effect.Effect<
+      readonly WatchlistEntry[] | undefined,
+      never,
+      MarketDataGatewayService
+    > =>
+      Effect.gen(function* () {
+        const entries =
+          candidateEntries && candidateEntries.length > 0
+            ? candidateEntries
+            : undefined;
+        if (
+          entries === undefined ||
+          !entries.some((entry) =>
+            isLadderSurvivorRow(entry.gridParams, args.strategyType),
+          )
+        ) {
+          return entries;
+        }
+        return yield* filterUnlistedLadderEntries(entries);
+      });
+    const entries = yield* resolveEntries(args.entries);
+    const activeEntries = entries;
 
     // A ladder watchlist is one paper account, not one $capital account per
     // symbol. Give every current survivor a stable cash partition and include
@@ -3368,30 +3709,20 @@ function paperTradeProgram(args: PaperTradeArgs) {
     // provenance (fingerprint + cohort), mirroring the grid engine's
     // per-state fields. Without it ladder fills are untagged legacy rows the
     // real-money readiness gate can never count.
-    if (ladderPortfolioEntries.length > 0) {
-      const ladderEnv = executionEnvironmentFor(
-        resolvedExchange,
-        args.live,
-        useTestnet || useSandbox,
-      );
-      const manifest = strategyManifestForLadder(args, "portfolio", ladderEnv);
-      const fingerprint = fingerprintStrategyManifest(manifest);
-      setLadderTradeProvenance({
-        fingerprint,
-        cohortId: `ladder-${fingerprint.slice(0, 16)}`,
-        lockedAt: new Date(),
-        executionEnvironment: ladderEnv,
-      });
-    }
+    stampLadderTradeProvenance(
+      ladderPortfolioEntries,
+      args,
+      resolvedExchange,
+      useTestnet,
+      useSandbox,
+    );
 
     // Account-level compounding: periodically re-derive each member's target
     // allocation from LIVE equity (winners fund losers' targets) and express
     // it as a maxPositionPct cap on sizing. initialCapital stays fixed so
     // persisted state never mismatches (configMatchesLadderState ignores
     // maxPositionPct). 0 disables; default every 24h.
-    const ladderRebalanceMs =
-      (Number(process.env.NEURATRADE_LADDER_REBALANCE_HOURS ?? "24") || 0) *
-      3_600_000;
+    const ladderRebalanceMs = ladderRebalanceIntervalMs();
     const ladderLiveCapital = new Map<string, number>();
     let ladderRebalancePlan: ReadonlyMap<string, LadderRebalancePlan> =
       new Map();
@@ -3436,63 +3767,77 @@ function paperTradeProgram(args: PaperTradeArgs) {
     const makeSpotOptions = (
       symbol: string,
       exchange: string,
-      overrides?: Partial<PaperTradingOptions>,
+      overrides?: EngineSignalOverrides,
     ): PaperTradingOptions => ({
       exchange,
       symbol,
       timeframe: args.timeframe,
       composerConfig,
       positionSizePct: args.positionSize,
-      riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
-      maxPositionSizePct:
-        overrides?.maxPositionSizePct ??
-        Option.getOrElse(args.maxPositionSizePct, () => 100),
+      riskPerTradePct: args.riskPerTrade,
+      maxPositionSizePct: Option.getOrElse(args.maxPositionSizePct, () => 100),
       feePct: args.fee,
       minConfidence: overrides?.minConfidence ?? args.minConfidence,
-      useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
-      atrStopMultiplier: overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
-      atrTakeProfitMultiplier:
-        overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
-      atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
-      scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
-      scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
-      volatilityLookback:
-        overrides?.volatilityLookback ?? args.volatilityLookback,
-      volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
-      volatilityHighPct: overrides?.volatilityHighPct ?? args.volatilityHighPct,
-      volatilityLowFactor:
-        overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
-      volatilityHighFactor:
-        overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
-      stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
-      takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
-      holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
-      minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
+      useAtrStops: args.useAtrStops,
+      atrStopMultiplier: args.atrStopMultiplier,
+      atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+      atrRiskReward: args.atrRiskReward,
+      scaleOutAtR: args.scaleOutAtR,
+      scaleOutPct: args.scaleOutPct,
+      volatilityLookback: args.volatilityLookback,
+      volatilityLowPct: args.volatilityLowPct,
+      volatilityHighPct: args.volatilityHighPct,
+      volatilityLowFactor: args.volatilityLowFactor,
+      volatilityHighFactor: args.volatilityHighFactor,
+      stopLossPct: args.stopLoss,
+      takeProfitPct: args.takeProfit,
+      holdUntilStop: args.holdUntilStop,
+      minAtrPct: args.minAtrPct,
       initialCapital: args.capital,
       isLive: args.live,
       volatilityTargetAnnualPct: args.volatilityTargetAnnualPct,
     });
 
-    // Live futures orders must respect the exchange's contract size step and
-    // minimums (a 5 USDT BTC order is 0.000077 BTC, below the 0.0001 step);
-    // fetch the contract table once per command run and resolve specs per
-    // symbol into the engine options. Simulated runs have no exchange
-    // contract table — specs come only from tests/options.
-    const contracts =
-      args.live && (args.futures || strategyType === "grid")
+    // Live futures orders must respect the venue's contract size step and
+    // minimums (a 5 USDT BTC order is 0.000077 BTC, below Bybit's 0.001
+    // minimum). Fetch the relevant table once per command run and resolve
+    // specs per symbol into the engine options. Simulated runs have no
+    // exchange contract table — specs come only from tests/options.
+    const contractSymbols = [
+      args.symbol,
+      ...(activeEntries ?? []).map((entry) => entry.symbol),
+    ];
+    const bitgetContracts =
+      args.live &&
+      resolvedExchange !== "bybit-futures" &&
+      (args.futures || strategyType === "grid")
         ? yield* fetchBitgetContracts(productType)
         : undefined;
+    const bybitContracts =
+      args.live &&
+      resolvedExchange === "bybit-futures" &&
+      (args.futures || strategyType === "grid")
+        ? yield* fetchBybitContracts(contractSymbols)
+        : undefined;
+    const bybitContractMap = new Map(
+      (bybitContracts ?? []).map((contract) => [
+        toBybitSymbol(contract.symbol),
+        contract,
+      ]),
+    );
     const contractSpecsFor = (symbol: string): ContractSizeSpec | undefined =>
-      contracts === undefined
-        ? undefined
-        : bitgetContractSpecs(contracts, symbol, productType);
+      bybitContracts !== undefined
+        ? bybitContractSpecs(bybitContractMap.get(toBybitSymbol(symbol)))
+        : bitgetContracts === undefined
+          ? undefined
+          : bitgetContractSpecs(bitgetContracts, symbol, productType);
 
     // Futures data and execution both live on Bitget in this port; default the
     // market-data exchange to bitget-futures unless the operator overrides it.
     const makeFuturesOptions = (
       symbol: string,
       exchangeOverride: string,
-      overrides?: Partial<FuturesPaperTradingOptions>,
+      overrides?: EngineSignalOverrides,
     ): FuturesPaperTradingOptions => {
       const contractSpecs = contractSpecsFor(symbol);
       const options: MutableFuturesPaperTradingOptions = {
@@ -3501,33 +3846,28 @@ function paperTradeProgram(args: PaperTradeArgs) {
         timeframe: args.timeframe,
         composerConfig,
         positionSizePct: args.positionSize,
-        riskPerTradePct: overrides?.riskPerTradePct ?? args.riskPerTrade,
-        maxPositionSizePct:
-          overrides?.maxPositionSizePct ??
-          Option.getOrElse(args.maxPositionSizePct, () => 100),
+        riskPerTradePct: args.riskPerTrade,
+        maxPositionSizePct: Option.getOrElse(
+          args.maxPositionSizePct,
+          () => 100,
+        ),
         feePct: args.fee,
         minConfidence: overrides?.minConfidence ?? args.minConfidence,
-        useAtrStops: overrides?.useAtrStops ?? args.useAtrStops,
-        atrStopMultiplier:
-          overrides?.atrStopMultiplier ?? args.atrStopMultiplier,
-        atrTakeProfitMultiplier:
-          overrides?.atrTakeProfitMultiplier ?? args.atrTakeProfitMultiplier,
-        atrRiskReward: overrides?.atrRiskReward ?? args.atrRiskReward,
-        scaleOutAtR: overrides?.scaleOutAtR ?? args.scaleOutAtR,
-        scaleOutPct: overrides?.scaleOutPct ?? args.scaleOutPct,
-        volatilityLookback:
-          overrides?.volatilityLookback ?? args.volatilityLookback,
-        volatilityLowPct: overrides?.volatilityLowPct ?? args.volatilityLowPct,
-        volatilityHighPct:
-          overrides?.volatilityHighPct ?? args.volatilityHighPct,
-        volatilityLowFactor:
-          overrides?.volatilityLowFactor ?? args.volatilityLowFactor,
-        volatilityHighFactor:
-          overrides?.volatilityHighFactor ?? args.volatilityHighFactor,
-        stopLossPct: overrides?.stopLossPct ?? args.stopLoss,
-        takeProfitPct: overrides?.takeProfitPct ?? args.takeProfit,
-        holdUntilStop: overrides?.holdUntilStop ?? args.holdUntilStop,
-        minAtrPct: overrides?.minAtrPct ?? args.minAtrPct,
+        useAtrStops: args.useAtrStops,
+        atrStopMultiplier: args.atrStopMultiplier,
+        atrTakeProfitMultiplier: args.atrTakeProfitMultiplier,
+        atrRiskReward: args.atrRiskReward,
+        scaleOutAtR: args.scaleOutAtR,
+        scaleOutPct: args.scaleOutPct,
+        volatilityLookback: args.volatilityLookback,
+        volatilityLowPct: args.volatilityLowPct,
+        volatilityHighPct: args.volatilityHighPct,
+        volatilityLowFactor: args.volatilityLowFactor,
+        volatilityHighFactor: args.volatilityHighFactor,
+        stopLossPct: args.stopLoss,
+        takeProfitPct: args.takeProfit,
+        holdUntilStop: args.holdUntilStop,
+        minAtrPct: args.minAtrPct,
         initialCapital: args.capital,
         isLive: args.live,
         leverage: args.leverage,
@@ -3607,36 +3947,30 @@ function paperTradeProgram(args: PaperTradeArgs) {
         args.maxPositionSizePct,
         () => 100,
       );
-      // max-position-size-pct is an account-level cap. Once capital is
-      // partitioned, expand the per-partition cap enough to preserve that
-      // account-level budget without ever exceeding 100% of a partition.
-      const partitionPositionPct = Math.min(
-        rawWeight.greaterThan(0) && rawWeight.lessThan(1)
-          ? Math.min(100, basePositionPct / rawWeight.toNumber())
-          : basePositionPct,
-        // Rebalance cap (when present): keeps deployed size tracking the
-        // member's target share of live portfolio equity.
-        positionPctCap ?? 100,
-      );
-      return {
+      const {
+        rungs,
+        gridStepPct,
+        gridMaxGrids,
+        gridPauseAfterLossBars,
+        targetRatio,
+        chopGateAdxThreshold,
+      } = resolveLadderGridSettings(gridParams, args);
+      const options: LadderPaperTradingOptions = {
         exchange: resolvedLadderExchange,
         symbol,
         timeframe: args.timeframe,
-        // Ladder survivors carry their gate-scored rung count; default 1 for
-        // direct symbol invocation where no whitelist row exists.
-        rungs: gridParams?.rungs ?? 1,
-        gridStepPct: gridParams?.gridStepPct ?? args.gridStepPct,
-        gridMaxGrids: gridParams?.gridMaxGrids ?? args.gridMaxGrids,
-        gridPauseAfterLossBars:
-          gridParams?.gridPauseAfterLossBars ?? args.gridPauseAfterLossBars,
+        rungs,
+        gridStepPct,
+        gridMaxGrids,
+        gridPauseAfterLossBars,
         feePct: args.fee,
         slippageBps: args.slippageBps,
         trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
         initialCapital: capitalPartition.toNumber(),
         leverage: args.leverage,
         onlyWithTrend: args.onlyWithTrend,
-        targetRatio: gridParams?.targetRatio ?? args.targetRatio ?? 1,
-        chopGateAdxThreshold: gridParams?.chopGateAdx ?? args.chopGateAdx ?? 0,
+        targetRatio,
+        chopGateAdxThreshold,
         maxHoldBars: args.maxHoldBars ?? 0,
         configMismatchAction: args.configMismatchAction,
         maxPositionDrawdownPct: args.maxPositionDrawdownPct,
@@ -3651,7 +3985,11 @@ function paperTradeProgram(args: PaperTradeArgs) {
         isLive: args.live,
         productType,
         marginMode,
-        maxPositionPct: partitionPositionPct,
+        maxPositionPct: ladderPartitionPositionPct(
+          rawWeight,
+          basePositionPct,
+          positionPctCap,
+        ),
         // Keep gross market exposure bounded separately from the collateral
         // cap enforced by RiskGuard. The latter is leverage-aware; this cap is
         // not, so a future leverage change cannot silently expand notional.
@@ -3669,36 +4007,19 @@ function paperTradeProgram(args: PaperTradeArgs) {
           1,
           Number(process.env.NEURATRADE_MAX_LADDER_LEVERAGE ?? "10") || 10,
         ),
-        // NOTE: no contractSpecs here. contractSpecsFor() returns BITGET
-        // contract rules, but the ladder trades BYBIT — passing them caused
-        // false min-orderable rejections (NEAR "min orderable 25.19" from the
-        // bitget spec) and "Qty invalid" (bitget's qty step on bybit). The
-        // bybit adapter rounds the qty to the contract's own step internally.
       };
+      // The ladder can trade Bybit or Bitget. Only attach a spec when it came
+      // from the same venue; passing Bitget rules to a Bybit ladder caused
+      // false min-orderable rejections in the old path.
+      const contractSpecs = contractSpecsFor(symbol);
+      return resolvedLadderExchange === "bybit-futures" &&
+        contractSpecs !== undefined
+        ? { ...options, contractSpecs }
+        : options;
     };
 
-    const spotAdapterLayer = args.live
-      ? BinanceLiveExchangeAdapterLive({
-          apiKey: args.apiKey || process.env.BINANCE_API_KEY || "",
-          apiSecret: args.apiSecret || process.env.BINANCE_API_SECRET || "",
-        })
-      : SimulatedExchangeAdapterLive();
-    const futuresAdapterLayer = (
-      args.live
-        ? resolveFuturesMarketExchange(args.exchange, true) === "bybit-futures"
-          ? BybitFuturesExchangeAdapterLive.pipe(
-              Layer.provide(BybitClientLiveConfig),
-              Layer.provide(BybitConfigLive),
-            )
-          : BitgetFuturesExchangeAdapterLive.pipe(
-              Layer.provide(BitgetClientLiveConfig),
-            )
-        : SimulatedFuturesExchangeAdapterLive()
-    ) as Layer.Layer<
-      FuturesExchangeAdapterService,
-      never,
-      MarketDataGatewayService
-    >;
+    const spotAdapterLayer = paperSpotAdapterLayer(args);
+    const futuresAdapterLayer = paperFuturesAdapterLayer(args);
 
     const runSpotIteration = (
       opts: PaperTradingOptions,
@@ -3795,178 +4116,217 @@ function paperTradeProgram(args: PaperTradeArgs) {
       ) as Effect.Effect<LadderPaperIterationResult, never, never>;
 
     let remaining = args.iterations;
-    // iterations=0 means run forever.
-    while (args.iterations === 0 || remaining !== 0) {
-      if (entries) {
-        // Cohort symbols are owned by their candidate soaks: the universe
-        // soak must never trade them (wrong fingerprint -> kill switch
-        // storms; regression 2026-08-08: repeated phantom SOL positions).
+
+    const runWatchlistSymbol = (input: {
+      readonly entry: WatchlistEntry;
+      readonly entryExchange: string;
+      readonly entryKey: string;
+      readonly isLadderSurvivor: boolean;
+      readonly allocatedCapital?: Decimal;
+    }): Effect.Effect<PaperIterationLogResult, never, never> =>
+      Effect.gen(function* () {
+        if (input.isLadderSurvivor) {
+          return yield* runLadderIteration(
+            makeLadderOptions(
+              input.entry.symbol,
+              input.entryExchange,
+              input.entry.gridParams,
+              input.allocatedCapital,
+              ladderRebalanceCapFor(input.entryKey),
+            ),
+          );
+        }
+        if (args.strategyType === "grid") {
+          return yield* runGridIteration(
+            makeGridOptions(
+              input.entry.symbol,
+              input.entryExchange,
+              input.entry.gridParams,
+            ),
+          );
+        }
+        if (args.futures) {
+          return yield* runFuturesIteration(
+            makeFuturesOptions(input.entry.symbol, input.entryExchange, {
+              minConfidence: input.entry.bestParams?.minConfidence,
+              atrStopMultiplier: input.entry.bestParams?.atrStopMultiplier,
+              atrTakeProfitMultiplier:
+                input.entry.bestParams?.atrTakeProfitMultiplier,
+            }),
+          );
+        }
+        return yield* runSpotIteration(
+          makeSpotOptions(input.entry.symbol, input.entryExchange, {
+            minConfidence: input.entry.bestParams?.minConfidence,
+            atrStopMultiplier: input.entry.bestParams?.atrStopMultiplier,
+            atrTakeProfitMultiplier:
+              input.entry.bestParams?.atrTakeProfitMultiplier,
+          }),
+        );
+      });
+
+    const saveLadderMember = (input: {
+      readonly entry: WatchlistEntry;
+      readonly entryExchange: string;
+      readonly entryKey: string;
+      readonly isLadderSurvivor: boolean;
+      readonly allocatedCapital?: Decimal;
+      readonly result: PaperIterationLogResult;
+    }): Effect.Effect<void, PaperTradingRepositoryError, never> =>
+      Effect.gen(function* () {
+        if (
+          !input.isLadderSurvivor ||
+          ladderPortfolioId === undefined ||
+          input.allocatedCapital === undefined
+        ) {
+          return;
+        }
+        const saveMember = paperRepo.saveLadderPortfolioMember;
+        if (saveMember === undefined) return;
+        const ladderResult = input.result as LadderPaperIterationResult;
+        ladderLiveCapital.set(input.entryKey, ladderResult.capital);
+        yield* saveMember({
+          portfolioId: ladderPortfolioId,
+          exchange: resolveFuturesMarketExchange(input.entryExchange, true),
+          symbol: input.entry.symbol,
+          timeframe: args.timeframe,
+          allocatedCapital: input.allocatedCapital,
+          capital: money(ladderResult.capital),
+          equity: money(ladderResult.equity ?? ladderResult.capital),
+          unrealizedPnl: money(ladderResult.unrealizedPnl ?? 0),
+          active: true,
+          updatedAt: new Date(),
+        });
+      });
+
+    const runWatchlistEntry = (
+      entry: WatchlistEntry,
+      cohortSymbols: ReadonlySet<string>,
+    ): Effect.Effect<void, PaperTradingRepositoryError, never> =>
+      Effect.gen(function* () {
+        if (cohortSymbols.has(entry.symbol)) return;
+        if (remaining === 0 && args.iterations !== 0) return;
+        const entryExchange = entry.exchange ?? args.exchange;
+        const isLadderSurvivor = isLadderSurvivorRow(
+          entry.gridParams,
+          args.strategyType,
+        );
+        const entryKey = `${resolveFuturesMarketExchange(entryExchange, true)}:${entry.symbol}:${args.timeframe}`;
+        const allocatedCapital = isLadderSurvivor
+          ? ladderAllocationFor(entry.symbol, entryExchange)
+          : undefined;
+        const iteration = {
+          entry,
+          entryExchange,
+          entryKey,
+          isLadderSurvivor,
+          allocatedCapital,
+        };
+        const result = yield* runWatchlistSymbol(iteration);
+        yield* Console.log(
+          formatPaperIterationLog(`${entryExchange}:${entry.symbol} `, result),
+        );
+        yield* saveLadderMember({ ...iteration, result });
+        if (remaining > 0 && args.iterations !== 0) remaining -= 1;
+      });
+
+    const saveLadderPortfolioSummary = (
+      evaluated: number,
+    ): Effect.Effect<void, PaperTradingRepositoryError, never> =>
+      Effect.gen(function* () {
+        if (
+          ladderPortfolioId === undefined ||
+          paperRepo.listLadderPortfolioMembers === undefined ||
+          paperRepo.saveLadderPortfolioSummary === undefined
+        ) {
+          return;
+        }
+        const members =
+          yield* paperRepo.listLadderPortfolioMembers(ladderPortfolioId);
+        const previous =
+          paperRepo.getLadderPortfolioSummary !== undefined
+            ? yield* paperRepo.getLadderPortfolioSummary(ladderPortfolioId)
+            : null;
+        const summary = summarizeLadderPortfolio(
+          ladderPortfolioId,
+          resolvedExchange,
+          args.timeframe,
+          money(args.capital),
+          members,
+          previous?.peakEquity,
+        );
+        yield* paperRepo.saveLadderPortfolioSummary(summary);
+        yield* Console.log(
+          `[${new Date().toISOString()}] PORTFOLIO ${ladderPortfolioId} | capital=${summary.capital.toFixed(2)} | equity=${summary.equity.toFixed(2)} | uPnL=${summary.unrealizedPnl.toFixed(4)} | symbols=${summary.activeSymbols} | evaluated=${evaluated}`,
+        );
+      });
+
+    const runWatchlistSweep = (): Effect.Effect<
+      void,
+      PaperTradingRepositoryError,
+      never
+    > =>
+      Effect.gen(function* () {
+        if (!activeEntries) return;
         const cohortSymbols = new Set<string>(
           READINESS_COHORT_CANDIDATES.map((candidate) => candidate.symbol),
         );
-        // Run the whole sweep of symbols CONCURRENTLY so multiple positions can
-        // open in parallel (sequential iteration leaves the rest of the account
-        // idle while each symbol waits for a limit fill). Each symbol's ladder
-        // self-limits by its paper capital and the real wallet margin (the
-        // adapter fails "ab not enough" when the account can't cover more), so
-        // parallel execution fills as many concurrent positions as the $50
-        // wallet can actually hold — ~4 at 25% margin each. API-call and
-        // order-rate safety is preserved by the market-data/exchange rate
-        // limiters; the per-round sleep below bounds overall cadence.
         for (const line of ladderRefreshRebalancePlan()) {
           yield* Console.log(line);
         }
-        const sweepResults = yield* Effect.forEach(
-          entries,
-          (entry) =>
-            Effect.gen(function* () {
-              if (cohortSymbols.has(entry.symbol)) return;
-              if (remaining === 0 && args.iterations !== 0) return;
-              const entryExchange = entry.exchange ?? args.exchange;
-              const isLadderSurvivor = isLadderSurvivorRow(
-                entry.gridParams,
-                args.strategyType,
-              );
-              const entryKey = `${resolveFuturesMarketExchange(entryExchange, true)}:${entry.symbol}:${args.timeframe}`;
-              const allocatedCapital = isLadderSurvivor
-                ? ladderAllocationFor(entry.symbol, entryExchange)
-                : undefined;
-              const result = isLadderSurvivor
-                ? yield* runLadderIteration(
-                    makeLadderOptions(
-                      entry.symbol,
-                      entryExchange,
-                      entry.gridParams,
-                      allocatedCapital,
-                      ladderRebalanceCapFor(entryKey),
-                    ),
-                  )
-                : args.strategyType === "grid"
-                  ? yield* runGridIteration(
-                      makeGridOptions(
-                        entry.symbol,
-                        entryExchange,
-                        entry.gridParams,
-                      ),
-                    )
-                  : args.futures
-                    ? yield* runFuturesIteration(
-                        makeFuturesOptions(entry.symbol, entryExchange, {
-                          minConfidence: entry.bestParams?.minConfidence,
-                          atrStopMultiplier:
-                            entry.bestParams?.atrStopMultiplier,
-                          atrTakeProfitMultiplier:
-                            entry.bestParams?.atrTakeProfitMultiplier,
-                        }),
-                      )
-                    : yield* runSpotIteration(
-                        makeSpotOptions(entry.symbol, entryExchange, {
-                          minConfidence: entry.bestParams?.minConfidence,
-                          atrStopMultiplier:
-                            entry.bestParams?.atrStopMultiplier,
-                          atrTakeProfitMultiplier:
-                            entry.bestParams?.atrTakeProfitMultiplier,
-                        }),
-                      );
-              yield* Console.log(
-                `[${new Date().toISOString()}] ${entryExchange}:${entry.symbol} ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}` : ""} | ${result.note}`,
-              );
-              if (
-                isLadderSurvivor &&
-                ladderPortfolioId !== undefined &&
-                allocatedCapital !== undefined &&
-                paperRepo.saveLadderPortfolioMember !== undefined
-              ) {
-                const ladderResult = result as LadderPaperIterationResult;
-                ladderLiveCapital.set(entryKey, ladderResult.capital);
-                const member: LadderPaperPortfolioMember = {
-                  portfolioId: ladderPortfolioId,
-                  exchange: resolveFuturesMarketExchange(entryExchange, true),
-                  symbol: entry.symbol,
-                  timeframe: args.timeframe,
-                  allocatedCapital,
-                  capital: money(ladderResult.capital),
-                  equity: money(ladderResult.equity ?? ladderResult.capital),
-                  unrealizedPnl: money(ladderResult.unrealizedPnl ?? 0),
-                  active: true,
-                  updatedAt: new Date(),
-                };
-                yield* paperRepo.saveLadderPortfolioMember(member);
-              }
-              if (remaining > 0 && args.iterations !== 0) {
-                remaining -= 1;
-              }
-              return { entry, entryExchange, result, isLadderSurvivor };
-            }),
+        const results = yield* Effect.forEach(
+          activeEntries,
+          (entry) => runWatchlistEntry(entry, cohortSymbols),
           { concurrency: 16 },
         );
-        if (
-          ladderPortfolioId !== undefined &&
-          paperRepo.listLadderPortfolioMembers !== undefined &&
-          paperRepo.saveLadderPortfolioSummary !== undefined
-        ) {
-          const members =
-            yield* paperRepo.listLadderPortfolioMembers(ladderPortfolioId);
-          const previous =
-            paperRepo.getLadderPortfolioSummary !== undefined
-              ? yield* paperRepo.getLadderPortfolioSummary(ladderPortfolioId)
-              : null;
-          const summary = summarizeLadderPortfolio(
-            ladderPortfolioId,
-            resolvedExchange,
-            args.timeframe,
-            money(args.capital),
-            members,
-            previous?.peakEquity,
-          );
-          yield* paperRepo.saveLadderPortfolioSummary(summary);
-          yield* Console.log(
-            `[${new Date().toISOString()}] PORTFOLIO ${ladderPortfolioId} | capital=${summary.capital.toFixed(2)} | equity=${summary.equity.toFixed(2)} | uPnL=${summary.unrealizedPnl.toFixed(4)} | symbols=${summary.activeSymbols} | evaluated=${sweepResults.length}`,
-          );
-        }
-        // Cadence between sweep rounds: bounded by interval, so parallel
-        // evaluation never spams the exchanges.
+        yield* saveLadderPortfolioSummary(results.length);
         if (args.iterations === 0 || remaining !== 0) {
           yield* Effect.sleep(`${args.interval} seconds`);
         }
-      } else {
-        const result =
-          args.strategyType === "grid"
-            ? yield* runGridIteration(
-                makeGridOptions(args.symbol, args.exchange),
+      });
+
+    const runSingleSymbolIteration = (): Effect.Effect<void, never, never> =>
+      Effect.gen(function* () {
+        const result = yield* args.strategyType === "grid"
+          ? runGridIteration(makeGridOptions(args.symbol, args.exchange))
+          : args.futures
+            ? runFuturesIteration(
+                makeFuturesOptions(args.symbol, args.exchange),
               )
-            : args.futures
-              ? yield* runFuturesIteration(
-                  makeFuturesOptions(args.symbol, args.exchange),
-                )
-              : yield* runSpotIteration(
-                  makeSpotOptions(args.symbol, args.exchange),
-                );
-        yield* Console.log(
-          `[${new Date().toISOString()}] ${result.action.toUpperCase()} | capital=${result.capital.toFixed(2)}${"openRungs" in result && "closedThisIteration" in result ? ` | open=${result.openRungs} | closed=${result.closedThisIteration}${"equity" in result && "unrealizedPnl" in result ? ` | equity=${Number(result.equity).toFixed(2)} | uPnL=${Number(result.unrealizedPnl).toFixed(4)}` : ""}` : ""} | ${result.note}`,
-        );
-
-        if (remaining > 0) {
-          remaining -= 1;
-        }
-
-        // Sleep between iterations: always in infinite mode (0), otherwise
-        // after every iteration except the final one.
+            : runSpotIteration(makeSpotOptions(args.symbol, args.exchange));
+        yield* Console.log(formatPaperIterationLog("", result));
+        if (remaining > 0) remaining -= 1;
         if (args.iterations === 0 || remaining !== 0) {
           yield* Effect.sleep(`${args.interval} seconds`);
         }
+      });
+
+    const printRecentClosedTrades = (): Effect.Effect<
+      void,
+      PaperTradingRepositoryError,
+      never
+    > =>
+      Effect.gen(function* () {
+        const closedTrades = yield* paperRepo.listRecentTrades(5);
+        if (closedTrades.length === 0) return;
+        yield* Console.log("\nRecent closed trades:");
+        for (const trade of closedTrades) {
+          yield* Console.log(
+            `  ${trade.side} ${trade.entryPrice.toFixed(2)} → ${trade.exitPrice.toFixed(2)} | PnL ${trade.pnlPct.toFixed(2)}% | ${trade.exitReason}`,
+          );
+        }
+      });
+
+    // iterations=0 means run forever.
+    while (args.iterations === 0 || remaining !== 0) {
+      if (activeEntries) {
+        yield* runWatchlistSweep();
+      } else {
+        yield* runSingleSymbolIteration();
       }
     }
 
-    const closedTrades = yield* paperRepo.listRecentTrades(5);
-    if (closedTrades.length > 0) {
-      yield* Console.log("\nRecent closed trades:");
-      for (const t of closedTrades) {
-        yield* Console.log(
-          `  ${t.side} ${t.entryPrice.toFixed(2)} → ${t.exitPrice.toFixed(2)} | PnL ${t.pnlPct.toFixed(2)}% | ${t.exitReason}`,
-        );
-      }
-    }
+    yield* printRecentClosedTrades();
   });
 }
 
@@ -4258,77 +4618,75 @@ export const soakCommand = Command.make(
           ? yield* fetchBitgetContracts(productTypeParsed)
           : undefined;
 
-      const runner = (
+      const runSoakFuturesIteration = (
+        symbol: string,
+        exchange: string,
+        entry: SoakSymbol | undefined,
+        bestParams?: SoakSymbol["bestParams"],
+      ): Effect.Effect<IterationResult, unknown, never> => {
+        const opts: MutableFuturesPaperTradingOptions = {
+          exchange,
+          symbol,
+          timeframe: mergedArgs.timeframe,
+          composerConfig,
+          positionSizePct: mergedArgs.positionSize,
+          riskPerTradePct: mergedArgs.riskPerTrade,
+          maxPositionSizePct: mergedArgs.maxPositionSize,
+          feePct: mergedArgs.fee,
+          minConfidence: bestParams?.minConfidence ?? mergedArgs.minConfidence,
+          useAtrStops:
+            bestParams?.atrStopMultiplier !== undefined
+              ? true
+              : mergedArgs.useAtrStops,
+          atrStopMultiplier:
+            bestParams?.atrStopMultiplier ?? mergedArgs.atrStopMultiplier,
+          atrTakeProfitMultiplier:
+            bestParams?.atrTakeProfitMultiplier ??
+            mergedArgs.atrTakeProfitMultiplier,
+          atrRiskReward: mergedArgs.atrRiskReward,
+          scaleOutAtR: mergedArgs.scaleOutAtR,
+          scaleOutPct: mergedArgs.scaleOutPct,
+          volatilityLookback: mergedArgs.volatilityLookback,
+          volatilityLowPct: mergedArgs.volatilityLowPct,
+          volatilityHighPct: mergedArgs.volatilityHighPct,
+          volatilityLowFactor: mergedArgs.volatilityLowFactor,
+          volatilityHighFactor: mergedArgs.volatilityHighFactor,
+          stopLossPct: mergedArgs.stopLoss,
+          takeProfitPct: mergedArgs.takeProfit,
+          holdUntilStop: mergedArgs.holdUntilStop,
+          minAtrPct: mergedArgs.minAtrPct,
+          initialCapital: mergedArgs.capital,
+          isLive: mergedArgs.live,
+          leverage: entry?.leverage ?? mergedArgs.leverage,
+          marginMode: entry?.marginMode ?? marginModeParsed,
+          productType: entry?.productType ?? productTypeParsed,
+          volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
+        };
+        if (contracts !== undefined) {
+          opts.contractSpecs = bitgetContractSpecs(
+            contracts,
+            symbol,
+            entry?.productType ?? productTypeParsed,
+          );
+        }
+        return runFuturesPaperTradingIteration(
+          opts as FuturesPaperTradingOptions,
+        ).pipe(
+          Effect.provide(futuresAdapterLayer),
+          Effect.provide(layers),
+          Effect.map((r): IterationResult => ({
+            action: r.action,
+            capital: r.capital,
+            note: r.note,
+          })),
+        ) as Effect.Effect<IterationResult, unknown, never>;
+      };
+
+      const runSoakSpotIteration = (
         symbol: string,
         exchange: string,
         bestParams?: SoakSymbol["bestParams"],
       ): Effect.Effect<IterationResult, unknown, never> => {
-        const entry = soakWatchlist.find((e) => e.symbol === symbol);
-        const useFutures =
-          entry?.productType !== undefined || mergedArgs.futures;
-        const futuresExchange =
-          useFutures && exchange === "binance" ? "bitget-futures" : exchange;
-
-        if (useFutures) {
-          const opts: MutableFuturesPaperTradingOptions = {
-            exchange: futuresExchange,
-            symbol,
-            timeframe: mergedArgs.timeframe,
-            composerConfig,
-            positionSizePct: mergedArgs.positionSize,
-            riskPerTradePct: mergedArgs.riskPerTrade,
-            maxPositionSizePct: mergedArgs.maxPositionSize,
-            feePct: mergedArgs.fee,
-            minConfidence:
-              bestParams?.minConfidence ?? mergedArgs.minConfidence,
-            useAtrStops:
-              bestParams?.atrStopMultiplier !== undefined
-                ? true
-                : mergedArgs.useAtrStops,
-            atrStopMultiplier:
-              bestParams?.atrStopMultiplier ?? mergedArgs.atrStopMultiplier,
-            atrTakeProfitMultiplier:
-              bestParams?.atrTakeProfitMultiplier ??
-              mergedArgs.atrTakeProfitMultiplier,
-            atrRiskReward: mergedArgs.atrRiskReward,
-            scaleOutAtR: mergedArgs.scaleOutAtR,
-            scaleOutPct: mergedArgs.scaleOutPct,
-            volatilityLookback: mergedArgs.volatilityLookback,
-            volatilityLowPct: mergedArgs.volatilityLowPct,
-            volatilityHighPct: mergedArgs.volatilityHighPct,
-            volatilityLowFactor: mergedArgs.volatilityLowFactor,
-            volatilityHighFactor: mergedArgs.volatilityHighFactor,
-            stopLossPct: mergedArgs.stopLoss,
-            takeProfitPct: mergedArgs.takeProfit,
-            holdUntilStop: mergedArgs.holdUntilStop,
-            minAtrPct: mergedArgs.minAtrPct,
-            initialCapital: mergedArgs.capital,
-            isLive: mergedArgs.live,
-            leverage: entry?.leverage ?? mergedArgs.leverage,
-            marginMode: entry?.marginMode ?? marginModeParsed,
-            productType: entry?.productType ?? productTypeParsed,
-            volatilityTargetAnnualPct: mergedArgs.volatilityTargetAnnualPct,
-          };
-          if (contracts !== undefined) {
-            opts.contractSpecs = bitgetContractSpecs(
-              contracts,
-              symbol,
-              entry?.productType ?? productTypeParsed,
-            );
-          }
-          return runFuturesPaperTradingIteration(
-            opts as FuturesPaperTradingOptions,
-          ).pipe(
-            Effect.provide(futuresAdapterLayer),
-            Effect.provide(layers),
-            Effect.map((r): IterationResult => ({
-              action: r.action,
-              capital: r.capital,
-              note: r.note,
-            })),
-          ) as Effect.Effect<IterationResult, unknown, never>;
-        }
-
         const opts: PaperTradingOptions = {
           exchange,
           symbol,
@@ -4373,6 +4731,21 @@ export const soakCommand = Command.make(
             note: r.note,
           })),
         ) as Effect.Effect<IterationResult, unknown, never>;
+      };
+
+      const runner = (
+        symbol: string,
+        exchange: string,
+        bestParams?: SoakSymbol["bestParams"],
+      ): Effect.Effect<IterationResult, unknown, never> => {
+        const entry = soakWatchlist.find((item) => item.symbol === symbol);
+        const useFutures =
+          entry?.productType !== undefined || mergedArgs.futures;
+        const futuresExchange =
+          useFutures && exchange === "binance" ? "bitget-futures" : exchange;
+        return useFutures
+          ? runSoakFuturesIteration(symbol, futuresExchange, entry, bestParams)
+          : runSoakSpotIteration(symbol, exchange, bestParams);
       };
 
       const soakOptions: SoakOptions = {
@@ -5874,6 +6247,63 @@ export const gridUniverseScanCommand = Command.make(
           }
         });
 
+      const filterTradeableSurvivors = (
+        survivors: readonly GridUniverseEntry[],
+      ) =>
+        Effect.gen(function* () {
+          if (survivors.length === 0) return [...survivors];
+          if (args.exchange.toLowerCase() !== "bitget-futures") {
+            yield* Console.log(
+              `🎯 Probe skipped: ${args.exchange} universe is sourced from its demo/tradeable instrument list`,
+            );
+            return [...survivors];
+          }
+
+          const client = yield* BitgetClient;
+          const tradeable: GridUniverseEntry[] = [];
+          for (const entry of survivors) {
+            const probe = yield* client
+              .getLeverage({
+                symbol: entry.symbol,
+                productType: "USDT-FUTURES",
+              })
+              .pipe(Effect.result);
+            if (probe._tag === "Success") {
+              tradeable.push(entry);
+            } else if (
+              probe.failure instanceof BitgetApiError &&
+              (isBitgetUnsupportedInstrumentError(probe.failure) ||
+                probeNamesProbedSymbol(
+                  probe.failure,
+                  entry.symbol,
+                  "USDT-FUTURES",
+                ))
+            ) {
+              const dropEvidence = `Bitget ${probe.failure.code ?? "?"}: ${probe.failure.body.slice(0, 140)}`;
+              yield* Console.log(
+                `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo (${dropEvidence})`,
+              );
+            } else {
+              const reason =
+                probe.failure instanceof BitgetApiError
+                  ? `BitgetApiError code=${probe.failure.code ?? "-"}: ${probe.failure.body.slice(0, 140)}`
+                  : probe.failure instanceof Error
+                    ? probe.failure.message
+                    : String(probe.failure);
+              yield* Console.log(
+                `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
+              );
+              tradeable.push(entry);
+            }
+          }
+          if (tradeable.length < survivors.length) {
+            yield* Console.log(
+              `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
+            );
+          }
+          return tradeable;
+        });
+
       const runScan = () =>
         Effect.gen(function* () {
           const gateway = yield* MarketDataGateway;
@@ -5914,80 +6344,13 @@ export const gridUniverseScanCommand = Command.make(
                 Effect.provide(repoLayer),
               );
 
-          let survivors =
+          const symbolFilteredSurvivors =
             rawResult.survivors.length > 0 && futuresSet.size > 0
               ? rawResult.survivors.filter((e) => isFuturesSymbol(e.symbol))
               : rawResult.survivors;
-
-          if (survivors.length > 0) {
-            // Tradeability probe: Bitget's demo is a SUBSET of the live
-            // contract list, so survivors must be probed against the demo
-            // account. Bybit testnet has no subset — the scan's universe
-            // already came from the testnet instrument list, so the probe
-            // is redundant (skipped, not silently dropped).
-            if (args.exchange.toLowerCase() !== "bitget-futures") {
-              yield* Console.log(
-                `🎯 Probe skipped: ${args.exchange} universe is sourced from its demo/tradeable instrument list`,
-              );
-            } else {
-              const client = yield* BitgetClient;
-              const tradeable: GridUniverseEntry[] = [];
-              for (const entry of survivors) {
-                const probe = yield* client
-                  .getLeverage({
-                    symbol: entry.symbol,
-                    productType: "USDT-FUTURES",
-                  })
-                  .pipe(Effect.result);
-                if (probe._tag === "Success") {
-                  tradeable.push(entry);
-                } else if (
-                  probe._tag === "Failure" &&
-                  probe.failure instanceof BitgetApiError &&
-                  (isBitgetUnsupportedInstrumentError(probe.failure) ||
-                    probeNamesProbedSymbol(
-                      probe.failure,
-                      entry.symbol,
-                      "USDT-FUTURES",
-                    ))
-                ) {
-                  // Only a probe error that proves the instrument is unsupported
-                  // (40034 with a missing-symbol/contract message) drops the
-                  // survivor; auth, rate-limit, transport, and other parameter
-                  // defects must NOT drop survivors. Log the exact API evidence
-                  // so a drop is auditable (verified 2026-08-09: the demo
-                  // returns 40034 "Parameter CYSUSDT does not exist" for
-                  // contracts its subset does not list).
-                  const dropEvidence =
-                    probe.failure instanceof BitgetApiError
-                      ? `Bitget ${probe.failure.code ?? "?"}: ${probe.failure.body.slice(0, 140)}`
-                      : "demo subset does not list this contract";
-                  yield* Console.log(
-                    `🎯 Dropped ${entry.symbol}: not tradeable on ${args.exchange} demo (${dropEvidence})`,
-                  );
-                } else {
-                  const reason =
-                    probe._tag === "Failure"
-                      ? probe.failure instanceof BitgetApiError
-                        ? `BitgetApiError code=${probe.failure.code ?? "-"}: ${probe.failure.body.slice(0, 140)}`
-                        : probe.failure instanceof Error
-                          ? probe.failure.message
-                          : String(probe.failure)
-                      : "unknown";
-                  yield* Console.log(
-                    `⚠️ Keep ${entry.symbol}: probe failed transiently (${reason})`,
-                  );
-                  tradeable.push(entry);
-                }
-              }
-              if (tradeable.length < survivors.length) {
-                yield* Console.log(
-                  `🎯 Filtered ${survivors.length - tradeable.length} survivors not tradeable in demo`,
-                );
-              }
-              survivors = tradeable;
-            }
-          }
+          const survivors = yield* filterTradeableSurvivors(
+            symbolFilteredSurvivors,
+          );
           const result = {
             entries: rawResult.entries,
             survivors,
@@ -6775,9 +7138,13 @@ function flowTradeProgram(args: FlowTradeArgs) {
   });
 }
 
+const timesFmForecastCommand = makeTimesFmForecastCommand(
+  makeDbLayer(process.env.NEURATRADE_HOME),
+);
+
 export const scalpCommand = Command.make("scalp", {}, () =>
   Console.log(
-    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|bybit-snapshot|parity-replay|flow-backtest|flow-universe|flow-record|flow-trade --help' for details.",
+    "Scalping commands. Use 'scalp backtest|optimize|scan|paper-trade|soak|profile|readiness|demo-readiness|bybit-snapshot|timesfm-forecast|parity-replay|flow-backtest|flow-universe|flow-record|flow-trade --help' for details.",
   ),
 ).pipe(
   Command.withDescription("Deterministic scalping operations"),
@@ -6793,6 +7160,7 @@ export const scalpCommand = Command.make("scalp", {}, () =>
     readinessCommand,
     demoReadinessCommand,
     bybitSnapshotCommand,
+    timesFmForecastCommand,
     parityReplayCommand,
     gridUniverseScanCommand,
     watchlistCommand,

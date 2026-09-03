@@ -41,7 +41,6 @@ import { runLadderGridBacktest } from "../src/scalping/ladder-grid.ts";
 import { runGridBacktest } from "../src/scalping/grid.ts";
 import { runBacktest } from "../src/scalping/backtest.ts";
 import { defaultComposerConfig } from "../src/scalping/composer.js";
-import type { CandleLike } from "../src/scalping/types.js";
 import type { Candle } from "../src/market-data/types.js";
 
 const HOME = process.env.NEURATRADE_HOME ?? `${process.env.HOME}/.neuratrade`;
@@ -192,7 +191,7 @@ function runEngine(
       symbol,
       exchange: "bybit-futures",
       timeframe: "15m",
-      candles: slice as unknown as import("../src/scalping/types.js").CandleLike[],
+      candles: slice,
       composerConfig: defaultComposerConfig,
       initialCapital: 10_000,
       positionSizePct: 50,

@@ -439,6 +439,243 @@ function isBefore(left: string, right: string): boolean {
   );
 }
 
+function prospectiveGateReasons(
+  evidence: ProspectiveEvidence,
+  thresholds: ReadinessThresholds,
+): string[] {
+  return [
+    ...(!Number.isFinite(evidence.completeTradeCount)
+      ? ["demo trade count is malformed"]
+      : []),
+    ...(!Number.isFinite(evidence.durationDays)
+      ? ["demo duration is malformed"]
+      : []),
+    ...(evidence.completeTradeCount < thresholds.minimumDemoTrades
+      ? ["demo trade count is below the minimum"]
+      : []),
+    ...(evidence.durationDays < thresholds.minimumDemoDurationDays
+      ? ["demo duration is below the minimum"]
+      : []),
+    ...(decimalValue(evidence.expectancyPct) === null
+      ? ["demo expectancy is malformed"]
+      : []),
+    ...(below(evidence.expectancyPct, thresholds.minimumDemoExpectancyPct)
+      ? ["demo expectancy is below the minimum"]
+      : []),
+    ...(decimalValue(evidence.confidenceLowerBoundPct) === null
+      ? ["demo confidence lower bound is malformed"]
+      : []),
+    ...(below(
+      evidence.confidenceLowerBoundPct,
+      thresholds.minimumDemoConfidenceLowerBoundPct,
+    )
+      ? ["demo confidence lower bound is below the minimum"]
+      : []),
+    ...(decimalValue(evidence.maximumDrawdownPct) === null
+      ? ["demo drawdown is malformed"]
+      : []),
+    ...(above(evidence.maximumDrawdownPct, thresholds.maximumDemoDrawdownPct)
+      ? ["demo drawdown is above the maximum"]
+      : []),
+    ...(!evidence.allTradesHaveLiveFillEvidence
+      ? ["one or more demo trades lack complete live fill evidence"]
+      : []),
+  ];
+}
+
+function historicalGateReasons(
+  evidence: HistoricalRobustnessEvidence,
+  thresholds: ReadinessThresholds,
+): string[] {
+  return [
+    ...(!Number.isFinite(evidence.completeWindows)
+      ? ["historical window count is malformed"]
+      : []),
+    ...(!Number.isFinite(evidence.profitableWindowPct)
+      ? ["profitable historical window percentage is malformed"]
+      : []),
+    ...(!Number.isFinite(evidence.totalTrades)
+      ? ["historical trade count is malformed"]
+      : []),
+    ...(evidence.completeWindows < thresholds.minimumHistoricalWindows
+      ? ["historical window count is below the minimum"]
+      : []),
+    ...(evidence.profitableWindowPct <= thresholds.minimumProfitableWindowPct
+      ? ["profitable historical windows do not exceed the minimum"]
+      : []),
+    ...(decimalValue(evidence.compoundedReturnPct) === null
+      ? ["historical compounded return is malformed"]
+      : []),
+    ...(below(
+      evidence.compoundedReturnPct,
+      thresholds.minimumHistoricalCompoundedReturnPct,
+    )
+      ? ["historical compounded return is negative"]
+      : []),
+    ...(decimalValue(evidence.maximumDrawdownPct) === null
+      ? ["historical drawdown is malformed"]
+      : []),
+    ...(above(
+      evidence.maximumDrawdownPct,
+      thresholds.maximumHistoricalDrawdownPct,
+    )
+      ? ["historical drawdown is above the maximum"]
+      : []),
+    ...(evidence.totalTrades < thresholds.minimumFixedOosTrades
+      ? ["historical trade count is below the minimum"]
+      : []),
+  ];
+}
+
+function confidenceGateReasons(
+  evidence: ConfidenceEvidence,
+  thresholds: ReadinessThresholds,
+): string[] {
+  return [
+    ...(evidence.sampleCount < thresholds.minimumFixedOosTrades
+      ? ["confidence sample count is below the minimum"]
+      : []),
+    ...(evidence.resamples !== thresholds.confidenceResamples
+      ? ["confidence resample count does not match the protocol"]
+      : []),
+    ...(evidence.blockLength !== thresholds.confidenceBlockLength
+      ? ["confidence block length does not match the protocol"]
+      : []),
+    ...(evidence.seed === 0 ? ["confidence seed must be non-zero"] : []),
+    ...(decimalValue(evidence.lowerBoundPct) === null
+      ? ["confidence lower bound is malformed"]
+      : []),
+    ...(below(evidence.lowerBoundPct, thresholds.minimumConfidenceLowerBoundPct)
+      ? ["confidence lower bound is below the minimum"]
+      : []),
+    ...(decimalValue(evidence.upperBoundPct) === null
+      ? ["confidence upper bound is malformed"]
+      : []),
+    ...(above(evidence.lowerBoundPct, evidence.upperBoundPct)
+      ? ["confidence interval is inverted"]
+      : []),
+  ];
+}
+
+function stressGateReasons(
+  evidence: StressEvidence,
+  thresholds: ReadinessThresholds,
+): string[] {
+  return [
+    ...(![20260802, 20260803, 20260804, 20260805, 20260806].every((seed) =>
+      evidence.seeds.includes(seed),
+    )
+      ? ["adverse stress seed set is incomplete"]
+      : []),
+    ...(decimalValue(evidence.returnPct) === null
+      ? ["adverse stress return is malformed"]
+      : []),
+    ...(below(evidence.returnPct, thresholds.minimumStressReturnPct)
+      ? ["adverse stress return is negative"]
+      : []),
+    ...(decimalValue(evidence.lowerBoundPct) === null
+      ? ["adverse stress confidence lower bound is malformed"]
+      : []),
+    ...(below(evidence.lowerBoundPct, thresholds.minimumStressLowerBoundPct)
+      ? ["adverse stress confidence lower bound is below the minimum"]
+      : []),
+  ];
+}
+
+function provenanceGateReasons(
+  evidence: ProvenanceEvidence,
+  evaluatedAt: string,
+): string[] {
+  const reasons = [
+    ...(!evidence.valid ? ["provenance validation failed"] : []),
+    ...(evidence.fingerprint !== evidence.expectedFingerprint
+      ? ["candidate fingerprint mismatch"]
+      : []),
+    ...(evidence.cohortId.length === 0 ? ["cohort ID is missing"] : []),
+    ...(evidence.queriedRows !== evidence.expectedRows
+      ? ["cohort query was truncated"]
+      : []),
+    ...([
+      evidence.candidateLock,
+      evidence.datasetCutoff,
+      evidence.earliestEntry,
+      evidence.latestClose,
+    ].some((value) => dateMillis(value) === null)
+      ? ["provenance timestamp is malformed"]
+      : []),
+    ...(isAfter(evidence.candidateLock, evidence.datasetCutoff)
+      ? ["candidate lock is after dataset cutoff"]
+      : []),
+    ...(isBefore(evidence.earliestEntry, evidence.candidateLock)
+      ? ["entry predates candidate lock"]
+      : []),
+    ...(isAfter(evidence.datasetCutoff, evidence.earliestEntry)
+      ? ["entry predates dataset cutoff"]
+      : []),
+    ...(isAfter(evidence.earliestEntry, evidence.latestClose)
+      ? ["entry is after close"]
+      : []),
+  ];
+  if (
+    dateMillis(evaluatedAt) !== null &&
+    isAfter(evidence.latestClose, evaluatedAt)
+  ) {
+    reasons.push("close is after evaluation time");
+  }
+  return reasons;
+}
+
+function dataQualityGateReasons(
+  evidence: DataQualityEvidence,
+  thresholds: ReadinessThresholds,
+): string[] {
+  return [
+    ...(!Number.isFinite(evidence.candleCount)
+      ? ["candle count is malformed"]
+      : []),
+    ...(!Number.isFinite(evidence.completeWindows)
+      ? ["complete window count is malformed"]
+      : []),
+    ...(!evidence.valid ? ["candle data-quality validation failed"] : []),
+    ...(evidence.candleCount === 0 ? ["candle evidence is empty"] : []),
+    ...(evidence.completeWindows < thresholds.minimumHistoricalWindows
+      ? ["candle evidence has insufficient complete windows"]
+      : []),
+  ];
+}
+
+function freshnessGateReasons(
+  evaluatedAt: string,
+  latestCandle: string,
+  ageHours: number,
+  threshold: number,
+): string[] {
+  return [
+    ...(dateMillis(evaluatedAt) === null || dateMillis(latestCandle) === null
+      ? ["freshness timestamp is malformed"]
+      : []),
+    ...(ageHours < 0 ? ["latest candle is in the future"] : []),
+    ...(ageHours > threshold ? ["latest candle is stale"] : []),
+  ];
+}
+
+function parityGateReasons(evidence: ExecutionParityEvidence): string[] {
+  return [
+    ...(!evidence.passed
+      ? ["deployed execution semantics do not match the validated replay"]
+      : []),
+    ...(evidence.protocolVersion !== "execution-parity/v1"
+      ? ["execution parity protocol version is unsupported"]
+      : []),
+    ...EXECUTION_PARITY_CHECK_NAMES.filter(
+      (name) => !evidence.checks.some((check) => check.name === name),
+    ).map((name) => `execution parity check is missing: ${name}`),
+    ...evidence.checks
+      .filter((check) => !check.passed)
+      .map((check) => `execution parity check failed: ${check.name}`),
+  ];
+}
+
 export function evaluateRealMoneyReadiness(
   input: RealMoneyReadinessInput,
 ): RealMoneyReadinessReport {
@@ -491,191 +728,22 @@ export function evaluateRealMoneyReadiness(
       ? (evaluatedAt - latestCandle) / (60 * 60 * 1000)
       : Number.POSITIVE_INFINITY;
 
-  const prospectiveReasons = [
-    ...(!Number.isFinite(p.completeTradeCount)
-      ? ["demo trade count is malformed"]
-      : []),
-    ...(!Number.isFinite(p.durationDays) ? ["demo duration is malformed"] : []),
-    ...(p.completeTradeCount < thresholds.minimumDemoTrades
-      ? ["demo trade count is below the minimum"]
-      : []),
-    ...(p.durationDays < thresholds.minimumDemoDurationDays
-      ? ["demo duration is below the minimum"]
-      : []),
-    ...(decimalValue(p.expectancyPct) === null
-      ? ["demo expectancy is malformed"]
-      : []),
-    ...(below(p.expectancyPct, thresholds.minimumDemoExpectancyPct)
-      ? ["demo expectancy is below the minimum"]
-      : []),
-    ...(decimalValue(p.confidenceLowerBoundPct) === null
-      ? ["demo confidence lower bound is malformed"]
-      : []),
-    ...(below(
-      p.confidenceLowerBoundPct,
-      thresholds.minimumDemoConfidenceLowerBoundPct,
-    )
-      ? ["demo confidence lower bound is below the minimum"]
-      : []),
-    ...(decimalValue(p.maximumDrawdownPct) === null
-      ? ["demo drawdown is malformed"]
-      : []),
-    ...(above(p.maximumDrawdownPct, thresholds.maximumDemoDrawdownPct)
-      ? ["demo drawdown is above the maximum"]
-      : []),
-    ...(!p.allTradesHaveLiveFillEvidence
-      ? ["one or more demo trades lack complete live fill evidence"]
-      : []),
-  ];
-  const historicalReasons = [
-    ...(!Number.isFinite(h.completeWindows)
-      ? ["historical window count is malformed"]
-      : []),
-    ...(!Number.isFinite(h.profitableWindowPct)
-      ? ["profitable historical window percentage is malformed"]
-      : []),
-    ...(!Number.isFinite(h.totalTrades)
-      ? ["historical trade count is malformed"]
-      : []),
-    ...(h.completeWindows < thresholds.minimumHistoricalWindows
-      ? ["historical window count is below the minimum"]
-      : []),
-    ...(h.profitableWindowPct <= thresholds.minimumProfitableWindowPct
-      ? ["profitable historical windows do not exceed the minimum"]
-      : []),
-    ...(decimalValue(h.compoundedReturnPct) === null
-      ? ["historical compounded return is malformed"]
-      : []),
-    ...(below(
-      h.compoundedReturnPct,
-      thresholds.minimumHistoricalCompoundedReturnPct,
-    )
-      ? ["historical compounded return is negative"]
-      : []),
-    ...(decimalValue(h.maximumDrawdownPct) === null
-      ? ["historical drawdown is malformed"]
-      : []),
-    ...(above(h.maximumDrawdownPct, thresholds.maximumHistoricalDrawdownPct)
-      ? ["historical drawdown is above the maximum"]
-      : []),
-    ...(h.totalTrades < thresholds.minimumFixedOosTrades
-      ? ["historical trade count is below the minimum"]
-      : []),
-  ];
-  const confidenceReasons = [
-    ...(c.sampleCount < thresholds.minimumFixedOosTrades
-      ? ["confidence sample count is below the minimum"]
-      : []),
-    ...(c.resamples !== thresholds.confidenceResamples
-      ? ["confidence resample count does not match the protocol"]
-      : []),
-    ...(c.blockLength !== thresholds.confidenceBlockLength
-      ? ["confidence block length does not match the protocol"]
-      : []),
-    ...(c.seed === 0 ? ["confidence seed must be non-zero"] : []),
-    ...(decimalValue(c.lowerBoundPct) === null
-      ? ["confidence lower bound is malformed"]
-      : []),
-    ...(below(c.lowerBoundPct, thresholds.minimumConfidenceLowerBoundPct)
-      ? ["confidence lower bound is below the minimum"]
-      : []),
-    ...(decimalValue(c.upperBoundPct) === null
-      ? ["confidence upper bound is malformed"]
-      : []),
-    ...(above(c.lowerBoundPct, c.upperBoundPct)
-      ? ["confidence interval is inverted"]
-      : []),
-  ];
-  const stressReasons = [
-    ...(![20260802, 20260803, 20260804, 20260805, 20260806].every((seed) =>
-      s.seeds.includes(seed),
-    )
-      ? ["adverse stress seed set is incomplete"]
-      : []),
-    ...(decimalValue(s.returnPct) === null
-      ? ["adverse stress return is malformed"]
-      : []),
-    ...(below(s.returnPct, thresholds.minimumStressReturnPct)
-      ? ["adverse stress return is negative"]
-      : []),
-    ...(decimalValue(s.lowerBoundPct) === null
-      ? ["adverse stress confidence lower bound is malformed"]
-      : []),
-    ...(below(s.lowerBoundPct, thresholds.minimumStressLowerBoundPct)
-      ? ["adverse stress confidence lower bound is below the minimum"]
-      : []),
-  ];
-  const provenanceReasons = [
-    ...(!provenance.valid ? ["provenance validation failed"] : []),
-    ...(provenance.fingerprint !== provenance.expectedFingerprint
-      ? ["candidate fingerprint mismatch"]
-      : []),
-    ...(provenance.cohortId.length === 0 ? ["cohort ID is missing"] : []),
-    ...(provenance.queriedRows !== provenance.expectedRows
-      ? ["cohort query was truncated"]
-      : []),
-    ...([
-      provenance.candidateLock,
-      provenance.datasetCutoff,
-      provenance.earliestEntry,
-      provenance.latestClose,
-    ].some((value) => dateMillis(value) === null)
-      ? ["provenance timestamp is malformed"]
-      : []),
-    ...(isAfter(provenance.candidateLock, provenance.datasetCutoff)
-      ? ["candidate lock is after dataset cutoff"]
-      : []),
-    ...(isBefore(provenance.earliestEntry, provenance.candidateLock)
-      ? ["entry predates candidate lock"]
-      : []),
-    ...(isAfter(provenance.datasetCutoff, provenance.earliestEntry)
-      ? ["entry predates dataset cutoff"]
-      : []),
-    ...(isAfter(provenance.earliestEntry, provenance.latestClose)
-      ? ["entry is after close"]
-      : []),
-    ...(evaluatedAt !== null &&
-    isAfter(provenance.latestClose, input.evaluatedAt)
-      ? ["close is after evaluation time"]
-      : []),
-  ];
-  const dataQualityReasons = [
-    ...(!Number.isFinite(quality.candleCount)
-      ? ["candle count is malformed"]
-      : []),
-    ...(!Number.isFinite(quality.completeWindows)
-      ? ["complete window count is malformed"]
-      : []),
-    ...(!quality.valid ? ["candle data-quality validation failed"] : []),
-    ...(quality.candleCount === 0 ? ["candle evidence is empty"] : []),
-    ...(quality.completeWindows < thresholds.minimumHistoricalWindows
-      ? ["candle evidence has insufficient complete windows"]
-      : []),
-  ];
-  const freshnessReasons = [
-    ...(evaluatedAt === null || latestCandle === null
-      ? ["freshness timestamp is malformed"]
-      : []),
-    ...(ageHours < 0 ? ["latest candle is in the future"] : []),
-    ...(ageHours > thresholds.maximumFreshnessHours
-      ? ["latest candle is stale"]
-      : []),
-  ];
-  const parityReasons = [
-    ...(!input.executionParity.passed
-      ? ["deployed execution semantics do not match the validated replay"]
-      : []),
-    ...(input.executionParity.protocolVersion !== "execution-parity/v1"
-      ? ["execution parity protocol version is unsupported"]
-      : []),
-    ...EXECUTION_PARITY_CHECK_NAMES.filter(
-      (name) =>
-        !input.executionParity.checks.some((check) => check.name === name),
-    ).map((name) => `execution parity check is missing: ${name}`),
-    ...input.executionParity.checks
-      .filter((check) => !check.passed)
-      .map((check) => `execution parity check failed: ${check.name}`),
-  ];
+  const prospectiveReasons = prospectiveGateReasons(p, thresholds);
+  const historicalReasons = historicalGateReasons(h, thresholds);
+  const confidenceReasons = confidenceGateReasons(c, thresholds);
+  const stressReasons = stressGateReasons(s, thresholds);
+  const provenanceReasons = provenanceGateReasons(
+    provenance,
+    input.evaluatedAt,
+  );
+  const dataQualityReasons = dataQualityGateReasons(quality, thresholds);
+  const freshnessReasons = freshnessGateReasons(
+    input.evaluatedAt,
+    quality.latestCandle,
+    ageHours,
+    thresholds.maximumFreshnessHours,
+  );
+  const parityReasons = parityGateReasons(input.executionParity);
 
   const gates = [
     gate("prospective-evidence", prospectiveReasons),

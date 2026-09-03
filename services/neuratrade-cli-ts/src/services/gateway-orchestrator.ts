@@ -49,6 +49,11 @@ export interface StartResult {
   readonly telegramEnabled: boolean;
 }
 
+interface GatewayProbe {
+  readonly healthy: boolean;
+  readonly detail: string;
+}
+
 export interface StopResult {
   readonly stoppedCount: number;
   readonly errors: ReadonlyArray<{
@@ -168,6 +173,216 @@ export const GatewayOrchestratorLive: Layer.Layer<
     const gwState = yield* GatewayState;
     const logger = yield* Logger;
 
+    const startBackend = (input: {
+      readonly tsOnly: boolean;
+      readonly supervised: boolean;
+      readonly backendEndpoint: string;
+      readonly backendEnv: Record<string, string>;
+      readonly healthTimeoutMs: number;
+      readonly signalTimeoutMs: number;
+    }): Effect.Effect<
+      {
+        readonly backendProc?: Bun.Subprocess;
+        readonly backendProbe?: GatewayProbe;
+      },
+      GatewayOrchestratorError,
+      never
+    > =>
+      Effect.gen(function* () {
+        if (input.tsOnly) {
+          yield* logger.info("TS-only mode: skipping Go backend spawn");
+          yield* gwState.writeServiceState(
+            "backend",
+            "skipped",
+            "TS-only mode: Go backend not required",
+            input.backendEndpoint,
+          );
+          return {};
+        }
+
+        const backendBinary = yield* pm
+          .resolveServiceBinary("neuratrade-server")
+          .pipe(
+            Effect.mapError(
+              (err) =>
+                new GatewayOrchestratorError({
+                  message: `Failed to resolve backend binary: ${err.message}`,
+                  cause: err,
+                }),
+            ),
+          );
+        const backendProc = yield* pm
+          .startService(
+            backendBinary,
+            "Backend API",
+            nodePath.join(path.logDir, "backend.log"),
+            input.backendEnv,
+            "backend",
+          )
+          .pipe(
+            Effect.mapError(
+              (err) =>
+                new GatewayOrchestratorError({
+                  message: `Failed to start backend: ${err.message}`,
+                  cause: err,
+                }),
+            ),
+          );
+        const backendProbe = yield* hc.waitForHealthy(
+          input.backendEndpoint,
+          input.healthTimeoutMs,
+        );
+        if (backendProbe.healthy) {
+          yield* gwState.writeServiceState(
+            "backend",
+            "healthy",
+            backendProbe.detail,
+            input.backendEndpoint,
+          );
+        } else if (input.supervised) {
+          yield* gwState.writeServiceState(
+            "backend",
+            "warming",
+            backendProbe.detail,
+            input.backendEndpoint,
+          );
+          yield* gwState.writeMode("warming", "backend warming up");
+        } else {
+          yield* pm.signalAndWait(
+            backendProc,
+            "SIGTERM",
+            input.signalTimeoutMs,
+          );
+          yield* gwState.writeServiceState(
+            "backend",
+            "down",
+            backendProbe.detail,
+            input.backendEndpoint,
+          );
+          yield* gwState.markStopped("backend health check failed");
+          return yield* Effect.fail(
+            new GatewayOrchestratorError({
+              message: backendProbe.detail,
+            }),
+          );
+        }
+        return { backendProc, backendProbe };
+      });
+
+    const startTelegram = (input: {
+      readonly enabled: boolean;
+      readonly supervised: boolean;
+      readonly token: string;
+      readonly bindHost: string;
+      readonly backendPort: string;
+      readonly telegramPort: string;
+      readonly telegramEndpoint: string;
+      readonly adminAPIKey: string;
+      readonly usePolling: boolean;
+      readonly backendProc?: Bun.Subprocess;
+      readonly healthTimeoutMs: number;
+      readonly signalTimeoutMs: number;
+    }): Effect.Effect<
+      { readonly telegramPid?: number; readonly telegramProbe?: GatewayProbe },
+      GatewayOrchestratorError,
+      never
+    > =>
+      Effect.gen(function* () {
+        if (!input.enabled) {
+          yield* gwState.writeServiceState(
+            "telegram",
+            "disabled",
+            "Telegram disabled for paper-only runtime",
+          );
+          return {};
+        }
+
+        yield* logger.info("Starting Telegram Service");
+        const telegramBinary = yield* pm
+          .resolveServiceBinary("telegram-service")
+          .pipe(
+            Effect.mapError(
+              (err) =>
+                new GatewayOrchestratorError({
+                  message: `Failed to resolve telegram binary: ${err.message}`,
+                  cause: err,
+                }),
+            ),
+          );
+        const telegramProc = yield* pm
+          .startService(
+            telegramBinary,
+            "Telegram Service",
+            nodePath.join(path.logDir, "telegram.log"),
+            {
+              PORT: input.telegramPort,
+              BIND_HOST: input.bindHost,
+              TELEGRAM_BOT_TOKEN: input.token,
+              TELEGRAM_USE_POLLING: String(input.usePolling),
+              TELEGRAM_API_BASE_URL: `http://${input.bindHost}:${input.backendPort}`,
+              BACKEND_HOST_PORT: input.backendPort,
+              NODE_ENV: "production",
+              ADMIN_API_KEY: input.adminAPIKey,
+            },
+            "telegram",
+          )
+          .pipe(
+            Effect.mapError(
+              (err) =>
+                new GatewayOrchestratorError({
+                  message: `Failed to start telegram: ${err.message}`,
+                  cause: err,
+                }),
+            ),
+          );
+        const telegramProbe = yield* hc.waitForHealthy(
+          input.telegramEndpoint,
+          input.healthTimeoutMs,
+        );
+        if (telegramProbe.healthy) {
+          yield* gwState.writeServiceState(
+            "telegram",
+            "healthy",
+            telegramProbe.detail,
+            input.telegramEndpoint,
+          );
+        } else if (input.supervised) {
+          yield* gwState.writeServiceState(
+            "telegram",
+            "warming",
+            telegramProbe.detail,
+            input.telegramEndpoint,
+          );
+          yield* gwState.writeMode("warming", "telegram warming up");
+        } else {
+          yield* pm.signalAndWait(
+            telegramProc,
+            "SIGTERM",
+            input.signalTimeoutMs,
+          );
+          if (input.backendProc !== undefined) {
+            yield* pm.signalAndWait(
+              input.backendProc,
+              "SIGTERM",
+              input.signalTimeoutMs,
+            );
+          }
+          yield* gwState.writeServiceState(
+            "telegram",
+            "down",
+            telegramProbe.detail,
+            input.telegramEndpoint,
+          );
+          yield* gwState.markStopped("telegram health check failed");
+          return yield* Effect.fail(
+            new GatewayOrchestratorError({
+              message: telegramProbe.detail,
+            }),
+          );
+        }
+        return { telegramPid: telegramProc.pid, telegramProbe };
+      });
+
     // ---- start ----
     const start = (
       options: GatewayStartOptions,
@@ -268,186 +483,32 @@ export const GatewayOrchestratorLive: Layer.Layer<
           },
         });
 
-        // Start Backend API
-        //
-        // TS-only mode (NEURATRADE_TS_ONLY=true): the trading path runs on the
-        // TypeScript Bitget adapter, so the Go backend binary is optional. Skip
-        // spawning neuratrade-server and mark the backend service skipped. This
-        // decouples the gateway process manager from the Go binary for TS-only
-        // deployments.
-        const tsOnly = isTSOnlyMode();
-        let backendProc: Bun.Subprocess | undefined;
-        let backendProbe: { healthy: boolean; detail: string } | undefined;
-        if (tsOnly) {
-          yield* logger.info("TS-only mode: skipping Go backend spawn");
-          yield* gwState.writeServiceState(
-            "backend",
-            "skipped",
-            "TS-only mode: Go backend not required",
-            backendEndpoint,
-          );
-        } else {
-          const backendBinary = yield* pm
-            .resolveServiceBinary("neuratrade-server")
-            .pipe(
-              Effect.mapError(
-                (err) =>
-                  new GatewayOrchestratorError({
-                    message: `Failed to resolve backend binary: ${err.message}`,
-                    cause: err,
-                  }),
-              ),
-            );
-
-          backendProc = yield* pm
-            .startService(
-              backendBinary,
-              "Backend API",
-              nodePath.join(path.logDir, "backend.log"),
-              backendEnv,
-              "backend",
-            )
-            .pipe(
-              Effect.mapError(
-                (err) =>
-                  new GatewayOrchestratorError({
-                    message: `Failed to start backend: ${err.message}`,
-                    cause: err,
-                  }),
-              ),
-            );
-
-          // Probe backend health
-          backendProbe = yield* hc.waitForHealthy(
-            backendEndpoint,
-            healthTimeoutMs,
-          );
-
-          if (backendProbe.healthy) {
-            yield* gwState.writeServiceState(
-              "backend",
-              "healthy",
-              backendProbe.detail,
-              backendEndpoint,
-            );
-          } else if (supervised) {
-            yield* gwState.writeServiceState(
-              "backend",
-              "warming",
-              backendProbe.detail,
-              backendEndpoint,
-            );
-            yield* gwState.writeMode("warming", "backend warming up");
-          } else {
-            yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
-            yield* gwState.writeServiceState(
-              "backend",
-              "down",
-              backendProbe.detail,
-              backendEndpoint,
-            );
-            yield* gwState.markStopped("backend health check failed");
-            return yield* Effect.fail(
-              new GatewayOrchestratorError({
-                message: backendProbe.detail,
-              }),
-            );
-          }
-        }
+        const backendResult = yield* startBackend({
+          tsOnly: isTSOnlyMode(),
+          supervised,
+          backendEndpoint,
+          backendEnv,
+          healthTimeoutMs,
+          signalTimeoutMs,
+        });
+        const { backendProc, backendProbe } = backendResult;
 
         // Telegram
-        let telegramPid: number | undefined;
-        let telegramProbe:
-          | { readonly healthy: boolean; readonly detail: string }
-          | undefined;
-        if (telegramEnabled) {
-          yield* logger.info("Starting Telegram Service");
-          const telegramBinary = yield* pm
-            .resolveServiceBinary("telegram-service")
-            .pipe(
-              Effect.mapError(
-                (err) =>
-                  new GatewayOrchestratorError({
-                    message: `Failed to resolve telegram binary: ${err.message}`,
-                    cause: err,
-                  }),
-              ),
-            );
-
-          const telegramProc = yield* pm
-            .startService(
-              telegramBinary,
-              "Telegram Service",
-              nodePath.join(path.logDir, "telegram.log"),
-              {
-                PORT: telegramPort,
-                BIND_HOST: bindHost,
-                TELEGRAM_BOT_TOKEN: telegramToken,
-                TELEGRAM_USE_POLLING: String(config.telegram.use_polling),
-                TELEGRAM_API_BASE_URL: `http://${bindHost}:${backendPort}`,
-                BACKEND_HOST_PORT: backendPort,
-                NODE_ENV: "production",
-                ADMIN_API_KEY: adminAPIKey,
-              },
-              "telegram",
-            )
-            .pipe(
-              Effect.mapError(
-                (err) =>
-                  new GatewayOrchestratorError({
-                    message: `Failed to start telegram: ${err.message}`,
-                    cause: err,
-                  }),
-              ),
-            );
-
-          telegramPid = telegramProc.pid;
-
-          telegramProbe = yield* hc.waitForHealthy(
-            telegramEndpoint,
-            healthTimeoutMs,
-          );
-
-          if (telegramProbe.healthy) {
-            yield* gwState.writeServiceState(
-              "telegram",
-              "healthy",
-              telegramProbe.detail,
-              telegramEndpoint,
-            );
-          } else if (supervised) {
-            yield* gwState.writeServiceState(
-              "telegram",
-              "warming",
-              telegramProbe.detail,
-              telegramEndpoint,
-            );
-            yield* gwState.writeMode("warming", "telegram warming up");
-          } else {
-            yield* pm.signalAndWait(telegramProc, "SIGTERM", signalTimeoutMs);
-            if (backendProc !== undefined) {
-              yield* pm.signalAndWait(backendProc, "SIGTERM", signalTimeoutMs);
-            }
-            yield* gwState.writeServiceState(
-              "telegram",
-              "down",
-              telegramProbe.detail,
-              telegramEndpoint,
-            );
-            yield* gwState.markStopped("telegram health check failed");
-            return yield* Effect.fail(
-              new GatewayOrchestratorError({
-                message: telegramProbe.detail,
-              }),
-            );
-          }
-        } else {
-          yield* gwState.writeServiceState(
-            "telegram",
-            "disabled",
-            "Telegram disabled for paper-only runtime",
-          );
-        }
+        const telegramResult = yield* startTelegram({
+          enabled: telegramEnabled,
+          supervised,
+          token: telegramToken,
+          bindHost,
+          backendPort,
+          telegramPort,
+          telegramEndpoint,
+          adminAPIKey,
+          usePolling: config.telegram.use_polling,
+          backendProc,
+          healthTimeoutMs,
+          signalTimeoutMs,
+        });
+        const { telegramPid, telegramProbe } = telegramResult;
 
         // CCXT state
         if (ccxtMode === "native") {

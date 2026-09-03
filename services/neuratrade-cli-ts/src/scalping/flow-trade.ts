@@ -26,6 +26,7 @@ import type { ExchangeError } from "../exchange/adapter.js";
 import type {
   FuturesExchangeAdapterService,
   FuturesMarginMode,
+  FuturesPosition,
   FuturesProductType,
 } from "../exchange/futures-adapter.js";
 import type {
@@ -38,6 +39,7 @@ import type {
 } from "../paper-trading/repository.js";
 import type { ContractSizeSpec } from "../paper-trading/types.js";
 import { orderableQty } from "../paper-trading/types.js";
+import type { CandleLike } from "./types.js";
 import type {
   CircuitBreakerError,
   CircuitBreakerService,
@@ -56,6 +58,10 @@ import {
   computeContexts,
   computeFlowSignal,
   defaultFlowBacktestOptions,
+  type BarContext,
+  type FlowFundingPoint,
+  type FlowOiPoint,
+  type FlowSignal,
   type FlowBacktestOptions,
 } from "./flow-backtest.js";
 
@@ -183,6 +189,475 @@ function signalBacktestOptions(opts: FlowTradeOptions): FlowBacktestOptions {
 
 const THREE_DAYS_MS = 3 * 86_400_000;
 
+interface FlowGateResult {
+  readonly state: FlowTradeState;
+  readonly earlyResult?: FlowTradeIterationResult;
+}
+
+interface FlowMarketData {
+  readonly candles: readonly CandleLike[];
+  readonly oi: readonly FlowOiPoint[];
+  readonly funding: readonly FlowFundingPoint[];
+  readonly lastCtx: BarContext;
+  readonly lastSignal?: FlowSignal;
+  readonly price: number;
+}
+
+interface FlowMarketLoadResult {
+  readonly market?: FlowMarketData;
+  readonly earlyNote?: string;
+}
+
+function flowHoldResult(
+  state: FlowTradeState,
+  note: string,
+): FlowTradeIterationResult {
+  return { action: "hold", side: state.side, state, note };
+}
+
+function guardFlowState(
+  repo: PaperTradingRepositoryService,
+  killSwitch: KillSwitchService,
+  circuitBreaker: CircuitBreakerService,
+  state: FlowTradeState,
+  now: number,
+): Effect.Effect<
+  FlowGateResult,
+  PaperTradingRepositoryError | KillSwitchError | CircuitBreakerError
+> {
+  return Effect.gen(function* () {
+    let nextState = state;
+    if (nextState.killed && nextState.side === null) {
+      if (!(yield* killSwitch.isEngaged())) {
+        nextState = { ...nextState, killed: false, updatedAt: now };
+        yield* repo.saveFlowTradeState(nextState);
+      }
+    }
+    if (nextState.killed || (yield* killSwitch.isEngaged())) {
+      const reason = yield* killSwitch
+        .getReason()
+        .pipe(Effect.orElseSucceed(() => "kill switch engaged"));
+      return {
+        state: nextState,
+        earlyResult: flowHoldResult(
+          nextState,
+          `kill switch engaged: ${reason}`,
+        ),
+      };
+    }
+    if (yield* circuitBreaker.isOpen()) {
+      const reason = yield* circuitBreaker
+        .getReason()
+        .pipe(Effect.orElseSucceed(() => "circuit breaker open"));
+      return {
+        state: nextState,
+        earlyResult: flowHoldResult(
+          nextState,
+          `circuit breaker open: ${reason}`,
+        ),
+      };
+    }
+    return { state: nextState };
+  });
+}
+
+function loadFlowMarketData(
+  repo: PaperTradingRepositoryService,
+  gateway: MarketDataGatewayService,
+  opts: FlowTradeOptions,
+  now: number,
+): Effect.Effect<
+  FlowMarketLoadResult,
+  MarketDataError | PaperTradingRepositoryError
+> {
+  return Effect.gen(function* () {
+    const historyLimit =
+      opts.historyLimit ?? (opts.timeframe === "1m" ? 2000 : 600);
+    const since = new Date(now - THREE_DAYS_MS);
+    const candles = yield* gateway.fetchOHLCV(
+      opts.exchange,
+      opts.symbol,
+      opts.timeframe,
+      historyLimit,
+    );
+    if (candles.length === 0) {
+      return {
+        earlyNote: `no ${opts.timeframe} candles for ${opts.symbol} (run the flow recorder/fetch first)`,
+      };
+    }
+    const oiRows = yield* repo.getOpenInterest(
+      opts.symbol,
+      opts.timeframe,
+      since.getTime(),
+    );
+    const fundingRates = yield* gateway.fetchFundingRates(
+      opts.exchange,
+      opts.symbol,
+      since,
+      new Date(now),
+    );
+    const oi = oiRows.map((row) => ({
+      ts: row.ts,
+      oi: row.oi,
+      oiValue: row.oiValue,
+    }));
+    const funding = fundingRates.map((row) => ({
+      ts: row.timestamp.getTime(),
+      fundingRate: row.fundingRate,
+    }));
+    const ctxs = computeContexts(candles, oi, funding);
+    const lastCtx = ctxs[ctxs.length - 1];
+    if (!lastCtx) return { earlyNote: "no bar context" };
+    const signals = computeFlowSignal(
+      candles,
+      oi,
+      funding,
+      signalBacktestOptions(opts),
+      opts.symbol,
+    );
+    return {
+      market: {
+        candles,
+        oi,
+        funding,
+        lastCtx,
+        lastSignal: signals[signals.length - 1],
+        price: lastCtx.close,
+      },
+    };
+  });
+}
+
+interface FlowEntryInput {
+  readonly repo: PaperTradingRepositoryService;
+  readonly adapter: FuturesExchangeAdapterService;
+  readonly riskGuard: RiskGuardService;
+  readonly opts: FlowTradeOptions;
+  readonly state: FlowTradeState;
+  readonly market: FlowMarketData;
+  readonly now: number;
+}
+
+function openFlowTrade(
+  input: FlowEntryInput,
+): Effect.Effect<FlowTradeIterationResult, FlowTradeError> {
+  return Effect.gen(function* () {
+    const { repo, adapter, riskGuard, opts, state, market, now } = input;
+    const signal = market.lastSignal;
+    if (!signal || signal.side === "NONE") {
+      const score = signal ? signal.score.toFixed(3) : "n/a";
+      return flowHoldResult(
+        { ...state, lastPrice: market.price, updatedAt: now },
+        `no entry signal (score ${score})`,
+      );
+    }
+    const side = signal.side;
+    const atr = signal.atr15 > 0 ? signal.atr15 : market.lastCtx.atr15;
+    if (atr <= 0 || market.price <= 0) {
+      return flowHoldResult(state, "no entry: ATR15 or price unavailable");
+    }
+
+    yield* riskGuard.check({
+      isLive: opts.isLive,
+      capital: opts.capital,
+      peakCapital: opts.capital,
+      startOfDayCapital: opts.capital,
+      dailyRealizedPnl: 0,
+      tradesTodayCount: 0,
+      positionValue: 0,
+      symbol: opts.symbol,
+      side: side === "LONG" ? "buy" : "sell",
+      leverage: opts.leverage,
+      productType: opts.productType,
+      minOrderableNotional:
+        opts.contractSpecs === undefined
+          ? undefined
+          : Math.max(
+              opts.contractSpecs.minTradeUSDT,
+              opts.contractSpecs.minQty * market.price,
+            ),
+    });
+
+    const allocation = money(opts.capital).times(opts.maxPositionSizePct / 100);
+    const rawQty = allocation.div(market.price);
+    const sizedQty =
+      opts.contractSpecs === undefined
+        ? rawQty
+        : orderableQty(
+            rawQty,
+            opts.contractSpecs,
+            money(market.price),
+            allocation,
+          );
+    if (toNumber(sizedQty) <= 0) {
+      return flowHoldResult(state, "no entry: position size below the minimum");
+    }
+
+    yield* adapter.setPositionMode(opts.productType, "one_way");
+    yield* adapter.setMarginMode(
+      opts.symbol,
+      opts.productType,
+      opts.marginMode,
+    );
+    const fill = yield* adapter.placeOrder({
+      symbol: opts.symbol,
+      side: side === "LONG" ? "buy" : "sell",
+      type: "market",
+      size: sizedQty,
+      price: money(market.price),
+      productType: opts.productType,
+      marginMode: opts.marginMode,
+      leverage: opts.leverage,
+    });
+    const entryPrice =
+      toNumber(fill.filledPrice) > 0
+        ? toNumber(fill.filledPrice)
+        : market.price;
+    const filledQty =
+      toNumber(fill.filledQty) > 0
+        ? toNumber(fill.filledQty)
+        : toNumber(sizedQty);
+    const stopPrice =
+      side === "LONG"
+        ? entryPrice - ATR_STOP_MULT * atr
+        : entryPrice + ATR_STOP_MULT * atr;
+    const nextState: FlowTradeState = {
+      ...freshFlowTradeState(opts, now),
+      side,
+      entryPrice,
+      qty: filledQty,
+      entryTime: now,
+      stopPrice,
+      lastPeak: entryPrice,
+      exitAt: now + opts.holdMinutes * 60_000,
+      orderId: fill.orderId,
+      capital: opts.capital,
+      atr,
+      stage: "initial",
+      entryOfiSign:
+        Math.sign(signal.zOfi) !== 0
+          ? Math.sign(signal.zOfi)
+          : Math.sign(signal.zReturn) || 1,
+      lastPrice: entryPrice,
+      updatedAt: now,
+    };
+    yield* repo.saveFlowTradeState(nextState);
+    return {
+      action: "opened",
+      side,
+      state: nextState,
+      note: `opened ${side} @ ${entryPrice.toFixed(4)} qty ${filledQty} stop ${stopPrice.toFixed(4)} exit ${new Date(nextState.exitAt!).toISOString()}`,
+    };
+  });
+}
+
+interface FlowPositionInput {
+  readonly repo: PaperTradingRepositoryService;
+  readonly adapter: FuturesExchangeAdapterService;
+  readonly killSwitch: KillSwitchService;
+  readonly opts: FlowTradeOptions;
+  readonly state: FlowTradeState;
+  readonly market: FlowMarketData;
+  readonly now: number;
+}
+
+function flowPositionSide(
+  position: FuturesPosition | null,
+): FlowTradeSide | null {
+  if (position?.side === "long") return "LONG";
+  if (position?.side === "short") return "SHORT";
+  return null;
+}
+
+function guardFlowPosition(
+  input: FlowPositionInput,
+): Effect.Effect<FlowGateResult, FlowTradeError> {
+  return Effect.gen(function* () {
+    const { repo, adapter, killSwitch, opts, state, market, now } = input;
+    const position = yield* adapter.getPosition(opts.symbol, opts.productType);
+    const positionSide = flowPositionSide(position);
+    const positionQty = position ? toNumber(position.quantity) : 0;
+    if (position !== null && positionSide === state.side && positionQty > 0) {
+      return { state };
+    }
+
+    const reason = `LIVE POSITION MISMATCH: state ${state.side} but exchange reports ${
+      position === null
+        ? "no position"
+        : `${positionSide ?? "unknown"} qty ${positionQty}`
+    }`;
+    yield* killSwitch.engage(reason);
+    const nextState = {
+      ...state,
+      killed: true,
+      lastPrice: market.price,
+      updatedAt: now,
+    };
+    yield* repo.saveFlowTradeState(nextState);
+    return {
+      state: nextState,
+      earlyResult: flowHoldResult(nextState, `kill switch engaged: ${reason}`),
+    };
+  });
+}
+
+interface FlowTrailingResult {
+  readonly stop: number;
+  readonly stage: FlowTradeStage;
+  readonly extreme: number;
+}
+
+function updateFlowTrailing(
+  state: FlowTradeState,
+  side: FlowTradeSide,
+  price: number,
+  entryPrice: number,
+  atr: number,
+): FlowTrailingResult {
+  const riskDistance = ATR_STOP_MULT * atr;
+  let stop = state.stopPrice!;
+  let stage: FlowTradeStage = state.stage ?? "initial";
+  let extreme = state.lastPeak ?? entryPrice;
+  if (side === "LONG") {
+    extreme = Math.max(extreme, price);
+    if (extreme - entryPrice >= BREAKEVEN_R * riskDistance) {
+      stage = stop === entryPrice ? stage : "breakeven";
+      stop = Math.max(stop, entryPrice, extreme - riskDistance);
+      if (stop > entryPrice) stage = "trail";
+    }
+  } else {
+    extreme = Math.min(extreme, price);
+    if (entryPrice - extreme >= BREAKEVEN_R * riskDistance) {
+      stage = stop === entryPrice ? stage : "breakeven";
+      stop = Math.min(stop, entryPrice, extreme + riskDistance);
+      if (stop < entryPrice) stage = "trail";
+    }
+  }
+  return { stop, stage, extreme };
+}
+
+type FlowExitReason = "stop" | "emergency" | "time";
+
+function flowStopTriggered(
+  side: FlowTradeSide,
+  price: number,
+  stop: number,
+): boolean {
+  return side === "LONG" ? price <= stop : price >= stop;
+}
+
+function flowEmergencyTriggered(
+  lastCtx: BarContext,
+  state: FlowTradeState,
+): boolean {
+  const ofiSign = Math.sign(lastCtx.ofiRaw);
+  const entryOfiSign = state.entryOfiSign ?? 0;
+  return (
+    Math.abs(lastCtx.zOi) > DEFAULT_EMERGENCY_OI_Z &&
+    ofiSign !== 0 &&
+    entryOfiSign !== 0 &&
+    ofiSign !== entryOfiSign
+  );
+}
+
+function resolveFlowExit(
+  side: FlowTradeSide,
+  price: number,
+  stop: number,
+  lastCtx: BarContext,
+  state: FlowTradeState,
+  now: number,
+): FlowExitReason | null {
+  if (flowStopTriggered(side, price, stop)) return "stop";
+  if (flowEmergencyTriggered(lastCtx, state)) return "emergency";
+  if (now >= (state.exitAt ?? Number.POSITIVE_INFINITY)) return "time";
+  return null;
+}
+
+function closeFlowPosition(
+  input: FlowPositionInput,
+  side: FlowTradeSide,
+  qty: number,
+  price: number,
+  reason: FlowExitReason,
+): Effect.Effect<FlowTradeIterationResult, FlowTradeError> {
+  return Effect.gen(function* () {
+    const { repo, adapter, opts, now } = input;
+    const close = yield* adapter.closePosition({
+      symbol: opts.symbol,
+      side: side === "LONG" ? "sell" : "buy",
+      productType: opts.productType,
+      marginMode: opts.marginMode,
+      leverage: opts.leverage,
+      size: money(qty),
+    });
+    const note = `closed ${side} (${reason}) @ ${price.toFixed(4)}${
+      close === null ? " — no position on exchange to reduce" : ""
+    }`;
+    yield* repo.clearFlowTradeState(opts.exchange, opts.symbol);
+    const state = {
+      ...freshFlowTradeState(opts, now),
+      lastPrice: price,
+      updatedAt: now,
+    };
+    return { action: "closed", side, state, note };
+  });
+}
+
+function manageFlowPosition(
+  input: FlowPositionInput,
+): Effect.Effect<FlowTradeIterationResult, FlowTradeError> {
+  return Effect.gen(function* () {
+    const { repo, state, market, now } = input;
+    const positionGuard = yield* guardFlowPosition(input);
+    if (positionGuard.earlyResult) return positionGuard.earlyResult;
+    if (state.side === null) return flowHoldResult(state, "no flow position");
+
+    const side = state.side;
+    const entryPrice = state.entryPrice!;
+    const qty = state.qty!;
+    const atr = state.atr ?? market.lastCtx.atr15;
+    const trailing = updateFlowTrailing(
+      state,
+      side,
+      market.price,
+      entryPrice,
+      atr,
+    );
+    const exitReason = resolveFlowExit(
+      side,
+      market.price,
+      trailing.stop,
+      market.lastCtx,
+      state,
+      now,
+    );
+    if (exitReason !== null) {
+      return yield* closeFlowPosition(
+        input,
+        side,
+        qty,
+        market.price,
+        exitReason,
+      );
+    }
+
+    const nextState = {
+      ...state,
+      stopPrice: trailing.stop,
+      stage: trailing.stage,
+      lastPeak: trailing.extreme,
+      lastPrice: market.price,
+      updatedAt: now,
+    };
+    yield* repo.saveFlowTradeState(nextState);
+    return flowHoldResult(
+      nextState,
+      `in ${side}: price ${market.price.toFixed(4)} stop ${trailing.stop.toFixed(4)} (${trailing.stage})`,
+    );
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -214,329 +689,49 @@ export function iterateFlowTrade(
   return Effect.gen(function* () {
     const now = Date.now();
 
-    let state =
+    const loadedState =
       (yield* repo.getFlowTradeState(opts.exchange, opts.symbol)) ??
       freshFlowTradeState(opts, now);
-
-    // Kill-switch gate BEFORE any action (grid-engine discipline). A sticky
-    // killed flag with a clean (flat) state clears only when the switch has
-    // been disengaged; otherwise hold and touch nothing.
-    if (
-      state.killed &&
-      state.side === null &&
-      !(yield* killSwitch.isEngaged())
-    ) {
-      state = { ...state, killed: false, updatedAt: now };
-      yield* repo.saveFlowTradeState(state);
-    } else if (state.killed || (yield* killSwitch.isEngaged())) {
-      const reason = yield* killSwitch
-        .getReason()
-        .pipe(Effect.orElseSucceed(() => "kill switch engaged"));
-      return {
-        action: "hold",
-        side: state.side,
-        state,
-        note: `kill switch engaged: ${reason}`,
-      };
-    }
-
-    if (yield* circuitBreaker.isOpen()) {
-      const reason = yield* circuitBreaker
-        .getReason()
-        .pipe(Effect.orElseSucceed(() => "circuit breaker open"));
-      return {
-        action: "hold",
-        side: state.side,
-        state,
-        note: `circuit breaker open: ${reason}`,
-      };
-    }
-
-    // (a) Load the latest candles + OI + funding for the current symbol from
-    // the DB (mainnet research data — the live engine never fetches market
-    // data from an exchange).
-    const historyLimit =
-      opts.historyLimit ?? (opts.timeframe === "1m" ? 2000 : 600);
-    const since = new Date(now - THREE_DAYS_MS);
-    const candles = yield* gateway.fetchOHLCV(
-      opts.exchange,
-      opts.symbol,
-      opts.timeframe,
-      historyLimit,
+    const gate = yield* guardFlowState(
+      repo,
+      killSwitch,
+      circuitBreaker,
+      loadedState,
+      now,
     );
-    if (candles.length === 0) {
-      return {
-        action: "hold",
-        side: state.side,
-        state,
-        note: `no ${opts.timeframe} candles for ${opts.symbol} (run the flow recorder/fetch first)`,
-      };
-    }
-    const oiRows = yield* repo.getOpenInterest(
-      opts.symbol,
-      opts.timeframe,
-      since.getTime(),
-    );
-    const fundingRates = yield* gateway.fetchFundingRates(
-      opts.exchange,
-      opts.symbol,
-      since,
-      new Date(now),
-    );
-    const oi = oiRows.map((r) => ({ ts: r.ts, oi: r.oi, oiValue: r.oiValue }));
-    const funding = fundingRates.map((r) => ({
-      ts: r.timestamp.getTime(),
-      fundingRate: r.fundingRate,
-    }));
+    if (gate.earlyResult) return gate.earlyResult;
+    const state = gate.state;
 
-    // (b) Compute the flow signal — the SAME computation as the backtest.
-    const ctxs = computeContexts(candles, oi, funding);
-    const lastCtx = ctxs[ctxs.length - 1];
-    if (!lastCtx) {
-      return {
-        action: "hold",
-        side: state.side,
-        state,
-        note: "no bar context",
-      };
+    // The live engine reads the same recorded mainnet data as the backtest;
+    // the exchange adapter is used only for orders and position checks.
+    const marketResult = yield* loadFlowMarketData(repo, gateway, opts, now);
+    if (marketResult.market === undefined) {
+      return flowHoldResult(state, marketResult.earlyNote ?? "no market data");
     }
-    const price = lastCtx.close;
-    const signals = computeFlowSignal(
-      candles,
-      oi,
-      funding,
-      signalBacktestOptions(opts),
-      opts.symbol,
-    );
-    const lastSignal = signals[signals.length - 1];
-
-    const holdWith = (next: FlowTradeState, note: string) => ({
-      action: "hold" as const,
-      side: next.side,
-      state: next,
-      note,
-    });
+    const market = marketResult.market;
 
     // (c) Flat: enter on a signal that clears the threshold.
     if (state.side === null) {
-      if (!lastSignal || lastSignal.side === "NONE") {
-        return holdWith(
-          { ...state, lastPrice: price, updatedAt: now },
-          `no entry signal (score ${lastSignal ? lastSignal.score.toFixed(3) : "n/a"})`,
-        );
-      }
-      const side = lastSignal.side;
-      const atr = lastSignal.atr15 > 0 ? lastSignal.atr15 : lastCtx.atr15;
-      if (atr <= 0 || price <= 0) {
-        return holdWith(state, "no entry: ATR15 or price unavailable");
-      }
-
-      // Pre-trade risk guard (grid-engine discipline).
-      yield* riskGuard.check({
-        isLive: opts.isLive,
-        capital: opts.capital,
-        peakCapital: opts.capital,
-        startOfDayCapital: opts.capital,
-        dailyRealizedPnl: 0,
-        tradesTodayCount: 0,
-        positionValue: 0,
-        symbol: opts.symbol,
-        side: side === "LONG" ? "buy" : "sell",
-        leverage: opts.leverage,
-        productType: opts.productType,
-        minOrderableNotional:
-          opts.contractSpecs === undefined
-            ? undefined
-            : Math.max(
-                opts.contractSpecs.minTradeUSDT,
-                opts.contractSpecs.minQty * price,
-              ),
-      });
-
-      // Size = capital × maxPositionSizePct / price, rounded to the adapter's
-      // step via the existing contract-spec logic when available.
-      const allocation = money(opts.capital).times(
-        opts.maxPositionSizePct / 100,
-      );
-      const rawQty = allocation.div(price);
-      const sizedQty =
-        opts.contractSpecs !== undefined
-          ? orderableQty(rawQty, opts.contractSpecs, money(price), allocation)
-          : rawQty;
-      if (toNumber(sizedQty) <= 0) {
-        return holdWith(state, "no entry: position size below the minimum");
-      }
-
-      yield* adapter.setPositionMode(opts.productType, "one_way");
-      yield* adapter.setMarginMode(
-        opts.symbol,
-        opts.productType,
-        opts.marginMode,
-      );
-      // price is passed as the sizing reference even for market orders so the
-      // bybit adapter does not need a live gateway tick for its notional math.
-      const fill = yield* adapter.placeOrder({
-        symbol: opts.symbol,
-        side: side === "LONG" ? "buy" : "sell",
-        type: "market",
-        size: sizedQty,
-        price: money(price),
-        productType: opts.productType,
-        marginMode: opts.marginMode,
-        leverage: opts.leverage,
-      });
-
-      const entryPrice =
-        toNumber(fill.filledPrice) > 0 ? toNumber(fill.filledPrice) : price;
-      const filledQty =
-        toNumber(fill.filledQty) > 0
-          ? toNumber(fill.filledQty)
-          : toNumber(sizedQty);
-      const stopPrice =
-        side === "LONG"
-          ? entryPrice - ATR_STOP_MULT * atr
-          : entryPrice + ATR_STOP_MULT * atr;
-      state = {
-        ...freshFlowTradeState(opts, now),
-        side,
-        entryPrice,
-        qty: filledQty,
-        entryTime: now,
-        stopPrice,
-        lastPeak: entryPrice,
-        exitAt: now + opts.holdMinutes * 60_000,
-        orderId: fill.orderId,
-        capital: opts.capital,
-        atr,
-        stage: "initial",
-        entryOfiSign:
-          Math.sign(lastSignal.zOfi) !== 0
-            ? Math.sign(lastSignal.zOfi)
-            : Math.sign(lastSignal.zReturn) || 1,
-        lastPrice: entryPrice,
-        updatedAt: now,
-      };
-      yield* repo.saveFlowTradeState(state);
-      return {
-        action: "opened",
-        side,
+      return yield* openFlowTrade({
+        repo,
+        adapter,
+        riskGuard,
+        opts,
         state,
-        note: `opened ${side} @ ${entryPrice.toFixed(4)} qty ${filledQty} stop ${stopPrice.toFixed(4)} exit ${new Date(state.exitAt!).toISOString()}`,
-      };
-    }
-
-    // (d) In a position: exit management + trailing.
-    const side = state.side;
-    const entryPrice = state.entryPrice!;
-    const qty = state.qty!;
-    const atr = state.atr ?? lastCtx.atr15;
-
-    // Live-position mismatch → engage the kill switch and hold (fail-closed;
-    // grid-engine reconciliation discipline).
-    const pos = yield* adapter.getPosition(opts.symbol, opts.productType);
-    const posSide: FlowTradeSide | null =
-      pos?.side === "long" ? "LONG" : pos?.side === "short" ? "SHORT" : null;
-    const posQty = pos ? toNumber(pos.quantity) : 0;
-    if (pos === null || posSide !== side || posQty <= 0) {
-      const reason = `LIVE POSITION MISMATCH: state ${side} but exchange reports ${
-        pos === null ? "no position" : `${posSide ?? "unknown"} qty ${posQty}`
-      }`;
-      yield* killSwitch.engage(reason);
-      state = { ...state, killed: true, lastPrice: price, updatedAt: now };
-      yield* repo.saveFlowTradeState(state);
-      return {
-        action: "hold",
-        side,
-        state,
-        note: `kill switch engaged: ${reason}`,
-      };
-    }
-
-    // Trail: after +1R move the stop to breakeven, then trail at 1.25×ATR15
-    // (identical rules to the backtest engine).
-    const r = ATR_STOP_MULT * atr;
-    let stop = state.stopPrice!;
-    let stage: FlowTradeStage = state.stage ?? "initial";
-    let extreme = state.lastPeak ?? entryPrice;
-    if (side === "LONG") {
-      extreme = Math.max(extreme, price);
-      if (extreme - entryPrice >= BREAKEVEN_R * r) {
-        stage = stop === entryPrice ? stage : "breakeven";
-        stop = Math.max(stop, entryPrice, extreme - r);
-        if (stop > entryPrice) stage = "trail";
-      }
-    } else {
-      extreme = Math.min(extreme, price);
-      if (entryPrice - extreme >= BREAKEVEN_R * r) {
-        stage = stop === entryPrice ? stage : "breakeven";
-        stop = Math.min(stop, entryPrice, extreme + r);
-        if (stop < entryPrice) stage = "trail";
-      }
-    }
-
-    // Exit checks, in backtest priority order: stop → emergency → time.
-    let exitReason: "stop" | "emergency" | "time" | null = null;
-    if (side === "LONG" && price <= stop) {
-      exitReason = "stop";
-    } else if (side === "SHORT" && price >= stop) {
-      exitReason = "stop";
-    }
-    if (exitReason === null) {
-      const ofiSign = Math.sign(lastCtx.ofiRaw);
-      const entryOfiSign = state.entryOfiSign ?? 0;
-      if (
-        Math.abs(lastCtx.zOi) > DEFAULT_EMERGENCY_OI_Z &&
-        ofiSign !== 0 &&
-        entryOfiSign !== 0 &&
-        ofiSign !== entryOfiSign
-      ) {
-        exitReason = "emergency";
-      }
-    }
-    if (
-      exitReason === null &&
-      now >= (state.exitAt ?? Number.POSITIVE_INFINITY)
-    ) {
-      exitReason = "time";
-    }
-
-    if (exitReason !== null) {
-      const close = yield* adapter.closePosition({
-        symbol: opts.symbol,
-        side: side === "LONG" ? "sell" : "buy",
-        productType: opts.productType,
-        marginMode: opts.marginMode,
-        leverage: opts.leverage,
-        size: money(qty),
+        market,
+        now,
       });
-      const note = `closed ${side} (${exitReason}) @ ${price.toFixed(4)}${
-        close === null ? " — no position on exchange to reduce" : ""
-      }`;
-      yield* repo.clearFlowTradeState(opts.exchange, opts.symbol);
-      return {
-        action: "closed",
-        side,
-        state: {
-          ...freshFlowTradeState(opts, now),
-          lastPrice: price,
-          updatedAt: now,
-        },
-        note,
-      };
     }
 
-    state = {
-      ...state,
-      stopPrice: stop,
-      stage,
-      lastPeak: extreme,
-      lastPrice: price,
-      updatedAt: now,
-    };
-    yield* repo.saveFlowTradeState(state);
-    return holdWith(
+    // (d) In a position: reconcile, trail, and apply the backtest exit order.
+    return yield* manageFlowPosition({
+      repo,
+      adapter,
+      killSwitch,
+      opts,
       state,
-      `in ${side}: price ${price.toFixed(4)} stop ${stop.toFixed(4)} (${stage})`,
-    );
+      market,
+      now,
+    });
   });
 }

@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect";
-import { BybitConfigLive, BybitConfig } from "../src/services/bybit-config.js";
+import { BybitConfigLive } from "../src/services/bybit-config.js";
 import {
   BybitClient,
   BybitClientLiveConfig,

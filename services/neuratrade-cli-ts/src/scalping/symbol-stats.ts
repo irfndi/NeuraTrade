@@ -37,6 +37,122 @@ function percentile(sorted: readonly number[], p: number): number {
 }
 
 /**
+ * Wilder directional-movement arrays (true range, +DM, -DM) over candles[1..n).
+ */
+interface DirectionalMovement {
+  readonly tr: Float64Array;
+  readonly plusDM: Float64Array;
+  readonly minusDM: Float64Array;
+}
+
+function computeDirectionalMovement(
+  candles: readonly CandleLike[],
+  n: number,
+): DirectionalMovement {
+  const tr = new Float64Array(n);
+  const plusDM = new Float64Array(n);
+  const minusDM = new Float64Array(n);
+  for (let i = 1; i < n; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevHigh = candles[i - 1].high;
+    const prevLow = candles[i - 1].low;
+    const prevClose = candles[i - 1].close;
+    tr[i] = Math.max(
+      high - low,
+      Math.abs(high - prevClose),
+      Math.abs(low - prevClose),
+    );
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+    plusDM[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    minusDM[i] = downMove > upMove && downMove > 0 ? downMove : 0;
+  }
+  return { tr, plusDM, minusDM };
+}
+
+// Wilder ATR — mirrors calculateATR over each prefix.
+function fillAtrPctSeries(
+  candles: readonly CandleLike[],
+  tr: Float64Array,
+  atrPctSeries: Float64Array,
+  period: number,
+  n: number,
+): void {
+  if (n > period) {
+    let atr = 0;
+    for (let i = 1; i <= period; i++) atr += tr[i];
+    atr /= period;
+    atrPctSeries[period] =
+      candles[period].close > 0 ? atr / candles[period].close : 0;
+    for (let i = period + 1; i < n; i++) {
+      atr = (atr * (period - 1) + tr[i]) / period;
+      atrPctSeries[i] = candles[i].close > 0 ? atr / candles[i].close : 0;
+    }
+  }
+}
+
+// Wilder ADX — mirrors calculateADX over each prefix.
+function fillAdxSeries(
+  plusDM: Float64Array,
+  minusDM: Float64Array,
+  tr: Float64Array,
+  adxSeries: Float64Array,
+  period: number,
+  n: number,
+): void {
+  if (n > period * 2) {
+    let smoothedPlus = 0;
+    let smoothedMinus = 0;
+    let smoothedTR = 0;
+    for (let i = 1; i <= period; i++) {
+      smoothedPlus += plusDM[i];
+      smoothedMinus += minusDM[i];
+      smoothedTR += tr[i];
+    }
+    const dxValues: number[] = [];
+    let adx = 0;
+    for (let i = period + 1; i < n; i++) {
+      smoothedPlus = (smoothedPlus * (period - 1)) / period + plusDM[i];
+      smoothedMinus = (smoothedMinus * (period - 1)) / period + minusDM[i];
+      smoothedTR = (smoothedTR * (period - 1)) / period + tr[i];
+      const plusDI = smoothedTR === 0 ? 0 : (smoothedPlus / smoothedTR) * 100;
+      const minusDI =
+        smoothedTR === 0 ? 0 : (smoothedMinus / smoothedTR) * 100;
+      const dx =
+        plusDI + minusDI === 0
+          ? 0
+          : (Math.abs(plusDI - minusDI) / (plusDI + minusDI)) * 100;
+      dxValues.push(dx);
+      if (dxValues.length === period) {
+        for (const v of dxValues) adx += v;
+        adx /= period;
+        adxSeries[i] = adx;
+      } else if (dxValues.length > period) {
+        adx = (adx * (period - 1) + dx) / period;
+        adxSeries[i] = adx;
+      }
+    }
+  }
+}
+
+// Rolling mean volume (last 20 candles, matching computeSymbolStats).
+function fillVolumeRatioSeries(
+  candles: readonly CandleLike[],
+  volumeRatioSeries: Float64Array,
+  n: number,
+): void {
+  let volumeSum = 0;
+  for (let i = 0; i < n; i++) {
+    volumeSum += candles[i].volume;
+    if (i >= 20) volumeSum -= candles[i - 20].volume;
+    const count = Math.min(20, i + 1);
+    const avg = count > 0 ? volumeSum / count : 0;
+    volumeRatioSeries[i] = avg > 0 ? candles[i].volume / avg : 1;
+  }
+}
+
+/**
  * Build a per-bar causal statistics provider: `provider(i)` returns statistics
  * computed only from candles[0..i], so backtests never see future data
  * (bd clever-cabin-dt8). ATR and ADX series are precomputed in a single pass
@@ -61,83 +177,10 @@ export function makeCausalSymbolStats(
   const volumeRatioSeries = new Float64Array(n).fill(1);
 
   if (n >= 2) {
-    const tr = new Float64Array(n);
-    const plusDM = new Float64Array(n);
-    const minusDM = new Float64Array(n);
-    for (let i = 1; i < n; i++) {
-      const high = candles[i].high;
-      const low = candles[i].low;
-      const prevHigh = candles[i - 1].high;
-      const prevLow = candles[i - 1].low;
-      const prevClose = candles[i - 1].close;
-      tr[i] = Math.max(
-        high - low,
-        Math.abs(high - prevClose),
-        Math.abs(low - prevClose),
-      );
-      const upMove = high - prevHigh;
-      const downMove = prevLow - low;
-      plusDM[i] = upMove > downMove && upMove > 0 ? upMove : 0;
-      minusDM[i] = downMove > upMove && downMove > 0 ? downMove : 0;
-    }
-
-    // Wilder ATR — mirrors calculateATR over each prefix.
-    if (n > period) {
-      let atr = 0;
-      for (let i = 1; i <= period; i++) atr += tr[i];
-      atr /= period;
-      atrPctSeries[period] =
-        candles[period].close > 0 ? atr / candles[period].close : 0;
-      for (let i = period + 1; i < n; i++) {
-        atr = (atr * (period - 1) + tr[i]) / period;
-        atrPctSeries[i] = candles[i].close > 0 ? atr / candles[i].close : 0;
-      }
-    }
-
-    // Wilder ADX — mirrors calculateADX over each prefix.
-    if (n > period * 2) {
-      let smoothedPlus = 0;
-      let smoothedMinus = 0;
-      let smoothedTR = 0;
-      for (let i = 1; i <= period; i++) {
-        smoothedPlus += plusDM[i];
-        smoothedMinus += minusDM[i];
-        smoothedTR += tr[i];
-      }
-      const dxValues: number[] = [];
-      let adx = 0;
-      for (let i = period + 1; i < n; i++) {
-        smoothedPlus = (smoothedPlus * (period - 1)) / period + plusDM[i];
-        smoothedMinus = (smoothedMinus * (period - 1)) / period + minusDM[i];
-        smoothedTR = (smoothedTR * (period - 1)) / period + tr[i];
-        const plusDI = smoothedTR === 0 ? 0 : (smoothedPlus / smoothedTR) * 100;
-        const minusDI =
-          smoothedTR === 0 ? 0 : (smoothedMinus / smoothedTR) * 100;
-        const dx =
-          plusDI + minusDI === 0
-            ? 0
-            : (Math.abs(plusDI - minusDI) / (plusDI + minusDI)) * 100;
-        dxValues.push(dx);
-        if (dxValues.length === period) {
-          for (const v of dxValues) adx += v;
-          adx /= period;
-          adxSeries[i] = adx;
-        } else if (dxValues.length > period) {
-          adx = (adx * (period - 1) + dx) / period;
-          adxSeries[i] = adx;
-        }
-      }
-    }
-
-    // Rolling mean volume (last 20 candles, matching computeSymbolStats).
-    let volumeSum = 0;
-    for (let i = 0; i < n; i++) {
-      volumeSum += candles[i].volume;
-      if (i >= 20) volumeSum -= candles[i - 20].volume;
-      const count = Math.min(20, i + 1);
-      const avg = count > 0 ? volumeSum / count : 0;
-      volumeRatioSeries[i] = avg > 0 ? candles[i].volume / avg : 1;
-    }
+    const { tr, plusDM, minusDM } = computeDirectionalMovement(candles, n);
+    fillAtrPctSeries(candles, tr, atrPctSeries, period, n);
+    fillAdxSeries(plusDM, minusDM, tr, adxSeries, period, n);
+    fillVolumeRatioSeries(candles, volumeRatioSeries, n);
   }
 
   void timeframe; // timeframe currently unused (annualizedVolatility is 0, matching batch behavior)

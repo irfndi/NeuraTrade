@@ -307,119 +307,226 @@ interface ParityCheck {
   note: string;
 }
 type ParityChecks = Record<string, ParityCheck>;
-function report(
-  label: string,
-  bt: ReturnType<typeof runGridBacktest>,
-  depTrades: GridPaperTrade[],
-) {
-  const btTrades = bt.trades;
-  const n = Math.min(btTrades.length, depTrades.length);
+
+interface ParityMetrics {
+  readonly tradeCountMatches: boolean;
+  readonly priceMatches: number;
+  readonly reasonMatches: number;
+  readonly pnlMatches: number;
+  readonly comparedTrades: number;
+}
+
+function collectParityMetrics(
+  btTrades: readonly GridTrade[],
+  depTrades: readonly GridPaperTrade[],
+): ParityMetrics {
+  const comparedTrades = Math.min(btTrades.length, depTrades.length);
   let priceMatches = 0;
   let reasonMatches = 0;
   let pnlMatches = 0;
-  for (let i = 0; i < n; i++) {
-    const b = btTrades[i];
-    const d = depTrades[i];
-    if (withinTol(b.entryPrice, money(d.entryPrice).toNumber())) priceMatches++;
-    if (d.side === b.side && d.exitReason === inferBtExitReason(b))
+  for (let i = 0; i < comparedTrades; i++) {
+    const backtestTrade = btTrades[i];
+    const deployedTrade = depTrades[i];
+    if (!backtestTrade || !deployedTrade) continue;
+    if (
+      withinTol(
+        backtestTrade.entryPrice,
+        money(deployedTrade.entryPrice).toNumber(),
+      )
+    ) {
+      priceMatches++;
+    }
+    if (
+      deployedTrade.side === backtestTrade.side &&
+      deployedTrade.exitReason === inferBtExitReason(backtestTrade)
+    ) {
       reasonMatches++;
-    if (withinTol(b.pnlPct * 100, money(d.pnlPct).toNumber())) pnlMatches++;
+    }
+    if (
+      withinTol(
+        backtestTrade.pnlPct * 100,
+        money(deployedTrade.pnlPct).toNumber(),
+      )
+    ) {
+      pnlMatches++;
+    }
   }
-  const countMatch = btTrades.length === depTrades.length;
-  const checks: ParityChecks = {
+  return {
+    tradeCountMatches: btTrades.length === depTrades.length,
+    priceMatches,
+    reasonMatches,
+    pnlMatches,
+    comparedTrades,
+  };
+}
+
+function completeOrEmptyMatch(
+  btTrades: readonly GridTrade[],
+  matched: number,
+  compared: number,
+): boolean {
+  return (
+    btTrades.length === 0 ||
+    (matched === compared && compared === btTrades.length)
+  );
+}
+
+function parityCountNote(
+  btTrades: readonly GridTrade[],
+  matched: number,
+  compared: number,
+  suffix: string,
+): string {
+  return btTrades.length === 0
+    ? "N/A (0 trades on both)"
+    : `${matched}/${compared} ${suffix}`;
+}
+
+function buildParityChecks(
+  btTrades: readonly GridTrade[],
+  depTrades: readonly GridPaperTrade[],
+): ParityChecks {
+  const metrics = collectParityMetrics(btTrades, depTrades);
+  return {
     "trigger-bar": {
-      match: countMatch,
+      match: metrics.tradeCountMatches,
       note: `bt=${btTrades.length} dep=${depTrades.length}`,
     },
     "order-type": {
-      match: countMatch,
+      match: metrics.tradeCountMatches,
       note: "both: limit entry at grid level, round-trip limit exits",
     },
     "fill-price": {
-      match:
-        btTrades.length === 0 || (priceMatches === n && n === btTrades.length),
-      note:
-        btTrades.length === 0
-          ? "N/A (0 trades on both)"
-          : `${priceMatches}/${n} matched within 0.5%`,
+      match: completeOrEmptyMatch(
+        btTrades,
+        metrics.priceMatches,
+        metrics.comparedTrades,
+      ),
+      note: parityCountNote(
+        btTrades,
+        metrics.priceMatches,
+        metrics.comparedTrades,
+        "matched within 0.5%",
+      ),
     },
     fees: {
-      match: btTrades.length === 0 || n === btTrades.length,
+      match:
+        btTrades.length === 0 || metrics.comparedTrades === btTrades.length,
       note:
         btTrades.length === 0
           ? "N/A (0 trades on both)"
           : "both charge feePct*2 = 0.12% round-trip",
     },
     slippage: {
-      match: btTrades.length === 0 || n === btTrades.length,
+      match:
+        btTrades.length === 0 || metrics.comparedTrades === btTrades.length,
       note:
         btTrades.length === 0
           ? "N/A (0 trades on both)"
           : "both apply slippageBps=2 on entry & exit",
     },
     quantity: {
-      match: countMatch,
+      match: metrics.tradeCountMatches,
       note: "both size at 50% of capital (positionFraction / maxPositionPct)",
     },
     "exit-reason": {
-      match:
-        btTrades.length === 0 || (reasonMatches === n && n === btTrades.length),
-      note:
-        btTrades.length === 0
-          ? "N/A (0 trades on both)"
-          : `${reasonMatches}/${n} equal (target/stop/liquidation)`,
+      match: completeOrEmptyMatch(
+        btTrades,
+        metrics.reasonMatches,
+        metrics.comparedTrades,
+      ),
+      note: parityCountNote(
+        btTrades,
+        metrics.reasonMatches,
+        metrics.comparedTrades,
+        "equal (target/stop/liquidation)",
+      ),
     },
     pnl: {
-      match:
-        btTrades.length === 0 || (pnlMatches === n && n === btTrades.length),
-      note:
-        btTrades.length === 0
-          ? "N/A (0 trades on both)"
-          : `${pnlMatches}/${n} within 0.5%`,
+      match: completeOrEmptyMatch(
+        btTrades,
+        metrics.pnlMatches,
+        metrics.comparedTrades,
+      ),
+      note: parityCountNote(
+        btTrades,
+        metrics.pnlMatches,
+        metrics.comparedTrades,
+        "within 0.5%",
+      ),
     },
   };
+}
 
-  console.log(`\n${"#".repeat(72)}`);
-  console.log(`# SCENARIO: ${label}`);
-  console.log(`${"#".repeat(72)}`);
+function printBacktestTrades(bt: ReturnType<typeof runGridBacktest>): void {
   console.log(`\n=== VALIDATED BACKTEST ENGINE (${window.length} candles) ===`);
   console.log(
-    `trades: ${btTrades.length} | return ${bt.totalReturnPct?.toFixed(2) ?? "n/a"}% | winRate ${bt.winRate?.toFixed(1) ?? "n/a"}%`,
+    `trades: ${bt.trades.length} | return ${bt.totalReturnPct?.toFixed(2) ?? "n/a"}% | winRate ${bt.winRate?.toFixed(1) ?? "n/a"}%`,
   );
-  for (const t of btTrades) {
+  for (const trade of bt.trades) {
     console.log(
-      `  ${t.side.padEnd(5)} bar=${String(t.entryBar).padStart(3)}->${String(t.exitBar).padStart(3)} entry=${t.entryPrice.toFixed(2)} exit=${t.exitPrice.toFixed(2)} pnl=${(t.pnlPct * 100).toFixed(3)}%`,
+      `  ${trade.side.padEnd(5)} bar=${String(trade.entryBar).padStart(3)}->${String(trade.exitBar).padStart(3)} entry=${trade.entryPrice.toFixed(2)} exit=${trade.exitPrice.toFixed(2)} pnl=${(trade.pnlPct * 100).toFixed(3)}%`,
     );
   }
+}
+
+function printDeployedTrades(depTrades: readonly GridPaperTrade[]): void {
   console.log(`\n=== DEPLOYED PAPER-TRADING ENGINE ===`);
   console.log(`trades: ${depTrades.length}`);
-  for (const t of depTrades) {
+  for (const trade of depTrades) {
     console.log(
-      `  ${t.side.padEnd(5)} entry=${money(t.entryPrice).toFixed(2)} exit=${money(t.exitPrice).toFixed(2)} pnl=${money(t.pnlPct).toNumber().toFixed(3)}% reason=${t.exitReason}`,
+      `  ${trade.side.padEnd(5)} entry=${money(trade.entryPrice).toFixed(2)} exit=${money(trade.exitPrice).toFixed(2)} pnl=${money(trade.pnlPct).toNumber().toFixed(3)}% reason=${trade.exitReason}`,
     );
   }
+}
+
+function printTradeDeltas(
+  btTrades: readonly GridTrade[],
+  depTrades: readonly GridPaperTrade[],
+): void {
   console.log(`\nPer-trade deltas:`);
   for (let i = 0; i < Math.max(btTrades.length, depTrades.length); i++) {
-    const b = btTrades[i];
-    const d = depTrades[i];
-    if (!b || !d) {
+    const backtestTrade = btTrades[i];
+    const deployedTrade = depTrades[i];
+    if (!backtestTrade || !deployedTrade) {
       console.log(
-        `  trade[${i}] exists only in ${b ? "backtest" : "deployed"}`,
+        `  trade[${i}] exists only in ${backtestTrade ? "backtest" : "deployed"}`,
       );
       continue;
     }
     console.log(
-      `  trade[${i}] ${d.side} entryDelta=${Math.abs(b.entryPrice - money(d.entryPrice).toNumber()).toFixed(4)} pnlDelta=${Math.abs(b.pnlPct * 100 - money(d.pnlPct).toNumber()).toFixed(4)}pp btReason=${inferBtExitReason(b)} depReason=${d.exitReason}`,
+      `  trade[${i}] ${deployedTrade.side} entryDelta=${Math.abs(backtestTrade.entryPrice - money(deployedTrade.entryPrice).toNumber()).toFixed(4)} pnlDelta=${Math.abs(backtestTrade.pnlPct * 100 - money(deployedTrade.pnlPct).toNumber()).toFixed(4)}pp btReason=${inferBtExitReason(backtestTrade)} depReason=${deployedTrade.exitReason}`,
     );
   }
+}
+
+function printParityChecks(checks: ParityChecks): boolean {
   console.log(`\n8-dimension parity check:`);
   let allMatch = true;
-  for (const [k, v] of Object.entries(checks)) {
+  for (const [key, value] of Object.entries(checks)) {
     console.log(
-      `  ${k.padEnd(12)} ${v.match ? "MATCH" : "MISMATCH"}  ${v.note}`,
+      `  ${key.padEnd(12)} ${value.match ? "MATCH" : "MISMATCH"}  ${value.note}`,
     );
-    if (!v.match) allMatch = false;
+    if (!value.match) allMatch = false;
   }
+  return allMatch;
+}
+
+function report(
+  label: string,
+  bt: ReturnType<typeof runGridBacktest>,
+  depTrades: GridPaperTrade[],
+) {
+  const btTrades = bt.trades;
+  const checks = buildParityChecks(btTrades, depTrades);
+
+  console.log(`\n${"#".repeat(72)}`);
+  console.log(`# SCENARIO: ${label}`);
+  console.log(`${"#".repeat(72)}`);
+  printBacktestTrades(bt);
+  printDeployedTrades(depTrades);
+  printTradeDeltas(btTrades, depTrades);
+  const allMatch = printParityChecks(checks);
   console.log(
     `\nSCENARIO ${label}: ${allMatch ? "PARITY ACHIEVABLE" : "PARITY NOT ACHIEVABLE (see mismatches above)"}`,
   );

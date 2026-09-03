@@ -16,6 +16,7 @@ import type {
   LadderPaperState,
 } from "./types.js";
 import {
+  buildGridCloseTrade,
   runGridPaperTradingIteration,
   type GridPaperTradingOptions,
 } from "./grid-engine.js";
@@ -279,6 +280,8 @@ interface TrackingOrder {
 interface TrackingClose {
   side: string;
   size: number;
+  type: "market" | "limit";
+  price: number | null;
 }
 /** Mock futures adapter plus the orders/closes it observed. */
 interface TrackingFuturesAdapterHarness {
@@ -329,7 +332,12 @@ function makeTrackingFuturesAdapter(
       }),
     closePosition: (req) =>
       Effect.sync(() => {
-        closes.push({ side: req.side, size: req.size.toNumber() });
+        closes.push({
+          side: req.side,
+          size: req.size.toNumber(),
+          type: req.price === undefined ? "market" : "limit",
+          price: req.price?.toNumber() ?? null,
+        });
         if (!closeWithFill) return null;
         const fill = {
           orderId: "close",
@@ -578,7 +586,10 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
   });
 
-  it("re-seeds a flat state whose persisted config differs from the options", async () => {
+  it("heals flat config drift while preserving realized capital", async () => {
+    // 2026-09-03: a full flat reseed vaporized a realized +0.55% BTC win
+    // (50.27 -> 50.00). Limits come from options; the balance is the
+    // account's and survives config drift.
     const repo = new InMemoryPaperRepository();
     await Effect.runPromise(
       repo.saveGridState({
@@ -620,8 +631,8 @@ describe("grid paper engine", () => {
       repo.getGridState("binance", "ETH/USDT", "15m"),
     );
     expect(state).not.toBeNull();
-    expect(state?.capital.toNumber()).toBe(20);
-    expect(state?.peakCapital.toNumber()).toBe(20);
+    expect(state?.capital.toNumber()).toBe(10_000);
+    expect(state?.peakCapital.toNumber()).toBe(10_000);
     expect(state?.maxPositionPct).toBe(50);
     expect(state?.maxDrawdownPct).toBe(5);
     expect(state?.gridMaxGrids).toBe(1);
@@ -807,6 +818,135 @@ describe("grid paper engine", () => {
     expect(trades[0]?.entryOrderId).toBe("live");
     expect(trades[0]?.exitOrderId).toBe("close");
     expect(trades[0]?.realizedPnlPct).toBeDefined();
+  });
+
+  it("uses a market close for live stop exits", async () => {
+    const repo = new InMemoryPaperRepository();
+    const opts = makeOptions({
+      isLive: true,
+      leverage: 10,
+      trendFilterPeriod: 0,
+    });
+    const { adapter, closes } = makeTrackingFuturesAdapter(true, {
+      symbol: "ETH/USDT",
+      side: "short",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 10,
+      quantity: money("0.02"),
+      available: money("0.02"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    });
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        initialCapital: opts.initialCapital,
+        capital: money(opts.initialCapital),
+        peakCapital: money(opts.initialCapital),
+        paused: 0,
+        side: "short",
+        entryPrice: money(1000),
+        entryOrderId: "live",
+        entryFilledQty: money("0.02"),
+        entryFee: money(0),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(opts),
+        executionEnvironment: "bitget-live",
+        gridStepPct: opts.gridStepPct,
+        gridMaxGrids: opts.gridMaxGrids,
+        gridPauseAfterLossBars: opts.gridPauseAfterLossBars,
+        feePct: opts.feePct,
+        slippageBps: opts.slippageBps,
+        trendFilterPeriod: opts.trendFilterPeriod,
+        maxPositionPct: opts.maxPositionPct,
+        maxDrawdownPct: opts.maxDrawdownPct,
+        leverage: opts.leverage,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+
+    const candles: Candle[] = [
+      {
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        open: 1000,
+        high: 1001,
+        low: 999,
+        close: 1000,
+        volume: 10,
+        timestamp: new Date("2026-01-01T00:00:00.000Z"),
+      },
+      {
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        open: 1000,
+        high: 1030,
+        low: 995,
+        close: 1020,
+        volume: 10,
+        timestamp: new Date("2026-01-01T00:15:00.000Z"),
+      },
+    ];
+
+    const result = await runWithRepo(opts, repo, candles, adapter);
+
+    expect(result.action).toBe("closed");
+    expect(closes).toHaveLength(1);
+    expect(closes[0]?.type).toBe("market");
+    expect(closes[0]?.price).toBeNull();
+  });
+
+  it("uses confirmed live fill quantity and fees for capital accounting", () => {
+    const result = buildGridCloseTrade({
+      options: makeOptions({ isLive: true }),
+      state: {
+        entryFillSource: "live",
+        entryOrderId: "entry",
+        entryFilledQty: money("0.5"),
+        entryFee: money("0.1"),
+      } as GridPaperState,
+      side: "long",
+      entryPrice: money(100),
+      exitPrice: money(101),
+      exitReason: "target",
+      stateCapital: money(50),
+      peakCapital: money(50),
+      maxPositionPct: 100,
+      leverage: 10,
+      openedAt: new Date("2026-01-01T00:00:00.000Z"),
+      entryEvidence: {
+        orderId: "entry",
+        filledQty: money("0.5"),
+        fee: money("0.1"),
+      },
+      exitFill: {
+        orderId: "exit",
+        symbol: "ETH/USDT",
+        side: "sell",
+        productType: "USDT-FUTURES",
+        marginMode: "isolated",
+        filledQty: money("0.5"),
+        filledPrice: money(101),
+        fee: money("0.1"),
+        timestamp: new Date("2026-01-01T00:15:00.000Z"),
+      },
+      fee: 0.2,
+      stopFee: 0.4,
+      fundingCost: money(0),
+    });
+
+    // Gross fill PnL is $0.50, less $0.20 in confirmed fees. The old
+    // theoretical path would have applied 10x leverage and overstated this.
+    expect(result.capitalAfter.toNumber()).toBeCloseTo(50.3, 10);
+    expect(result.trade.pnlPct.toNumber()).toBeCloseTo(0.6, 10);
+    expect(result.trade.realizedPnlPct?.toNumber()).toBeCloseTo(0.6, 10);
   });
 
   it("applies the daily trade-count risk gate to live grid entries", async () => {
