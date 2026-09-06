@@ -94,4 +94,14 @@ describe("KillSwitchService", () => {
     const engaged = await Effect.runPromise(ks.isEngaged());
     expect(engaged).toBe(true);
   });
+
+  it("sees a stop engaged by another instance on the same db", async () => {
+    const db = freshDb();
+    const reader = makeKillSwitchService(db);
+    expect(await Effect.runPromise(reader.isEngaged())).toBe(false);
+    const writer = makeKillSwitchService(db);
+    await Effect.runPromise(writer.engage("other process stop"));
+    // Reader already cached false — must still observe the fresh stop.
+    expect(await Effect.runPromise(reader.isEngaged())).toBe(true);
+  });
 });

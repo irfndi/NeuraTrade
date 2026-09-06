@@ -40,14 +40,17 @@ ON CONFLICT(id) DO NOTHING;
 `;
 
 /**
- * SQLite-backed kill switch with an in-process write-through mirror.
+ * SQLite-backed kill switch.
  *
  * Fail-closed contract (live soaks depend on this): callers MUST abort
  * trading on any KillSwitchError, and must treat an unreadable/missing
- * persisted state as engaged (unknown => block). The in-process mirror is
- * set synchronously on engage BEFORE the DB write, so a failed persist still
- * leaves this process blocking; disengage only clears the mirror after a
- * confirmed DB write, so a failed disengage stays engaged.
+ * persisted state as engaged (unknown => block). Every isEngaged() reads
+ * the DB so a stop engaged by ANOTHER process is visible here; the
+ * in-process mirror is only a fallback when the DB read itself fails
+ * (a failed read fails closed, never open). Engage sets the mirror
+ * synchronously BEFORE the DB write so a failed persist still blocks
+ * this process; disengage only clears the mirror after a confirmed DB
+ * write, so a failed disengage stays engaged.
  */
 class KillSwitchSQLite implements KillSwitchService {
   /** Last known engaged state; null until first confirmed read/write. */
@@ -102,25 +105,31 @@ class KillSwitchSQLite implements KillSwitchService {
   }
 
   isEngaged(): Effect.Effect<boolean, KillSwitchError, never> {
-    return Effect.try({
-      try: () => {
-        if (this.mirror !== null) return this.mirror;
+    return Effect.suspend(() => {
+      try {
         const row = this.db
           .query("SELECT engaged FROM risk_kill_switch WHERE id = 1")
           .get() as { engaged: number } | null;
         if (!row) {
           // Engaged-unknown: the row should exist (constructor ensures it).
           // Fail closed instead of reading a deleted state as disengaged.
-          throw new Error("kill switch row missing; treating as engaged");
+          return Effect.fail(
+            new KillSwitchError("kill switch row missing; treating as engaged"),
+          );
         }
         this.mirror = row.engaged === 1;
-        return this.mirror;
-      },
-      catch: (err) =>
-        new KillSwitchError(
-          `Failed to read kill switch: ${err instanceof Error ? err.message : String(err)}`,
-          err,
-        ),
+        return Effect.succeed(this.mirror);
+      } catch (cause: unknown) {
+        // ponytail: on read failure, trust the mirror only if it says
+        // engaged; a null/false mirror plus a dead DB fails closed too.
+        if (this.mirror === true) return Effect.succeed(true);
+        return Effect.fail(
+          new KillSwitchError(
+            `Failed to read kill switch: ${cause instanceof Error ? cause.message : String(cause)}`,
+            cause,
+          ),
+        );
+      }
     });
   }
 
