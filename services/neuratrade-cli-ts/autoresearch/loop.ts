@@ -21,6 +21,7 @@ const resultsDir = join(here, "results");
 const knobsPath = join(here, "knobs.ts");
 const championPath = join(resultsDir, "champion.json");
 const championLock = join(resultsDir, "champion.lock");
+const claimedPath = join(resultsDir, "claimed.json");
 const ledgerPath = join(resultsDir, "ledger.jsonl");
 const goalsPath = join(resultsDir, "goals.md");
 
@@ -109,6 +110,13 @@ function goalsClaimed(r: EvaluateResult): boolean {
 }
 
 function writeGoals(status: string, r: EvaluateResult | null): void {
+  // Never downgrade a durable claim.
+  if (
+    status !== "CLAIMED" &&
+    readJsonFile<{ claimedAt?: string }>(claimedPath)?.claimedAt
+  ) {
+    return;
+  }
   const body = `# Autoresearch goals
 
 Status: **${status}**
@@ -128,9 +136,24 @@ Live trading remains frozen until credential rotation + position reconciliation.
   writeFileSync(goalsPath, body);
 }
 
+function persistClaim(r: EvaluateResult, knobs: AutoresearchKnobs): void {
+  writeJsonFile(claimedPath, {
+    claimedAt: new Date().toISOString(),
+    worker,
+    knobs,
+    result: r,
+  });
+  writeGoals("CLAIMED", r);
+}
+
 console.log(
   `autoresearch w${worker}/${workers}: trials=${trials} panelSymbols=${panelSymbols} screen=${screenSteps}@${screenBudget}s confirm=${confirmSteps}@${confirmBudget}s`,
 );
+
+if (readJsonFile<{ claimedAt?: string }>(claimedPath)?.claimedAt) {
+  console.log("GOALS already CLAIMED (claimed.json present) — exiting.");
+  process.exit(0);
+}
 
 console.log("loading candle panel once...");
 const panel = loadAlignedPanel({ symbols: panelSymbols });
@@ -191,6 +214,7 @@ withFileLock(championLock, () => {
       `SEED confirm=${base.score.toFixed(4)} screen=${screen.score.toFixed(4)} guardsOk=${base.guardsOk} reason=${base.reason}`,
     );
     if (goalsClaimed(base)) {
+      persistClaim(base, champ.knobs);
       console.log("GOALS CLAIMED on seed — stopping.");
       process.exit(0);
     }
@@ -206,6 +230,10 @@ withFileLock(championLock, () => {
 });
 
 for (let i = 1; i <= trials; i++) {
+  if (readJsonFile<{ claimedAt?: string }>(claimedPath)?.claimedAt) {
+    console.log("GOALS CLAIMED by another worker — stopping.");
+    process.exit(0);
+  }
   const localChamp = loadChampionUnlocked();
   // Occasional two-axis mutate to escape plateaus.
   let next = localChamp.knobs;
@@ -279,7 +307,11 @@ for (let i = 1; i <= trials; i++) {
         guardsOk: result.guardsOk,
       };
       persistChampionUnlocked(nextState);
-      writeGoals(goalsClaimed(result) ? "CLAIMED" : "IN_PROGRESS", result);
+      if (goalsClaimed(result)) {
+        persistClaim(result, next);
+        return "CLAIMED" as const;
+      }
+      writeGoals("IN_PROGRESS", result);
       return "KEEP" as const;
     }
     writeGoals("IN_PROGRESS", result);
@@ -290,7 +322,7 @@ for (let i = 1; i <= trials; i++) {
     `  ${decision} confirm score=${result.score.toFixed(4)} guardsOk=${result.guardsOk} reason=${result.reason} elapsedMs=${result.elapsedMs}`,
   );
 
-  if (decision === "KEEP" && goalsClaimed(result)) {
+  if (decision === "CLAIMED") {
     console.log("\nGOALS CLAIMED — stopping loop.");
     process.exit(0);
   }
