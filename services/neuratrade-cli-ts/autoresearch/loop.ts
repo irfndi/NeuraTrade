@@ -129,17 +129,11 @@ console.log(
   `panel ready: ${panel.symbols.length} symbols, refLen=${panel.refLen}, loadedMs=${panel.loadedMs}`,
 );
 
-const shard =
-  workers > 1
-    ? { symbolOffset: worker, symbolStride: workers }
-    : { symbolOffset: 0, symbolStride: 1 };
-
 function evalScreen(k: AutoresearchKnobs): EvaluateResult {
   return evaluateKnobsOnPanel(k, panel, {
     phase: "screen",
     maxSteps: screenSteps,
     budgetSec: screenBudget,
-    ...shard,
   });
 }
 
@@ -148,9 +142,6 @@ function evalConfirm(k: AutoresearchKnobs): EvaluateResult {
     phase: "confirm",
     maxSteps: confirmSteps,
     budgetSec: confirmBudget,
-    // Confirm always uses full panel (no shard) for claim-quality scores.
-    symbolOffset: 0,
-    symbolStride: 1,
   });
 }
 
