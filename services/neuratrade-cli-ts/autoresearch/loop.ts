@@ -55,22 +55,31 @@ mkdirSync(resultsDir, { recursive: true });
 
 interface ChampionState {
   knobs: AutoresearchKnobs;
+  /** Confirm-phase median log-return (claim metric). */
   score: number;
+  /** Screen-phase median log-return — used only for the cheap gate. */
+  screenScore: number;
   guardsOk: boolean;
 }
 
 function loadChampionUnlocked(): ChampionState {
-  const raw = readJsonFile<ChampionState>(championPath);
+  const raw = readJsonFile<ChampionState & { screenScore?: number }>(
+    championPath,
+  );
   if (raw?.knobs) {
     return {
       knobs: raw.knobs,
       score: Number.isFinite(raw.score) ? raw.score : Number.NEGATIVE_INFINITY,
+      screenScore: Number.isFinite(raw.screenScore)
+        ? (raw.screenScore as number)
+        : Number.NEGATIVE_INFINITY,
       guardsOk: Boolean(raw.guardsOk),
     };
   }
   return {
     knobs: { ...seedKnobs },
     score: Number.NEGATIVE_INFINITY,
+    screenScore: Number.NEGATIVE_INFINITY,
     guardsOk: false,
   };
 }
@@ -145,19 +154,25 @@ function evalConfirm(k: AutoresearchKnobs): EvaluateResult {
   });
 }
 
-// Seed champion under lock if missing / -Infinity.
+// Seed / backfill screenScore under lock (screen vs confirm are not comparable).
 withFileLock(championLock, () => {
   let champ = loadChampionUnlocked();
-  if (
+  const needsSeed =
     !Number.isFinite(champ.score) ||
-    champ.score === Number.NEGATIVE_INFINITY
-  ) {
+    champ.score === Number.NEGATIVE_INFINITY;
+  const needsScreenBackfill =
+    !needsSeed &&
+    (!Number.isFinite(champ.screenScore) ||
+      champ.screenScore === Number.NEGATIVE_INFINITY);
+
+  if (needsSeed) {
     console.log("evaluating seed champion (screen → confirm)...");
     const screen = evalScreen(champ.knobs);
     const base = evalConfirm(champ.knobs);
     champ = {
       knobs: champ.knobs,
       score: base.score,
+      screenScore: screen.score,
       guardsOk: base.guardsOk,
     };
     persistChampionUnlocked(champ);
@@ -173,29 +188,47 @@ withFileLock(championLock, () => {
     });
     writeGoals(goalsClaimed(base) ? "CLAIMED" : "IN_PROGRESS", base);
     console.log(
-      `SEED confirm score=${base.score.toFixed(4)} guardsOk=${base.guardsOk} reason=${base.reason} elapsedMs=${base.elapsedMs}`,
+      `SEED confirm=${base.score.toFixed(4)} screen=${screen.score.toFixed(4)} guardsOk=${base.guardsOk} reason=${base.reason}`,
     );
     if (goalsClaimed(base)) {
       console.log("GOALS CLAIMED on seed — stopping.");
       process.exit(0);
     }
+  } else if (needsScreenBackfill) {
+    console.log("backfilling champion screenScore for fair gate...");
+    const screen = evalScreen(champ.knobs);
+    champ = { ...champ, screenScore: screen.score };
+    persistChampionUnlocked(champ);
+    console.log(
+      `backfill screenScore=${screen.score.toFixed(4)} (confirm champ=${champ.score.toFixed(4)})`,
+    );
   }
 });
 
 for (let i = 1; i <= trials; i++) {
   const localChamp = loadChampionUnlocked();
-  const { next, axis } = mutateKnobs(localChamp.knobs, rng);
+  // Occasional two-axis mutate to escape plateaus.
+  let next = localChamp.knobs;
+  let axis: string;
+  const first = mutateKnobs(next, rng);
+  next = first.next;
+  axis = first.axis;
+  if (rng() < 0.25) {
+    const second = mutateKnobs(next, rng);
+    next = second.next;
+    axis = `${first.axis}+${second.axis}`;
+  }
   console.log(`\n[w${worker} trial ${i}/${trials}] mutate ${axis} → screen...`);
   const screen = evalScreen(next);
   console.log(
     `  screen score=${screen.score.toFixed(4)} guardsOk=${screen.guardsOk} elapsedMs=${screen.elapsedMs}`,
   );
 
-  // Cheap reject on screen score only (confirm is the claim gate).
+  // Compare screen-to-screen only (never against confirm score).
   const screenPromising =
     Number.isFinite(screen.score) &&
-    (localChamp.score === Number.NEGATIVE_INFINITY ||
-      screen.score > localChamp.score);
+    (localChamp.screenScore === Number.NEGATIVE_INFINITY ||
+      screen.score > localChamp.screenScore);
 
   if (!screenPromising) {
     appendLedger({
@@ -206,10 +239,11 @@ for (let i = 1; i <= trials; i++) {
       axis,
       knobs: next,
       screen,
+      championScreenScore: localChamp.screenScore,
       championScore: localChamp.score,
     });
     console.log(
-      `  DISCARD_SCREEN (screen ${screen.score.toFixed(4)} <= champ ${localChamp.score.toFixed(4)})`,
+      `  DISCARD_SCREEN (screen ${screen.score.toFixed(4)} <= champScreen ${localChamp.screenScore.toFixed(4)})`,
     );
     continue;
   }
@@ -235,11 +269,13 @@ for (let i = 1; i <= trials; i++) {
       screen,
       result,
       championScore: champ.score,
+      championScreenScore: champ.screenScore,
     });
     if (keep) {
       const nextState: ChampionState = {
         knobs: next,
         score: result.score,
+        screenScore: screen.score,
         guardsOk: result.guardsOk,
       };
       persistChampionUnlocked(nextState);
