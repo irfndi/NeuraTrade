@@ -3546,6 +3546,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         if (args.live && strategyType === "grid") {
           const liveGridError = validateLiveGridConfiguration(
             buildLiveGridConfigCandidate(args, resolvedExchange, productType),
+            isDemoAccount,
           );
           if (liveGridError !== undefined) {
             return yield* Effect.fail(new Error(liveGridError));
