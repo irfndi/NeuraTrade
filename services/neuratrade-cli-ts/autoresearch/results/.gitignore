@@ -1,3 +1,4 @@
 # Autoresearch results (ledger + champion). Generated; safe to delete.
 *
 !.gitignore
+!champion-whitelist.json

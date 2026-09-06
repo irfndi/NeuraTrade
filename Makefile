@@ -13,7 +13,7 @@ NC=\033[0m
 
 .PHONY: help services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
 	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once \
-	autoresearch-loop autoresearch-parallel
+	autoresearch-loop autoresearch-parallel champion-paper champion-demo champion-soak
 
 all: typecheck
 
@@ -129,3 +129,12 @@ autoresearch-loop: ## Single-worker screen→confirm loop until goals claim
 
 autoresearch-parallel: ## Start 4 parallel autoresearch workers via pm2
 	@cd services/neuratrade-cli-ts && pm2 start ecosystem.autoresearch.config.cjs
+
+champion-paper: ## Paper-soak claimed champion knobs (simulated, isolated HOME)
+	@cd services/neuratrade-cli-ts && pm2 start ecosystem.champion-soak.config.cjs --only neuratrade-champion-paper
+
+champion-demo: ## Bybit testnet soak of claimed champion knobs
+	@cd services/neuratrade-cli-ts && pm2 start ecosystem.champion-soak.config.cjs --only neuratrade-champion-demo
+
+champion-soak: ## Paper + Bybit testnet champion soaks
+	@cd services/neuratrade-cli-ts && pm2 start ecosystem.champion-soak.config.cjs

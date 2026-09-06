@@ -1,0 +1,58 @@
+[
+  {
+    "symbol": "BTC/USDT:USDT",
+    "exchange": "bybit-futures",
+    "returnPct": 0,
+    "gridParams": {
+      "gridStepPct": 1.29,
+      "gridMaxGrids": 3,
+      "gridPauseAfterLossBars": 4,
+      "rungs": 2,
+      "targetRatio": 1.9,
+      "chopGateAdx": 0,
+      "allocatedWeight": 0.25
+    }
+  },
+  {
+    "symbol": "ETH/USDT:USDT",
+    "exchange": "bybit-futures",
+    "returnPct": 0,
+    "gridParams": {
+      "gridStepPct": 1.29,
+      "gridMaxGrids": 3,
+      "gridPauseAfterLossBars": 4,
+      "rungs": 2,
+      "targetRatio": 1.9,
+      "chopGateAdx": 0,
+      "allocatedWeight": 0.25
+    }
+  },
+  {
+    "symbol": "SOL/USDT:USDT",
+    "exchange": "bybit-futures",
+    "returnPct": 0,
+    "gridParams": {
+      "gridStepPct": 1.29,
+      "gridMaxGrids": 3,
+      "gridPauseAfterLossBars": 4,
+      "rungs": 2,
+      "targetRatio": 1.9,
+      "chopGateAdx": 0,
+      "allocatedWeight": 0.25
+    }
+  },
+  {
+    "symbol": "LINK/USDT:USDT",
+    "exchange": "bybit-futures",
+    "returnPct": 0,
+    "gridParams": {
+      "gridStepPct": 1.29,
+      "gridMaxGrids": 3,
+      "gridPauseAfterLossBars": 4,
+      "rungs": 2,
+      "targetRatio": 1.9,
+      "chopGateAdx": 0,
+      "allocatedWeight": 0.25
+    }
+  }
+]
