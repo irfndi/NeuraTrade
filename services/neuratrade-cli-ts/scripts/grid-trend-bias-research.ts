@@ -58,7 +58,7 @@ function closeOpenGridPosition(
     side: "long" | "short",
     liquidation: boolean,
   ) => void,
- ): void {
+): void {
   if (positionSize > 0) {
     const target = entryPrice + step * targetRatio;
     const stop = entryPrice - step * maxGrids;

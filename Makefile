@@ -12,7 +12,7 @@ BLUE=\033[0;34m
 NC=\033[0m
 
 .PHONY: help services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
-	test test-cli-ts test-frontend build-ts logs-ts
+	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once autoresearch-loop
 
 all: typecheck
 
@@ -116,3 +116,12 @@ test-frontend: ## Run Telegram service tests
 
 logs-ts: ## Show TS gateway logs from NEURATRADE_HOME
 	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log
+
+autoresearch-test: ## Unit tests for autoresearch keep/discard + guards
+	@cd services/neuratrade-cli-ts && bun test autoresearch/
+
+autoresearch-once: ## Evaluate current autoresearch knobs once
+	@cd services/neuratrade-cli-ts && bun run autoresearch/run-once.ts --budget-sec=$${BUDGET_SEC:-180} --symbols=$${SYMBOLS:-8} --steps=$${STEPS:-40}
+
+autoresearch-loop: ## Overnight mutate→evaluate→keep/discard until goals claim
+	@cd services/neuratrade-cli-ts && bun run autoresearch/loop.ts --trials=$${TRIALS:-100} --budget-sec=$${BUDGET_SEC:-180} --symbols=$${SYMBOLS:-8} --steps=$${STEPS:-40}

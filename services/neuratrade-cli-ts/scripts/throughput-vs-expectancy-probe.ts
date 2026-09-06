@@ -114,9 +114,27 @@ const refLen = Math.min(...symbols.map((s) => aligned.get(s)!.length));
 console.log(`probe: ${symbols.length} symbols, ${refLen} bars`);
 
 const CONFIGS = [
-  { name: "base", gridStepPct: 1.0, stopRatio: 1.5, maxHoldBars: 48, targetRatio: 2 },
-  { name: "fast", gridStepPct: 0.5, stopRatio: 1.0, maxHoldBars: 8, targetRatio: 1.5 },
-  { name: "fastest", gridStepPct: 0.3, stopRatio: 0.8, maxHoldBars: 4, targetRatio: 1.2 },
+  {
+    name: "base",
+    gridStepPct: 1.0,
+    stopRatio: 1.5,
+    maxHoldBars: 48,
+    targetRatio: 2,
+  },
+  {
+    name: "fast",
+    gridStepPct: 0.5,
+    stopRatio: 1.0,
+    maxHoldBars: 8,
+    targetRatio: 1.5,
+  },
+  {
+    name: "fastest",
+    gridStepPct: 0.3,
+    stopRatio: 0.8,
+    maxHoldBars: 4,
+    targetRatio: 1.2,
+  },
 ] as const;
 
 const BASE_OPTS = {
@@ -191,7 +209,9 @@ function median(xs: number[]): number {
 }
 
 const months = (steps * STEP_BARS * 15) / (60 * 24 * 30);
-console.log(`\nprobe: ${steps} steps x ${symbols.length} symbols (~${months.toFixed(1)} symbol-months per config)\n`);
+console.log(
+  `\nprobe: ${steps} steps x ${symbols.length} symbols (~${months.toFixed(1)} symbol-months per config)\n`,
+);
 console.log(
   "config   | trades/sym-mo | win%  | medTrade% | medRet%  | medDD%  | med log-ret/window",
 );
@@ -200,7 +220,10 @@ let baseLog = 0;
 let fastLog = 0;
 for (const cfg of CONFIGS) {
   const a = acc.get(cfg.name)!;
-  const perSymMonth = a.trades / Math.max(1, steps * symbols.length) / (months / steps) * steps / Math.max(1, months);
+  const perSymMonth =
+    ((a.trades / Math.max(1, steps * symbols.length) / (months / steps)) *
+      steps) /
+    Math.max(1, months);
   const winPct = a.trades > 0 ? (a.wins / a.trades) * 100 : NaN;
   const medTrade = a.trades > 0 ? a.pnlSum / a.trades : NaN;
   const medRet = median(a.rets);

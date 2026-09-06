@@ -100,7 +100,7 @@ export function defaultRiskLimits(isLive: boolean): RiskLimits {
 function basicRiskViolations(
   context: RiskContext,
   limits: RiskLimits,
- ): string[] {
+): string[] {
   const violations: string[] = [];
   if (context.isLive && !limits.liveTradingEnabled) {
     violations.push("live trading is disabled");
@@ -143,7 +143,7 @@ function basicRiskViolations(
 function positionRiskViolations(
   context: RiskContext,
   limits: RiskLimits,
- ): string[] {
+): string[] {
   const violations: string[] = [];
   const positionLeverage = Math.max(1, context.leverage ?? 1);
   const positionSizePct =
@@ -186,7 +186,7 @@ function positionRiskViolations(
 function allowlistRiskViolations(
   context: RiskContext,
   limits: RiskLimits,
- ): string[] {
+): string[] {
   const violations: string[] = [];
   if (
     limits.allowedSymbols &&

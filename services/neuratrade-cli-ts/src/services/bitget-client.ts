@@ -837,7 +837,7 @@ function contractFieldAlias(
   key: string,
   alias: string,
   fallback: string = "0",
- ): string {
+): string {
   return String(data[key] ?? data[alias] ?? fallback);
 }
 function parseContract(data: BitgetApiRecord): BitgetContract {
@@ -845,7 +845,11 @@ function parseContract(data: BitgetApiRecord): BitgetContract {
     symbol: contractField(data, "symbol", ""),
     baseCoin: contractField(data, "baseCoin", ""),
     quoteCoin: contractField(data, "quoteCoin", ""),
-    productType: contractField(data, "productType", "USDT-FUTURES") as BitgetProductType,
+    productType: contractField(
+      data,
+      "productType",
+      "USDT-FUTURES",
+    ) as BitgetProductType,
     status: contractField(data, "status", ""),
     symbolStatus: contractFieldAlias(data, "symbolStatus", "status", ""),
     // The futures contracts endpoint reports decimal places as pricePlace

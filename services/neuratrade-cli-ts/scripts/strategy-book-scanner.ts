@@ -258,13 +258,15 @@ for (const [symbol, candles] of panel) {
   for (const engine of engines) {
     const windowStats: WindowStat[] = [];
     for (let w = 0; w < WINDOWS; w++) {
-      const testEnd =
-        candles.length -
-        (WINDOWS - 1 - w) * TEST_BARS;
+      const testEnd = candles.length - (WINDOWS - 1 - w) * TEST_BARS;
       const testStart = testEnd - TEST_BARS;
       const trainStart = testStart - TRAIN_BARS;
       if (trainStart < 0 || testEnd > candles.length) break;
-      const outcome = runEngine(engine, candles.slice(trainStart, testEnd), symbol);
+      const outcome = runEngine(
+        engine,
+        candles.slice(trainStart, testEnd),
+        symbol,
+      );
       if (outcome && outcome.trades > 0) {
         windowStats.push({
           retPct: outcome.retPct,
@@ -318,7 +320,9 @@ for (const [symbol, candles] of panel) {
 }
 
 const book = results.filter((r) => r.qualified);
-console.log(`\nscanner: ${results.length} combos evaluated, ${book.length} QUALIFIED\n`);
+console.log(
+  `\nscanner: ${results.length} combos evaluated, ${book.length} QUALIFIED\n`,
+);
 
 // Per-engine honesty table.
 console.log("engine  | combos | qualified | median(medRet%) | best combo");

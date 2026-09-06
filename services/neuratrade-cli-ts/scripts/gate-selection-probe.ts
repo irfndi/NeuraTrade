@@ -299,7 +299,10 @@ function median(xs: number[]): number {
     : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function pooled(halfOutcomes: WindowOutcome[], pick: (w: WindowOutcome) => number[]): number[] {
+function pooled(
+  halfOutcomes: WindowOutcome[],
+  pick: (w: WindowOutcome) => number[],
+): number[] {
   return halfOutcomes.flatMap(pick);
 }
 
@@ -343,14 +346,8 @@ for (const h of halves) {
 }
 
 console.log("\n=== KILL CRITERIA (pre-registered) ===");
-const h1Ok =
-  margins.H1 >= 3 &&
-  passRates.H1 >= 0.05 &&
-  passRates.H1 <= 0.95;
-const h2Ok =
-  margins.H2 >= 3 &&
-  passRates.H2 >= 0.05 &&
-  passRates.H2 <= 0.95;
+const h1Ok = margins.H1 >= 3 && passRates.H1 >= 0.05 && passRates.H1 <= 0.95;
+const h2Ok = margins.H2 >= 3 && passRates.H2 >= 0.05 && passRates.H2 <= 0.95;
 console.log(
   `H1 margin ${margins.H1.toFixed(2)}pp (need >= +3): ${h1Ok ? "OK" : "FAIL"} | H2 margin ${margins.H2.toFixed(2)}pp: ${h2Ok ? "OK" : "FAIL"}`,
 );

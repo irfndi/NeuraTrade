@@ -117,8 +117,7 @@ function fillAdxSeries(
       smoothedMinus = (smoothedMinus * (period - 1)) / period + minusDM[i];
       smoothedTR = (smoothedTR * (period - 1)) / period + tr[i];
       const plusDI = smoothedTR === 0 ? 0 : (smoothedPlus / smoothedTR) * 100;
-      const minusDI =
-        smoothedTR === 0 ? 0 : (smoothedMinus / smoothedTR) * 100;
+      const minusDI = smoothedTR === 0 ? 0 : (smoothedMinus / smoothedTR) * 100;
       const dx =
         plusDI + minusDI === 0
           ? 0

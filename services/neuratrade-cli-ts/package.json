@@ -19,7 +19,10 @@
     "dev:cf": "alchemy dev",
     "destroy:cf": "alchemy destroy",
     "logs:cf": "alchemy logs",
-    "tail:cf": "alchemy tail"
+    "tail:cf": "alchemy tail",
+    "autoresearch:once": "bun run autoresearch/run-once.ts",
+    "autoresearch:loop": "bun run autoresearch/loop.ts",
+    "autoresearch:test": "bun test autoresearch/"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.108",

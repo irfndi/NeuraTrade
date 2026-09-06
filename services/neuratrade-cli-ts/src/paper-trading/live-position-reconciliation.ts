@@ -77,8 +77,10 @@ function lacksCompleteLiveEntryEvidence(
   // ponytail: 8-way guard extracted to lower reconcileLivePosition from ~34 to ~12 CC
   // without reordering safety checks (order matters: side/state null, side match,
   // expected fields, fill-source proof, then quantity/available).
-  if (state.entryFillSource !== "live" && state.entryFillSource !== "adopted") return true;
-  if (state.entryOrderId === undefined || state.entryOrderId.length === 0) return true;
+  if (state.entryFillSource !== "live" && state.entryFillSource !== "adopted")
+    return true;
+  if (state.entryOrderId === undefined || state.entryOrderId.length === 0)
+    return true;
   if (state.entryFilledQty === undefined) return true;
   if (!state.entryFilledQty.isFinite()) return true;
   if (state.entryFilledQty.lessThanOrEqualTo(0)) return true;

@@ -200,7 +200,7 @@ function mergeConfigSection(
   base: ResolvedConfig,
   section: keyof ResolvedConfig,
   fields: ConfigFields,
- ): ResolvedConfig {
+): ResolvedConfig {
   const updates = Object.fromEntries(
     Object.entries(fields).filter(([, value]) => value !== undefined),
   );
@@ -217,13 +217,12 @@ function mergeRuntimeSection(
   rawSection: ConfigFields | undefined,
   runtimeSection: ConfigFields,
   fields: readonly string[],
- ): ResolvedConfig {
+): ResolvedConfig {
   if (!isJsonObject(rawSection)) return base;
   const updates = Object.fromEntries(
-    fields.filter((field) => field in rawSection).map((field) => [
-      field,
-      runtimeSection[field],
-    ]),
+    fields
+      .filter((field) => field in rawSection)
+      .map((field) => [field, runtimeSection[field]]),
   );
   return mergeConfigSection(base, section, updates);
 }
@@ -319,22 +318,16 @@ function applyRuntimeOverrides(
     runtime.telegram,
     ["service_url", "grpc_address", "use_polling", "api_base_url"],
   );
-  result = mergeRuntimeSection(
-    result,
-    "ai",
-    raw.ai,
-    runtime.ai,
-    [
-      "provider",
-      "model",
-      "base_url",
-      "temperature",
-      "max_tokens",
-      "min_confidence",
-      "daily_budget",
-      "routing_mode",
-    ],
-  );
+  result = mergeRuntimeSection(result, "ai", raw.ai, runtime.ai, [
+    "provider",
+    "model",
+    "base_url",
+    "temperature",
+    "max_tokens",
+    "min_confidence",
+    "daily_budget",
+    "routing_mode",
+  ]);
   if (isJsonObject(raw.features)) {
     result = { ...result, features: runtime.features };
   }

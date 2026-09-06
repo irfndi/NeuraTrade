@@ -514,7 +514,10 @@ function convertScalar(spec: AnyOptionSpec, raw: string): ScalarResult {
           message: `Invalid value '${raw}' for option '--${spec.name}': expected an integer`,
         };
       }
-      return { _tag: "ok", value: wrapOptional(spec, Number.parseInt(raw, 10)) };
+      return {
+        _tag: "ok",
+        value: wrapOptional(spec, Number.parseInt(raw, 10)),
+      };
     }
     case "float": {
       const n = Number(raw);

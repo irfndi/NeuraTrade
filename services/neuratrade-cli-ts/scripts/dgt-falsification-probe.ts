@@ -194,7 +194,10 @@ for (
           maxHoldBars: cfg.maxHoldBars,
           gridMaxGrids: cfg.gridMaxGrids,
         });
-        perConfigSum.set(cfg.name, (perConfigSum.get(cfg.name) ?? 0) + r.totalReturnPct);
+        perConfigSum.set(
+          cfg.name,
+          (perConfigSum.get(cfg.name) ?? 0) + r.totalReturnPct,
+        );
         perConfigCount.set(cfg.name, (perConfigCount.get(cfg.name) ?? 0) + 1);
       } catch {
         continue;
@@ -265,7 +268,9 @@ for (const cfg of CONFIGS) {
     row.push(`${med.toFixed(2).padStart(7)}  ${mn.toFixed(1).padStart(7)}`);
   }
   medians.set(cfg.name, { h1: meds[0], h2: meds[1] });
-  console.log(`${cfg.name.padEnd(13)} | ${row.join(" | ")} | ${survives ? "YES" : "-"}`);
+  console.log(
+    `${cfg.name.padEnd(13)} | ${row.join(" | ")} | ${survives ? "YES" : "-"}`,
+  );
 }
 {
   const row: string[] = [];
@@ -286,8 +291,7 @@ const bhMed = {
   h2: median(halves[1].ws.map((w) => w.buyHoldPct)),
 };
 const worstWideWindow = minFinite(windows.map((w) => w.returnsPct.dgt_wide));
-const beatsValidatedBoth =
-  wide.h1 - val.h1 >= 1 && wide.h2 - val.h2 >= 1;
+const beatsValidatedBoth = wide.h1 - val.h1 >= 1 && wide.h2 - val.h2 >= 1;
 const beatsBhBoth = wide.h1 > bhMed.h1 && wide.h2 > bhMed.h2;
 const tailOk = worstWideWindow > -20;
 console.log(
@@ -296,7 +300,9 @@ console.log(
 console.log(
   `dgt_wide vs buy&hold median: H1 ${wide.h1.toFixed(2)} vs ${bhMed.h1.toFixed(2)}, H2 ${wide.h2.toFixed(2)} vs ${bhMed.h2.toFixed(2)}`,
 );
-console.log(`worst single dgt_wide window: ${worstWideWindow.toFixed(1)}% (need > -20%)`);
+console.log(
+  `worst single dgt_wide window: ${worstWideWindow.toFixed(1)}% (need > -20%)`,
+);
 if (beatsValidatedBoth && beatsBhBoth && tailOk) {
   console.log(
     "\nVERDICT: SURVIVED — proceed to fresh-data walk-forward before ANY engine change.",

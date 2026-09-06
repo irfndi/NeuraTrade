@@ -38,17 +38,19 @@ const candles5m = (symbol: string) =>
     )
     .all(symbol) as CandleRow[];
 
-const toCandle = (symbol: string) => (r: CandleRow): Candle => ({
-  open: Number(r.open),
-  high: Number(r.high),
-  low: Number(r.low),
-  close: Number(r.close),
-  volume: Number(r.volume),
-  exchange: "bybit-futures",
-  symbol,
-  timeframe: "5m",
-  timestamp: new Date(String(r.ts)),
-});
+const toCandle =
+  (symbol: string) =>
+  (r: CandleRow): Candle => ({
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+    volume: Number(r.volume),
+    exchange: "bybit-futures",
+    symbol,
+    timeframe: "5m",
+    timestamp: new Date(String(r.ts)),
+  });
 
 for (const symbol of SYMBOLS) {
   const raw = candles5m(symbol).map(toCandle(symbol));

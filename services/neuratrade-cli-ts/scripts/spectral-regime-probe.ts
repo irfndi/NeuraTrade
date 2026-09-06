@@ -195,7 +195,8 @@ function eigenvaluesSymmetric(matrix: number[][]): number[] {
         if (Math.abs(a[p][q]) < 1e-12) continue;
         const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
         const t =
-          Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+          Math.sign(theta || 1) /
+          (Math.abs(theta) + Math.sqrt(theta * theta + 1));
         const c = 1 / Math.sqrt(t * t + 1);
         const s = t * c;
         for (let k = 0; k < n; k++) {

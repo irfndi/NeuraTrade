@@ -68,7 +68,10 @@ interface SymbolRow {
 
 let targets: string[];
 if (symbolOverride) {
-  targets = symbolOverride.split(",").map((s) => s.trim()).filter(Boolean);
+  targets = symbolOverride
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 } else {
   const rows = db
     .query(
@@ -79,7 +82,9 @@ if (symbolOverride) {
     )
     .all(TOP) as SymbolRow[];
   // DB rows look like "BTC/USDT:USDT"; Bybit wants "BTCUSDT".
-  targets = rows.map((r) => r.symbol.replace(/\/USDT.*$/, "USDT").toUpperCase());
+  targets = rows.map((r) =>
+    r.symbol.replace(/\/USDT.*$/, "USDT").toUpperCase(),
+  );
 }
 
 console.log(
@@ -128,7 +133,9 @@ for (const raw of targets) {
       }
     })();
     rowsThisSymbol += inserted;
-    oldest = Math.min(...list.map((r) => Number(r.fundingRateTimestamp ?? r.fundingTime)));
+    oldest = Math.min(
+      ...list.map((r) => Number(r.fundingRateTimestamp ?? r.fundingTime)),
+    );
     if (inserted === 0) break;
     pages += 1;
     if (list.length < PAGE) break;
@@ -138,4 +145,6 @@ for (const raw of targets) {
   console.log(`  ${wire}: +${rowsThisSymbol} rows (${pages} pages)`);
 }
 
-console.log(`backfill-funding: DONE, inserted/attempted ~${totalRows} rows total`);
+console.log(
+  `backfill-funding: DONE, inserted/attempted ~${totalRows} rows total`,
+);

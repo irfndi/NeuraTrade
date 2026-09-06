@@ -85,7 +85,7 @@ export function selectFlowUniverse(
   symbols: readonly FlowInstrument[],
   funding?: Readonly<Record<string, number>>,
   opts: FlowUniverseOptions = {},
- ): readonly FlowUniverseEntry[] {
+): readonly FlowUniverseEntry[] {
   const maxSpreadBps = opts.maxSpreadBps ?? DEFAULT_MAX_SPREAD_BPS;
   const minAgeDays = opts.minAgeDays ?? DEFAULT_MIN_AGE_DAYS;
   const topN = opts.topN ?? DEFAULT_FLOW_UNIVERSE_TOP_N;

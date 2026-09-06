@@ -94,7 +94,7 @@ export interface BitgetFuturesGuardResult {
 
 function findBasicFuturesOrderError(
   ctx: BitgetFuturesGuardContext,
- ): string | undefined {
+): string | undefined {
   const numericFields: Array<readonly [string, string]> = [
     ["order size", ctx.order.size],
     ["last price", ctx.lastPrice],
@@ -114,7 +114,9 @@ function findBasicFuturesOrderError(
       balance.available,
     ]);
   }
-  const invalidField = numericFields.find(([, value]) => !isDecimalString(value));
+  const invalidField = numericFields.find(
+    ([, value]) => !isDecimalString(value),
+  );
   if (invalidField !== undefined) {
     return `${invalidField[0]} must be a decimal string`;
   }
@@ -127,7 +129,11 @@ function findBasicFuturesOrderError(
     return `contract mismatch: order ${ctx.order.symbol} vs contract ${ctx.contract.symbol}`;
   }
   const contractStatus = ctx.contract.symbolStatus || ctx.contract.status;
-  if (contractStatus !== "online" && contractStatus !== "normal" && contractStatus !== "") {
+  if (
+    contractStatus !== "online" &&
+    contractStatus !== "normal" &&
+    contractStatus !== ""
+  ) {
     return `contract ${ctx.contract.symbol} is not tradable`;
   }
   if (compare(ctx.leverage, ctx.contract.minLeverage) < 0) {
@@ -140,13 +146,20 @@ function findBasicFuturesOrderError(
 }
 
 type FuturesSizingCheck =
-  | { readonly ok: true; readonly notional: string; readonly marginRequired: string }
+  | {
+      readonly ok: true;
+      readonly notional: string;
+      readonly marginRequired: string;
+    }
   | { readonly ok: false; readonly reason: string };
 
-function validateFuturesSizing(ctx: BitgetFuturesGuardContext): FuturesSizingCheck {
-  const price = ctx.order.price && ctx.order.price.trim() !== ""
-    ? ctx.order.price
-    : ctx.lastPrice;
+function validateFuturesSizing(
+  ctx: BitgetFuturesGuardContext,
+): FuturesSizingCheck {
+  const price =
+    ctx.order.price && ctx.order.price.trim() !== ""
+      ? ctx.order.price
+      : ctx.lastPrice;
   const notional = multiply(ctx.order.size, price);
   if (ctx.order.reduceOnly) {
     return { ok: true, notional, marginRequired: "0" };

@@ -141,7 +141,10 @@ function ladderOpts(): LadderOptions {
 }
 
 /** Funnel's own gate evaluation on history ENDING at endIdx (inclusive). */
-function passesFunnelGates(candles: readonly Candle[], endIdx: number): boolean {
+function passesFunnelGates(
+  candles: readonly Candle[],
+  endIdx: number,
+): boolean {
   const startIdx = endIdx - TRAIN_BARS - TEST_BARS * 2 + 1;
   if (startIdx < 0) return false;
   const window = candles.slice(startIdx, endIdx + 1);
@@ -227,7 +230,9 @@ function median(xs: number[]): number {
   const sorted = xs.filter(Number.isFinite).sort((a, b) => a - b);
   if (sorted.length === 0) return Number.NaN;
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return sorted.length % 2 === 1
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 const halfSplit = Math.floor(outcomes.length / 2);
@@ -236,7 +241,9 @@ const halves = [
   { name: "H2", ws: outcomes.slice(halfSplit) },
 ];
 
-console.log("\nhalf | n_sel | n_rej | med(sel)% | med(rej)% | margin | passRate");
+console.log(
+  "\nhalf | n_sel | n_rej | med(sel)% | med(rej)% | margin | passRate",
+);
 console.log("-".repeat(72));
 const margins: Record<string, number> = {};
 const rates: Record<string, number> = {};
@@ -257,11 +264,11 @@ for (const h of halves) {
 console.log("\n=== KILL CRITERIA (pre-registered) ===");
 const okH1 = margins.H1 >= 3 && rates.H1 >= 0.05 && rates.H1 <= 0.95;
 const okH2 = margins.H2 >= 3 && rates.H2 >= 0.05 && rates.H2 <= 0.95;
-console.log(
-  `H1 ${okH1 ? "OK" : "FAIL"} | H2 ${okH2 ? "OK" : "FAIL"}`,
-);
+console.log(`H1 ${okH1 ? "OK" : "FAIL"} | H2 ${okH2 ? "OK" : "FAIL"}`);
 if (okH1 && okH2) {
-  console.log("\nVERDICT: SURVIVED — the real funnel gates select better windows.");
+  console.log(
+    "\nVERDICT: SURVIVED — the real funnel gates select better windows.",
+  );
 } else {
   console.log(
     "\nVERDICT: NULL — even the funnel's own validator does not select better-than-random windows on this data. Selection-layer hypothesis closed.",
