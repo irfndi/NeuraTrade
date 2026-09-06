@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { checkGuards } from "./prepare.ts";
+import { checkGuards, PHASE_GEOM } from "./prepare.ts";
 import { mutateKnobs, shouldKeep, renderKnobsModule } from "./mutate.ts";
+import { withFileLock, writeJsonFile, readJsonFile } from "./lock.ts";
 import type { AutoresearchKnobs } from "./knobs.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const base: AutoresearchKnobs = {
   rungs: 1,
@@ -101,5 +105,31 @@ describe("renderKnobsModule", () => {
     const src = renderKnobsModule(base);
     expect(src).toContain("export const knobs");
     expect(src).toContain('"gridStepPct": 1');
+  });
+});
+
+describe("phase geometry", () => {
+  it("screen forward window is much shorter than confirm", () => {
+    expect(PHASE_GEOM.screen.forwardBars).toBeLessThan(
+      PHASE_GEOM.confirm.forwardBars,
+    );
+  });
+});
+
+describe("withFileLock", () => {
+  it("serializes writes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ar-lock-"));
+    const lock = join(dir, "x.lock");
+    const file = join(dir, "x.json");
+    try {
+      withFileLock(lock, () => writeJsonFile(file, { n: 1 }));
+      withFileLock(lock, () => {
+        const cur = readJsonFile<{ n: number }>(file)!;
+        writeJsonFile(file, { n: cur.n + 1 });
+      });
+      expect(readJsonFile<{ n: number }>(file)?.n).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

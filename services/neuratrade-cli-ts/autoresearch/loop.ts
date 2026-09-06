@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 /**
- * Overnight mutate → evaluate → keep/discard loop.
+ * Overnight mutate → screen → (confirm on KEEP) → keep/discard.
+ * Panel loaded once. Parallel-safe champion updates via lockfile.
  * Never touches live kill-switch or position rows.
  */
-import { mkdirSync, appendFileSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { knobs as seedKnobs, type AutoresearchKnobs } from "./knobs.ts";
-import { evaluateKnobs, type EvaluateResult } from "./prepare.ts";
+import {
+  loadAlignedPanel,
+  evaluateKnobsOnPanel,
+  type EvaluateResult,
+} from "./prepare.ts";
 import { mutateKnobs, shouldKeep, renderKnobsModule } from "./mutate.ts";
+import { withFileLock, readJsonFile, writeJsonFile } from "./lock.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const resultsDir = join(here, "results");
 const knobsPath = join(here, "knobs.ts");
 const championPath = join(resultsDir, "champion.json");
+const championLock = join(resultsDir, "champion.lock");
 const ledgerPath = join(resultsDir, "ledger.jsonl");
 const goalsPath = join(resultsDir, "goals.md");
 
@@ -22,48 +29,58 @@ function arg(name: string, fallback: string): string {
   return hit?.split("=")[1] ?? fallback;
 }
 
-const trials = Number(arg("trials", "100"));
-const budgetSec = Number(arg("budget-sec", "180"));
-const symbols = Number(arg("symbols", "8"));
-const steps = Number(arg("steps", "40"));
+const trials = Number(arg("trials", "500"));
+const worker = Number(arg("worker", "0"));
+const workers = Number(arg("workers", "1"));
+const panelSymbols = Number(arg("symbols", "8"));
+const screenSteps = Number(arg("screen-steps", "12"));
+const screenBudget = Number(arg("screen-budget-sec", "45"));
+const confirmSteps = Number(arg("confirm-steps", "40"));
+const confirmBudget = Number(arg("confirm-budget-sec", "180"));
+
+/** Deterministic RNG per worker for diverse mutations. */
+function mulberry32(seed: number): () => number {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const rng = mulberry32(0x9e3779b9 ^ (worker + 1) * 0x85ebca6b);
 
 mkdirSync(resultsDir, { recursive: true });
 
-function loadChampion(): {
+interface ChampionState {
   knobs: AutoresearchKnobs;
   score: number;
   guardsOk: boolean;
-} {
-  try {
-    const raw = JSON.parse(readFileSync(championPath, "utf8")) as {
-      knobs: AutoresearchKnobs;
-      score: number;
-      guardsOk?: boolean;
-    };
-    return {
-      knobs: raw.knobs,
-      score: raw.score,
-      guardsOk: Boolean(raw.guardsOk),
-    };
-  } catch {
-    return {
-      knobs: { ...seedKnobs },
-      score: Number.NEGATIVE_INFINITY,
-      guardsOk: false,
-    };
-  }
 }
 
-function persistChampion(
-  k: AutoresearchKnobs,
-  score: number,
-  guardsOk: boolean,
-): void {
-  writeFileSync(
-    championPath,
-    JSON.stringify({ knobs: k, score, guardsOk }, null, 2),
-  );
-  writeFileSync(knobsPath, renderKnobsModule(k));
+function loadChampionUnlocked(): ChampionState {
+  const raw = readJsonFile<ChampionState>(championPath);
+  if (raw?.knobs) {
+    return {
+      knobs: raw.knobs,
+      score: Number.isFinite(raw.score) ? raw.score : Number.NEGATIVE_INFINITY,
+      guardsOk: Boolean(raw.guardsOk),
+    };
+  }
+  return {
+    knobs: { ...seedKnobs },
+    score: Number.NEGATIVE_INFINITY,
+    guardsOk: false,
+  };
+}
+
+function persistChampionUnlocked(state: ChampionState): void {
+  writeJsonFile(championPath, state);
+  // Only worker 0 writes knobs.ts to avoid thrash; others still update champion.json.
+  if (worker === 0) {
+    writeFileSync(knobsPath, renderKnobsModule(state.knobs));
+  }
 }
 
 function appendLedger(row: unknown): void {
@@ -72,6 +89,7 @@ function appendLedger(row: unknown): void {
 
 function goalsClaimed(r: EvaluateResult): boolean {
   return (
+    r.phase === "confirm" &&
     r.guardsOk &&
     r.medianLogReturn > 0 &&
     r.winRatePct >= 48 &&
@@ -86,8 +104,9 @@ function writeGoals(status: string, r: EvaluateResult | null): void {
 
 Status: **${status}**
 Updated: ${new Date().toISOString()}
+Worker: ${worker}/${workers}
 
-| Goal | Target | Current |
+| Goal | Target | Current (confirm) |
 | --- | --- | --- |
 | Profitability (med log-ret) | > 0 | ${r ? r.medianLogReturn.toFixed(4) : "n/a"} |
 | Win rate | ≥ 48% | ${r ? r.winRatePct.toFixed(1) : "n/a"} |
@@ -100,80 +119,153 @@ Live trading remains frozen until credential rotation + position reconciliation.
   writeFileSync(goalsPath, body);
 }
 
-let champion = loadChampion();
 console.log(
-  `autoresearch loop: trials=${trials} budgetSec=${budgetSec} championScore=${champion.score}`,
+  `autoresearch w${worker}/${workers}: trials=${trials} panelSymbols=${panelSymbols} screen=${screenSteps}@${screenBudget}s confirm=${confirmSteps}@${confirmBudget}s`,
 );
 
-// Baseline evaluate if champion has no score yet.
-if (!Number.isFinite(champion.score) || champion.score === Number.NEGATIVE_INFINITY) {
-  console.log("evaluating seed champion...");
-  const base = evaluateKnobs(champion.knobs, {
-    budgetSec,
-    symbols,
-    maxSteps: steps,
+console.log("loading candle panel once...");
+const panel = loadAlignedPanel({ symbols: panelSymbols });
+console.log(
+  `panel ready: ${panel.symbols.length} symbols, refLen=${panel.refLen}, loadedMs=${panel.loadedMs}`,
+);
+
+const shard =
+  workers > 1
+    ? { symbolOffset: worker, symbolStride: workers }
+    : { symbolOffset: 0, symbolStride: 1 };
+
+function evalScreen(k: AutoresearchKnobs): EvaluateResult {
+  return evaluateKnobsOnPanel(k, panel, {
+    phase: "screen",
+    maxSteps: screenSteps,
+    budgetSec: screenBudget,
+    ...shard,
   });
-  champion = {
-    knobs: champion.knobs,
-    score: base.score,
-    guardsOk: base.guardsOk,
-  };
-  persistChampion(champion.knobs, champion.score, champion.guardsOk);
-  appendLedger({
-    ts: new Date().toISOString(),
-    trial: 0,
-    decision: "SEED",
-    axis: null,
-    knobs: champion.knobs,
-    result: base,
-  });
-  writeGoals(goalsClaimed(base) ? "CLAIMED" : "IN_PROGRESS", base);
-  console.log(
-    `SEED score=${base.score.toFixed(4)} guardsOk=${base.guardsOk} reason=${base.reason}`,
-  );
-  if (goalsClaimed(base)) {
-    console.log("GOALS CLAIMED on seed — stopping.");
-    process.exit(0);
-  }
 }
 
-for (let i = 1; i <= trials; i++) {
-  const { next, axis } = mutateKnobs(champion.knobs);
-  console.log(`\n[trial ${i}/${trials}] mutate ${axis} → evaluate...`);
-  const result = evaluateKnobs(next, { budgetSec, symbols, maxSteps: steps });
-  const keep = shouldKeep({
-    candidateScore: result.score,
-    candidateGuardsOk: result.guardsOk,
-    championScore: champion.score,
-    championGuardsOk: champion.guardsOk,
+function evalConfirm(k: AutoresearchKnobs): EvaluateResult {
+  return evaluateKnobsOnPanel(k, panel, {
+    phase: "confirm",
+    maxSteps: confirmSteps,
+    budgetSec: confirmBudget,
+    // Confirm always uses full panel (no shard) for claim-quality scores.
+    symbolOffset: 0,
+    symbolStride: 1,
   });
-  const decision = keep ? "KEEP" : "DISCARD";
-  appendLedger({
-    ts: new Date().toISOString(),
-    trial: i,
-    decision,
-    axis,
-    knobs: next,
-    result,
-    championScore: champion.score,
-  });
-  console.log(
-    `${decision} score=${result.score.toFixed(4)} (champ=${champion.score.toFixed(4)}) guardsOk=${result.guardsOk} reason=${result.reason} elapsedMs=${result.elapsedMs}`,
-  );
-  if (keep) {
-    champion = {
-      knobs: next,
-      score: result.score,
-      guardsOk: result.guardsOk,
+}
+
+// Seed champion under lock if missing / -Infinity.
+withFileLock(championLock, () => {
+  let champ = loadChampionUnlocked();
+  if (
+    !Number.isFinite(champ.score) ||
+    champ.score === Number.NEGATIVE_INFINITY
+  ) {
+    console.log("evaluating seed champion (screen → confirm)...");
+    const screen = evalScreen(champ.knobs);
+    const base = evalConfirm(champ.knobs);
+    champ = {
+      knobs: champ.knobs,
+      score: base.score,
+      guardsOk: base.guardsOk,
     };
-    persistChampion(next, result.score, result.guardsOk);
-    writeGoals(goalsClaimed(result) ? "CLAIMED" : "IN_PROGRESS", result);
-    if (goalsClaimed(result)) {
-      console.log("\nGOALS CLAIMED — stopping loop.");
+    persistChampionUnlocked(champ);
+    appendLedger({
+      ts: new Date().toISOString(),
+      worker,
+      trial: 0,
+      decision: "SEED",
+      axis: null,
+      knobs: champ.knobs,
+      screen,
+      result: base,
+    });
+    writeGoals(goalsClaimed(base) ? "CLAIMED" : "IN_PROGRESS", base);
+    console.log(
+      `SEED confirm score=${base.score.toFixed(4)} guardsOk=${base.guardsOk} reason=${base.reason} elapsedMs=${base.elapsedMs}`,
+    );
+    if (goalsClaimed(base)) {
+      console.log("GOALS CLAIMED on seed — stopping.");
       process.exit(0);
     }
-  } else {
+  }
+});
+
+for (let i = 1; i <= trials; i++) {
+  const localChamp = loadChampionUnlocked();
+  const { next, axis } = mutateKnobs(localChamp.knobs, rng);
+  console.log(`\n[w${worker} trial ${i}/${trials}] mutate ${axis} → screen...`);
+  const screen = evalScreen(next);
+  console.log(
+    `  screen score=${screen.score.toFixed(4)} guardsOk=${screen.guardsOk} elapsedMs=${screen.elapsedMs}`,
+  );
+
+  // Cheap reject on screen score only (confirm is the claim gate).
+  const screenPromising =
+    Number.isFinite(screen.score) &&
+    (localChamp.score === Number.NEGATIVE_INFINITY ||
+      screen.score > localChamp.score);
+
+  if (!screenPromising) {
+    appendLedger({
+      ts: new Date().toISOString(),
+      worker,
+      trial: i,
+      decision: "DISCARD_SCREEN",
+      axis,
+      knobs: next,
+      screen,
+      championScore: localChamp.score,
+    });
+    console.log(
+      `  DISCARD_SCREEN (screen ${screen.score.toFixed(4)} <= champ ${localChamp.score.toFixed(4)})`,
+    );
+    continue;
+  }
+
+  console.log("  screen promising → confirm...");
+  const result = evalConfirm(next);
+
+  const decision = withFileLock(championLock, () => {
+    const champ = loadChampionUnlocked();
+    const keep = shouldKeep({
+      candidateScore: result.score,
+      candidateGuardsOk: result.guardsOk,
+      championScore: champ.score,
+      championGuardsOk: champ.guardsOk,
+    });
+    appendLedger({
+      ts: new Date().toISOString(),
+      worker,
+      trial: i,
+      decision: keep ? "KEEP" : "DISCARD_CONFIRM",
+      axis,
+      knobs: next,
+      screen,
+      result,
+      championScore: champ.score,
+    });
+    if (keep) {
+      const nextState: ChampionState = {
+        knobs: next,
+        score: result.score,
+        guardsOk: result.guardsOk,
+      };
+      persistChampionUnlocked(nextState);
+      writeGoals(goalsClaimed(result) ? "CLAIMED" : "IN_PROGRESS", result);
+      return "KEEP" as const;
+    }
     writeGoals("IN_PROGRESS", result);
+    return "DISCARD_CONFIRM" as const;
+  });
+
+  console.log(
+    `  ${decision} confirm score=${result.score.toFixed(4)} guardsOk=${result.guardsOk} reason=${result.reason} elapsedMs=${result.elapsedMs}`,
+  );
+
+  if (decision === "KEEP" && goalsClaimed(result)) {
+    console.log("\nGOALS CLAIMED — stopping loop.");
+    process.exit(0);
   }
 }
 

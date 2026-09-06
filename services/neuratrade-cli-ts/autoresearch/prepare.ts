@@ -1,6 +1,9 @@
 /**
  * Frozen evaluation harness (Karpathy prepare.py analogue).
  * Do not edit during autoresearch trials — change knobs.ts only.
+ *
+ * Speed: load the 15m panel ONCE via loadAlignedPanel(), then evaluateKnobsOnPanel().
+ * Two-phase: screen (short forward) then confirm (full 30d) on KEEP candidates.
  */
 import { Database } from "bun:sqlite";
 import { resampleCandles } from "../src/scalping/grid-universe.ts";
@@ -8,11 +11,16 @@ import { runLadderGridBacktest } from "../src/scalping/ladder-grid.ts";
 import type { Candle } from "../src/market-data/types.ts";
 import type { AutoresearchKnobs } from "./knobs.ts";
 
+export type EvalPhase = "screen" | "confirm";
+
 export interface EvaluateOptions {
   readonly symbols?: number;
   readonly maxSteps?: number;
   readonly budgetSec?: number;
   readonly dbPath?: string;
+  readonly phase?: EvalPhase;
+  /** Preloaded panel — skips DB I/O when set. */
+  readonly panel?: AlignedPanel;
 }
 
 export interface EvaluateResult {
@@ -29,13 +37,38 @@ export interface EvaluateResult {
   readonly steps: number;
   readonly elapsedMs: number;
   readonly reason: string;
+  readonly phase: EvalPhase;
+}
+
+export interface AlignedPanel {
+  readonly symbols: readonly string[];
+  readonly aligned: ReadonlyMap<string, Candle[]>;
+  readonly refLen: number;
+  readonly loadedMs: number;
 }
 
 const FEE_PCT = 0.02;
 const SLIPPAGE_BPS = 2;
-const STEP_BARS = 96;
-const FORWARD_BARS = 2880; // ~30d of 15m
-const FIRST_BAR = 672;
+
+/** Phase geometry — screen is cheap; confirm is the claim gate. */
+export const PHASE_GEOM = {
+  screen: {
+    stepBars: 96,
+    forwardBars: 672, // ~7d of 15m
+    firstBar: 336,
+    minCandles: 2500,
+    minWindows: 4,
+    minSymbols: 3,
+  },
+  confirm: {
+    stepBars: 96,
+    forwardBars: 2880, // ~30d of 15m
+    firstBar: 672,
+    minCandles: 6000,
+    minWindows: 8,
+    minSymbols: 3,
+  },
+} as const;
 
 function median(xs: number[]): number {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
@@ -84,14 +117,15 @@ function load15m(db: Database, symbolWire: string): Candle[] {
   return resampleCandles(base, 15, "15m");
 }
 
-export function evaluateKnobs(
-  knobs: AutoresearchKnobs,
-  opts: EvaluateOptions = {},
-): EvaluateResult {
+/** Load + align once per process. Reuse across all trials. */
+export function loadAlignedPanel(opts: {
+  symbols?: number;
+  dbPath?: string;
+  minCandles?: number;
+}): AlignedPanel {
   const started = Date.now();
-  const budgetMs = (opts.budgetSec ?? 180) * 1000;
   const topN = opts.symbols ?? 8;
-  const maxSteps = opts.maxSteps ?? 40;
+  const minCandles = opts.minCandles ?? PHASE_GEOM.confirm.minCandles;
 
   const db = new Database(homeDb(opts.dbPath), { readonly: true });
   db.exec("PRAGMA busy_timeout = 30000;");
@@ -107,9 +141,8 @@ export function evaluateKnobs(
 
   const panel = new Map<string, Candle[]>();
   for (const row of symbolRows.slice(0, topN)) {
-    if (Date.now() - started > budgetMs * 0.35) break;
     const candles = load15m(db, row.symbol);
-    if (candles.length >= 6000) panel.set(row.symbol, candles);
+    if (candles.length >= minCandles) panel.set(row.symbol, candles);
   }
   db.close();
 
@@ -129,11 +162,30 @@ export function evaluateKnobs(
         Number.isFinite(c.close) &&
         c.close > 0,
     );
-    if (clipped.length >= 6000) aligned.set(symbol, clipped);
+    if (clipped.length >= minCandles) aligned.set(symbol, clipped);
   }
 
   const symbols = [...aligned.keys()].sort();
-  const empty = (reason: string): EvaluateResult => ({
+  const refLen =
+    symbols.length > 0
+      ? Math.min(...symbols.map((s) => aligned.get(s)!.length))
+      : 0;
+
+  return {
+    symbols,
+    aligned,
+    refLen,
+    loadedMs: Date.now() - started,
+  };
+}
+
+function emptyResult(
+  reason: string,
+  started: number,
+  phase: EvalPhase,
+  symbolCount: number,
+): EvaluateResult {
+  return {
     score: Number.NEGATIVE_INFINITY,
     guardsOk: false,
     medianLogReturn: Number.NaN,
@@ -143,17 +195,45 @@ export function evaluateKnobs(
     tradesPerSymMonth: Number.NaN,
     expectancyPct: Number.NaN,
     windows: 0,
-    symbols: symbols.length,
+    symbols: symbolCount,
     steps: 0,
     elapsedMs: Date.now() - started,
     reason,
-  });
+    phase,
+  };
+}
 
-  if (symbols.length < 3) return empty("insufficient_symbols");
+/** Fast path: evaluate against an already-loaded panel (no DB). */
+export function evaluateKnobsOnPanel(
+  knobs: AutoresearchKnobs,
+  panel: AlignedPanel,
+  opts: {
+    maxSteps?: number;
+    budgetSec?: number;
+    phase?: EvalPhase;
+    /** Optional symbol shard for parallel workers (indices into panel.symbols). */
+    symbolOffset?: number;
+    symbolStride?: number;
+  } = {},
+): EvaluateResult {
+  const started = Date.now();
+  const phase: EvalPhase = opts.phase ?? "confirm";
+  const geom = PHASE_GEOM[phase];
+  const budgetMs = (opts.budgetSec ?? (phase === "screen" ? 45 : 180)) * 1000;
+  const maxSteps = opts.maxSteps ?? (phase === "screen" ? 12 : 40);
+  const stride = Math.max(1, opts.symbolStride ?? 1);
+  const offset = Math.max(0, opts.symbolOffset ?? 0);
 
-  const refLen = Math.min(...symbols.map((s) => aligned.get(s)!.length));
-  const lastStartBar = refLen - FORWARD_BARS - 1;
-  if (lastStartBar <= FIRST_BAR) return empty("insufficient_bars");
+  const symbols = panel.symbols.filter((_, i) => i % stride === offset);
+  if (symbols.length < geom.minSymbols) {
+    return emptyResult("insufficient_symbols", started, phase, symbols.length);
+  }
+
+  const refLen = panel.refLen;
+  const lastStartBar = refLen - geom.forwardBars - 1;
+  if (lastStartBar <= geom.firstBar) {
+    return emptyResult("insufficient_bars", started, phase, symbols.length);
+  }
 
   const rets: number[] = [];
   const dds: number[] = [];
@@ -181,17 +261,17 @@ export function evaluateKnobs(
   };
 
   for (
-    let bar = FIRST_BAR;
+    let bar = geom.firstBar;
     bar <= lastStartBar && steps < maxSteps;
-    bar += STEP_BARS, steps++
+    bar += geom.stepBars, steps++
   ) {
     if (Date.now() - started > budgetMs) break;
     for (const symbol of symbols) {
       if (Date.now() - started > budgetMs) break;
-      const candles = aligned.get(symbol)!;
+      const candles = panel.aligned.get(symbol)!;
       const startIdx = candles.length - refLen + bar;
-      const endIdx = Math.min(candles.length, startIdx + FORWARD_BARS);
-      if (endIdx - startIdx < FORWARD_BARS * 0.9) continue;
+      const endIdx = Math.min(candles.length, startIdx + geom.forwardBars);
+      if (endIdx - startIdx < geom.forwardBars * 0.9) continue;
       const slice = candles.slice(startIdx, endIdx);
       try {
         const r = runLadderGridBacktest(slice, baseOpts);
@@ -207,9 +287,11 @@ export function evaluateKnobs(
   }
 
   const windows = rets.length;
-  if (windows < 8) return empty("insufficient_windows");
+  if (windows < geom.minWindows) {
+    return emptyResult("insufficient_windows", started, phase, symbols.length);
+  }
 
-  const months = (steps * STEP_BARS * 15) / (60 * 24 * 30);
+  const months = (steps * geom.stepBars * 15) / (60 * 24 * 30);
   const tradesPerSymMonth =
     months > 0 ? trades / Math.max(1, symbols.length * months) : Number.NaN;
   const winRatePct = trades > 0 ? (wins / trades) * 100 : Number.NaN;
@@ -221,21 +303,21 @@ export function evaluateKnobs(
     .map((r) => Math.log(1 + Math.max(-0.95, r / 100)));
   const medianLogReturn = median(logs);
 
-  const guards: string[] = [];
-  if (!(medianLogReturn > 0)) guards.push("log_return_nonpositive");
-  if (!(winRatePct >= 48)) guards.push("winrate_below_48");
-  if (!(medianDrawdownPct <= 15)) guards.push("drawdown_above_15");
-  if (!(tradesPerSymMonth >= 4)) guards.push("throughput_below_4");
-  if (!(expectancyPct > 0)) guards.push("expectancy_nonpositive");
+  const g = checkGuards({
+    medianLogReturn,
+    winRatePct,
+    medianDrawdownPct,
+    tradesPerSymMonth,
+    expectancyPct,
+  });
 
-  const guardsOk = guards.length === 0;
   const score = Number.isFinite(medianLogReturn)
     ? medianLogReturn
     : Number.NEGATIVE_INFINITY;
 
   return {
     score,
-    guardsOk,
+    guardsOk: g.ok,
     medianLogReturn,
     medianReturnPct,
     medianDrawdownPct,
@@ -246,8 +328,29 @@ export function evaluateKnobs(
     symbols: symbols.length,
     steps,
     elapsedMs: Date.now() - started,
-    reason: guardsOk ? "ok" : guards.join(","),
+    reason: g.reason,
+    phase,
   };
+}
+
+/** Convenience: load panel (or use opts.panel) then evaluate. */
+export function evaluateKnobs(
+  knobs: AutoresearchKnobs,
+  opts: EvaluateOptions = {},
+): EvaluateResult {
+  const phase = opts.phase ?? "confirm";
+  const panel =
+    opts.panel ??
+    loadAlignedPanel({
+      symbols: opts.symbols ?? 8,
+      dbPath: opts.dbPath,
+      minCandles: PHASE_GEOM[phase].minCandles,
+    });
+  return evaluateKnobsOnPanel(knobs, panel, {
+    maxSteps: opts.maxSteps,
+    budgetSec: opts.budgetSec,
+    phase,
+  });
 }
 
 /** Pure guard check used by unit tests (no DB). */

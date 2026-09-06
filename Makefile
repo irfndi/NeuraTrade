@@ -12,7 +12,8 @@ BLUE=\033[0;34m
 NC=\033[0m
 
 .PHONY: help services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
-	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once autoresearch-loop
+	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once \
+	autoresearch-loop autoresearch-parallel
 
 all: typecheck
 
@@ -120,8 +121,11 @@ logs-ts: ## Show TS gateway logs from NEURATRADE_HOME
 autoresearch-test: ## Unit tests for autoresearch keep/discard + guards
 	@cd services/neuratrade-cli-ts && bun test autoresearch/
 
-autoresearch-once: ## Evaluate current autoresearch knobs once
+autoresearch-once: ## Evaluate current autoresearch knobs once (confirm phase)
 	@cd services/neuratrade-cli-ts && bun run autoresearch/run-once.ts --budget-sec=$${BUDGET_SEC:-180} --symbols=$${SYMBOLS:-8} --steps=$${STEPS:-40}
 
-autoresearch-loop: ## Overnight mutate→evaluate→keep/discard until goals claim
-	@cd services/neuratrade-cli-ts && bun run autoresearch/loop.ts --trials=$${TRIALS:-100} --budget-sec=$${BUDGET_SEC:-180} --symbols=$${SYMBOLS:-8} --steps=$${STEPS:-40}
+autoresearch-loop: ## Single-worker screen→confirm loop until goals claim
+	@cd services/neuratrade-cli-ts && bun run autoresearch/loop.ts --trials=$${TRIALS:-500} --symbols=$${SYMBOLS:-8} --screen-steps=$${SCREEN_STEPS:-12} --screen-budget-sec=$${SCREEN_BUDGET:-45} --confirm-steps=$${CONFIRM_STEPS:-40} --confirm-budget-sec=$${CONFIRM_BUDGET:-180}
+
+autoresearch-parallel: ## Start 4 parallel autoresearch workers via pm2
+	@cd services/neuratrade-cli-ts && pm2 start ecosystem.autoresearch.config.cjs

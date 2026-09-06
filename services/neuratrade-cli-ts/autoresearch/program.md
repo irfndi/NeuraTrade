@@ -27,10 +27,13 @@ Until claimed: keep looping. Prefer falsification over storytelling.
 
 ```bash
 cd services/neuratrade-cli-ts
-bun run autoresearch:once          # single evaluate of current knobs
-bun run autoresearch:loop         # mutate → evaluate → keep/discard overnight
-bun run autoresearch:loop -- --trials=50 --budget-sec=180
+make -C ../.. autoresearch-once
+make -C ../.. autoresearch-loop          # 1 worker, panel cached, screen→confirm
+make -C ../.. autoresearch-parallel      # 4 pm2 workers, shared champion lock
 ```
+
+Each trial: cheap **screen** (~7d windows) → only promising knobs pay full **confirm** (~30d).
+Candle panel loads once per process.
 
 ## Mutation hints (for agents)
 
