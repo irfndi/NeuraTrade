@@ -626,6 +626,11 @@ export interface BybitClientImpl {
     symbol: string;
     orderId: string;
   }) => Effect.Effect<BybitOrder, BybitClientError>;
+  /** Order history (filled/cancelled/rejected — realtime only holds active). */
+  readonly getOrderHistory: (args: {
+    symbol: string;
+    orderId: string;
+  }) => Effect.Effect<BybitOrder | null, BybitClientError>;
   /** All resting open orders for a symbol (realtime endpoint, no orderId). */
   readonly getOpenOrders: (
     symbol?: string,
@@ -794,6 +799,15 @@ function makeBybitClientImpl(
             },
         ),
       ),
+    // History holds what realtime drops: filled, cancelled, rejected.
+    // Null (not the empty-order sentinel) when Bybit has no record —
+    // callers distinguish "unknown" from "unfilled".
+    getOrderHistory: ({ symbol, orderId }) =>
+      get(
+        "/v5/order/history",
+        { category: "linear", symbol, orderId },
+        BybitOrderListSchema,
+      ).pipe(Effect.map((result) => result.list?.[0] ?? null)),
     getOpenOrders: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
@@ -1204,6 +1218,15 @@ function pollBybitOrderFill(
       data = yield* withError(
         client.getOrder({ symbol, orderId: ack.orderId }),
       );
+    }
+    // Empty realtime (orderId "") means the order left the active window —
+    // filled-then-aged, cancelled, or never indexed. NEVER treat as proof
+    // unfilled: check history first, or a real fill gets rolled back.
+    if (data.orderId === "" || data.orderStatus === "") {
+      const past = yield* withError(
+        client.getOrderHistory({ symbol, orderId: ack.orderId }),
+      ).pipe(Effect.orElseSucceed(() => null));
+      if (past !== null) data = past;
     }
     const filledQty = money(data.cumExecQty);
     const filledPrice = money(data.avgPrice);

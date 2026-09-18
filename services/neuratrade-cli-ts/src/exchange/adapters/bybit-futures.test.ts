@@ -102,6 +102,7 @@ function makeStubClient(): BybitClientImpl {
         cumExecFee: orderStatus === "Filled" ? "0.5" : "0",
       }),
     getOpenOrders: () => Effect.succeed(openOrders as never),
+    getOrderHistory: () => Effect.succeed(null),
     cancelOrder: (args) =>
       cancelError
         ? Effect.fail(
