@@ -6,3 +6,5 @@ edition.workspace = true
 [dependencies]
 nt-risk = { path = "../nt-risk" }
 nt-market = { path = "../nt-market" }
+nt-execution = { path = "../nt-execution" }
+nt-ledger = { path = "../nt-ledger" }

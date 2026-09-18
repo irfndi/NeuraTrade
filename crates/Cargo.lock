@@ -17,6 +17,8 @@ dependencies = [
 name = "nt-grid"
 version = "0.1.0"
 dependencies = [
+ "nt-execution",
+ "nt-ledger",
  "nt-market",
  "nt-risk",
 ]

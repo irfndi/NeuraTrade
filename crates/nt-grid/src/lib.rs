@@ -5,6 +5,9 @@
 use nt_market::Panel;
 use nt_risk::Money;
 
+pub mod engine;
+pub use engine::{FillReason, PaperEngineConfig, PaperFillEvent, Side, run_paper_engine};
+
 /// Grid geometry. `step_bp`: rung spacing in basis points of anchor.
 #[derive(Debug, Clone, Copy)]
 pub struct GridConfig {
