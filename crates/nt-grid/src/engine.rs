@@ -28,7 +28,7 @@
 //! `&[nt_market::Candle]` (oldest-first, the same order `Panel::new` sorts
 //! into) directly instead.
 
-use nt_execution::{HONEST_TAKER_EXIT_BP, Order, submit};
+use nt_execution::{Order, submit};
 use nt_ledger::Ledger;
 use nt_market::Candle;
 use nt_risk::{EquityWindow, Money, RiskLimits, approve};
@@ -61,6 +61,12 @@ pub struct PaperEngineConfig {
     /// Exchange contract-spec rounding (min qty, tick size) is out of scope
     /// for this pass — see the task brief.
     pub max_position_size_pct: i64,
+    /// Per-ticker realized cost in basis points of notional: exchange fee
+    /// plus measured slippage plus minimum-size rounding drag for THIS symbol.
+    /// The global 6bp default is a research floor, not a trading promise:
+    /// PUMPFUN-class drag fails sizing against its own edge while ETH passes.
+    /// Feed per-symbol, never global.
+    pub fee_bp: i64,
 }
 
 /// Which side a fill's position was on.
@@ -181,7 +187,11 @@ pub fn run_paper_engine(
 
                 let position_value = Money(scale(capital.0, cfg.max_position_size_pct, 100));
                 let qty_abs = scale(position_value.0, 1_000_000, entry_price.0.max(1));
-                let qty_signed = if side == Side::Long { qty_abs } else { -qty_abs };
+                let qty_signed = if side == Side::Long {
+                    qty_abs
+                } else {
+                    -qty_abs
+                };
 
                 let Ok(appr) = approve(
                     capital,
@@ -199,7 +209,7 @@ pub fn run_paper_engine(
                     Order {
                         qty_base_micros: qty_signed,
                         price_micros: entry_price,
-                        fee_bp: HONEST_TAKER_EXIT_BP,
+                        fee_bp: cfg.fee_bp,
                     },
                 );
                 events.push(PaperFillEvent {
@@ -280,7 +290,7 @@ pub fn run_paper_engine(
                     Order {
                         qty_base_micros: exit_qty,
                         price_micros: exit_price,
-                        fee_bp: HONEST_TAKER_EXIT_BP,
+                        fee_bp: cfg.fee_bp,
                     },
                 );
                 events.push(PaperFillEvent {

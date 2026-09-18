@@ -7,6 +7,14 @@
 use nt_risk::{Money, RiskApproval};
 
 /// Taker-exit fee in basis points of notional (honest default: 0.06% = 6bp).
+///
+/// Per-ticker efficiency: Bybit charges maker 2bp / taker 5.5bp uniformly,
+/// so the RESEARCH default stays global — but every symbol pays a different
+/// REALIZED rate once slippage and minimum-size rounding land. `Order.fee_bp`
+/// is per-order for exactly this reason: fill `fee_bp` from the symbol's own
+/// measured bps (fee + slippage + rounding drag), not from one global. A
+/// symbol whose realized drag exceeds its expected edge per trade is
+/// untradable at that size no matter what the global default says.
 pub const HONEST_TAKER_EXIT_BP: i64 = 6;
 
 /// A paper order: signed qty in base units (micros), limit price in micro-USDT.

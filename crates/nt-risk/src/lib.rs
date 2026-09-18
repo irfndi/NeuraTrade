@@ -123,26 +123,27 @@ pub fn allowlist_violations(
     limits: &RiskLimits,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(allowed) = &limits.allowed_symbols {
-        if !allowed.is_empty() && !allowed.iter().any(|s| s == symbol) {
-            out.push(format!("symbol {symbol} is not in the allowed list"));
-        }
+    if let Some(allowed) = &limits.allowed_symbols
+        && !allowed.is_empty()
+        && !allowed.iter().any(|s| s == symbol)
+    {
+        out.push(format!("symbol {symbol} is not in the allowed list"));
     }
-    if let Some(allowed) = &limits.allowed_product_types {
-        if !allowed.is_empty() {
-            match product_type {
-                None => out.push("product type unknown is not allowed".to_string()),
-                Some(pt) if !allowed.iter().any(|s| s == pt) => {
-                    out.push(format!("product type {pt} is not allowed"));
-                }
-                _ => {}
+    if let Some(allowed) = &limits.allowed_product_types
+        && !allowed.is_empty()
+    {
+        match product_type {
+            None => out.push("product type unknown is not allowed".to_string()),
+            Some(pt) if !allowed.iter().any(|s| s == pt) => {
+                out.push(format!("product type {pt} is not allowed"));
             }
+            _ => {}
         }
     }
-    if let (Some(max_lev), Some(lev)) = (limits.max_leverage, leverage) {
-        if lev > max_lev {
-            out.push(format!("leverage {lev}x exceeds max {max_lev}x"));
-        }
+    if let (Some(max_lev), Some(lev)) = (limits.max_leverage, leverage)
+        && lev > max_lev
+    {
+        out.push(format!("leverage {lev}x exceeds max {max_lev}x"));
     }
     out
 }

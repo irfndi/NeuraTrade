@@ -86,6 +86,7 @@
 //   net   = gross - fees = -1_748_112
 //   render: gross "-1.50", fees "0.24", net "-1.74" (Money::render truncates
 //   to 2dp: (|v| % 1_000_000) / 10_000)
+use nt_execution::HONEST_TAKER_EXIT_BP;
 use nt_grid::{FillReason, PaperEngineConfig, Side, run_paper_engine};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
@@ -123,7 +124,11 @@ fn main() {
         grid_max_grids: 2,
         slippage_bps: 50,
         max_position_size_pct: 10,
+        // Same run at two realized costs: 6bp honest floor vs 69bp
+        // PUMPFUN-class drag. Sizes/prices must not move; only fees do.
+        fee_bp: HONEST_TAKER_EXIT_BP,
     };
+    let drag = PaperEngineConfig { fee_bp: 69, ..cfg };
     let capital = Money::usdt(1000);
     let limits = RiskLimits::live();
 
@@ -196,6 +201,23 @@ fn main() {
     assert_eq!(totals.fills, 4);
     assert_eq!(totals.gross_micros, -1_505_999);
     assert_eq!(totals.fees_micros, 242_113);
+
+    // Per-ticker proof: same fills, PUMPFUN-class drag. Sizes and prices
+    // must be identical; only fees move. Net must be strictly worse.
+    let (devents, dledger) = run_paper_engine(&candles, &drag, capital, &limits);
+    assert_eq!(devents.len(), events.len());
+    for (a, b) in devents.iter().zip(events.iter()) {
+        assert_eq!(a.qty_base_micros, b.qty_base_micros, "size is fee-blind");
+        assert_eq!(a.price, b.price, "price is fee-blind");
+        assert!(a.fee.0 > b.fee.0, "drag must raise every fee");
+    }
+    let dtotals = dledger.totals();
+    assert_eq!(
+        dtotals.gross_micros, totals.gross_micros,
+        "gross is fee-blind"
+    );
+    assert!(dtotals.fees_micros > totals.fees_micros);
+    assert!(dtotals.net_micros() < totals.net_micros());
     assert_eq!(totals.net_micros(), -1_748_112);
 
     println!("nt-grid paper_engine_check ok");

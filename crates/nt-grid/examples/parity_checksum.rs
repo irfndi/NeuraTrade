@@ -28,7 +28,7 @@ fn main() {
     let mut sum: u32 = 0;
     let mut w: u32 = 1;
     for sig in s.iter().rev() {
-        let rung = sig.rung.abs() as u32;
+        let rung = u32::try_from(sig.rung.abs()).unwrap_or(u32::MAX);
         let up = if sig.rung > 0 { 512 } else { 0 };
         let price_cents = (sig.price.0 / 10_000) as u32;
         let pack = sig.at as u32 + rung * 16 + up + price_cents * 2048;

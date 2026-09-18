@@ -92,9 +92,14 @@ fn main() {
     };
     let v = allowlist_violations("ETH/USDT:USDT", Some("COIN-FUTURES"), Some(20), &scoped);
     assert_eq!(v.len(), 3, "symbol + product type + leverage must all fire");
-    assert!(allowlist_violations("BTC/USDT:USDT", Some("USDT-FUTURES"), Some(5), &scoped).is_empty());
+    assert!(
+        allowlist_violations("BTC/USDT:USDT", Some("USDT-FUTURES"), Some(5), &scoped).is_empty()
+    );
     // Unknown product type fails an active allowlist, same as guards.ts.
-    assert_eq!(allowlist_violations("BTC/USDT:USDT", None, None, &scoped).len(), 1);
+    assert_eq!(
+        allowlist_violations("BTC/USDT:USDT", None, None, &scoped).len(),
+        1
+    );
     // No allowlists configured at all -> nothing can violate.
     let unrestricted = RiskLimits {
         allowed_symbols: None,
