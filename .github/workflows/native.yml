@@ -83,6 +83,9 @@ jobs:
           (cd "$HOME/.bend" && ln -sfn "app/${{ env.BEND_VERSION }}/ci" current)
           curl -fsSL https://bend-lang.com/install.sh | sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH applies to NEXT steps only: export in-step so the
+          # pin check below resolves bend in THIS step.
+          export PATH="$HOME/.bend/bin:$PATH"
           bend --version
       - name: Run grid kernel (parity checksum 663097394)
         run: |
