@@ -491,6 +491,71 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(lastOrderNotional).toBeGreaterThan(20);
     expect(lastOrderNotional).toBeLessThan(30);
   });
+  it("skips a min-raised rung past the notional-cap share (regression: BTC 164% guard trip)", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(), // capital 100, rungs 2
+      isLive: true,
+      maxPositionPct: 50,
+      maxNotionalPct: 100,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      // BTC-like floor: 0.001 min on a ~100k price dwarfs the 25 USDT rung.
+      contractSpecs: { minQty: 0.001, qtyStep: 0.001, minTradeUSDT: 5 },
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () =>
+        Effect.succeed(
+          [candle(100000, 100000, 99000, 99500, 0), candle(99000, 99500, 98500, 99000, 1)] as Candle[],
+        ),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    let placed = 0;
+    const adapter = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const recordingAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      placeOrder: (req) => {
+        placed += 1;
+        return adapter.placeOrder(req);
+      },
+    };
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, recordingAdapter),
+      ),
+    );
+    // Min-raised 0.001 BTC x ~99k = ~99 USDT > 50 USDT cap share: no venue
+    // order, no guard trip — a clean HOLD, not a rolled-back bar.
+    expect(placed).toBe(0);
+    expect(result.action).toBe("hold");
+    expect(result.note).not.toContain("notional size");
+  });
+
 
   it("uses dynamic leverage that scales with account size (small acct -> low cap)", async () => {
     const db = new Database(":memory:");
