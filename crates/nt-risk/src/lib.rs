@@ -227,10 +227,18 @@ pub struct RiskApproval {
 /// `Ok` carries the execution seal; `Err` carries every violation.
 ///
 /// Does NOT yet call [`live_trading_violations`], [`trade_count_violations`]
-/// or [`allowlist_violations`] — those were added alongside a concurrent
-/// task building on this exact signature; wiring them in is a signature
-/// change deferred to avoid breaking that in-flight work. Callers that need
-/// them today must call all four functions and merge the violation lists.
+/// or [`allowlist_violations`]. Reassessed once `nt-grid`'s paper engine
+/// (the only current caller) landed: that engine has no live/daily-count
+/// concept to give these checks (it walks a fixture batch, not a live day),
+/// so wiring them in today means threading meaningless placeholder
+/// `is_live=false`/`trades_today_count=0` through every call site for no
+/// behavioral benefit. Also, `clever-cabin-k4u` (dynamic equity window +
+/// rejection fixture) already needs to touch every `approve()` call site in
+/// `engine.rs` — bundle this signature change with that pass instead of
+/// touching the same call sites twice. Wire these in once a caller with
+/// real live/daily/symbol context exists (Task 7 Step 4, exchange wiring).
+/// Callers that need them today must call all four functions and merge the
+/// violation lists.
 pub fn approve(
     capital: Money,
     window: &EquityWindow,
