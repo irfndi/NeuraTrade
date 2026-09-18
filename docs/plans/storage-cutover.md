@@ -4,6 +4,25 @@ Draft for P3 (plan Task 5). Vendor still an owner call (managed vs second
 volume); schema below is vendor-neutral Postgres. SQLite stays readable until
 reads cut; the 9.4 GB monolith is never extended with new writers.
 
+**Considered and rejected for the ledger role (2026-09-18):**
+`rusqlite` and `tursodatabase/turso` (SQLite rewritten in Rust, formerly
+Limbo). `rusqlite` is bindings to real SQLite — it does not fix this repo's
+actual pain point (the single-writer bottleneck starving paper/demo soaks
+under concurrent research writers), so it solves nothing Postgres doesn't
+already solve better here. `turso` is more interesting — pure Rust (fits
+"Rust owns everything"), and now ships real concurrent writes (MVCC +
+row-level conflict detection, preview since Aug 2026) — but its own
+maintainers describe it as beta and explicitly not yet at "SQLite-level
+reliability," caution advised for anything mission-critical. The `fills`/
+`positions`/`kill_switch` tables below are exactly that (real money math,
+P0 no-float rule) — not the place to carry beta-database risk. Postgres
+stays the ledger store.
+
+`turso` IS worth a second look for the **candle/research** role below, as an
+alternative to raw Parquet — SQL-queryable, concurrent-safe, no separate
+DuckDB hop, same low-stakes / not-money-critical profile Parquet already
+has. Not decided; flagging for whoever picks up Task 5 Step 2+.
+
 ## Postgres — transactional state only
 
 ```sql
