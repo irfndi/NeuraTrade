@@ -70,17 +70,16 @@ function loadChampionKnobs() {
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 const knobs = loadChampionKnobs();
 const cliTsDir = __dirname;
-const whitelist = path.join(
-  __dirname,
-  "autoresearch",
-  "results",
-  "champion-whitelist.json",
-);
+// TRIAL SCOPE: LINK only (lowest venue floor — smallest-amount trial).
+// BTC at $100/4 = ~$25/partition can never pass the ~$115 venue floor
+// (already guard-doomed at 150%+ on the $50 demo partition); ETH/SOL stay
+// demo/paper-only until trial proves fills. Single-symbol watchlist keeps
+// the full $100 behind one orderable rung.
+const whitelist = path.join(__dirname, "trial-live-whitelist.json");
 const trialHome = path.join(
   process.env.HOME || "/root",
   ".neuratrade-champion-trial-live",
 );
-
 module.exports = {
   apps: [
     {
