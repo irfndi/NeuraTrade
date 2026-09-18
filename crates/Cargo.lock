@@ -5,6 +5,12 @@ version = 4
 [[package]]
 name = "nt-cli"
 version = "0.1.0"
+dependencies = [
+ "nt-grid",
+ "nt-ledger",
+ "nt-market",
+ "nt-risk",
+]
 
 [[package]]
 name = "nt-execution"
