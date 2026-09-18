@@ -15,11 +15,15 @@ set +a
 BAK=/root/.neuratrade/data/neuratrade.db.bak-20260905
 [ -f "$BAK" ] || { echo "bak already gone, nothing to do"; exit 0; }
 PUT=/opt/neuratrade/services/neuratrade-cli-ts/scripts/r2-put.py
-TS=$(date -u +%Y%m%dT%H%M%SZ)
-# Persistent workdir (survives reboot, so resume is real) + trap cleanup
-# of parts only after manifest-complete delete (never mid-run).
-WORK=/root/.neuratrade/archive-bak-$TS
+# Stable workdir so resume is real (first run stamps PREFIX, re-runs reuse it).
+WORK=/root/.neuratrade/archive-bak-20260905
 mkdir -p "$WORK"
+if [ -f "$WORK/PREFIX" ]; then
+  TS=$(cat "$WORK/PREFIX")
+else
+  TS=$(date -u +%Y%m%dT%H%M%SZ)
+  echo "$TS" > "$WORK/PREFIX"
+fi
 cleanup_parts() { rm -f "$WORK"/part-*; }
 # Disk gate: gzip parts (~2GB est) + headroom must fit before split starts.
 AVAIL_KB=$(df / | awk 'NR==2 {print $4}')
@@ -28,9 +32,12 @@ NEED_KB=$((BAK_KB / 3 + 1048576))
 [ "$AVAIL_KB" -gt "$NEED_KB" ] || { echo "disk low (avail ${AVAIL_KB}KB < need ${NEED_KB}KB), abort"; exit 1; }
 echo "local sha256: $(sha256sum "$BAK" | cut -d" " -f1) ($(du -h "$BAK" | cut -f1))"
 # 1GB gzip parts, numbered for resume.
-split -b 1G --numeric-suffixes=1 --suffix-length=3 <(gzip -c "$BAK") "$WORK/part-"
+# Only split when no parts yet (resume reuses existing parts + MANIFEST).
+if ! ls "$WORK"/part-* >/dev/null 2>&1; then
+  split -b 1G --numeric-suffixes=1 --suffix-length=3 <(gzip -c "$BAK") "$WORK/part-"
+fi
 MANIFEST="$WORK/MANIFEST"
-: > "$MANIFEST"
+[ -f "$MANIFEST" ] || : > "$MANIFEST"
 for part in "$WORK"/part-*; do
   n=$(basename "$part")
   key="neuratrade/db-backup/neuratrade.db.bak-20260905-$TS/$n.gz"

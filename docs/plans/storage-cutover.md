@@ -94,3 +94,14 @@ field-for-field so the Rust shadow can dual-write with no translation.
   Symlink swap: `ln -sfn /opt/neuratrade/bin/nt-cli-<sha> /opt/neuratrade/bin/nt-cli`
   Restart only the replaced app (e.g. `pm2 restart nt-cli`), then health probe: `nt-cli health`.
 - Rollback = re-symlink previous binary (`ln -sfn .../nt-cli-<prev-sha> .../nt-cli`) + `pm2 restart` the same app + `nt-cli health` again.
+
+## Bak archive tooling (2026-09-18, tooling only — never executed)
+
+- `scripts/archive-bak-r2.sh`: stable workdir
+  `/root/.neuratrade/archive-bak-20260905` (persistent, not /tmp); first
+  run stamps `PREFIX`, re-runs reuse it so R2 keys + MANIFEST stay stable.
+  Splits gzip stream into 1GB `part-*`, skips split when parts exist, skips
+  PUT for parts already `VERIFY OK` in MANIFEST (real resume). Disk gate
+  before split; delete only via `--delete-after-verify` with complete
+  manifest + typed YES; parts cleaned only after delete. Upload/delete
+  require owner GO; this session ships the script only.
