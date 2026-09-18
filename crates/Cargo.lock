@@ -14,6 +14,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nt-grid"
+version = "0.1.0"
+dependencies = [
+ "nt-market",
+ "nt-risk",
+]
+
+[[package]]
 name = "nt-ledger"
 version = "0.1.0"
 dependencies = [

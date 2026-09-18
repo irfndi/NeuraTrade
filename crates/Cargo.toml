@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["nt-cli", "nt-risk", "nt-execution", "nt-ledger", "nt-market"]
+members = ["nt-cli", "nt-risk", "nt-execution", "nt-ledger", "nt-market", "nt-grid"]
 
 [workspace.package]
 version = "0.1.0"
