@@ -20,8 +20,10 @@
  * 2. Exposed-chat creds rotated (clever-cabin-ztm) — OAuth sub-account
  *    588670783 is the rotation target, never the old keys
  * 3. Owner typed CONFIRM on the [MAINNET] card (asset/amount/direction/cost)
- *
- * Run: pm2 start ecosystem.trial-live.config.cjs --only neuratrade-champion-trial-live
+ * 4. CODE: validateLiveSandboxMode (scalp.ts:3248) rejects --live with
+ *    BYBIT_USE_TESTNET=false by design — trial-live needs an explicit
+ *    mainnet allow-flag + owner-CONFIRM gate wired before this app can
+ *    start. Until then operator-start fails closed on validation.
  */
 const fs = require("node:fs");
 const path = require("node:path");
