@@ -89,6 +89,9 @@ jobs:
           bend bend/guards.bend -o /tmp/guards
           test "$(/tmp/guards)" = "2065"
 
+      - name: Verify Bend pin
+        run: test "$(bend --version)" = "bend ${{ env.BEND_VERSION }}"
+
   zig:
     name: Zig cross-build (box artifact)
     runs-on: ubuntu-latest

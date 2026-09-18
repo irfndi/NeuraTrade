@@ -113,7 +113,8 @@ function championArgs(extra) {
     "--slippage-bps",
     "2",
     // Marketable-limit demo entries: cross the rung touch 5bps so thin
-    // testnet books fill (clever-cabin-85m). Paper ledger keeps fillPrice.
+    // testnet books fill (clever-cabin-85m). Paper fee line carries the
+    // same cross cost, so paper-vs-demo has zero divergence from this.
     "--live-entry-cross-bps",
     "5",
     "--leverage",
