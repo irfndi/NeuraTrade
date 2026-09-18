@@ -57,6 +57,7 @@ jobs:
           done
           cargo run -q -p nt-grid --example paper_engine_check
           cargo run -q -p nt-grid --example sleeves_check
+          cargo run -q -p nt-grid --example pump_catch
 
   bend:
     name: Bend parity (grid + guards + search kernels)

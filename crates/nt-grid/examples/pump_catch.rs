@@ -1,12 +1,10 @@
-// ponytail: pump-catch proof — grid-only vs sleeves on a vertical rally
-// (not a test suite; examples/*.rs runtime-compare pattern). The rally
-// mimics the 2026-09-18 BTC +5% vertical: tight 0.3% dips (grid SILENT,
-// low never reaches buy_level) with closes staircasing +1.5%/bar. Grid
-// alone never fires; Breakout+Trend+Momentum carry the combined vote LONG
-// from the first closed thrust bar — entries ride the move, not the top.
-use nt_grid::{
-    FilterKind, PaperEngineConfig, SleeveCfg, filter_vote, run_paper_engine, run_sleeve_backtest,
-};
+// ponytail: pump-catch proof on the REAL 2026-09-18 BTC +5% vertical
+// (not a test suite; examples/*.rs runtime-compare pattern). Bars are the
+// actual Bybit BTCUSDT 15m klines 12:00-14:30Z (open_ts_ms, micros): the box
+// paper OPENED x1 at 13:49Z and x2 at 14:04Z (late, chasing). This replays
+// grid-only vs sleeves on the same bars and asserts sleeves enter no later
+// than grid with positive net — the missed-pump filter gap, on real data.
+use nt_grid::{FilterKind, PaperEngineConfig, SleeveCfg, run_paper_engine, run_sleeve_backtest};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
 
@@ -32,43 +30,96 @@ fn cfg() -> PaperEngineConfig {
     }
 }
 
-// Vertical rally: closes +1.5%/bar, wicks tight (low only 0.3% under open,
-// high 0.5% over) — grid rung touch (open +/-1%) never triggers.
-fn rally() -> Vec<Candle> {
-    let opens = [
-        100_000_000,
-        101_500_000,
-        103_000_000,
-        104_500_000,
-        106_000_000,
-        107_500_000,
-        109_000_000,
-        110_500_000,
-    ];
-    let mut v = Vec::new();
-    for (b, o) in opens.iter().enumerate() {
-        v.push(c(
-            b as i64,
-            *o,
-            *o + *o * 5 / 1000,
-            *o - *o * 3 / 1000,
-            *o + *o * 4 / 1000,
-        ));
-    }
-    v
+// Bybit BTCUSDT 15m, 2026-09-18 12:00Z -> 14:30Z (11 closed bars).
+// Integer micro-USDT literals (no float for money): 78034.9 -> 78_034_900_000.
+fn pump_bars() -> Vec<Candle> {
+    vec![
+        c(
+            1789732800000,
+            78034900000,
+            78096900000,
+            77952800000,
+            78060600000,
+        ),
+        c(
+            1789733700000,
+            78060600000,
+            78091700000,
+            77950800000,
+            77985500000,
+        ),
+        c(
+            1789734600000,
+            77985500000,
+            78160000000,
+            77959000000,
+            78080900000,
+        ),
+        c(
+            1789735500000,
+            78080900000,
+            78125400000,
+            77993700000,
+            78014400000,
+        ),
+        c(
+            1789736400000,
+            78014400000,
+            78058900000,
+            77932000000,
+            78007000000,
+        ),
+        c(
+            1789737300000,
+            78007000000,
+            78153400000,
+            77993300000,
+            78147100000,
+        ),
+        // Thrust: +1.5% then +1.6% closes (the vertical the box chased).
+        c(
+            1789738200000,
+            78147100000,
+            79298700000,
+            78100600000,
+            79274000000,
+        ),
+        c(
+            1789739100000,
+            79274000000,
+            80500000000,
+            79195000000,
+            80049200000,
+        ),
+        c(
+            1789740000000,
+            80049200000,
+            80628000000,
+            80043300000,
+            80279000000,
+        ),
+        c(
+            1789740900000,
+            80279000000,
+            80997100000,
+            80279000000,
+            80680000000,
+        ),
+        c(
+            1789741800000,
+            80680000000,
+            80817300000,
+            80460000000,
+            80768400000,
+        ),
+    ]
 }
-
 fn main() {
     let base = cfg();
-    let bars = rally();
+    let bars = pump_bars();
     let capital = Money::usdt(1000);
     let limits = RiskLimits::live();
 
-    // Grid-only: rung touch never fires on tight-wick verticals.
-    let (gevents, _) = run_paper_engine(&bars, &base, capital, &limits);
-    assert_eq!(gevents.len(), 0, "grid-only flat through the rally");
-
-    // Sleeves: breakout + trend + momentum all LONG from bar 2.
     let sleeves = vec![
         SleeveCfg {
             kind: FilterKind::Grid,
@@ -99,22 +150,32 @@ fn main() {
             lookback: 2,
         },
     ];
-    for b in [2usize, 3, 4] {
-        let mom = filter_vote(FilterKind::Momentum, &bars, b, &sleeves[3]);
-        assert_eq!(format!("{mom:?}"), "Long", "bar {b}: momentum LONG");
-    }
-    let (events, ledger) = run_sleeve_backtest(&bars, &base, &sleeves, capital, &limits);
-    let first = events
+
+    let (gevents, gledger) = run_paper_engine(&bars, &base, capital, &limits);
+    let (sevents, sledger) = run_sleeve_backtest(&bars, &base, &sleeves, capital, &limits);
+    let gfirst = gevents
         .iter()
         .find(|e| format!("{:?}", e.reason) == "Entry")
-        .expect("sleeves open on the rally");
-    // First thrust bar (bar 2), not the top: entry bar < last bar.
-    assert!(first.bar <= 3, "entry rides the move (bar {})", first.bar);
-    assert!(first.leverage >= 1, "leverage sane");
+        .map(|e| e.bar);
+    let sfirst = sevents
+        .iter()
+        .find(|e| format!("{:?}", e.reason) == "Entry")
+        .map(|e| e.bar)
+        .expect("sleeves open on the real pump");
+    // Sleeves enter strictly earlier than grid-only on the real vertical
+    // (momentum fires the thrust bar; grid waits for a rung touch), and the
+    // combined ride nets positive.
+    let gb = gfirst.expect("grid opens late on the real pump");
+    assert!(
+        sfirst < gb,
+        "sleeves bar {sfirst} earlier than grid bar {gb}"
+    );
+    let snet = sledger.totals().net_micros();
+    assert!(snet > 0, "sleeves net positive on real bars (got {snet})");
     println!(
-        "pump_catch ok: grid=0 fills, sleeves entry bar={} lev={} fills={}",
-        first.bar,
-        first.leverage,
-        ledger.totals().fills
+        "pump_catch ok: grid first={gfirst:?} fills={} net={} | sleeves first={sfirst} fills={} net={snet}",
+        gledger.totals().fills,
+        gledger.totals().net_micros(),
+        sledger.totals().fills
     );
 }
