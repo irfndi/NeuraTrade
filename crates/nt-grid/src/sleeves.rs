@@ -305,7 +305,20 @@ pub fn run_sleeve_backtest(
                     peak = current;
                 }
                 let budget_bp = base.max_position_size_pct * 100;
-                let cfg_max = sleeves.iter().map(|s| s.max_leverage).max().unwrap_or(1);
+                // Strictest voting-side ceiling wins: a Grid max-1 sleeve must
+                // never open at 10x on another sleeve's votes.
+                let side_votes_long = side == Side::Long;
+                let cfg_max = sleeves
+                    .iter()
+                    .filter(|s| {
+                        matches!(
+                            (filter_vote(s.kind, candles, i, s), side_votes_long),
+                            (Vote::Long, true) | (Vote::Short, false)
+                        )
+                    })
+                    .map(|s| s.max_leverage)
+                    .min()
+                    .unwrap_or(1);
                 let cap = account_scaled_leverage_cap(current, budget_bp, cfg_max);
                 let lev = conviction_leverage(cap, conviction);
                 let margin = Money(scale(capital.0, base.max_position_size_pct, 100));

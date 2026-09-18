@@ -127,11 +127,39 @@ fn main() {
     assert_eq!(conviction_leverage(10, 5_000), 5);
     assert_eq!(conviction_leverage(10, 10_000), 10);
 
+    let capital = Money::usdt(1000);
+    let limits = RiskLimits::live();
+    // Strictest voting-side ceiling wins: Grid max-1 voting LONG caps the
+    // open at account-cap(min(1,10)) even though Breakout allows 10.
+    let mixed = vec![
+        SleeveCfg {
+            kind: FilterKind::Grid,
+            weight_bp: 5_000,
+            max_leverage: 1,
+            step_bp: 100,
+            lookback: 0,
+        },
+        SleeveCfg {
+            kind: FilterKind::Breakout,
+            weight_bp: 5_000,
+            max_leverage: 10,
+            step_bp: 100,
+            lookback: 2,
+        },
+    ];
+    let (mevents, _) = run_sleeve_backtest(&bars, &base, &mixed, capital, &limits);
+    let mfirst = mevents
+        .iter()
+        .find(|e| format!("{:?}", e.reason) == "Entry")
+        .unwrap();
+    assert!(
+        mfirst.leverage <= 3,
+        "grid max-1 binds the open (got {})",
+        mfirst.leverage
+    );
     // End to end: bar 0 votes grid-only LONG (5000/0, breakout+trend need
     // warmup), so the first entry carries the bar-0 weights at conviction
     // leverage. Later bars vote unanimous once lookbacks fill.
-    let capital = Money::usdt(1000);
-    let limits = RiskLimits::live();
     let (events, ledger) = run_sleeve_backtest(&bars, &base, &sleeves, capital, &limits);
     assert!(!events.is_empty(), "sleeves opened");
     let first = events

@@ -1,14 +1,13 @@
 import Base
 
-# Sleeve combiner (P4, additive): pure weighted-vote mirror of nt-grid
-# `sleeves::combine_votes`. Scores in Bend, executes in Rust — this kernel
-# never sees IO, panels, or orders (same law as search.bend/grid.bend).
+# Sleeve combiner (P4, additive): DIRECTION-ONLY mirror of nt-grid
+# `sleeves::combine_votes` majority rule. Scores in Bend, executes in Rust —
+# this kernel never sees IO, panels, or orders (same law as search.bend).
+# It proves the combine RULE (which side wins / tie / silence), not the
+# bp weights: `lw0`/`sw0` below are illustrative weight trees, NOT called by
+# main (Bend affine types forbid fanning one flag to two helpers). The real
+# weighted sums live in Rust `combine_votes`, covered by `sleeves_check`.
 #
-# Linearity design (Bend affine types): a U32 param matched more than once
-# is rejected, so NO helper takes both totals. Instead each case passes its
-# six vote flags straight into ONE nested match that adds weight literals
-# directly — every flag consumed once, no totals ever bound. Verbose by
-# Bend necessity, not by choice.
 # Votes: 1=Long, 2=Short. Direction: 0=skip, 1=long, 2=short, 3=tie.
 # Ground truth: case1=1, case2=3, case3=0 -> 1 + 3*4 + 0*16 = 13.
 
