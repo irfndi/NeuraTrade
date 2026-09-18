@@ -240,6 +240,56 @@ pub struct RiskApproval {
 /// real live/daily/symbol context exists (Task 7 Step 4, exchange wiring).
 /// Callers that need them today must call all four functions and merge the
 /// violation lists.
+/// Full caller context for [`approve_full`]: live/daily/symbol identity.
+/// Paper callers pass `is_live=false`, `trades_today=0`, `symbol="PAPER"`.
+#[derive(Debug, Clone)]
+pub struct TradeIntent {
+    pub is_live: bool,
+    pub trades_today: u32,
+    pub symbol: String,
+    pub product_type: Option<String>,
+    pub leverage: Option<i64>,
+}
+impl Default for TradeIntent {
+    fn default() -> TradeIntent {
+        TradeIntent {
+            is_live: false,
+            trades_today: 0,
+            symbol: "PAPER".to_string(),
+            product_type: Some("USDT-FUTURES".to_string()),
+            leverage: None,
+        }
+    }
+}
+/// Per-symbol rolling throughput tracker keyed by `exchange:symbol:timeframe`.
+/// Stores `(ts_ms, gross_micros, fee_micros)` fills; [`ThroughputTracker::window`]
+/// evicts entries older than `window_ms` and aggregates the rest.
+#[derive(Debug, Default)]
+pub struct ThroughputTracker {
+    fills: std::collections::HashMap<String, Vec<(i64, i64, i64)>>,
+}
+impl ThroughputTracker {
+    pub fn key(exchange: &str, symbol: &str, timeframe: &str) -> String {
+        format!("{exchange}:{symbol}:{timeframe}")
+    }
+    pub fn record(&mut self, key: &str, ts_ms: i64, gross_micros: i64, fee_micros: i64) {
+        self.fills
+            .entry(key.to_string())
+            .or_default()
+            .push((ts_ms, gross_micros, fee_micros));
+    }
+    pub fn window(&mut self, key: &str, now_ms: i64, window_ms: i64) -> ThroughputWindow {
+        let v = self.fills.entry(key.to_string()).or_default();
+        v.retain(|(ts, _, _)| now_ms - *ts < window_ms);
+        let mut w = ThroughputWindow::default();
+        for (_, g, f) in v.iter() {
+            w.trades += 1;
+            w.gross_micros = w.gross_micros.saturating_add(*g);
+            w.fees_micros = w.fees_micros.saturating_add(*f);
+        }
+        w
+    }
+}
 pub fn approve(
     capital: Money,
     window: &EquityWindow,
@@ -249,6 +299,36 @@ pub fn approve(
     leverage: i64,
     limits: &RiskLimits,
 ) -> Result<RiskApproval, Vec<String>> {
+    approve_full(
+        capital,
+        window,
+        position_value,
+        notional_value,
+        min_orderable,
+        leverage,
+        limits,
+        &TradeIntent::default(),
+        &ThroughputWindow::default(),
+        &ThroughputLimits::strict(),
+    )
+    .map_err(|(v, _)| v)
+}
+/// Bundled gate (clever-cabin-k4u, one pass): floor + drawdown + position +
+/// live/count/allowlist + throughput. Throughput violations return alongside
+/// so callers can halt the symbol without conflating it with a hard reject.
+#[allow(clippy::too_many_arguments)] // ponytail: bundled k4u gate — one 10-arg call beats two passes over the same call sites
+pub fn approve_full(
+    capital: Money,
+    window: &EquityWindow,
+    position_value: Money,
+    notional_value: Money,
+    min_orderable: Money,
+    leverage: i64,
+    limits: &RiskLimits,
+    intent: &TradeIntent,
+    throughput: &ThroughputWindow,
+    tp_limits: &ThroughputLimits,
+) -> Result<RiskApproval, (Vec<String>, Vec<String>)> {
     let mut v = basic_risk_violations(capital, limits);
     v.extend(drawdown_violations(window, limits));
     v.extend(position_risk_violations(
@@ -259,10 +339,19 @@ pub fn approve(
         capital,
         limits,
     ));
+    v.extend(live_trading_violations(intent.is_live, limits));
+    v.extend(trade_count_violations(intent.trades_today, limits));
+    v.extend(allowlist_violations(
+        &intent.symbol,
+        intent.product_type.as_deref(),
+        intent.leverage.or(Some(leverage)),
+        limits,
+    ));
+    let t = throughput_violations(throughput, tp_limits);
     if v.is_empty() {
         Ok(RiskApproval { _seal: () })
     } else {
-        Err(v)
+        Err((v, t))
     }
 }
 
