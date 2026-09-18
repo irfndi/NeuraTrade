@@ -1,6 +1,9 @@
 // ponytail: single runnable check for nt-risk (not a test suite).
 // Fails (non-zero exit) if guard semantics break.
-use nt_risk::{EquityWindow, Money, RiskLimits, approve, basic_risk_violations};
+use nt_risk::{
+    EquityWindow, Money, RiskLimits, ThroughputLimits, ThroughputWindow, approve,
+    basic_risk_violations, throughput_violations,
+};
 
 fn window(current: Money) -> EquityWindow {
     EquityWindow {
@@ -72,6 +75,39 @@ fn main() {
         ..live
     };
     assert!(basic_risk_violations(Money::usdt(50), &soak).is_empty());
+
+    // Throughput breaker (Aug-18 shape): 99 trades/hour must halt.
+    let lim = ThroughputLimits::strict();
+    let spiral = ThroughputWindow {
+        trades: 99,
+        gross_micros: -2_170_000,
+        fees_micros: 1_540_000,
+    };
+    let v = throughput_violations(&spiral, &lim);
+    assert!(
+        v.iter().any(|s| s.contains("trades exceeds max")),
+        "spiral must halt"
+    );
+
+    // Fee-dominated window (60% share) halts even at low count.
+    let drag = ThroughputWindow {
+        trades: 5,
+        gross_micros: 40_000,
+        fees_micros: 60_000,
+    };
+    assert!(
+        throughput_violations(&drag, &lim)
+            .iter()
+            .any(|s| s.contains("fee share"))
+    );
+
+    // Healthy flow passes.
+    let calm = ThroughputWindow {
+        trades: 5,
+        gross_micros: 500_000,
+        fees_micros: 30_000,
+    };
+    assert!(throughput_violations(&calm, &lim).is_empty());
 
     println!("nt-risk check ok");
 }

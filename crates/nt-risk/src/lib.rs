@@ -176,3 +176,54 @@ pub fn approve(
         Err(v)
     }
 }
+
+/// Hourly throughput window for the revenge-spiral breaker (P2).
+/// `gross_micros` is signed window PnL; `fees_micros` is total fees paid.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ThroughputWindow {
+    pub trades: u64,
+    pub gross_micros: i64,
+    pub fees_micros: i64,
+}
+
+/// Throughput breaker limits.
+#[derive(Debug, Clone, Copy)]
+pub struct ThroughputLimits {
+    /// Halt a symbol past this many fills in the window (e.g. 25/hour).
+    pub max_trades_per_window: u64,
+    /// Halt when fees exceed this share (bp) of activity `|gross|+fees`.
+    pub max_fee_share_bp: i64,
+}
+
+impl ThroughputLimits {
+    /// P2 proposal: 25 trades/hour or 50% fee share halts the symbol.
+    pub fn strict() -> ThroughputLimits {
+        ThroughputLimits {
+            max_trades_per_window: 25,
+            max_fee_share_bp: 5_000,
+        }
+    }
+}
+
+/// Revenge-spiral breaker: count cap first, then fee-drag share.
+/// Fee share = `fees*10000/(|gross|+fees)`; pure-fee windows read 100%.
+pub fn throughput_violations(w: &ThroughputWindow, lim: &ThroughputLimits) -> Vec<String> {
+    let mut out = Vec::new();
+    if w.trades > lim.max_trades_per_window {
+        out.push(format!(
+            "throughput {} trades exceeds max {} per window",
+            w.trades, lim.max_trades_per_window
+        ));
+    }
+    let activity = (w.gross_micros as i128).abs() + w.fees_micros as i128;
+    if activity > 0 {
+        let share = (w.fees_micros as i128 * 10_000 / activity) as i64;
+        if share > lim.max_fee_share_bp {
+            out.push(format!(
+                "fee share {share}bp exceeds max {}bp",
+                lim.max_fee_share_bp
+            ));
+        }
+    }
+    out
+}
