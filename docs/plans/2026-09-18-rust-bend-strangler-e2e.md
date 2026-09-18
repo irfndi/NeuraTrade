@@ -1,0 +1,374 @@
+# NeuraTrade Rust + Bend Strangler — End-to-End Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Box checked 2026-09-18:** `217.216.35.77` (`vmi2933244`). Data persists; hunt must stay up. Not green on CPU/disk/PnL.
+
+**Goal:** Keep the profitability / PnL / trade-throughput hunt running while strangling NeuraTrade into a maintainable **Rust runtime + Bend parallel search + Zig-shipped binaries**, with storage split so the monolith SQLite stops starving the VPS.
+
+**Architecture:** Strangler fig. Champion paper/demo soaks and throttled autoresearch stay online. Bend owns the trial/search kernel (with `LAWS.bend` / `PROOF.bend`). Rust owns risk, execution, ledger, adapters, CLI. Zig (`cargo-zigbuild` / `zig cc`) produces reproducible native artifacts. TS remains a temporary FFI/gRPC bridge (Cloudflare / cutover only), then is deleted. Storage splits: Postgres for transactional state; Parquet (+ optional DuckDB) for research candles — not PlanetScale TIN (TIN is Postgres FTS, not a SQLite replacement).
+
+**Tech Stack:** Rust (edition 2024+), Bend (`bend guide`, `LAWS.bend`, `PROOF.bend`, parallelize), Zig toolchain for cross-compile, optional TS FFI, Postgres (managed or self-hosted), Parquet/object storage, SQLite only as ephemeral local cache, `bd` for tracking, PM2 on `217.216.35.77` until Rust supervisor replaces it.
+
+**Spec / decisions locked in brainstorming (2026-09-18):**
+- Full-stack direction: Rust + Bend (+ Zig ship); not Bend-only or ops-only forever.
+- Keep-alive: soaks + research continue — we are still finding profitability, want **high trade throughput** and **positive expectancy quickly**.
+- TIN ≠ DB migration target. Prefer Postgres (ops) + Parquet (history).
+- Do not preserve obsolete paths; delete Go/TS when parity is proven (aligns with AGENTS.md working principles).
+- New test files are **opt-in** per AGENTS.md — prefer existing tests + runtime/soak evidence unless the user explicitly approves new suites.
+
+**Global Constraints:**
+- Never stop champion paper/demo without an explicit owner decision window.
+- Never wipe `~/.neuratrade/data/neuratrade.db`, champion JSON, or soak state without a verified backup off-box.
+- Money math: decimal / fixed-point only — no float for monetary values (P0).
+- Risk path remains the only path to execution (Bend search must not place live orders).
+- Bend workflow: `bend guide` → encode invariants in `LAWS.bend` → `bend PROOF.bend` before commit.
+- RTK-prefix shell on agents (`rtk …`). Track work in `bd`, not markdown TODOs outside this plan.
+- Box disk was **87%** with `disk-breached=1`; reclaim before adding more data writers.
+
+**Observed box baseline (2026-09-18):**
+| Item | Value |
+| --- | --- |
+| Autoresearch | 4× `loop.ts --trials=50000`, ~5d, ~67% CPU combined, ~0.9–1.0 GB RAM |
+| Host | ~99% CPU, load 23–26, disk 87% |
+| SQLite | `~/.neuratrade/data/neuratrade.db` ≈ 8.8 GB + bak ≈ 6.9 GB |
+| Champion paper | equity ~201.81 / 200, `open=0` |
+| Champion demo (live) | equity ~198.31 / 200, `open=0`, blocked: notional >100%, capital &lt; min 50 |
+| Audit finding | Confirmed — autoresearch workers starve the box |
+
+---
+
+## Target layout (new tree grows beside old)
+
+```
+neuratrade/
+├── AGENTS.md                 # keep Bend rules + existing agent rules
+├── LAWS.bend                 # cross-cutting proofs (risk, money, no bypass)
+├── PROOF.bend
+├── crates/                   # Rust workspace
+│   ├── nt-cli/               # binary entry (replaces bun index.ts gradually)
+│   ├── nt-risk/
+│   ├── nt-execution/
+│   ├── nt-ledger/
+│   ├── nt-market/
+│   ├── nt-exchange-*/        # bitget/bybit/…
+│   └── nt-ffi/               # optional C ABI / uniffi for TS bridge
+├── bend/                     # Bend packages
+│   ├── search/               # autoresearch kernel (parallel trials)
+│   ├── backtest/
+│   └── laws/                 # domain laws composed into root LAWS.bend
+├── build/                    # Zig / cargo-zigbuild scripts
+│   ├── zig-build.sh
+│   └── targets.toml
+├── deploy/
+│   └── ecosystem.rust.cjs    # PM2 until rust supervisor ships
+└── services/neuratrade-cli-ts/  # DELETE after parity (strangler source of truth until then)
+```
+
+---
+
+## Phase map (order is binding)
+
+```
+P0 Ops unblock (hunt can trade)
+ → P1 Disk + SQLite hygiene
+ → P2 Throttled search + throughput knobs (still TS)
+ → P3 Storage split design + dual-write
+ → P4 Bend search kernel (replace autoresearch CPU path)
+ → P5 Rust runtime strangler (risk → exec → ledger → CLI)
+ → P6 Zig single-artifact ship
+ → P7 TS FFI bridge (temporary) + Cloudflare cutover
+ → P8 Delete Go / Bun trading path; Postgres cutover; bake-off
+```
+
+Each phase must leave **paper + demo soaks runnable** and produce **bd-closeable evidence** (logs, equity, fill counts).
+
+---
+
+### Task 0: Track the epic in beads
+
+**Files:**
+- Create: `bd` epic + child issues (no markdown TODO lists)
+
+- [ ] **Step 1:** `bd create "Epic: Rust+Bend strangler (keep profitability hunt alive)" -t epic -p 1`
+- [ ] **Step 2:** Create children for P0–P8 with `--deps` / blocking links from this plan’s phase IDs
+- [ ] **Step 3:** Attach this file path in epic description: `docs/plans/2026-09-18-rust-bend-strangler-e2e.md`
+
+---
+
+### Task 1 (P0): Unblock live/demo trade throughput — keep hunt alive
+
+**Why:** Demo cannot open size (notional ~150% of max; ETH/SOL capital &lt; min 50). Zero opens ⇒ no PnL learning.
+
+**Files:**
+- Modify (TS strangler, temporary): `services/neuratrade-cli-ts/ecosystem.champion-soak.config.cjs`
+- Modify: champion whitelist / capital allocation under `services/neuratrade-cli-ts/autoresearch/results/champion-whitelist.json` (or generate script — do not hand-edit secrets)
+- Modify as needed: `services/neuratrade-cli-ts/src/cli/scalp.ts` risk flag defaults **only if** a bug forces notional &gt; 100% with `positionFraction=1` and weight 0.25
+- Reference: box logs under `/root/.neuratrade-champion-demo/logs/champion-demo.out.log`
+
+**Interfaces:**
+- Consumes: frozen `champion-soak.json` knobs; PM2 champion-demo/paper process args
+- Produces: soaks that can open positions without violating max-position / min-capital; rising `opened-count-*` monitor files
+
+- [ ] **Step 1:** On box, capture 20 recent `pre-trade risk check failed` lines from champion-demo (baseline evidence)
+- [ ] **Step 2:** Decide allocation fix (prefer config): either raise per-symbol capital above min 50, lower `--min-capital`, or reduce grid notional so size ≤ `--max-position-size-pct 100`
+- [ ] **Step 3:** Apply **one** change set; restart only champion-demo/paper (not full PM2 wipe)
+- [ ] **Step 4:** Verify ≥1 open attempt succeeds or fails for a *market* reason (not sizing/min-capital) within 2 intervals
+- [ ] **Step 5:** Record equity + open/closed counts in bd evidence; do not claim profitability yet
+
+**Exit criteria:** Demo/paper no longer stuck solely on sizing/min-capital; hunt can generate trades.
+
+---
+
+### Task 2 (P0/P1): Throttle autoresearch so soaks get CPU
+
+**Why:** Audit finding confirmed; 4×50k trials ≈ box meltdown.
+
+**Files:**
+- Modify: PM2 ecosystem for `neuratrade-autoresearch-w0..w3` (on box and/or repo ecosystem under `services/neuratrade-cli-ts/`)
+- Modify: `services/neuratrade-cli-ts/autoresearch/loop.ts` CLI defaults only if defaults are unsafe for shared hosts
+
+**Interfaces:**
+- Consumes: `--worker`, `--workers`, `--trials`, screen/confirm budgets
+- Produces: ≤2 workers OR night window OR CPU quota; champion JSON still updates
+
+- [ ] **Step 1:** Snapshot `pm2 list` + `uptime`/`loadavg` (before)
+- [ ] **Step 2:** Stop `neuratrade-autoresearch-w2` and `w3` (or set trials much lower); keep 1–2 workers
+- [ ] **Step 3:** Optional: `nice` / cgroup / PM2 `max_memory_restart` already 2GB — add CPU scheduling notes in deploy docs
+- [ ] **Step 4:** Confirm champion paper/demo interval latency improves; loadavg drops materially
+- [ ] **Step 5:** Document the new “shared-host search budget” in this plan’s appendix when values settle
+
+**Exit criteria:** Autoresearch no longer holds host at ~99% CPU continuously; soaks remain online.
+
+---
+
+### Task 3 (P1): Disk reclaim without losing persistence
+
+**Why:** `disk-breached=1`, 87% disk; 6.9 GB bak duplicates live DB.
+
+**Files / paths on box:**
+- `/root/.neuratrade/data/neuratrade.db.bak-20260905`
+- `/tmp/ledger-*.jsonl`, rotated syslog if safe
+- Optional: off-box archive to R2 (existing `scripts/archive-ledger-r2.sh` pattern)
+
+- [ ] **Step 1:** Confirm live DB integrity path: prefer `PRAGMA quick_check` when load is low (or copy off-box first)
+- [ ] **Step 2:** Copy bak + critical champion JSON off-box (R2/S3/local) before delete
+- [ ] **Step 3:** Remove confirmed-redundant bak / tmp ledgers; re-check `df -h` and clear `disk-breached` monitor when policy allows
+- [ ] **Step 4:** Enable logrotate discipline (pm2-logrotate already present); cap journal if needed
+- [ ] **Step 5:** Add runbook note: never keep multi-GB same-host full-file bak beside live DB
+
+**Exit criteria:** Disk &lt; ~75% sustained; persistence intact; breach flag cleared or explained.
+
+---
+
+### Task 4 (P2): Throughput-oriented hunt knobs (still TS)
+
+**Why:** Goal is “lots of trades, profitable in no time” — need measurable fill clock + expectancy gates, not flat HOLDs.
+
+**Files:**
+- Read: `services/neuratrade-cli-ts/autoresearch/results/champion-soak.json`
+- Modify/create research scripts under `services/neuratrade-cli-ts/autoresearch/` (prefer extending existing growth/timeframe experiments)
+- Monitor: `/root/.neuratrade/state/champion-soak-monitor/`
+
+**Interfaces:**
+- Consumes: frozen soak knobs + honest fees
+- Produces: candidate knobs that increase expected fills/day while keeping guards (DD, PF, expectancy) green
+
+- [ ] **Step 1:** Define hunt KPIs: fills/day, expectancy %, max DD %, time-to-first-fill, live vs paper gap
+- [ ] **Step 2:** Run existing growth / timeframe experiments (do not overwrite champion files until promote gate)
+- [ ] **Step 3:** Promote only via explicit champion-soak write + whitelist regen
+- [ ] **Step 4:** Restart soaks with force-reseed only when mismatch policy requires it
+- [ ] **Step 5:** Attach KPI snapshot to bd issue weekly until Rust/Bend cutover
+
+**Exit criteria:** Documented KPI loop; at least one candidate improves fill rate without blowing DD guards.
+
+---
+
+### Task 5 (P3): Storage architecture — Postgres + Parquet (not TIN)
+
+**Why:** 8.8 GB monolith SQLite is operationally heavy on a 72 GB VPS; concurrent research writers hurt soaks.
+
+**Decision record:**
+| Data | Store | Notes |
+| --- | --- | --- |
+| Orders, positions, fills, kill-switch, ledgers | **Postgres** | Managed (PlanetScale Postgres / Neon / etc.) or dedicated instance — not co-located on full root disk forever |
+| OHLCV / research panels | **Parquet** (object storage or NVMe) | Query via DuckDB or Bend/Rust readers |
+| Tiny local cache | SQLite optional | Ephemeral; never system of record |
+| Full-text over logs/docs | PlanetScale **TIN** later | Only if FTS needed — unrelated to candle growth |
+
+**Files:**
+- Create: `docs/plans/storage-cutover.md` (or appendix in this file once schemas land)
+- Create (later): `crates/nt-ledger` migrations (SQL, additive)
+- Create: Parquet writer path for candle sync (replace/augment `seed-champion-soak-candles` / sync scripts)
+
+- [ ] **Step 1:** Inventory SQLite tables by size (top offenders = migrate first to Parquet)
+- [ ] **Step 2:** Draft Postgres schema for ledger/positions only (minimal)
+- [ ] **Step 3:** Dual-write from TS soak → Postgres (feature-flagged); keep SQLite readable
+- [ ] **Step 4:** Backfill candles to Parquet; point autoresearch readers at Parquet
+- [ ] **Step 5:** Cut reads; shrink or freeze SQLite; drop bak policy
+
+**Exit criteria:** New candle growth does not inflate the trading DB; ledger survives process restarts in Postgres.
+
+---
+
+### Task 6 (P4): Bend search kernel (replace Bun autoresearch hot path)
+
+**Why:** Parallel trials are Bend’s sweet spot; proofs block silent risk regressions.
+
+**Files:**
+- Create: `LAWS.bend`, `PROOF.bend` (repo root)
+- Create: `bend/search/` (trial loop, mutate, score — port of `autoresearch/loop.ts` + `mutate.ts` + `prepare.ts` semantics)
+- Create: `bend/laws/` money + risk laws (no live order placement from search)
+- Modify: `AGENTS.md` Bend block (already present) — keep in sync with `bend guide`
+
+**Interfaces:**
+- Consumes: Parquet panels + knob space; same champion JSON schema under `autoresearch/results/` initially
+- Produces: `champion.json` / `champion-soak.json` compatible with existing soaks
+- Law examples (encode precisely in Bend): search process cannot submit exchange orders; scores use fee schedule maker0.02/takerExit0.06 when `honestFees` set; DD guard failures never promote
+
+- [ ] **Step 1:** Install Bend; run `bend guide`; spike `pow`-style parallel map over a tiny knob grid
+- [ ] **Step 2:** Write `LAWS.bend` for search isolation + fee honesty + promotion guards
+- [ ] **Step 3:** Port score/prepare semantics; parallelize trial evaluation
+- [ ] **Step 4:** `bend PROOF.bend` green before any commit
+- [ ] **Step 5:** PM2: replace `neuratrade-autoresearch-w*` with Bend binary; keep JSON drop path identical so soaks unchanged
+- [ ] **Step 6:** Compare Bend vs Bun champion on same panel hash; require agreement within tolerance before deleting Bun loop
+
+**Exit criteria:** Autoresearch CPU work runs in Bend; soaks still consume champion JSON; proofs pass on CI/agent commit gate.
+
+---
+
+### Task 7 (P5): Rust runtime strangler
+
+**Order inside Rust (hard):** market → signal/grid → **risk** → execution → ledger/portfolio. Risk is the only path to execution.
+
+**Files:**
+- Create: Cargo workspace under `crates/`
+- Create: `nt-risk`, `nt-execution`, `nt-ledger`, `nt-market`, `nt-cli`
+- Port behavior from: `services/neuratrade-cli-ts/src/paper-trading/`, `src/scalping/`, exchange clients under `src/`
+- Do **not** extend frozen Go `services/backend-api` except to unblock TS path until D1–D4 deletion criteria are met
+
+**Interfaces:**
+- Consumes: same CLI flags as `bun run index.ts scalp paper-trade …` initially (flag parity table in README)
+- Produces: `nt` binary; paper state compatible or explicitly migrated once
+
+- [ ] **Step 1:** Scaffold workspace + `nt` CLI stub that prints version / health
+- [ ] **Step 2:** Port decimal money + pre-trade risk guards (`max-drawdown`, `max-daily-loss`, `max-position-size`, min capital)
+- [ ] **Step 3:** Paper grid engine parity vs TS on a fixed candle fixture (runtime compare; new test files only if user approves)
+- [ ] **Step 4:** Wire Bybit/Bitget public market + signed trading behind risk
+- [ ] **Step 5:** Shadow mode: Rust paper beside TS paper on same whitelist; diff equity/fills daily
+- [ ] **Step 6:** Cut PM2 champion-paper to Rust when shadow gap acceptable; then demo
+
+**Exit criteria:** Rust paper soak matches TS within agreed tolerance; demo cutover planned with owner.
+
+---
+
+### Task 8 (P6): Zig packaging — everything ships as binaries
+
+**Files:**
+- Create: `build/zig-build.sh`, `build/targets.toml`
+- Integrate: `cargo-zigbuild` for musl/glibc Linux targets used on the VPS
+- Create: checksummed release tarball / single `nt` + `nt-search` (Bend) artifacts
+
+- [ ] **Step 1:** Pin Zig version in repo (`.zig-version` or docs)
+- [ ] **Step 2:** Script: build Rust crates via zig linker for `x86_64-unknown-linux-gnu` (box arch)
+- [ ] **Step 3:** Script: package Bend search binary beside `nt`
+- [ ] **Step 4:** Deploy script: stop one PM2 app, replace binary, start; health probe
+- [ ] **Step 5:** Document one-command release: `./build/zig-build.sh release`
+
+**Exit criteria:** Box runs versioned binaries without `bun run` for search + paper path.
+
+---
+
+### Task 9 (P7): Temporary TS FFI / bridge
+
+**Why:** Cloudflare worker / alchemy path may lag native cutover.
+
+**Files:**
+- Create: `crates/nt-ffi` (C ABI or uniffi)
+- Modify: `services/neuratrade-cli-ts/src/cloudflare/` to call native where possible **or** HTTP to local `nt` — prefer HTTP/gRPC over FFI if simpler
+- Delete bridge when worker rewritten or retired
+
+- [ ] **Step 1:** Choose bridge: gRPC/HTTP first; FFI only if in-process required
+- [ ] **Step 2:** Expose read-only status + optional paper tick
+- [ ] **Step 3:** No exchange secrets in Worker; secrets stay in native runtime env
+- [ ] **Step 4:** Schedule deletion date once native covers the surface
+
+**Exit criteria:** Worker does not own trading logic; bridge is thin and deletable.
+
+---
+
+### Task 10 (P8): Delete legacy; bake-off; ops freeze
+
+**Files:**
+- Delete when green: Bun autoresearch loop, TS paper engine, Go backend spawn paths per D1–D4 in AGENTS.md
+- Update: Makefile / CI to Rust+Bend+Zig; neutralize Go targets
+- Update: `AGENTS.md` WHERE TO LOOK table
+
+- [ ] **Step 1:** Checklist parity: search, paper, demo, ledger restore, kill switch
+- [ ] **Step 2:** Tag `archive/ts-cli-YYYY-MM-DD` before deletion
+- [ ] **Step 3:** Remove PM2 bun entries; only binary apps remain
+- [ ] **Step 4:** Close epic via `make bd-close-qa` with soak + search evidence (E2E ≠ N/A)
+
+**Exit criteria:** One maintainable native stack; hunt still running; disk/CPU budgets documented.
+
+---
+
+## Success metrics (hunt + rewrite)
+
+| Metric | Near-term (P0–P2) | Done (P8) |
+| --- | --- | --- |
+| Host CPU while soaks run | &lt; ~60% avg (search throttled) | Search on Bend with caps |
+| Disk | &lt; 75%, no co-located multi-GB bak | Postgres + Parquet; thin cache only |
+| Paper fills/day | Rising vs 2026-09-18 flat open=0 | KPI dashboard from ledger |
+| Demo | Not blocked by min-capital/notional bugs | Rust path; risk laws proven |
+| Expectancy | Positive on honest fees before promote | Same gates in Bend laws |
+| Ship | bun + PM2 | Zig-built `nt` + `nt-search` binaries |
+
+---
+
+## Explicit non-goals
+
+- Big-bang rewrite that pauses the profitability hunt.
+- Using PlanetScale TIN as the SQLite replacement.
+- New Go features (Go stays frozen until D1–D4 deletion).
+- Silent champion overwrites without promote gate.
+- Adding large new test trees without user opt-in (AGENTS.md).
+
+---
+
+## Appendix A — Box operator cheat sheet
+
+```bash
+# Status
+ssh root@217.216.35.77 'pm2 list; df -h /; cat ~/.neuratrade/state/champion-soak-monitor/*'
+
+# Champion logs
+tail -f ~/.neuratrade-champion-paper/logs/champion-paper.out.log
+tail -f ~/.neuratrade-champion-demo/logs/champion-demo.out.log
+
+# Throttle search (example)
+pm2 stop neuratrade-autoresearch-w2 neuratrade-autoresearch-w3
+```
+
+## Appendix B — Bend agent rules (must stay in AGENTS.md)
+
+```
+When using Bend:
+- run `bend guide` to learn it
+- use `LAWS.bend` to keep important rules
+- run `bend PROOF.bend` before committing
+- parallelize the code whenever possible
+```
+
+## Appendix C — Open owner decisions (resolve during P0–P3)
+
+1. Per-symbol capital vs lower `--min-capital` vs smaller grid notional for demo.
+2. Managed Postgres vendor vs self-hosted on a second volume.
+3. When demo is allowed to use real funds vs paper-only until Rust shadow passes.
+4. Autoresearch steady-state budget (workers × trials × schedule).
+
+---
+
+## Implementation note
+
+Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in parallel with scaffolding Tasks 5–6 in repo. Do not start Task 10 until shadow parity and Bend proofs are green.
