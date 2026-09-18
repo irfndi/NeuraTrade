@@ -1322,6 +1322,7 @@ function executeLadderFillLive(
   repo: PaperTradingRepositoryService,
   productType: FuturesProductType,
   marginMode: FuturesMarginMode,
+  gateway?: MarketDataGatewayService,
 ): Effect.Effect<
   void,
   ExchangeError | RiskError | PaperTradingRepositoryError,
@@ -1367,18 +1368,26 @@ function executeLadderFillLive(
       marginMode,
       leverage,
     );
-    // Marketable-limit entries: the paper fillPrice is slippage-adjusted
-    // AWAY from the touch (long pays up, short receives down), so a GTC
-    // limit at fillPrice may never trade through on a thin testnet book.
-    // Cross the touch instead: long bids slightly ABOVE the rung signal,
-    // short asks slightly BELOW. Spread in bps keeps it proportional per
-    // ticker. The cross cost (<= crossBps) is folded into the paper fee
-    // line: ledger fee = exchange fee + rounding + cross bps, so
-    // paper-vs-demo has zero systematic divergence from this offset.
+    // Venue pricing off the LIVE book (2026-09-18: rung levels go stale on
+    // 15m signals — probe showed venue 43bps off mark on a stranded sell).
+    // Buy at ask, sell at bid, nudged by crossBps for marketability; falls
+    // back to rung x cross when the book read fails. Paper ledger keeps
+    // fillPrice (theoretical) — spread-only divergence, logged per fill.
     const crossBps = Math.max(0, options.liveEntryCrossBps ?? 0);
     const crossFactor =
       side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
-    const venuePrice = money(toNumber(fillPrice) * crossFactor);
+    let venuePrice = money(toNumber(fillPrice) * crossFactor);
+    if (gateway !== undefined) {
+      const book = yield* gateway
+        .fetchTick(options.exchange, options.symbol)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (book !== null) {
+        const ref = side === "buy" ? (book.ask ?? 0) : (book.bid ?? 0);
+        if (Number.isFinite(ref) && ref > 0) {
+          venuePrice = money(ref * crossFactor);
+        }
+      }
+    }
     const placed = yield* adapter
       .placeOrder({
         symbol: options.symbol,
@@ -1474,6 +1483,7 @@ function executeLadderBarLive(
   adapter: FuturesExchangeAdapterService,
   riskGuard: RiskGuardService,
   repo: PaperTradingRepositoryService,
+  gateway?: MarketDataGatewayService,
 ): Effect.Effect<
   void,
   ExchangeError | RiskError | PaperTradingRepositoryError,
@@ -1496,6 +1506,7 @@ function executeLadderBarLive(
         repo,
         productType,
         marginMode,
+        gateway,
       );
     }
     for (const close of closes) {
@@ -1522,6 +1533,7 @@ interface LadderOptionalServices {
   readonly circuitBreaker: Option.Option<CircuitBreakerService>;
   readonly adapter: Option.Option<FuturesExchangeAdapterService>;
   readonly riskGuard: Option.Option<RiskGuardService>;
+  readonly gateway: Option.Option<MarketDataGatewayService>;
 }
 
 interface LadderStartIndex {
@@ -1709,6 +1721,7 @@ function loadLadderOptionalServices(): Effect.Effect<LadderOptionalServices> {
       circuitBreaker: yield* Effect.serviceOption(CircuitBreaker),
       adapter: yield* Effect.serviceOption(FuturesExchangeAdapter),
       riskGuard: yield* Effect.serviceOption(RiskGuard),
+      gateway: yield* Effect.serviceOption(MarketDataGateway),
     };
   });
 }
@@ -1830,6 +1843,7 @@ function executeLadderLiveEvents(
       services.adapter.value,
       services.riskGuard.value,
       repo,
+      Option.isSome(services.gateway) ? services.gateway.value : undefined,
     ).pipe(Effect.result);
     if (outcome._tag === "Success") return null;
     const failureReason = ladderLiveFailureReason(outcome.failure);
