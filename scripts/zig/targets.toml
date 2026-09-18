@@ -1,0 +1,7 @@
+# P6 build targets. Box is x86_64 Linux (Ubuntu 24.04, glibc); local dev is arm64 macOS.
+[host]
+target = "aarch64-apple-darwin"
+
+[box]
+target = "x86_64-unknown-linux-gnu"
+zig_version = "0.16.0"
