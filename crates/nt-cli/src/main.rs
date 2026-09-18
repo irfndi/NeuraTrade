@@ -89,6 +89,7 @@ fn main() {
             volume_base_micros: 1_000_000,
         });
     }
+    candles.sort_by_key(|c| c.open_ts_ms); // oldest-first contract for run_paper_engine
     // Paper-engine geometry (mirrors paper_engine_check fixture scale):
     // step 1.00%, target 1.00x step, stop 2 grids, 50bps slippage,
     // 10% position. Fee per symbol via --fee-bp.
