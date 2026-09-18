@@ -71,9 +71,10 @@ export interface LadderPaperTradingOptions {
   readonly feePct: number;
   readonly slippageBps: number;
   /**
-   * Live-entry limit cross in bps (default 5): venue order crosses the
-   * rung touch (long bids above, short asks below) so thin testnet books
-   * actually fill. Paper ledger keeps the conservative fillPrice.
+   * Live-entry limit cross in bps (default 0 = opt-in; soak config sets 5
+   * explicitly). Venue order crosses the rung touch (long bids above,
+   * short asks below) so thin testnet books actually fill. Paper fee line
+   * carries the same cross cost, so paper-vs-demo has zero divergence.
    */
   readonly liveEntryCrossBps?: number;
   readonly initialCapital: number;
@@ -1367,7 +1368,7 @@ function executeLadderFillLive(
     // ticker. The cross cost (<= crossBps) is folded into the paper fee
     // line: ledger fee = exchange fee + rounding + cross bps, so
     // paper-vs-demo has zero systematic divergence from this offset.
-    const crossBps = Math.max(0, options.liveEntryCrossBps ?? 5);
+    const crossBps = Math.max(0, options.liveEntryCrossBps ?? 0);
     const crossFactor =
       side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
     const venuePrice = money(toNumber(fillPrice) * crossFactor);

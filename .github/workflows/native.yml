@@ -47,15 +47,15 @@ jobs:
         run: cd crates && cargo fmt --check
 
       - name: Clippy (deny warnings)
-        run: cd crates && cargo clippy --offline --all-targets -- -D warnings
+        run: cd crates && cargo clippy --all-targets -- -D warnings
 
       - name: Run crate checks
         run: |
           cd crates
           for p in nt-risk nt-execution nt-ledger nt-market nt-grid; do
-            cargo run --offline -q -p $p --example check
+            cargo run -q -p $p --example check
           done
-          cargo run --offline -q -p nt-grid --example paper_engine_check
+          cargo run -q -p nt-grid --example paper_engine_check
 
   bend:
     name: Bend parity (grid + guards kernels)
@@ -63,17 +63,31 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
-      - name: Install Bend
+      - name: Install Bun
+        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install Bend (pinned via install.sh + pre-seeded tarball)
+        env:
+          BEND_NO_TELEMETRY: "1"
         run: |
-          curl -fsSL https://github.com/HigherOrderCO/bend/releases/download/v${{ env.BEND_VERSION }}/bend-linux-x64 -o /usr/local/bin/bend
-          chmod +x /usr/local/bin/bend
+          curl -fsSL https://bend-lang.com/dl/${{ env.BEND_VERSION }}.tar.gz -o /tmp/bend.tgz
+          echo "4db70e77ce1b1027f1d0e15dee025921fa794a9b415add4350ec7c64acf2775b  /tmp/bend.tgz" | sha256sum -c -
+          mkdir -p "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci" && tar -xzf /tmp/bend.tgz -C "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci"
+          ln -sfn "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci" "$HOME/.bend/current"
+          curl -fsSL https://bend-lang.com/install.sh | sh
+          echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           bend --version
 
-      - name: Run grid kernel (parity checksum)
-        run: bend bend/grid.bend
+      - name: Run grid kernel (parity checksum 663097394)
+        run: |
+          test "$(bend bend/grid.bend)" = "663097394"
 
-      - name: Run guards kernel
-        run: bend bend/guards.bend
+      - name: Compile + run guards kernel (expects 2065)
+        run: |
+          bend bend/guards.bend -o /tmp/guards
+          test "$(/tmp/guards)" = "2065"
 
   zig:
     name: Zig cross-build (box artifact)
