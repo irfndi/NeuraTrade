@@ -253,7 +253,7 @@ pub fn run_paper_engine(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
-                let entry_net = fill.proceeds_micros.0 - fill.fee_micros.0;
+                let entry_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
                 position = Some((
                     OpenPosition {
                         side,
@@ -364,7 +364,9 @@ pub fn run_paper_engine(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
-                closed_realized += entry_net + (fill.proceeds_micros.0 - fill.fee_micros.0);
+                let exit_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
+                closed_realized =
+                    closed_realized.saturating_add(entry_net.saturating_add(exit_net));
                 position = None;
             }
         }
