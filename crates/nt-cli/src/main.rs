@@ -8,7 +8,9 @@ use nt_risk::{Money, RiskLimits};
 use std::env;
 
 fn usage() -> ! {
-    eprintln!("usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N]");
+    eprintln!(
+        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N]"
+    );
     std::process::exit(2);
 }
 
@@ -31,6 +33,7 @@ fn main() {
     let mut bars: Option<String> = None;
     let mut capital_usdt: i64 = 50;
     let mut fee_bp: i64 = nt_execution_bp();
+    let mut timeframe_ms: Option<i64> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -53,6 +56,15 @@ fn main() {
                     .unwrap_or_else(|| usage())
                     .parse()
                     .unwrap_or_else(|_| usage());
+            }
+            "--timeframe-ms" => {
+                i += 1;
+                timeframe_ms = Some(
+                    args.get(i)
+                        .unwrap_or_else(|| usage())
+                        .parse()
+                        .unwrap_or_else(|_| usage()),
+                );
             }
             _ => usage(),
         }
@@ -90,6 +102,18 @@ fn main() {
         });
     }
     candles.sort_by_key(|c| c.open_ts_ms); // oldest-first contract for run_paper_engine
+    // Closed-only (nt-market Panel contract): drop the forming bar. With
+    // --timeframe-ms, a bar is closed iff now >= open_ts + timeframe; without
+    // it, drop the newest row (a CSV export's tail is the forming candle).
+    if let Some(tf) = timeframe_ms {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(i64::MAX);
+        candles.retain(|c| c.open_ts_ms.saturating_add(tf) <= now_ms);
+    } else if candles.len() > 1 {
+        candles.pop();
+    }
     // Paper-engine geometry (mirrors paper_engine_check fixture scale):
     // step 1.00%, target 1.00x step, stop 2 grids, 50bps slippage,
     // 10% position. Fee per symbol via --fee-bp.
