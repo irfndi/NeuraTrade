@@ -30,13 +30,25 @@ impl Money {
 }
 
 /// Risk limits. `*_pct` fields are whole percent (e.g. 100 = 100%).
-#[derive(Debug, Clone, Copy)]
+/// Not `Copy` (holds `Vec<String>` allowlists) — pass by reference, or
+/// `.clone()` where an owned copy is actually needed.
+#[derive(Debug, Clone)]
 pub struct RiskLimits {
     pub min_capital: Money,
     pub max_position_size_pct: i64,
     pub max_notional_pct: i64,
     pub max_drawdown_pct: i64,
     pub max_daily_loss_pct: i64,
+    /// Live-trading kill switch. Mirrors guards.ts `liveTradingEnabled`.
+    pub live_trading_enabled: bool,
+    /// Daily fill cap. Mirrors guards.ts `maxTradesPerDay`.
+    pub max_trades_per_day: u32,
+    /// Symbol allowlist; `None` or empty means unrestricted.
+    pub allowed_symbols: Option<Vec<String>>,
+    /// Product-type allowlist; `None` or empty means unrestricted.
+    pub allowed_product_types: Option<Vec<String>>,
+    /// Leverage cap; `None` means unrestricted.
+    pub max_leverage: Option<i64>,
 }
 
 impl RiskLimits {
@@ -48,6 +60,11 @@ impl RiskLimits {
             max_notional_pct: 100,
             max_drawdown_pct: 15,
             max_daily_loss_pct: 5,
+            live_trading_enabled: true,
+            max_trades_per_day: 10,
+            allowed_symbols: None,
+            allowed_product_types: Some(vec!["USDT-FUTURES".to_string()]),
+            max_leverage: Some(10),
         }
     }
 }
@@ -69,6 +86,63 @@ pub fn basic_risk_violations(capital: Money, limits: &RiskLimits) -> Vec<String>
             capital.render(),
             limits.min_capital.render()
         ));
+    }
+    out
+}
+
+/// Live-trading kill switch. Mirrors guards.ts `liveTradingEnabled` check
+/// (folded into `basicRiskViolations` there; kept as its own function here
+/// so it composes with [`approve`] additively — see note above `approve`).
+pub fn live_trading_violations(is_live: bool, limits: &RiskLimits) -> Vec<String> {
+    let mut out = Vec::new();
+    if is_live && !limits.live_trading_enabled {
+        out.push("live trading is disabled".to_string());
+    }
+    out
+}
+
+/// Daily fill cap. Mirrors guards.ts `maxTradesPerDay` check.
+pub fn trade_count_violations(trades_today_count: u32, limits: &RiskLimits) -> Vec<String> {
+    let mut out = Vec::new();
+    if trades_today_count >= limits.max_trades_per_day {
+        out.push(format!(
+            "trades today {trades_today_count} meets or exceeds max {}",
+            limits.max_trades_per_day
+        ));
+    }
+    out
+}
+
+/// `allowlistRiskViolations`: symbol/product-type allowlists + leverage cap.
+/// `product_type: None` is treated the same as guards.ts's `undefined` —
+/// it fails an active product-type allowlist rather than passing it.
+pub fn allowlist_violations(
+    symbol: &str,
+    product_type: Option<&str>,
+    leverage: Option<i64>,
+    limits: &RiskLimits,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(allowed) = &limits.allowed_symbols {
+        if !allowed.is_empty() && !allowed.iter().any(|s| s == symbol) {
+            out.push(format!("symbol {symbol} is not in the allowed list"));
+        }
+    }
+    if let Some(allowed) = &limits.allowed_product_types {
+        if !allowed.is_empty() {
+            match product_type {
+                None => out.push("product type unknown is not allowed".to_string()),
+                Some(pt) if !allowed.iter().any(|s| s == pt) => {
+                    out.push(format!("product type {pt} is not allowed"));
+                }
+                _ => {}
+            }
+        }
+    }
+    if let (Some(max_lev), Some(lev)) = (limits.max_leverage, leverage) {
+        if lev > max_lev {
+            out.push(format!("leverage {lev}x exceeds max {max_lev}x"));
+        }
     }
     out
 }
@@ -151,6 +225,12 @@ pub struct RiskApproval {
 
 /// Full pre-trade gate: floor + drawdown + position caps.
 /// `Ok` carries the execution seal; `Err` carries every violation.
+///
+/// Does NOT yet call [`live_trading_violations`], [`trade_count_violations`]
+/// or [`allowlist_violations`] — those were added alongside a concurrent
+/// task building on this exact signature; wiring them in is a signature
+/// change deferred to avoid breaking that in-flight work. Callers that need
+/// them today must call all four functions and merge the violation lists.
 pub fn approve(
     capital: Money,
     window: &EquityWindow,
