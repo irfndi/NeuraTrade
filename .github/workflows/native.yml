@@ -74,12 +74,16 @@ jobs:
         run: |
           curl -fsSL https://bend-lang.com/dl/${{ env.BEND_VERSION }}.tar.gz -o /tmp/bend.tgz
           echo "4db70e77ce1b1027f1d0e15dee025921fa794a9b415add4350ec7c64acf2775b  /tmp/bend.tgz" | sha256sum -c -
+          # Tarball root holds bend2/ + guide/ (no version dir): extract into
+          # app/<ver>/ci mirroring the launcher layout, then symlink with a
+          # RELATIVE target (launcher does `ln -sfn app/...` from $B) so
+          # $B/current/bend2/main.ts resolves on the runner.
           mkdir -p "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci" && tar -xzf /tmp/bend.tgz -C "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci"
-          ln -sfn "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci" "$HOME/.bend/current"
+          test -f "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci/bend2/main.ts"
+          (cd "$HOME/.bend" && ln -sfn "app/${{ env.BEND_VERSION }}/ci" current)
           curl -fsSL https://bend-lang.com/install.sh | sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           bend --version
-
       - name: Run grid kernel (parity checksum 663097394)
         run: |
           test "$(bend bend/grid.bend)" = "663097394"
