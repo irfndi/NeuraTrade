@@ -2793,7 +2793,7 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly maxPositionDrawdownPct: number;
   /** Ladder: stop distance as a multiple of the grid step (0 = legacy boundary). */
   readonly stopRatio: number;
-  /** Ladder: live-entry limit cross in bps (venue order only, ledger keeps fillPrice). */
+  /** Ladder: live-entry limit cross in bps (default 0 = opt-in; soak sets 5). */
   readonly liveEntryCrossBps: number;
   /** Per-side taker fee percent for non-target (market) exits. */
   readonly takerExitFeePct: number;
