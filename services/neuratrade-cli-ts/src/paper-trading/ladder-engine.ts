@@ -1259,11 +1259,13 @@ function ladderRungQty(
   const fullyDynamic = options.fullyDynamicLeverage === true;
   const marginSizedRaw = perRungAllocation.div(fillPrice);
   const notionalCapPct = options.maxNotionalPct;
+  // Guard divides RAW notional by w.capital, so clamp the per-rung cap share
+  // (100%/rungs) — a rung sized under it can never trip the book cap alone.
   const notionalSizedRaw =
     notionalCapPct === undefined
       ? marginSizedRaw
       : capital
-          .times(Math.max(0, notionalCapPct) / 100)
+          .times(Math.max(0, Math.min(100, notionalCapPct)) / 100)
           .div(Math.max(1, Math.floor(options.rungs ?? 1)))
           .div(fillPrice);
   const raw = Decimal.min(marginSizedRaw, notionalSizedRaw);
@@ -1280,6 +1282,8 @@ function ladderRungQty(
       leverage: lev,
     } satisfies LadderRungQtyResult;
   }
+  // Min-raised qty can exceed the per-rung margin AFTER the cap (orderableQty
+  // floors UP to minQty); the margin check below skips instead of sending it.
   const qty = orderableQty(raw, spec, fillPrice, perRungAllocation);
   const notional = qty.times(fillPrice);
   const leverage = dynamicLeverage(
