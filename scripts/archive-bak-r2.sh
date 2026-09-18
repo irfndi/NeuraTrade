@@ -16,8 +16,16 @@ BAK=/root/.neuratrade/data/neuratrade.db.bak-20260905
 [ -f "$BAK" ] || { echo "bak already gone, nothing to do"; exit 0; }
 PUT=/opt/neuratrade/services/neuratrade-cli-ts/scripts/r2-put.py
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-WORK=/tmp/bak-archive-$TS
+# Persistent workdir (survives reboot, so resume is real) + trap cleanup
+# of parts only after manifest-complete delete (never mid-run).
+WORK=/root/.neuratrade/archive-bak-$TS
 mkdir -p "$WORK"
+cleanup_parts() { rm -f "$WORK"/part-*; }
+# Disk gate: gzip parts (~2GB est) + headroom must fit before split starts.
+AVAIL_KB=$(df / | awk 'NR==2 {print $4}')
+BAK_KB=$(du -k "$BAK" | cut -f1)
+NEED_KB=$((BAK_KB / 3 + 1048576))
+[ "$AVAIL_KB" -gt "$NEED_KB" ] || { echo "disk low (avail ${AVAIL_KB}KB < need ${NEED_KB}KB), abort"; exit 1; }
 echo "local sha256: $(sha256sum "$BAK" | cut -d" " -f1) ($(du -h "$BAK" | cut -f1))"
 # 1GB gzip parts, numbered for resume.
 split -b 1G --numeric-suffixes=1 --suffix-length=3 <(gzip -c "$BAK") "$WORK/part-"
@@ -44,5 +52,6 @@ if [ "${1:-}" = "--delete-after-verify" ]; then
   read -r CONFIRM
   [ "$CONFIRM" = "YES" ] || { echo "aborted (confirmation != YES)"; exit 1; }
   rm -v "$BAK"
+  cleanup_parts
   df -h / | tail -1
 fi
