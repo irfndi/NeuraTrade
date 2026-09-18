@@ -372,3 +372,20 @@ When using Bend:
 ## Implementation note
 
 Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in parallel with scaffolding Tasks 5–6 in repo. Do not start Task 10 until shadow parity and Bend proofs are green.
+
+---
+
+## Final gates (2026-09-18, owner-ordered — all must be green before P8)
+
+- [ ] **Gate 1 — Zero warnings/errors:** `cargo clippy --offline --all-targets`
+  clean, `bunx tsc --noEmit` clean (minus pre-existing TS2688 bun-types),
+  `bun test` green on touched suites. No new warnings introduced per commit.
+- [ ] **Gate 2 — No regression:** paper + demo soaks stay up through every
+  change; `opened-count-*` never regresses to a sizing/min-capital block;
+  fill-count deltas explained per cycle (clever-cabin-85m).
+- [ ] **Gate 3 — Testnet momentum:** demo orders fill on testnet
+  (`liveEntryCrossBps` cross-touch); `opened-count-demo > 0` sustained;
+  paper-vs-demo comparison runs on the SAME feed.
+- [ ] **Gate 4 — Parallel live-shadow:** `nt-cli` paper `--shadow` replicates
+  the champion-paper loop with 0 unexplained PnL/fill divergence; then cut
+  paper → demo → bridge → TS per the sunset checklist.

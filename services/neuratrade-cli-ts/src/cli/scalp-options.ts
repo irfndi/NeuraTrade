@@ -146,6 +146,15 @@ export const slippageBpsOption = Options.float("slippage-bps").pipe(
   ),
 );
 
+export const liveEntryCrossBpsOption = Options.float(
+  "live-entry-cross-bps",
+).pipe(
+  Options.withDefault(5),
+  Options.withDescription(
+    "Live-entry limit cross in bps: venue order crosses the rung touch (long bids above, short asks below) so thin testnet books fill. Paper ledger keeps the conservative fillPrice.",
+  ),
+);
+
 export const takerExitFeePctOption = Options.float("taker-exit-fee-pct").pipe(
   Options.withDefault(0.06),
   Options.withDescription(

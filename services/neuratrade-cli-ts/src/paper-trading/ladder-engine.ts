@@ -70,6 +70,12 @@ export interface LadderPaperTradingOptions {
   readonly gridPauseAfterLossBars: number;
   readonly feePct: number;
   readonly slippageBps: number;
+  /**
+   * Live-entry limit cross in bps (default 5): venue order crosses the
+   * rung touch (long bids above, short asks below) so thin testnet books
+   * actually fill. Paper ledger keeps the conservative fillPrice.
+   */
+  readonly liveEntryCrossBps?: number;
   readonly initialCapital: number;
   readonly trendFilterPeriod: number;
   readonly leverage: number;
@@ -1348,6 +1354,16 @@ function executeLadderFillLive(
       marginMode,
       leverage,
     );
+    // Marketable-limit entries: the paper fillPrice is slippage-adjusted
+    // AWAY from the touch (long pays up, short receives down), so a GTC
+    // limit at fillPrice may never trade through on a thin testnet book.
+    // Cross the touch instead: long bids slightly ABOVE the rung signal,
+    // short asks slightly BELOW. Paper ledger keeps fillPrice; only the
+    // venue order crosses. Spread in bps keeps it proportional per ticker.
+    const crossBps = Math.max(0, options.liveEntryCrossBps ?? 5);
+    const crossFactor =
+      side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
+    const venuePrice = money(toNumber(fillPrice) * crossFactor);
     const placed = yield* adapter
       .placeOrder({
         symbol: options.symbol,
@@ -1357,7 +1373,7 @@ function executeLadderFillLive(
         marginMode,
         leverage,
         size: sized.qty,
-        price: fillPrice,
+        price: venuePrice,
         reduceOnly: false,
       })
       .pipe(Effect.result);

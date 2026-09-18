@@ -272,6 +272,7 @@ import {
   signalFeedOption,
   maxPositionDrawdownPctOption,
   stopRatioOption,
+  liveEntryCrossBpsOption,
   takerExitFeePctOption,
   fundingRatePct8hOption,
   maintenanceMarginRatePctOption,
@@ -2792,6 +2793,8 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly maxPositionDrawdownPct: number;
   /** Ladder: stop distance as a multiple of the grid step (0 = legacy boundary). */
   readonly stopRatio: number;
+  /** Ladder: live-entry limit cross in bps (venue order only, ledger keeps fillPrice). */
+  readonly liveEntryCrossBps: number;
   /** Per-side taker fee percent for non-target (market) exits. */
   readonly takerExitFeePct: number;
   /** Funding cost percent of notional per 8h held on open positions. */
@@ -3087,6 +3090,7 @@ export const paperTradeCommand = Command.make(
     signalFeed: signalFeedOption,
     maxPositionDrawdownPct: maxPositionDrawdownPctOption,
     stopRatio: stopRatioOption,
+    liveEntryCrossBps: liveEntryCrossBpsOption,
     takerExitFeePct: takerExitFeePctOption,
     fundingRatePct8h: fundingRatePct8hOption,
     maintenanceMarginRatePct: maintenanceMarginRatePctOption,
@@ -4657,6 +4661,7 @@ function paperTradeProgram(args: PaperTradeArgs) {
         gridPauseAfterLossBars,
         feePct: args.fee,
         slippageBps: args.slippageBps,
+        liveEntryCrossBps: args.liveEntryCrossBps,
         trendFilterPeriod: args.onlyWithTrend ? args.trendFilterPeriod : 0,
         initialCapital: capitalPartition.toNumber(),
         leverage: args.leverage,
