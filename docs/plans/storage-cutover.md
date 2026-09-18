@@ -87,12 +87,15 @@ field-for-field so the Rust shadow can dual-write with no translation.
 - CI builds `nt-cli` on push (`.github/workflows/native.yml`); box never
   builds. Soak DB/JSON untouched; kill-switch stays ENGAGED until owner clears.
 - Required GitHub Secrets (placeholders, values never in repo): `BOX_SSH_KEY`, `BOX_HOST`.
+- Recipe (from a green run):
   `gh run download <run-id> -n nt-cli-linux-x64`
   `ssh root@$BOX_HOST 'mkdir -p /opt/neuratrade/bin'` (first deploy only;
   dir does not exist yet — verified 2026-09-18)
   `scp nt-cli root@$BOX_HOST:/opt/neuratrade/bin/nt-cli-$(git rev-parse --short HEAD)`
-  `sha256sum nt-cli` locally vs on box — must match before swap.
   Symlink swap: `ln -sfn /opt/neuratrade/bin/nt-cli-<sha> /opt/neuratrade/bin/nt-cli`
+  Health gate (ship is NOT done until this passes):
+  `/opt/neuratrade/bin/nt-cli health` must print `status=ok` BEFORE any
+  `pm2 restart`; after restart, probe again. A bad cross-build never swaps.
   Restart only the replaced app (e.g. `pm2 restart nt-cli`), then health probe: `nt-cli health`.
 - Rollback = re-symlink previous binary (`ln -sfn .../nt-cli-<prev-sha> .../nt-cli`) + `pm2 restart` the same app + `nt-cli health` again.
 
