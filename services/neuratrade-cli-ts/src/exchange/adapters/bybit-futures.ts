@@ -1180,6 +1180,15 @@ interface BybitFillInput {
   readonly withError: <A>(
     effect: Effect.Effect<A, BybitClientError>,
   ) => Effect.Effect<A, ExchangeError>;
+  /// Venue price sent with the order (limit) or "MARKET". Best-effort
+  /// diagnostics only — error string, never the fill path.
+  readonly venuePrice?: string;
+  /// Requested qty in base units (pre-floor sizing).
+  readonly requestedQty?: string;
+  /// Instrument tick size (price granularity).
+  readonly tickSize?: string;
+  /// Gateway for the best-effort mark/bid/ask snapshot on failure.
+  readonly gateway?: MarketDataGatewayService;
 }
 
 function cancelUnfilledBybitOrder(
@@ -1202,7 +1211,7 @@ function cancelUnfilledBybitOrder(
 }
 
 function pollBybitOrderFill(
-  input: BybitFillInput & { gateway?: MarketDataGatewayService; venuePrice?: string },
+  input: BybitFillInput,
 ): Effect.Effect<FuturesOrderFill, ExchangeError> {
   return Effect.gen(function* () {
     const { request, symbol, ack, client, withError } = input;
@@ -1239,15 +1248,20 @@ function pollBybitOrderFill(
         data.orderStatus,
       );
       // Fill diagnostics (clever-cabin-85m): why did the book ignore us?
-      // Venue price vs live mark/bid/ask + tick size tells marketable vs
-      // stranded apart. Gateway read is best-effort (never fails the path).
-      let diag = `venue=${input.venuePrice ?? "?"} tick=${request.price?.toString() ?? "?"}`;
+      // Requested venuePrice/qty/side/type + tickSize vs live mark/bid/ask
+      // tells marketable vs stranded vs sizing apart. Gateway read is
+      // best-effort (never fails the path). Redacted: no keys/secrets.
+      let diag =
+        `venue=${input.venuePrice ?? "?"} qty=${input.requestedQty ?? request.size.toString()} ` +
+        `side=${request.side} type=${request.type} tickSize=${input.tickSize ?? "?"}`;
       if (input.gateway !== undefined) {
         const tick = yield* input.gateway
           .fetchTick("bybit-futures", request.symbol)
           .pipe(Effect.orElseSucceed(() => null));
         if (tick !== null) {
           diag += ` mark=${tick.price} bid=${tick.bid ?? "?"} ask=${tick.ask ?? "?"} vol24h=${tick.volume24h ?? "?"}`;
+        } else {
+          diag += " mark=? bid=? ask=? vol24h=?";
         }
       }
       return yield* Effect.fail(
@@ -1330,6 +1344,8 @@ export function makeBybitFuturesAdapter(
         withError,
         gateway,
         venuePrice: request.type === "limit" ? price.toString() : "MARKET",
+        requestedQty: qty.toString(),
+        tickSize: tickSize.toString(),
       });
     });
 

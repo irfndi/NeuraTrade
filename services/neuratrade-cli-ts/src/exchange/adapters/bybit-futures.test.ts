@@ -358,6 +358,13 @@ describe("BybitFuturesExchangeAdapter", () => {
       expect(outcome.reason).toContain("not filled");
       expect(outcome.reason).toContain("status=New");
       expect(outcome.reason).toContain("resting order bybit-1 canceled");
+      // Fill-diagnostics probe (clever-cabin-85m): error names venue vs
+      // mark. Stub gateway is price-only (no bid/ask), so the fallback
+      // rendering asserts exactly.
+      expect(outcome.reason).toContain("venue=");
+      expect(outcome.reason).toContain("mark=40000");
+      expect(outcome.reason).toContain("bid=?");
+      expect(outcome.reason).toContain("ask=?");
     }
     expect(calls).toContain("cancelOrder:BTCUSDT:bybit-1");
   });
