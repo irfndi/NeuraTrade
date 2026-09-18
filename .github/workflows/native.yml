@@ -124,9 +124,10 @@ jobs:
           pipx install cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild
           ZIG_WANT=$(cat .zig-version)
           echo "want zig $ZIG_WANT"
-          curl -fsSL "https://ziglang.org/download/0.16.0/zig-linux-x86_64-0.16.0.tar.xz" -o /tmp/zig.tar.xz
+          # Canonical name: zig-x86_64-linux-<ver> (zig-linux-x86_64 404s).
+          curl -fsSL "https://ziglang.org/download/${ZIG_WANT}/zig-x86_64-linux-${ZIG_WANT}.tar.xz" -o /tmp/zig.tar.xz
           tar -xf /tmp/zig.tar.xz -C /tmp
-          echo "/tmp/zig-linux-x86_64-0.16.0" >> "$GITHUB_PATH"
+          echo "/tmp/zig-x86_64-linux-${ZIG_WANT}" >> "$GITHUB_PATH"
 
       - name: Build host binary + health probe
         run: |
