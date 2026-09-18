@@ -141,13 +141,14 @@ champion-soak: ## Paper + Bybit testnet champion soaks
 
 .PHONY: native-check native-box native-ship
 
-native-check: ## Rust fmt + clippy (zero warnings) + all 6 example checks
+native-check: ## Rust fmt + clippy (zero warnings) + all 7 example checks
 	@cd crates && cargo fmt --check
 	@cd crates && cargo fetch
 	@cd crates && cargo clippy --all-targets -- -D warnings
 	@cd crates && cargo build
 	@cd crates && for p in nt-risk nt-execution nt-ledger nt-market nt-grid; do cargo run -p $$p --example check || exit 1; done
 	@cd crates && cargo run -p nt-grid --example paper_engine_check
+	@cd crates && cargo run -p nt-grid --example sleeves_check
 
 native-box: ## Cross-build the box binary via zigbuild (release)
 	@./scripts/zig/zig-build.sh release box

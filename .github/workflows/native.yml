@@ -56,6 +56,7 @@ jobs:
             cargo run -q -p $p --example check
           done
           cargo run -q -p nt-grid --example paper_engine_check
+          cargo run -q -p nt-grid --example sleeves_check
 
   bend:
     name: Bend parity (grid + guards + search kernels)
@@ -100,6 +101,11 @@ jobs:
         run: |
           bend bend/search.bend -o /tmp/search
           test "$(/tmp/search)" = "11"
+
+      - name: Compile + run sleeves kernel (expects 13)
+        run: |
+          bend bend/sleeves.bend -o /tmp/sleeves
+          test "$(/tmp/sleeves)" = "13"
 
       - name: Verify Bend pin
         run: test "$(bend --version)" = "bend ${{ env.BEND_VERSION }}"
