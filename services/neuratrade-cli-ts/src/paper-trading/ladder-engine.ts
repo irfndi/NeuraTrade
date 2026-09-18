@@ -636,6 +636,9 @@ function fillLadderSide(ctx: LadderBarContext, side: LadderSide): void {
     const fillPrice =
       side === "long" ? rung.level * ctx.slippage : rung.level / ctx.slippage;
     const sized = ladderRungQty(w.capital, opts, money(fillPrice));
+    // Floor-unorderable: clean HOLD — don't mark filled, don't emit event.
+    // Paper and live stay aligned; skipReason already explains the cap.
+    if (sized.qty.lessThanOrEqualTo(0)) continue;
     rungs[index] = {
       ...rung,
       filled: true,
@@ -1482,7 +1485,7 @@ function executeLadderBarLive(
     const leverage = Math.max(1, options.leverage ?? 1);
     // Floor-unorderable rungs (qty 0 skip from ladderRungQty) are a clean
     // HOLD: never send them to the venue, so no guard trip, no bar rollback.
-    const orderableFills = fills.filter((fill) => (fill.qty ?? 0) > 0);
+    const orderableFills = fills.filter((fill) => fill.qty > 0);
     for (const fill of orderableFills) {
       yield* executeLadderFillLive(
         fill,
