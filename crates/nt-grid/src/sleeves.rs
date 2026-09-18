@@ -17,6 +17,9 @@ use nt_risk::{
 use crate::{FillReason, PaperEngineConfig, Side};
 
 /// One directional filter. New filters arrive as variants, not new engines.
+/// Additive set (each needs a `filter_vote` arm + a sleeves_check row):
+/// Grid (rung touch), Breakout (donchian), Trend (SMA side), Momentum
+/// (close-vs-close-N thrust), Chop (ADX-style veto), Funding (carry veto).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterKind {
     /// Grid rung touch (same geometry as `run_paper_engine` entries).
@@ -25,6 +28,15 @@ pub enum FilterKind {
     Breakout,
     /// Close vs its own `lookback`-bar SMA (trend-following).
     Trend,
+    /// Close thrust vs the close `lookback` bars ago: long when
+    /// `close[i] >= close[i-n] * (1 + step_bp/10000)`, short on the mirror.
+    Momentum,
+    /// Range veto: SKIP unless the `lookback`-bar range/high-low mean
+    /// exceeds `step_bp` of price (dead-flat bars abstain instead of voting).
+    Chop,
+    /// Carry veto: SKIP when the per-bar funding drag in `step_bp`
+    /// would erase the edge (else abstains like Chop).
+    Funding,
 }
 
 /// One voting sleeve: a filter plus its vote weight and leverage ceiling.
@@ -149,6 +161,62 @@ pub fn filter_vote(kind: FilterKind, candles: &[Candle], i: usize, cfg: &SleeveC
             } else {
                 Vote::Skip
             }
+        }
+        FilterKind::Momentum => {
+            // Thrust vs the close `lookback` bars ago (causal: excludes bar i).
+            // step_bp is the thrust threshold: long at +step, short at -step.
+            let n = cfg.lookback;
+            if n == 0 || i < n || cfg.step_bp <= 0 {
+                return Vote::Skip;
+            }
+            let base = candles[i - n].close.0;
+            if base <= 0 {
+                return Vote::Skip;
+            }
+            let up = base + scale(base, cfg.step_bp, 10_000);
+            let dn = base - scale(base, cfg.step_bp, 10_000);
+            if c.close.0 >= up {
+                Vote::Long
+            } else if c.close.0 <= dn {
+                Vote::Short
+            } else {
+                Vote::Skip
+            }
+        }
+        FilterKind::Chop => {
+            // Range veto as a PASS-THROUGH voter: SKIP on dead-flat bars
+            // (range/mean <= step_bp), else echo the bar's own direction
+            // (close vs open) so chop never invents a side, only abstains.
+            let n = cfg.lookback.max(1);
+            if i + 1 < n || cfg.step_bp <= 0 {
+                return Vote::Skip;
+            }
+            let from = i + 1 - n;
+            let (mut hi, mut lo) = (candles[from].high.0, candles[from].low.0);
+            let mut sum: i128 = 0;
+            for k in candles[from..=i].iter() {
+                hi = hi.max(k.high.0);
+                lo = lo.min(k.low.0);
+                sum += k.high.0 as i128 - k.low.0 as i128;
+            }
+            let mean_range = sum / n as i128;
+            let px = c.close.0.max(1) as i128;
+            if mean_range * 10_000 <= cfg.step_bp as i128 * px {
+                return Vote::Skip;
+            }
+            if c.close > c.open {
+                Vote::Long
+            } else if c.close < c.open {
+                Vote::Short
+            } else {
+                Vote::Skip
+            }
+        }
+        FilterKind::Funding => {
+            // Carry veto: pure abstain for now. Directional sleeves decide
+            // sides; a live funding feed wires here when the venue adapter
+            // lands (Task 7 Step 4) — until then it never blocks a vote.
+            Vote::Skip
         }
     }
 }

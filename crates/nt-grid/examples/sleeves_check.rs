@@ -111,7 +111,47 @@ fn main() {
     let (l, _s) = combine_votes(&flat, 3, &grid_only);
     assert_eq!(l, 0, "flat bar: grid silent, no votes");
 
-    // Leverage tiers mirror TS accountScaledLeverageCap exactly.
+    // Momentum thrust: +1.5%/bar staircase exceeds the 100bp threshold.
+    let mom = SleeveCfg {
+        kind: FilterKind::Momentum,
+        weight_bp: 1_000,
+        max_leverage: 1,
+        step_bp: 100,
+        lookback: 2,
+    };
+    assert_eq!(
+        format!("{:?}", filter_vote(FilterKind::Momentum, &bars, 2, &mom)),
+        "Long"
+    );
+    // Chop veto: dead-flat bar (300k mean range) abstains at a 50bp trigger.
+    let chop = SleeveCfg {
+        kind: FilterKind::Chop,
+        weight_bp: 1_000,
+        max_leverage: 1,
+        step_bp: 50,
+        lookback: 2,
+    };
+    assert_eq!(
+        format!("{:?}", filter_vote(FilterKind::Chop, &flat, 3, &chop)),
+        "Skip"
+    );
+    // Chop pass-through: live bar echoes its own direction.
+    assert_eq!(
+        format!("{:?}", filter_vote(FilterKind::Chop, &bars, 2, &chop)),
+        "Long"
+    );
+    // Funding: pure abstain until the venue feed lands.
+    let fund = SleeveCfg {
+        kind: FilterKind::Funding,
+        weight_bp: 1_000,
+        max_leverage: 1,
+        step_bp: 1,
+        lookback: 0,
+    };
+    assert_eq!(
+        format!("{:?}", filter_vote(FilterKind::Funding, &bars, 2, &fund)),
+        "Skip"
+    );
     assert_eq!(account_scaled_leverage_cap(Money::usdt(100), 1000, 10), 10);
     assert_eq!(account_scaled_leverage_cap(Money::usdt(100), 5000, 10), 5);
     assert_eq!(account_scaled_leverage_cap(Money::usdt(1000), 1000, 99), 25);
