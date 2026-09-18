@@ -112,11 +112,12 @@ function championArgs(extra) {
     "0.02",
     "--slippage-bps",
     "2",
-    // Marketable-limit demo entries: cross the rung touch 5bps so thin
-    // testnet books fill (clever-cabin-85m). Paper fee line carries the
-    // same cross cost, so paper-vs-demo has zero divergence from this.
+    // Marketable-limit demo entries: cross the rung touch 15bps so thin
+    // testnet books fill (clever-cabin-85m; 5bps proved unmarketable on ETH
+    // 19:04 cycle — still status empty/qty 0 rolled back). Paper fee line
+    // carries the same cross cost, so paper-vs-demo has zero divergence.
     "--live-entry-cross-bps",
-    "5",
+    "15",
     "--leverage",
     "1",
     "--capital",
