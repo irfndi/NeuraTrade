@@ -62,10 +62,11 @@ pub struct PaperEngineConfig {
     /// for this pass — see the task brief.
     pub max_position_size_pct: i64,
     /// Per-ticker realized cost in basis points of notional: exchange fee
-    /// plus measured slippage plus minimum-size rounding drag for THIS symbol.
-    /// The global 6bp default is a research floor, not a trading promise:
-    /// PUMPFUN-class drag fails sizing against its own edge while ETH passes.
-    /// Feed per-symbol, never global.
+    /// plus minimum-size rounding drag for THIS symbol. Slippage is NOT in
+    /// here — it stays in `slippage_bps` (`worse_price` moves the fill
+    /// price; this only sizes the fee line). The global 6bp default is a
+    /// research floor, not a trading promise: PUMPFUN-class drag fails
+    /// sizing against its own edge while ETH passes. Feed per-symbol.
     pub fee_bp: i64,
 }
 

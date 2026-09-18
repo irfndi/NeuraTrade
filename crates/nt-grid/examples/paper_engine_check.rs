@@ -202,22 +202,27 @@ fn main() {
     assert_eq!(totals.gross_micros, -1_505_999);
     assert_eq!(totals.fees_micros, 242_113);
 
-    // Per-ticker proof: same fills, PUMPFUN-class drag. Sizes and prices
-    // must be identical; only fees move. Net must be strictly worse.
+    // Per-ticker proof: same fills, PUMPFUN-class drag (69bp). Sizes and
+    // prices must be identical; only fees move. Exact hand-derived fees:
+    // notional*69/10000 truncated -> 689999, 696969, 689999, 707360,
+    // total 2784327 (vs 242113 at 6bp); net -1505999-2784327 = -4290326.
     let (devents, dledger) = run_paper_engine(&candles, &drag, capital, &limits);
     assert_eq!(devents.len(), events.len());
     for (a, b) in devents.iter().zip(events.iter()) {
         assert_eq!(a.qty_base_micros, b.qty_base_micros, "size is fee-blind");
         assert_eq!(a.price, b.price, "price is fee-blind");
-        assert!(a.fee.0 > b.fee.0, "drag must raise every fee");
     }
+    assert_eq!(devents[0].fee, Money(689_999));
+    assert_eq!(devents[1].fee, Money(696_969));
+    assert_eq!(devents[2].fee, Money(689_999));
+    assert_eq!(devents[3].fee, Money(707_360));
     let dtotals = dledger.totals();
     assert_eq!(
         dtotals.gross_micros, totals.gross_micros,
         "gross is fee-blind"
     );
-    assert!(dtotals.fees_micros > totals.fees_micros);
-    assert!(dtotals.net_micros() < totals.net_micros());
+    assert_eq!(dtotals.fees_micros, 2_784_327);
+    assert_eq!(dtotals.net_micros(), -4_290_326);
     assert_eq!(totals.net_micros(), -1_748_112);
 
     println!("nt-grid paper_engine_check ok");
