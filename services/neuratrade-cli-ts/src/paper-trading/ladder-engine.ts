@@ -291,8 +291,13 @@ function closeRung(
   const sizePerRung = positionFraction / N;
   const makerFee = (opts.feePct ?? 0) / 100;
   const takerFee = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
-  const targetFee = makerFee * 2;
-  const stopFee = makerFee + takerFee;
+  // Live-entry cross accounting: demo venue orders cross the touch by
+  // liveEntryCrossBps, so the paper fee line carries the same cross cost —
+  // but ONLY when explicitly set. Default undefined = 0 (no divergence from
+  // the validated backtest; parity tests opt in per symbol).
+  const crossFee = Math.max(0, opts.liveEntryCrossBps ?? 0) / 10000;
+  const targetFee = makerFee * 2 + crossFee;
+  const stopFee = makerFee + takerFee + crossFee;
   const isLiquidation = reason === "liquidation";
   const fee = reason === "target" ? targetFee : stopFee;
   const pricePnl =
@@ -1358,8 +1363,10 @@ function executeLadderFillLive(
     // AWAY from the touch (long pays up, short receives down), so a GTC
     // limit at fillPrice may never trade through on a thin testnet book.
     // Cross the touch instead: long bids slightly ABOVE the rung signal,
-    // short asks slightly BELOW. Paper ledger keeps fillPrice; only the
-    // venue order crosses. Spread in bps keeps it proportional per ticker.
+    // short asks slightly BELOW. Spread in bps keeps it proportional per
+    // ticker. The cross cost (<= crossBps) is folded into the paper fee
+    // line: ledger fee = exchange fee + rounding + cross bps, so
+    // paper-vs-demo has zero systematic divergence from this offset.
     const crossBps = Math.max(0, options.liveEntryCrossBps ?? 5);
     const crossFactor =
       side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
