@@ -1,0 +1,120 @@
+name: Native
+
+on:
+  push:
+    paths:
+      - "crates/**"
+      - "bend/**"
+      - "scripts/zig/**"
+      - ".zig-version"
+      - ".github/workflows/native.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "bend/**"
+      - "scripts/zig/**"
+      - ".zig-version"
+      - ".github/workflows/native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BEND_VERSION: "2.0.5"
+
+jobs:
+  rust:
+    name: Rust checks (fmt, clippy, examples)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cd crates && cargo fmt --check
+
+      - name: Clippy (deny warnings)
+        run: cd crates && cargo clippy --offline --all-targets -- -D warnings
+
+      - name: Run crate checks
+        run: |
+          cd crates
+          for p in nt-risk nt-execution nt-ledger nt-market nt-grid; do
+            cargo run --offline -q -p $p --example check
+          done
+          cargo run --offline -q -p nt-grid --example paper_engine_check
+
+  bend:
+    name: Bend parity (grid + guards kernels)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+
+      - name: Install Bend
+        run: |
+          curl -fsSL https://github.com/HigherOrderCO/bend/releases/download/v${{ env.BEND_VERSION }}/bend-linux-x64 -o /usr/local/bin/bend
+          chmod +x /usr/local/bin/bend
+          bend --version
+
+      - name: Run grid kernel (parity checksum)
+        run: bend bend/grid.bend
+
+      - name: Run guards kernel
+        run: bend bend/guards.bend
+
+  zig:
+    name: Zig cross-build (box artifact)
+    runs-on: ubuntu-latest
+    needs: [rust, bend]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig + cargo-zigbuild
+        run: |
+          pipx install cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild
+          ZIG_WANT=$(cat .zig-version)
+          echo "want zig $ZIG_WANT"
+          curl -fsSL "https://ziglang.org/download/0.16.0/zig-linux-x86_64-0.16.0.tar.xz" -o /tmp/zig.tar.xz
+          tar -xf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-linux-x86_64-0.16.0" >> "$GITHUB_PATH"
+
+      - name: Build host binary + health probe
+        run: |
+          ./scripts/zig/zig-build.sh release host
+          ./crates/target/release/nt-cli health
+
+      - name: Cross-build box binary
+        run: ./scripts/zig/zig-build.sh release box
+
+      - name: Checksum + upload box artifact
+        run: |
+          sha256sum crates/target/x86_64-unknown-linux-gnu/release/nt-cli | tee nt-cli.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nt-cli-linux-x64
+          path: |
+            crates/target/x86_64-unknown-linux-gnu/release/nt-cli
+            nt-cli.sha256
+          retention-days: 30

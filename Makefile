@@ -138,3 +138,20 @@ champion-demo: ## Bybit testnet soak of claimed champion knobs
 
 champion-soak: ## Paper + Bybit testnet champion soaks
 	@cd services/neuratrade-cli-ts && pm2 start ecosystem.champion-soak.config.cjs
+
+.PHONY: native-check native-box native-ship
+
+native-check: ## Rust fmt + clippy (zero warnings) + all 6 example checks
+	@cd crates && cargo fmt --check
+	@cd crates && cargo fetch
+	@cd crates && cargo clippy --offline --all-targets -- -D warnings
+	@cd crates && cargo build --offline
+	@cd crates && for p in nt-risk nt-execution nt-ledger nt-market nt-grid; do cargo run --offline -p $$p --example check || exit 1; done
+	@cd crates && cargo run --offline -p nt-grid --example paper_engine_check
+
+native-box: ## Cross-build the box binary via zigbuild (release)
+	@./scripts/zig/zig-build.sh release box
+
+native-ship: ## Print the box deploy recipe (set BOX_HOST; prints only)
+	@echo "scp crates/target/x86_64-unknown-linux-gnu/release/nt-cli $${BOX_HOST:?set BOX_HOST}:/opt/neuratrade/bin/nt-cli"
+	@echo "ssh $${BOX_HOST:?set BOX_HOST} 'pm2 restart nt-cli'"

@@ -23,8 +23,19 @@ if [ "$DEST" = box ]; then
         exit 1
     fi
     (cd "$ROOT/crates" && cargo zigbuild --profile "$PROFILE" --target "$TARGET")
-    echo "artifacts: $ROOT/crates/target/$TARGET/$PROFILE/nt-cli"
+    ART="$ROOT/crates/target/$TARGET/$PROFILE/nt-cli"
 else
     (cd "$ROOT/crates" && cargo build --profile "$PROFILE")
-    echo "artifacts: $ROOT/crates/target/$PROFILE/nt-cli"
+    ART="$ROOT/crates/target/$PROFILE/nt-cli"
+fi
+# fail-closed: refuse success without the artifact, then fingerprint it.
+if [ ! -x "$ART" ]; then
+    echo "missing artifact: $ART" >&2
+    exit 1
+fi
+echo "artifacts: $ART"
+if have sha256sum; then
+    sha256sum "$ART"
+else
+    shasum -a 256 "$ART"
 fi
