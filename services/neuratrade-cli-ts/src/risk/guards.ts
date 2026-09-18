@@ -25,6 +25,10 @@ export interface RiskLimits {
   readonly maxTradesPerDay: number;
   /** Maximum order notional as a percentage of capital, independent of leverage. */
   readonly maxNotionalPct?: number;
+  /** Halt a symbol past this many fills in the rolling window (e.g. 25/hour). */
+  readonly maxTradesPerWindow?: number;
+  /** Halt when window fees exceed this share (bp) of |gross|+fees. */
+  readonly maxWindowFeeShareBp?: number;
   readonly maxLeverage?: number;
   readonly allowedSymbols?: readonly string[];
   readonly allowedProductTypes?: readonly string[];
@@ -37,6 +41,12 @@ export interface RiskContext {
   readonly isLive: boolean;
   readonly capital: number;
   readonly peakCapital: number;
+  /** Fills in the rolling throughput window (undefined = gate off). */
+  readonly tradesInWindowCount?: number;
+  /** Signed window PnL before fees; pairs with windowFeesPaid. */
+  readonly windowGrossPnl?: number;
+  /** Total fees paid in the window (same currency as gross). */
+  readonly windowFeesPaid?: number;
   readonly startOfDayCapital: number;
   readonly dailyRealizedPnl: number;
   readonly tradesTodayCount: number;
@@ -183,6 +193,46 @@ function positionRiskViolations(
   return violations;
 }
 
+/**
+ * Revenge-spiral breaker (P2): per-symbol rolling-window halt.
+ * Mirrors nt-risk `throughput_violations`: count cap first, then fee-drag
+ * share = fees*10000/(|gross|+fees). Gate is off when limits are unset.
+ */
+function throughputRiskViolations(
+  context: RiskContext,
+  limits: RiskLimits,
+): string[] {
+  const violations: string[] = [];
+  const windowTrades = context.tradesInWindowCount;
+  if (
+    limits.maxTradesPerWindow !== undefined &&
+    windowTrades !== undefined &&
+    windowTrades > limits.maxTradesPerWindow
+  ) {
+    violations.push(
+      `throughput ${windowTrades} trades exceeds max ${limits.maxTradesPerWindow} per window`,
+    );
+  }
+  const gross = context.windowGrossPnl;
+  const fees = context.windowFeesPaid;
+  if (
+    limits.maxWindowFeeShareBp !== undefined &&
+    gross !== undefined &&
+    fees !== undefined
+  ) {
+    const activity = Math.abs(gross) + fees;
+    if (activity > 0) {
+      const shareBp = Math.floor((fees * 10_000) / activity);
+      if (shareBp > limits.maxWindowFeeShareBp) {
+        violations.push(
+          `fee share ${shareBp}bp exceeds max ${limits.maxWindowFeeShareBp}bp`,
+        );
+      }
+    }
+  }
+  return violations;
+}
+
 function allowlistRiskViolations(
   context: RiskContext,
   limits: RiskLimits,
@@ -220,6 +270,7 @@ export function makeRiskGuard(limits: RiskLimits): RiskGuardService {
         const violations = [
           ...basicRiskViolations(context, limits),
           ...positionRiskViolations(context, limits),
+          ...throughputRiskViolations(context, limits),
           ...allowlistRiskViolations(context, limits),
         ];
         if (violations.length > 0) {

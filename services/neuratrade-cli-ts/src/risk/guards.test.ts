@@ -385,4 +385,55 @@ describe("makeRiskGuard", () => {
       ).toBe(true);
     }
   });
+
+  it("halts a symbol past the window trade cap (Aug-18 revenge shape)", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(false),
+      maxTradesPerWindow: 25,
+    });
+    const error = await Effect.runPromise(
+      guard.check(baseContext({ tradesInWindowCount: 99 })).pipe(Effect.flip),
+    );
+    expect(
+      error.violations.some((v) => v.includes("throughput 99 trades")),
+    ).toBe(true);
+  });
+
+  it("halts a fee-dominated window even at a low trade count", async () => {
+    const guard = makeRiskGuard({
+      ...defaultRiskLimits(false),
+      maxWindowFeeShareBp: 5_000,
+    });
+    const error = await Effect.runPromise(
+      guard
+        .check(
+          baseContext({ windowGrossPnl: 40, windowFeesPaid: 60 }),
+        )
+        .pipe(Effect.flip),
+    );
+    expect(error.violations.some((v) => v.includes("fee share"))).toBe(true);
+  });
+
+  it("passes healthy flow and leaves the gate off when unset", async () => {
+    const strict = makeRiskGuard({
+      ...defaultRiskLimits(false),
+      maxTradesPerWindow: 25,
+      maxWindowFeeShareBp: 5_000,
+    });
+    const calm = await Effect.runPromise(
+      strict.check(
+        baseContext({
+          tradesInWindowCount: 5,
+          windowGrossPnl: 500,
+          windowFeesPaid: 30,
+        }),
+      ),
+    );
+    expect(calm).toBeUndefined();
+    const off = makeRiskGuard(defaultRiskLimits(false));
+    const unsettled = await Effect.runPromise(
+      off.check(baseContext({ tradesInWindowCount: 9_999 })),
+    );
+    expect(unsettled).toBeUndefined();
+  });
 });
