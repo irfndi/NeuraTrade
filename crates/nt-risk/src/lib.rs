@@ -217,31 +217,28 @@ pub fn position_risk_violations(
     out
 }
 
-/// Seal: only [`approve`] can mint one. `nt-execution::submit` demands it,
-/// so unapproved orders cannot reach execution — in Rust or any FFI.
+/// Seal: only [`approve`]/[`approve_full`] can mint one.
+/// `nt-execution::submit` demands it, so unapproved orders cannot reach
+/// execution — in Rust or any FFI.
 #[derive(Debug, Clone, Copy)]
 pub struct RiskApproval {
     _seal: (),
 }
+/// Throughput notes on the `Ok` path: non-empty means halt new entries.
+pub type ThroughputNotes = Vec<String>;
+/// Approved book + throughput notes.
+pub type GateOk = (RiskApproval, ThroughputNotes);
+/// Hard violations + throughput violations.
+pub type GateErr = (Vec<String>, Vec<String>);
+/// Bundled gate decision.
+pub type GateDecision = Result<GateOk, GateErr>;
 
-/// Full pre-trade gate: floor + drawdown + position caps.
+/// Full pre-trade gate: floor + drawdown + position caps (+ live/count/
+/// allowlist via [`approve_full`] with default paper intent).
 /// `Ok` carries the execution seal; `Err` carries every violation.
 ///
-/// Does NOT yet call [`live_trading_violations`], [`trade_count_violations`]
-/// or [`allowlist_violations`]. Reassessed once `nt-grid`'s paper engine
-/// (the only current caller) landed: that engine has no live/daily-count
-/// concept to give these checks (it walks a fixture batch, not a live day),
-/// so wiring them in today means threading meaningless placeholder
-/// `is_live=false`/`trades_today_count=0` through every call site for no
-/// behavioral benefit. Also, `clever-cabin-k4u` (dynamic equity window +
-/// rejection fixture) already needs to touch every `approve()` call site in
-/// `engine.rs` — bundle this signature change with that pass instead of
-/// touching the same call sites twice. Wire these in once a caller with
-/// real live/daily/symbol context exists (Task 7 Step 4, exchange wiring).
-/// Callers that need them today must call all four functions and merge the
-/// violation lists.
-/// Full caller context for [`approve_full`]: live/daily/symbol identity.
-/// Paper callers pass `is_live=false`, `trades_today=0`, `symbol="PAPER"`.
+/// Legacy wrapper for callers without live/daily/throughput context: passes
+/// a default paper intent and an empty throughput window.
 #[derive(Debug, Clone)]
 pub struct TradeIntent {
     pub is_live: bool,
@@ -311,11 +308,13 @@ pub fn approve(
         &ThroughputWindow::default(),
         &ThroughputLimits::strict(),
     )
+    .map(|(a, _)| a)
     .map_err(|(v, _)| v)
 }
 /// Bundled gate (clever-cabin-k4u, one pass): floor + drawdown + position +
-/// live/count/allowlist + throughput. Throughput violations return alongside
-/// so callers can halt the symbol without conflating it with a hard reject.
+/// live/count/allowlist + throughput. Throughput returns on BOTH paths:
+/// `Ok((seal, t))` with non-empty `t` means approved book but halt the symbol
+/// (no new entries); exits ignore `t` so a halt never strands inventory.
 #[allow(clippy::too_many_arguments)] // ponytail: bundled k4u gate — one 10-arg call beats two passes over the same call sites
 pub fn approve_full(
     capital: Money,
@@ -328,7 +327,7 @@ pub fn approve_full(
     intent: &TradeIntent,
     throughput: &ThroughputWindow,
     tp_limits: &ThroughputLimits,
-) -> Result<RiskApproval, (Vec<String>, Vec<String>)> {
+) -> GateDecision {
     let mut v = basic_risk_violations(capital, limits);
     v.extend(drawdown_violations(window, limits));
     v.extend(position_risk_violations(
@@ -349,7 +348,7 @@ pub fn approve_full(
     ));
     let t = throughput_violations(throughput, tp_limits);
     if v.is_empty() {
-        Ok(RiskApproval { _seal: () })
+        Ok((RiskApproval { _seal: () }, t))
     } else {
         Err((v, t))
     }

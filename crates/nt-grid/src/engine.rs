@@ -31,7 +31,9 @@
 use nt_execution::{Order, submit};
 use nt_ledger::Ledger;
 use nt_market::Candle;
-use nt_risk::{EquityWindow, Money, RiskLimits, approve};
+use nt_risk::{
+    EquityWindow, Money, RiskLimits, ThroughputLimits, ThroughputTracker, TradeIntent, approve_full,
+};
 
 /// Config for the stateful paper engine. Distinct from [`crate::GridConfig`]
 /// (which drives the multi-rung [`crate::evaluate`] ladder and is untouched
@@ -154,14 +156,17 @@ pub fn run_paper_engine(
     capital: Money,
     limits: &RiskLimits,
 ) -> (Vec<PaperFillEvent>, Ledger) {
-    let window = EquityWindow {
-        current: capital,
-        peak: capital,
-        day_start: capital,
-    };
+    let day_start = capital;
+    let mut peak = capital;
+    // Closed-round-trip PnL only: open entries never move the equity window
+    // (an entry's -99M proceeds is inventory, not a 10% daily loss).
+    let mut closed_realized: i64 = 0;
+    let mut tracker = ThroughputTracker::default();
+    let tp_key = ThroughputTracker::key("paper", "PAPER", "1h");
+    let tp_limits = ThroughputLimits::strict();
     let mut ledger = Ledger::new();
     let mut events = Vec::new();
-    let mut position: Option<OpenPosition> = None;
+    let mut position: Option<(OpenPosition, i64)> = None; // + entry fill net at open
 
     for (i, candle) in candles.iter().enumerate() {
         let step = Money(scale(candle.open.0, cfg.step_bp, 10_000));
@@ -194,16 +199,36 @@ pub fn run_paper_engine(
                     -qty_abs
                 };
 
-                let Ok(appr) = approve(
+                let current = Money(capital.0 + closed_realized);
+                if current.0 > peak.0 {
+                    peak = current;
+                }
+                let eq = EquityWindow {
+                    current,
+                    peak,
+                    day_start,
+                };
+                let tp = tracker.window(&tp_key, candle.open_ts_ms, 3_600_000);
+                let intent = TradeIntent {
+                    trades_today: events.len() as u32,
+                    ..TradeIntent::default()
+                };
+                let Ok((appr, halt)) = approve_full(
                     capital,
-                    &window,
+                    &eq,
                     position_value,
                     position_value,
                     Money::ZERO,
                     1,
                     limits,
+                    &intent,
+                    &tp,
+                    &tp_limits,
                 ) else {
                     continue; // Rejected: skip this bar's entry, no trade.
+                };
+                if !halt.is_empty() {
+                    continue; // Throughput halt: approved book, no new entries.
                 };
                 let fill = submit(
                     appr,
@@ -222,13 +247,23 @@ pub fn run_paper_engine(
                     fee: fill.fee_micros,
                 });
                 ledger.apply(fill);
-                position = Some(OpenPosition {
-                    side,
-                    entry_price,
-                    qty_base_micros: qty_signed,
-                });
+                tracker.record(
+                    &tp_key,
+                    candle.open_ts_ms,
+                    fill.proceeds_micros.0,
+                    fill.fee_micros.0,
+                );
+                let entry_net = fill.proceeds_micros.0 - fill.fee_micros.0;
+                position = Some((
+                    OpenPosition {
+                        side,
+                        entry_price,
+                        qty_base_micros: qty_signed,
+                    },
+                    entry_net,
+                ));
             }
-            Some(pos) => {
+            Some((pos, entry_net)) => {
                 let target_delta = Money(scale(step.0, cfg.target_ratio_x100, 100));
                 let stop_delta = Money(step.0 * cfg.grid_max_grids);
                 let (target, stop) = match pos.side {
@@ -272,14 +307,34 @@ pub fn run_paper_engine(
                 };
 
                 let exit_qty = -pos.qty_base_micros;
-                let Ok(appr) = approve(
+                let current = Money(capital.0 + closed_realized);
+                if current.0 > peak.0 {
+                    peak = current;
+                }
+                let eq = EquityWindow {
+                    current,
+                    peak,
+                    day_start,
+                };
+                let tp = tracker.window(&tp_key, candle.open_ts_ms, 3_600_000);
+                // Exit bypasses daily-count and ignores throughput halt: a halt
+                // must never strand inventory. Only hard v (floor/drawdown)
+                // can still block a close.
+                let exit_intent = TradeIntent {
+                    trades_today: 0,
+                    ..TradeIntent::default()
+                };
+                let Ok((appr, _)) = approve_full(
                     capital,
-                    &window,
+                    &eq,
                     Money::ZERO,
                     Money::ZERO,
                     Money::ZERO,
                     1,
                     limits,
+                    &exit_intent,
+                    &tp,
+                    &tp_limits,
                 ) else {
                     // Fail closed rather than force an unapproved trade,
                     // even though a zero-size close should never be
@@ -303,6 +358,13 @@ pub fn run_paper_engine(
                     fee: fill.fee_micros,
                 });
                 ledger.apply(fill);
+                tracker.record(
+                    &tp_key,
+                    candle.open_ts_ms,
+                    fill.proceeds_micros.0,
+                    fill.fee_micros.0,
+                );
+                closed_realized += entry_net + (fill.proceeds_micros.0 - fill.fee_micros.0);
                 position = None;
             }
         }
