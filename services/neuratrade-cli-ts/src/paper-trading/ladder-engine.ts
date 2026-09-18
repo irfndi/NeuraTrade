@@ -1480,7 +1480,10 @@ function executeLadderBarLive(
     const productType = options.productType ?? "USDT-FUTURES";
     const marginMode = options.marginMode ?? "isolated";
     const leverage = Math.max(1, options.leverage ?? 1);
-    for (const fill of fills) {
+    // Floor-unorderable rungs (qty 0 skip from ladderRungQty) are a clean
+    // HOLD: never send them to the venue, so no guard trip, no bar rollback.
+    const orderableFills = fills.filter((fill) => (fill.qty ?? 0) > 0);
+    for (const fill of orderableFills) {
       yield* executeLadderFillLive(
         fill,
         w,
