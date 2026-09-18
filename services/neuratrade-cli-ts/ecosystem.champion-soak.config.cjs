@@ -116,8 +116,11 @@ function championArgs(extra) {
     "1",
     "--capital",
     "200",
+    // 30, not 50: per-symbol capital is 200/4=50, so a min-capital equal to
+    // par is a one-loss ratchet deadlock (clever-cabin-qgc) — the floor
+    // needs headroom below par to survive normal drawdown.
     "--min-capital",
-    "50",
+    "30",
     "--max-position-size-pct",
     "50",
     "--max-drawdown-pct",
