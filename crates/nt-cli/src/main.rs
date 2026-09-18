@@ -2,6 +2,13 @@
 // paper engine and prints ledger totals. Paper-only: no venue, no orders,
 // no secrets. Input CSV columns: open_ts_ms,open,high,low,close micros.
 // (Export with: sqlite3 demo.db ".headers on" "SELECT ..." > bars.csv)
+// Live-shadow runs: pass --capital-usdt = per-symbol partition (e.g. 200/4
+// = 50 for the 4-ticker demo) + per-symbol --fee-bp, else parity diffs are
+// config artifacts, not engine divergence.
+// --state is a tick FILTER (last open_ts), not full forwardOnly parity: each
+// tick replays only newer candles with a FRESH engine, so an exit whose entry
+// sat in a prior tick never fires. True tick parity needs persisted
+// position+ledger (Task 7 Step 5).
 use nt_grid::{PaperEngineConfig, run_paper_engine};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
