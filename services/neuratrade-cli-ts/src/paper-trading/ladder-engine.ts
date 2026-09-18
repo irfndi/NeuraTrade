@@ -1304,6 +1304,20 @@ function ladderRungQty(
       skipReason: `min orderable notional ${notional.toFixed(2)} USDT requires margin ${margin.toFixed(2)} at ${leverage}x, exceeding the ${toNumber(perRungAllocation).toFixed(2)} USDT per-rung cap`,
     } satisfies LadderRungQtyResult;
   }
+  // Min-raised qty can also exceed the notional cap share AFTER the clamp
+  // (orderableQty floors UP to minQty); skip instead of tripping the guard.
+  if (notionalCapPct !== undefined) {
+    const notionalCapShare = capital
+      .times(Math.max(0, Math.min(100, notionalCapPct)) / 100)
+      .div(Math.max(1, Math.floor(options.rungs ?? 1)));
+    if (notional.greaterThan(notionalCapShare)) {
+      return {
+        qty: money(0),
+        leverage,
+        skipReason: `min orderable notional ${notional.toFixed(2)} USDT exceeds the ${notionalCapShare.toFixed(2)} USDT notional cap share`,
+      } satisfies LadderRungQtyResult;
+    }
+  }
   return { qty, leverage } satisfies LadderRungQtyResult;
 }
 
