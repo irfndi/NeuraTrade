@@ -1202,7 +1202,7 @@ function cancelUnfilledBybitOrder(
 }
 
 function pollBybitOrderFill(
-  input: BybitFillInput,
+  input: BybitFillInput & { gateway?: MarketDataGatewayService; venuePrice?: string },
 ): Effect.Effect<FuturesOrderFill, ExchangeError> {
   return Effect.gen(function* () {
     const { request, symbol, ack, client, withError } = input;
@@ -1238,9 +1238,21 @@ function pollBybitOrderFill(
         orderId,
         data.orderStatus,
       );
+      // Fill diagnostics (clever-cabin-85m): why did the book ignore us?
+      // Venue price vs live mark/bid/ask + tick size tells marketable vs
+      // stranded apart. Gateway read is best-effort (never fails the path).
+      let diag = `venue=${input.venuePrice ?? "?"} tick=${request.price?.toString() ?? "?"}`;
+      if (input.gateway !== undefined) {
+        const tick = yield* input.gateway
+          .fetchTick("bybit-futures", request.symbol)
+          .pipe(Effect.orElseSucceed(() => null));
+        if (tick !== null) {
+          diag += ` mark=${tick.price} bid=${tick.bid ?? "?"} ask=${tick.ask ?? "?"} vol24h=${tick.volume24h ?? "?"}`;
+        }
+      }
       return yield* Effect.fail(
         new ExchangeError(
-          `futures order ${orderId} not filled (status=${data.orderStatus}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}); ${cleanup}`,
+          `futures order ${orderId} not filled (status=${data.orderStatus}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}; ${diag}); ${cleanup}`,
         ),
       );
     }
@@ -1316,6 +1328,8 @@ export function makeBybitFuturesAdapter(
         leverage: effectiveLeverage,
         client,
         withError,
+        gateway,
+        venuePrice: request.type === "limit" ? price.toString() : "MARKET",
       });
     });
 
