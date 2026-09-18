@@ -225,3 +225,7 @@ services/timesfm-forecast/src/*.egg-info/
 
 # Wrangler local dev state (R2/KV simulation cache)
 .wrangler/
+
+# Rust strangler workspace (P5)
+crates/target/
+crates/**/target/

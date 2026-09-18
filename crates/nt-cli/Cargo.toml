@@ -1,0 +1,6 @@
+[package]
+name = "nt-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

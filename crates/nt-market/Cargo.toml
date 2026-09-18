@@ -1,0 +1,7 @@
+[package]
+name = "nt-market"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nt-risk = { path = "../nt-risk" }

@@ -1,0 +1,8 @@
+[package]
+name = "nt-ledger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nt-risk = { path = "../nt-risk" }
+nt-execution = { path = "../nt-execution" }

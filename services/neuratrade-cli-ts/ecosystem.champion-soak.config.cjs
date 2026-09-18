@@ -119,7 +119,7 @@ function championArgs(extra) {
     "--min-capital",
     "50",
     "--max-position-size-pct",
-    "100",
+    "50",
     "--max-drawdown-pct",
     "15",
     "--max-daily-loss-pct",
