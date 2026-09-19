@@ -389,3 +389,32 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
 - [ ] **Gate 4 — Parallel live-shadow:** `nt-cli` paper `--shadow` replicates
   the champion-paper loop with 0 unexplained PnL/fill divergence; then cut
   paper → demo → bridge → TS per the sunset checklist.
+
+---
+
+## Progress log (2026-09-19 — regression sweep, branch `feat/rust-bend-strangler-p0-p5`)
+
+> Local evidence only. Box state quoted read-only; no box writes. Commits to
+> `origin/feat/rust-bend-strangler-p0-p5`: `dc719c72` shadow ledger,
+> `5a192090` tick convergence, `7a7b18cc` market-entries flag,
+> `0a8802b4` always-pass-venue-price fix (pushed).
+
+| Slice | Result | Evidence |
+| --- | --- | --- |
+| Rust tests | PASS | `cargo test --workspace` exit 0 (6 crates, 0 unit tests each — coverage lives in `examples/`); `cargo clippy --offline --all-targets` no warnings |
+| Rust examples | PASS | `nt-grid`: check / paper_engine_check (fills=4 net=-1.74) / parity_checksum (`663097394`) / pump_catch / sleeves_check; `nt-ledger`: check — all exit 0 |
+| Bend proofs | PASS | `bend PROOF.bend` → `laws hold` exit 0; `bend/grid.bend` → `663097394` (matches Rust parity checksum); search/guards/sleeves elaborate exit 0 |
+| TS Gate1 | PASS | `bunx tsc --noEmit` exit 0; `bun test src/paper-trading/` 152 pass 0 fail; tree clean in scope |
+| Box soaks | HOLD (no regression, no fill) | paper + demo online (`bun run index.ts`, NOT native yet); demo `opened-count-demo=0`, 16h log zero real fills (4 limit attempts 00:07–01:09Z rolled back qty=0; no touch since); paper flat open=0; disk 73% |
+| nt-cli binary | HEALTHY (shadow-only) | `/opt/neuratrade/bin/nt-cli -> nt-cli-7a7b18cc`, `health` → `status=ok runtime=rust-strangler` |
+
+**Regression verdict 2026-09-19:** no regression — every local gate green,
+box soaks alive with zero sizing/min-capital blocks. NOT cutover-ready:
+soaks still run Bun TS (P5 Step 6 uncut), Bend search not yet in PM2
+(P4 Step 5), demo never filled (Gate 3 open), shadow-vs-live daily diff
+pending (Gate 4 open).
+
+**Next toward Rust+Bend:** P4 Step 5 (Bend binary into PM2, keep JSON drop
+path) → P5 Step 6 (cut champion-paper to Rust on shadow parity) → Gate 3
+fill → P6 Zig ship (`build/zig-build.sh` missing; `.zig-version` pins
+0.16.0) → P8 sunset.
