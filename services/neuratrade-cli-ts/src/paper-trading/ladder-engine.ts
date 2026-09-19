@@ -1355,11 +1355,9 @@ function executeLadderFillLive(
     const fillPrice = money(fill.fillPrice);
     const sized = ladderRungQty(w.capital, options, fillPrice);
     if (sized.qty.lessThanOrEqualTo(0)) {
-      // Surface the sizing skip on the HOLD line: skips never place orders,
-      // so without this the log looks like a quiet flat market.
       return yield* Effect.fail(
         new ExchangeError(
-          `live rung skipped (${sized.skipReason ?? "zero qty"}) — no venue order placed`,
+          `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
         ),
       );
     }
