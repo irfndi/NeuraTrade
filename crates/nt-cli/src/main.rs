@@ -11,6 +11,10 @@
 // without it a fresh engine replays a partial window and drops those exits.
 // --ledger appends this tick's fills as CSV. All three are opt-in file
 // paths (default off); no network, no secrets.
+// Geometry flags (--step-bp/--target-x100/--stop-grids/--slip-bp/--pos-pct)
+// default to the paper_engine_check fixture scale; pass champion-soak.json
+// knobs (step130/target195/stop2) for champion parity. Untouched defaults
+// replay byte-identical.
 use nt_grid::{
     EndState, PaperEngineConfig, ResumePosition, ResumeState, Side, run_paper_engine_from,
 };
@@ -20,7 +24,7 @@ use std::env;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N] [--state <file>] [--resume <file>] [--ledger <file>]"
+        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N] [--state <file>] [--resume <file>] [--ledger <file>] [--step-bp N] [--target-x100 N] [--stop-grids N] [--slip-bp N] [--pos-pct N]"
     );
     std::process::exit(2);
 }
@@ -48,6 +52,13 @@ fn main() {
     let mut state_path: Option<String> = None;
     let mut resume_path: Option<String> = None;
     let mut ledger_path: Option<String> = None;
+    let mut step_bp: i64 = 100;
+    let mut target_x100: i64 = 100;
+    let mut stop_grids: i64 = 2;
+    let mut slip_bp: i64 = 50;
+    let mut pos_pct: i64 = 10;
+    let mut fetch_url: Option<String> = None;
+    let mut fetch_out: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -92,9 +103,70 @@ fn main() {
                 i += 1;
                 ledger_path = Some(args.get(i).unwrap_or_else(|| usage()).clone());
             }
+            "--step-bp" => {
+                i += 1;
+                step_bp = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--target-x100" => {
+                i += 1;
+                target_x100 = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--stop-grids" => {
+                i += 1;
+                stop_grids = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--slip-bp" => {
+                i += 1;
+                slip_bp = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--pos-pct" => {
+                i += 1;
+                pos_pct = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--fetch-public" => {
+                i += 1;
+                fetch_url = Some(args.get(i).unwrap_or_else(|| usage()).clone());
+            }
+            "--fetch-out" => {
+                i += 1;
+                fetch_out = Some(args.get(i).unwrap_or_else(|| usage()).clone());
+            }
             _ => usage(),
         }
         i += 1;
+    }
+    // Public-candle fetch runs BEFORE --bars is required: it PRODUCES the
+    // CSV (`--fetch-public <url> --fetch-out <csv>` + nothing else).
+    if let (Some(url), Some(out)) = (&fetch_url, &fetch_out) {
+        if let Err(e) = fetch_public_candles(url, out) {
+            eprintln!("fetch {url}: {e}");
+            std::process::exit(1);
+        }
+        println!("fetched {url} -> {out}");
+        return;
+    } else if fetch_url.is_some() || fetch_out.is_some() {
+        eprintln!("--fetch-public and --fetch-out must be passed together");
+        std::process::exit(2);
     }
     let path = bars.unwrap_or_else(|| usage());
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -159,15 +231,15 @@ fn main() {
         None => ResumeState::default(),
         Some(rp) => load_resume(rp),
     };
-    // Paper-engine geometry (mirrors paper_engine_check fixture scale):
-    // step 1.00%, target 1.00x step, stop 2 grids, 50bps slippage,
-    // 10% position. Fee per symbol via --fee-bp.
+    // Paper-engine geometry: fixture scale by default, champion knobs via
+    // flags (step130/target195/stop2 for champion-soak.json parity).
+    // Fee per symbol via --fee-bp.
     let cfg = PaperEngineConfig {
-        step_bp: 100,
-        target_ratio_x100: 100,
-        grid_max_grids: 2,
-        slippage_bps: 50,
-        max_position_size_pct: 10,
+        step_bp,
+        target_ratio_x100: target_x100,
+        grid_max_grids: stop_grids,
+        slippage_bps: slip_bp,
+        max_position_size_pct: pos_pct,
         fee_bp,
     };
     let capital = Money(capital_usdt * 1_000_000);
@@ -341,6 +413,56 @@ fn append_ledger(path: &str, events: &[nt_grid::PaperFillEvent]) {
     {
         eprintln!("ledger append {path}: {e}");
     }
+}
+
+/// Public-candle fetch: plain unauthenticated HTTP GET (no auth headers,
+/// no signing) of a JSON array of [open_ts_ms, open, high, low, close]
+/// integer-micros rows, written as --bars-compatible CSV. Uses only std
+/// (no new deps): minimal HTTP/1.0 over TcpStream, http:// URLs only —
+/// TLS stays in the TS soak until a vendored TLS crate is approved.
+/// Fail-closed: non-200, short read, or bad JSON aborts with an error.
+fn fetch_public_candles(url: &str, out: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("only http:// URLs (no TLS yet)")?;
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let mut sock = std::net::TcpStream::connect((host, 80)).map_err(|e| e.to_string())?;
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .map_err(|e| e.to_string())?;
+    write!(
+        sock,
+        "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    sock.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&raw);
+    let (_, body) = text.split_once("\r\n\r\n").ok_or("no HTTP body")?;
+    let status = text.lines().next().unwrap_or("");
+    if !status.contains(" 200") {
+        return Err(format!("status: {status}"));
+    }
+    // Minimal JSON parse: expect [[n,n,n,n,n],...] with integer micros.
+    let nums: Vec<i64> = body
+        .split(|c: char| !(c == '-' || c.is_ascii_digit()))
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().map_err(|_| format!("bad number {s:?}")))
+        .collect::<Result<_, _>>()?;
+    if nums.is_empty() || !nums.len().is_multiple_of(5) {
+        return Err(format!("want 5-col rows, got {} numbers", nums.len()));
+    }
+    let mut csv = String::from("open_ts_ms,open,high,low,close\n");
+    let (rows, _) = nums.as_chunks::<5>();
+    for r in rows {
+        use std::fmt::Write as _;
+        let _ = writeln!(csv, "{},{},{},{},{}", r[0], r[1], r[2], r[3], r[4]);
+    }
+    std::fs::write(out, csv).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Honest taker-exit default (6bp) without depending on nt-execution
