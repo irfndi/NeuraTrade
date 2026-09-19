@@ -291,7 +291,10 @@ pub fn run_paper_engine_from(
                 };
                 let tp = tracker.window(&tp_key, candle.open_ts_ms, 3_600_000);
                 let intent = TradeIntent {
-                    trades_today: resume.event_count.saturating_add(events.len()) as u32,
+                    trades_today: usize::min(
+                        resume.event_count.saturating_add(events.len()),
+                        u32::MAX as usize,
+                    ) as u32,
                     ..TradeIntent::default()
                 };
                 let Ok((appr, halt)) = approve_full(
