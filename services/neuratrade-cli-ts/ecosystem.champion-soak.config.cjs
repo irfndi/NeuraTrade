@@ -112,10 +112,11 @@ function championArgs(extra) {
     "0.02",
     "--slippage-bps",
     "2",
-    // Marketable-limit demo entries: cross the rung touch 15bps so thin
-    // testnet books fill (clever-cabin-85m; 5bps proved unmarketable on ETH
-    // 19:04 cycle — still status empty/qty 0 rolled back). Paper fee line
-    // carries the same cross cost, so paper-vs-demo has zero divergence.
+    // Market-type demo entries (testnet-only opt-in): thin books leave even
+    // crossed limits unfilled (clever-cabin-85m; 00:07-01:09Z qty=0 rollbacks),
+    // so demo places market with venue price as reference (Bitget 40020;
+    // Bybit ignores it). Shared placement is safe: live path runs only when
+    // isLive === true, so paper never reaches useMarket and stays simulated.
     "--live-entry-cross-bps",
     "15",
     "--demo-live-market-entries",
