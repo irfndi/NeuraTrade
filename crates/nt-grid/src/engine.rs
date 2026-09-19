@@ -150,23 +150,83 @@ fn worse_price(price: Money, bps: i64, is_buy: bool) -> Money {
 /// does not track equity/drawdown across fills (no realized-PnL feedback
 /// into `capital`). That is a first-pass simplification beyond what the
 /// brief's formulas require; see the task report.
+/// Open position carried across incremental shadow ticks (Task 7 Step 5).
+/// Same data the engine already holds in `OpenPosition` + entry net, made
+/// persistable so an exit whose entry sat in a prior tick still fires.
+#[derive(Debug, Clone, Copy)]
+pub struct ResumePosition {
+    pub side: Side,
+    pub entry_price: Money,
+    pub qty_base_micros: i64,
+    pub entry_net: i64,
+}
+
+/// Resume seed for incremental replay (`nt-cli shadow --resume`).
+/// `peak=None` starts at `capital`; `window_fills` reseeds the hourly
+/// throughput window so halts match a continuous run.
+#[derive(Debug, Clone, Default)]
+pub struct ResumeState {
+    pub position: Option<ResumePosition>,
+    pub closed_realized: i64,
+    pub peak: Option<Money>,
+    /// (open_ts_ms, gross_micros, fee_micros), pruned to the window horizon.
+    pub window_fills: Vec<(i64, i64, i64)>,
+}
+
+/// End state for the `--resume` file: everything the next tick needs.
+#[derive(Debug, Clone)]
+pub struct EndState {
+    pub position: Option<ResumePosition>,
+    pub closed_realized: i64,
+    pub peak: Money,
+    pub window_fills: Vec<(i64, i64, i64)>,
+}
+
 pub fn run_paper_engine(
     candles: &[Candle],
     cfg: &PaperEngineConfig,
     capital: Money,
     limits: &RiskLimits,
 ) -> (Vec<PaperFillEvent>, Ledger) {
+    let (events, ledger, _) =
+        run_paper_engine_from(candles, cfg, capital, limits, &ResumeState::default());
+    (events, ledger)
+}
+
+/// Same as [`run_paper_engine`], but resumes from / returns tick state so
+/// incremental replays converge to the continuous run on the same panel.
+pub fn run_paper_engine_from(
+    candles: &[Candle],
+    cfg: &PaperEngineConfig,
+    capital: Money,
+    limits: &RiskLimits,
+    resume: &ResumeState,
+) -> (Vec<PaperFillEvent>, Ledger, EndState) {
     let day_start = capital;
-    let mut peak = capital;
+    let mut peak = resume.peak.unwrap_or(capital);
     // Closed-round-trip PnL only: open entries never move the equity window
     // (an entry's -99M proceeds is inventory, not a 10% daily loss).
-    let mut closed_realized: i64 = 0;
+    let mut closed_realized: i64 = resume.closed_realized;
     let mut tracker = ThroughputTracker::default();
     let tp_key = ThroughputTracker::key("paper", "PAPER", "1h");
     let tp_limits = ThroughputLimits::strict();
+    for &(ts, gross, fee) in &resume.window_fills {
+        tracker.record(&tp_key, ts, gross, fee);
+    }
+    // Mirror of the tracker window for the end state (tracker has no dump).
+    let mut session_fills: Vec<(i64, i64, i64)> = resume.window_fills.clone();
     let mut ledger = Ledger::new();
     let mut events = Vec::new();
-    let mut position: Option<(OpenPosition, i64)> = None; // + entry fill net at open
+    let mut position: Option<(OpenPosition, i64)> = resume.position.map(|p| {
+        (
+            OpenPosition {
+                side: p.side,
+                entry_price: p.entry_price,
+                qty_base_micros: p.qty_base_micros,
+            },
+            p.entry_net,
+        )
+    });
 
     for (i, candle) in candles.iter().enumerate() {
         let step = Money(scale(candle.open.0, cfg.step_bp, 10_000));
@@ -253,6 +313,11 @@ pub fn run_paper_engine(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
+                session_fills.push((
+                    candle.open_ts_ms,
+                    fill.proceeds_micros.0,
+                    fill.fee_micros.0,
+                ));
                 let entry_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
                 position = Some((
                     OpenPosition {
@@ -364,6 +429,11 @@ pub fn run_paper_engine(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
+                session_fills.push((
+                    candle.open_ts_ms,
+                    fill.proceeds_micros.0,
+                    fill.fee_micros.0,
+                ));
                 let exit_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
                 closed_realized =
                     closed_realized.saturating_add(entry_net.saturating_add(exit_net));
@@ -372,5 +442,20 @@ pub fn run_paper_engine(
         }
     }
 
-    (events, ledger)
+    let last_ts = candles.last().map(|c| c.open_ts_ms).unwrap_or(i64::MIN);
+    // Mirror of Tracker's expiry (`now - ts < window_ms`): keep fills the
+    // next tick's window() would still see relative to the last bar.
+    session_fills.retain(|(ts, _, _)| last_ts.saturating_sub(*ts) < 3_600_000);
+    let end = EndState {
+        position: position.map(|(p, entry_net)| ResumePosition {
+            side: p.side,
+            entry_price: p.entry_price,
+            qty_base_micros: p.qty_base_micros,
+            entry_net,
+        }),
+        closed_realized,
+        peak,
+        window_fills: session_fills,
+    };
+    (events, ledger, end)
 }

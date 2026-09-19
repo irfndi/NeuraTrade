@@ -228,5 +228,49 @@ fn main() {
     assert_eq!(dtotals.net_micros(), -4_290_326);
     assert_eq!(totals.net_micros(), -1_748_112);
 
+    // Resume convergence (Task 7 Step 5): split the panel mid-position
+    // (after the bar-1 long entry, before its bar-2 exit) and replay the
+    // tail from the head's EndState. Concatenated incremental events must
+    // equal the continuous run's events, gross, fees, and window seeding.
+    use nt_grid::{ResumeState, run_paper_engine_from};
+    let (h_events, _, h_end) =
+        run_paper_engine_from(&candles[..2], &cfg, capital, &limits, &ResumeState::default());
+    assert_eq!(h_events.len(), 1, "head holds the bar-1 entry {h_events:?}");
+    let resume = ResumeState {
+        position: h_end.position,
+        closed_realized: h_end.closed_realized,
+        peak: Some(h_end.peak),
+        window_fills: h_end.window_fills,
+    };
+    let (t_events, t_ledger, _) =
+        run_paper_engine_from(&candles[2..], &cfg, capital, &limits, &resume);
+    assert_eq!(t_events.len(), 3, "tail holds the exit + short round trip");
+    // Tail bars are indexed from its own slice start; shift to panel index.
+    let mut joined = h_events.clone();
+    joined.extend(t_events.iter().map(|e| nt_grid::PaperFillEvent {
+        bar: e.bar + 2,
+        ..*e
+    }));
+    assert_eq!(joined.len(), events.len());
+    for (a, b) in joined.iter().zip(events.iter()) {
+        assert_eq!(a.bar, b.bar);
+        assert_eq!(a.side, b.side);
+        assert_eq!(a.reason, b.reason);
+        assert_eq!(a.price, b.price);
+        assert_eq!(a.qty_base_micros, b.qty_base_micros);
+        assert_eq!(a.fee, b.fee);
+    }
+    let joined_gross: i64 = joined
+        .iter()
+        .map(|e| {
+            let signed = e.qty_base_micros as i128 * e.price.0 as i128 / 1_000_000;
+            -(signed as i64)
+        })
+        .sum();
+    assert_eq!(joined_gross, totals.gross_micros, "gross converges");
+    let joined_fees: i64 = joined.iter().map(|e| e.fee.0).sum();
+    assert_eq!(joined_fees, totals.fees_micros, "fees converge");
+    assert_eq!(t_ledger.totals().fills, 3, "tail ledger holds its own fills");
+
     println!("nt-grid paper_engine_check ok");
 }

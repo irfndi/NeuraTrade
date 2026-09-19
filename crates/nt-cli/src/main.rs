@@ -5,18 +5,22 @@
 // Live-shadow runs: pass --capital-usdt = per-symbol partition (e.g. 200/4
 // = 50 for the 4-ticker demo) + per-symbol --fee-bp, else parity diffs are
 // config artifacts, not engine divergence.
-// --state is a tick FILTER (last open_ts), not full forwardOnly parity: each
-// tick replays only newer candles with a FRESH engine, so an exit whose entry
-// sat in a prior tick never fires. True tick parity needs persisted
-// position+ledger (Task 7 Step 5).
-use nt_grid::{PaperEngineConfig, run_paper_engine};
+// --state is a tick cursor (last open_ts): each tick replays only newer
+// candles instead of double-counting. --resume persists open position +
+// equity state so an exit whose entry sat in a prior tick still fires;
+// without it a fresh engine replays a partial window and drops those exits.
+// --ledger appends this tick's fills as CSV. All three are opt-in file
+// paths (default off); no network, no secrets.
+use nt_grid::{
+    EndState, PaperEngineConfig, ResumePosition, ResumeState, Side, run_paper_engine_from,
+};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
 use std::env;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N] [--state <file>]"
+        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N] [--state <file>] [--resume <file>] [--ledger <file>]"
     );
     std::process::exit(2);
 }
@@ -42,6 +46,8 @@ fn main() {
     let mut fee_bp: i64 = nt_execution_bp();
     let mut timeframe_ms: Option<i64> = None;
     let mut state_path: Option<String> = None;
+    let mut resume_path: Option<String> = None;
+    let mut ledger_path: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -77,6 +83,14 @@ fn main() {
             "--state" => {
                 i += 1;
                 state_path = Some(args.get(i).unwrap_or_else(|| usage()).clone());
+            }
+            "--resume" => {
+                i += 1;
+                resume_path = Some(args.get(i).unwrap_or_else(|| usage()).clone());
+            }
+            "--ledger" => {
+                i += 1;
+                ledger_path = Some(args.get(i).unwrap_or_else(|| usage()).clone());
             }
             _ => usage(),
         }
@@ -139,6 +153,12 @@ fn main() {
             return;
         }
     }
+    // --resume persists open position + equity state so exits whose entries
+    // sat in a prior tick still fire (see file header). Opt-in; default off.
+    let resume: ResumeState = match &resume_path {
+        None => ResumeState::default(),
+        Some(rp) => load_resume(rp),
+    };
     // Paper-engine geometry (mirrors paper_engine_check fixture scale):
     // step 1.00%, target 1.00x step, stop 2 grids, 50bps slippage,
     // 10% position. Fee per symbol via --fee-bp.
@@ -155,7 +175,7 @@ fn main() {
         min_capital: Money(30 * 1_000_000),
         ..RiskLimits::live()
     };
-    let (events, ledger) = run_paper_engine(&candles, &cfg, capital, &limits);
+    let (events, ledger, end) = run_paper_engine_from(&candles, &cfg, capital, &limits, &resume);
     let t = ledger.totals();
     println!(
         "shadow bars={} fills={} gross={} fees={} net={} events={}",
@@ -166,10 +186,132 @@ fn main() {
         t.net_micros(),
         events.len()
     );
+    if let Some(rp) = &resume_path {
+        store_resume(rp, &end);
+    }
+    if let Some(lp) = &ledger_path {
+        append_ledger(lp, &events);
+    }
     if let Some(sp) = &state_path
         && let Some(last) = candles.last()
     {
         let _ = std::fs::write(sp, last.open_ts_ms.to_string());
+    }
+}
+
+/// Resume file: line-based, tolerant parse (bad lines warn + fall back).
+/// ```text
+/// v1
+/// closed_realized <i64>
+/// peak <i64 micros>
+/// flat | position <LONG|SHORT> <entry_price_micros> <qty_base_micros> <entry_net>
+/// window <open_ts_ms> <gross_micros> <fee_micros>   (repeated)
+/// ```
+fn load_resume(path: &str) -> ResumeState {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return ResumeState::default(), // first tick: no file yet
+    };
+    let mut st = ResumeState::default();
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.as_slice() {
+            ["closed_realized", v] => {
+                st.closed_realized = v.parse().unwrap_or(0);
+            }
+            ["peak", v] => {
+                if let Ok(m) = v.parse() {
+                    st.peak = Some(Money(m));
+                }
+            }
+            ["flat"] => st.position = None,
+            ["position", side, price, qty, net] => {
+                let side = match *side {
+                    "LONG" => Side::Long,
+                    "SHORT" => Side::Short,
+                    _ => {
+                        eprintln!("resume: bad side {side:?}, ignoring position");
+                        continue;
+                    }
+                };
+                st.position = Some(ResumePosition {
+                    side,
+                    entry_price: Money(price.parse().unwrap_or(0)),
+                    qty_base_micros: qty.parse().unwrap_or(0),
+                    entry_net: net.parse().unwrap_or(0),
+                });
+            }
+            ["window", ts, gross, fee] => {
+                if let (Ok(ts), Ok(gross), Ok(fee)) =
+                    (ts.parse(), gross.parse(), fee.parse())
+                {
+                    st.window_fills.push((ts, gross, fee));
+                }
+            }
+            _ => {} // v1 header, blanks: skip
+        }
+    }
+    st
+}
+
+fn store_resume(path: &str, end: &EndState) {
+    let mut out = String::from("v1\n");
+    out.push_str(&format!("closed_realized {}\n", end.closed_realized));
+    out.push_str(&format!("peak {}\n", end.peak.0));
+    match end.position {
+        None => out.push_str("flat\n"),
+        Some(p) => {
+            let side = match p.side {
+                Side::Long => "LONG",
+                Side::Short => "SHORT",
+            };
+            out.push_str(&format!(
+                "position {side} {} {} {}\n",
+                p.entry_price.0, p.qty_base_micros, p.entry_net
+            ));
+        }
+    }
+    for (ts, gross, fee) in &end.window_fills {
+        out.push_str(&format!("window {ts} {gross} {fee}\n"));
+    }
+    if let Err(e) = std::fs::write(path, out) {
+        eprintln!("resume write {path}: {e}");
+    }
+}
+
+fn append_ledger(path: &str, events: &[nt_grid::PaperFillEvent]) {
+    use std::fmt::Write as _;
+    let fresh = !std::path::Path::new(path).exists();
+    let mut out = String::new();
+    if fresh {
+        out.push_str("bar,side,reason,price_micros,qty_base_micros,fee_micros\n");
+    }
+    for e in events {
+        let side = match e.side {
+            Side::Long => "long",
+            Side::Short => "short",
+        };
+        let reason = match e.reason {
+            nt_grid::FillReason::Entry => "entry",
+            nt_grid::FillReason::Target => "target",
+            nt_grid::FillReason::Stop => "stop",
+        };
+        let _ = writeln!(
+            out,
+            "{},{side},{reason},{},{},{}",
+            e.bar, e.price.0, e.qty_base_micros, e.fee.0
+        );
+    }
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| {
+            use std::io::Write as _;
+            f.write_all(out.as_bytes())
+        })
+    {
+        eprintln!("ledger append {path}: {e}");
     }
 }
 
