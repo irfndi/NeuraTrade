@@ -118,6 +118,7 @@ function championArgs(extra) {
     // carries the same cross cost, so paper-vs-demo has zero divergence.
     "--live-entry-cross-bps",
     "15",
+    "--demo-live-market-entries",
     "--leverage",
     "1",
     "--capital",
