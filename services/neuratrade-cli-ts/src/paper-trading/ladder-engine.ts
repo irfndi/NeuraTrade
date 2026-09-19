@@ -77,6 +77,14 @@ export interface LadderPaperTradingOptions {
    * carries the same cross cost, so paper-vs-demo has zero divergence.
    */
   readonly liveEntryCrossBps?: number;
+  /**
+   * Opt-in market-type demo entries (testnet-only, default false = limit).
+   * Thin testnet books leave crossed limits unfilled and the bar rolls back
+   * (clever-cabin-85m); market-type skips price (fill at venue) so
+   * opened-count-demo can go >0. Paper ledger keeps the theoretical fillPrice
+   * either way — venue-type divergence is execution-only, logged per fill.
+   */
+  readonly demoLiveMarketEntries?: boolean;
   readonly initialCapital: number;
   readonly trendFilterPeriod: number;
   readonly leverage: number;
@@ -1402,16 +1410,21 @@ function executeLadderFillLive(
         }
       }
     }
+    // Market-type demo entries (opt-in, testnet-only): thin books leave even
+    // crossed limits unfilled so the bar rolls back (clever-cabin-85m).
+    // Market skips price (fill at venue); default stays limit. Paper ledger
+    // keeps fillPrice either way — logged per fill below.
+    const useMarket = options.demoLiveMarketEntries === true;
     const placed = yield* adapter
       .placeOrder({
         symbol: options.symbol,
         side,
-        type: "limit",
+        type: useMarket ? "market" : "limit",
         productType,
         marginMode,
         leverage,
         size: sized.qty,
-        price: venuePrice,
+        ...(useMarket ? {} : { price: venuePrice }),
         reduceOnly: false,
       })
       .pipe(Effect.result);

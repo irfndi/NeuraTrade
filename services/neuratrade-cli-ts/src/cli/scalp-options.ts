@@ -155,6 +155,14 @@ export const liveEntryCrossBpsOption = Options.float(
   ),
 );
 
+export const demoLiveMarketEntriesOption = Options.boolean(
+  "demo-live-market-entries",
+).pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Demo live entries as market orders (default false = limit; testnet-only opt-in for thin books, clever-cabin-85m).",
+  ),
+);
 export const takerExitFeePctOption = Options.float("taker-exit-fee-pct").pipe(
   Options.withDefault(0.06),
   Options.withDescription(
