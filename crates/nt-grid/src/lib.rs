@@ -7,7 +7,10 @@ use nt_risk::Money;
 
 pub mod engine;
 pub mod sleeves;
-pub use engine::{EndState, FillReason, PaperEngineConfig, PaperFillEvent, ResumePosition, ResumeState, Side, run_paper_engine, run_paper_engine_from};
+pub use engine::{
+    EndState, FillReason, PaperEngineConfig, PaperFillEvent, ResumePosition, ResumeState, Side,
+    run_paper_engine, run_paper_engine_from,
+};
 pub use sleeves::{
     FilterKind, SleeveCfg, SleeveFillEvent, Vote, account_scaled_leverage_cap, combine_votes,
     conviction_leverage, filter_vote, run_sleeve_backtest,

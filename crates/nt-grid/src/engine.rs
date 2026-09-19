@@ -163,7 +163,12 @@ pub struct ResumePosition {
 
 /// Resume seed for incremental replay (`nt-cli shadow --resume`).
 /// `peak=None` starts at `capital`; `window_fills` reseeds the hourly
-/// throughput window so halts match a continuous run.
+/// throughput window so halts match a continuous run. `bar_offset` shifts
+/// emitted `PaperFillEvent.bar` so appended per-tick ledgers match the
+/// continuous run's indices (each tick replays a slice starting at 0).
+/// `event_count` seeds `trades_today` so daily-count gates see continuous
+/// growth; `cum_*` accumulate ledger totals so tick output prints
+/// continuous-equivalent PnL.
 #[derive(Debug, Clone, Default)]
 pub struct ResumeState {
     pub position: Option<ResumePosition>,
@@ -171,6 +176,14 @@ pub struct ResumeState {
     pub peak: Option<Money>,
     /// (open_ts_ms, gross_micros, fee_micros), pruned to the window horizon.
     pub window_fills: Vec<(i64, i64, i64)>,
+    /// Bars consumed by prior ticks; added to each emitted event's `bar`.
+    pub bar_offset: usize,
+    /// Fills emitted by prior ticks; seeds `trades_today`.
+    pub event_count: usize,
+    /// Ledger totals accumulated by prior ticks.
+    pub cum_fills: u64,
+    pub cum_gross: i64,
+    pub cum_fees: i64,
 }
 
 /// End state for the `--resume` file: everything the next tick needs.
@@ -180,6 +193,14 @@ pub struct EndState {
     pub closed_realized: i64,
     pub peak: Money,
     pub window_fills: Vec<(i64, i64, i64)>,
+    /// Prior offset + bars consumed this tick; the next tick's offset.
+    pub bar_offset: usize,
+    /// Prior count + fills emitted this tick.
+    pub event_count: usize,
+    /// Prior totals + this tick's ledger totals.
+    pub cum_fills: u64,
+    pub cum_gross: i64,
+    pub cum_fees: i64,
 }
 
 pub fn run_paper_engine(
@@ -270,7 +291,7 @@ pub fn run_paper_engine_from(
                 };
                 let tp = tracker.window(&tp_key, candle.open_ts_ms, 3_600_000);
                 let intent = TradeIntent {
-                    trades_today: events.len() as u32,
+                    trades_today: resume.event_count.saturating_add(events.len()) as u32,
                     ..TradeIntent::default()
                 };
                 let Ok((appr, halt)) = approve_full(
@@ -299,7 +320,7 @@ pub fn run_paper_engine_from(
                     },
                 );
                 events.push(PaperFillEvent {
-                    bar: i,
+                    bar: resume.bar_offset.saturating_add(i),
                     side,
                     reason: FillReason::Entry,
                     price: entry_price,
@@ -313,11 +334,7 @@ pub fn run_paper_engine_from(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
-                session_fills.push((
-                    candle.open_ts_ms,
-                    fill.proceeds_micros.0,
-                    fill.fee_micros.0,
-                ));
+                session_fills.push((candle.open_ts_ms, fill.proceeds_micros.0, fill.fee_micros.0));
                 let entry_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
                 position = Some((
                     OpenPosition {
@@ -415,7 +432,7 @@ pub fn run_paper_engine_from(
                     },
                 );
                 events.push(PaperFillEvent {
-                    bar: i,
+                    bar: resume.bar_offset.saturating_add(i),
                     side: pos.side,
                     reason,
                     price: exit_price,
@@ -429,11 +446,7 @@ pub fn run_paper_engine_from(
                     fill.proceeds_micros.0,
                     fill.fee_micros.0,
                 );
-                session_fills.push((
-                    candle.open_ts_ms,
-                    fill.proceeds_micros.0,
-                    fill.fee_micros.0,
-                ));
+                session_fills.push((candle.open_ts_ms, fill.proceeds_micros.0, fill.fee_micros.0));
                 let exit_net = fill.proceeds_micros.0.saturating_sub(fill.fee_micros.0);
                 closed_realized =
                     closed_realized.saturating_add(entry_net.saturating_add(exit_net));
@@ -446,6 +459,7 @@ pub fn run_paper_engine_from(
     // Mirror of Tracker's expiry (`now - ts < window_ms`): keep fills the
     // next tick's window() would still see relative to the last bar.
     session_fills.retain(|(ts, _, _)| last_ts.saturating_sub(*ts) < 3_600_000);
+    let tick = ledger.totals();
     let end = EndState {
         position: position.map(|(p, entry_net)| ResumePosition {
             side: p.side,
@@ -456,6 +470,11 @@ pub fn run_paper_engine_from(
         closed_realized,
         peak,
         window_fills: session_fills,
+        bar_offset: resume.bar_offset.saturating_add(candles.len()),
+        event_count: resume.event_count.saturating_add(events.len()),
+        cum_fills: resume.cum_fills.saturating_add(tick.fills),
+        cum_gross: resume.cum_gross.saturating_add(tick.gross_micros),
+        cum_fees: resume.cum_fees.saturating_add(tick.fees_micros),
     };
     (events, ledger, end)
 }

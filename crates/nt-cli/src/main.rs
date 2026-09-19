@@ -176,15 +176,24 @@ fn main() {
         ..RiskLimits::live()
     };
     let (events, ledger, end) = run_paper_engine_from(&candles, &cfg, capital, &limits, &resume);
+    // Cumulative view: prior ticks' totals + this tick's ledger, so `shadow`
+    // prints continuous-equivalent PnL (ledger only holds this tick).
     let t = ledger.totals();
     println!(
         "shadow bars={} fills={} gross={} fees={} net={} events={}",
+        resume.bar_offset.saturating_add(candles.len()),
+        end.cum_fills,
+        end.cum_gross,
+        end.cum_fees,
+        end.cum_gross.saturating_sub(end.cum_fees),
+        resume.event_count.saturating_add(events.len())
+    );
+    eprintln!(
+        "tick bars={} fills={} gross={} fees={}",
         candles.len(),
         t.fills,
         t.gross_micros,
-        t.fees_micros,
-        t.net_micros(),
-        events.len()
+        t.fees_micros
     );
     if let Some(rp) = &resume_path {
         store_resume(rp, &end);
@@ -206,6 +215,9 @@ fn main() {
 /// peak <i64 micros>
 /// flat | position <LONG|SHORT> <entry_price_micros> <qty_base_micros> <entry_net>
 /// window <open_ts_ms> <gross_micros> <fee_micros>   (repeated)
+/// bar_offset <usize>
+/// event_count <usize>
+/// cum <fills> <gross> <fees>
 /// ```
 fn load_resume(path: &str) -> ResumeState {
     let text = match std::fs::read_to_string(path) {
@@ -213,6 +225,7 @@ fn load_resume(path: &str) -> ResumeState {
         Err(_) => return ResumeState::default(), // first tick: no file yet
     };
     let mut st = ResumeState::default();
+    // v1 files predate bar/event/cum lines; missing lines mean 0 (fresh).
     for line in text.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
         match f.as_slice() {
@@ -242,11 +255,20 @@ fn load_resume(path: &str) -> ResumeState {
                 });
             }
             ["window", ts, gross, fee] => {
-                if let (Ok(ts), Ok(gross), Ok(fee)) =
-                    (ts.parse(), gross.parse(), fee.parse())
-                {
+                if let (Ok(ts), Ok(gross), Ok(fee)) = (ts.parse(), gross.parse(), fee.parse()) {
                     st.window_fills.push((ts, gross, fee));
                 }
+            }
+            ["bar_offset", v] => {
+                st.bar_offset = v.parse().unwrap_or(0);
+            }
+            ["event_count", v] => {
+                st.event_count = v.parse().unwrap_or(0);
+            }
+            ["cum", fills, gross, fees] => {
+                st.cum_fills = fills.parse().unwrap_or(0);
+                st.cum_gross = gross.parse().unwrap_or(0);
+                st.cum_fees = fees.parse().unwrap_or(0);
             }
             _ => {} // v1 header, blanks: skip
         }
@@ -274,6 +296,12 @@ fn store_resume(path: &str, end: &EndState) {
     for (ts, gross, fee) in &end.window_fills {
         out.push_str(&format!("window {ts} {gross} {fee}\n"));
     }
+    out.push_str(&format!("bar_offset {}\n", end.bar_offset));
+    out.push_str(&format!("event_count {}\n", end.event_count));
+    out.push_str(&format!(
+        "cum {} {} {}\n",
+        end.cum_fills, end.cum_gross, end.cum_fees
+    ));
     if let Err(e) = std::fs::write(path, out) {
         eprintln!("resume write {path}: {e}");
     }
