@@ -1412,8 +1412,10 @@ function executeLadderFillLive(
     }
     // Market-type demo entries (opt-in, testnet-only): thin books leave even
     // crossed limits unfilled so the bar rolls back (clever-cabin-85m).
-    // Market skips price (fill at venue); default stays limit. Paper ledger
-    // keeps fillPrice either way — logged per fill below.
+    // Price is ALWAYS passed: Bybit ignores it on Market (bybit-futures.ts
+    // only sets order.price for limit), Bitget requires it even on market
+    // (40020 when absent — reference only, fill comes from order detail).
+    // Default stays limit. Paper ledger keeps fillPrice either way.
     const useMarket = options.demoLiveMarketEntries === true;
     const placed = yield* adapter
       .placeOrder({
@@ -1424,7 +1426,7 @@ function executeLadderFillLive(
         marginMode,
         leverage,
         size: sized.qty,
-        ...(useMarket ? {} : { price: venuePrice }),
+        price: venuePrice,
         reduceOnly: false,
       })
       .pipe(Effect.result);
