@@ -52,7 +52,7 @@ jobs:
       - name: Run crate checks
         run: |
           cd crates
-          for p in nt-risk nt-execution nt-ledger nt-market nt-grid; do
+          for p in nt-risk nt-execution nt-ledger nt-market nt-grid nt-ladder; do
             cargo run -q -p $p --example check
           done
           cargo run -q -p nt-grid --example paper_engine_check

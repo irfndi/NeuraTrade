@@ -1,0 +1,7 @@
+[package]
+name = "nt-ladder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nt-risk = { path = "../nt-risk" }

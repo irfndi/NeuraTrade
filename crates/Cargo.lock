@@ -30,6 +30,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nt-ladder"
+version = "0.1.0"
+dependencies = [
+ "nt-risk",
+]
+
+[[package]]
 name = "nt-ledger"
 version = "0.1.0"
 dependencies = [
