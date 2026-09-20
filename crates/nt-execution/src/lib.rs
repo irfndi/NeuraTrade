@@ -20,6 +20,16 @@ use nt_risk::{Money, RiskApproval};
 /// size no matter what the global default says.
 pub const HONEST_TAKER_EXIT_BP: i64 = 6;
 
+/// Maker (target-resting) fee in basis points of notional — the second half
+/// of the champion soak's `honestFees` schedule
+/// (`services/neuratrade-cli-ts/autoresearch/results/champion-soak.json`:
+/// `maker0.02/takerExit0.06 rescored 2026-09-07`, mirrored by
+/// [`HONEST_TAKER_EXIT_BP`] on the exit side). Entries and stop exits cross
+/// the spread (taker); a target exit rests on the book as a maker limit, so
+/// it pays the maker rate. Same per-symbol caveat as the taker constant:
+/// the global default is a research floor, `Order.fee_bp` stays per-order.
+pub const HONEST_MAKER_FEE_BP: i64 = 2;
+
 /// A paper order: signed qty in base units (micros), limit price in micro-USDT.
 #[derive(Debug, Clone, Copy)]
 pub struct Order {

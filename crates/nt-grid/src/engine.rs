@@ -70,6 +70,11 @@ pub struct PaperEngineConfig {
     /// research floor, not a trading promise: PUMPFUN-class drag fails
     /// sizing against its own edge while ETH passes. Feed per-symbol.
     pub fee_bp: i64,
+    /// Maker fee in bp of notional for resting target exits (honest schedule
+    /// `maker0.02`, see `nt_execution::HONEST_MAKER_FEE_BP` /
+    /// `champion-soak.json` `honestFees`). Entries and stop exits stay taker
+    /// (`fee_bp`): only a target exit is modelled as a resting limit fill.
+    pub maker_fee_bp: i64,
 }
 
 /// Which side a fill's position was on.
@@ -166,9 +171,19 @@ pub struct ResumePosition {
 /// throughput window so halts match a continuous run. `bar_offset` shifts
 /// emitted `PaperFillEvent.bar` so appended per-tick ledgers match the
 /// continuous run's indices (each tick replays a slice starting at 0).
-/// `event_count` seeds `trades_today` so daily-count gates see continuous
-/// growth; `cum_*` accumulate ledger totals so tick output prints
-/// continuous-equivalent PnL.
+/// `event_count` is cumulative fill bookkeeping for the ledger view only
+/// (it does NOT gate trades — see the day boundary below); `cum_*`
+/// accumulate ledger totals so tick output prints continuous-equivalent PnL.
+///
+/// Day boundary: `day_index` is the UTC day index of the last bar processed
+/// (`open_ts_ms / 86_400_000`, floor) and `day_fills` the fills recorded
+/// inside that day — the ONLY source of `trades_today`, never the cumulative
+/// `event_count` (a cumulative count would permanently halt every replay at
+/// `RiskLimits::live().max_trades_per_day = 10` total fills). `None`/`0`
+/// means unset: a fresh run, where the first bar establishes the boundary.
+/// `day_start_capital` is the capital in force at that day's first bar, so
+/// the daily-loss denominator uses the real boundary rather than being
+/// re-derived from the current tick's capital.
 #[derive(Debug, Clone, Default)]
 pub struct ResumeState {
     pub position: Option<ResumePosition>,
@@ -178,12 +193,18 @@ pub struct ResumeState {
     pub window_fills: Vec<(i64, i64, i64)>,
     /// Bars consumed by prior ticks; added to each emitted event's `bar`.
     pub bar_offset: usize,
-    /// Fills emitted by prior ticks; seeds `trades_today`.
+    /// Fills emitted by prior ticks (cumulative, ledger bookkeeping only).
     pub event_count: usize,
     /// Ledger totals accumulated by prior ticks.
     pub cum_fills: u64,
     pub cum_gross: i64,
     pub cum_fees: i64,
+    /// UTC day index of the last processed bar; `None` = unset.
+    pub day_index: Option<i64>,
+    /// Fills inside `day_index` (reset once at each rollover).
+    pub day_fills: u32,
+    /// Capital in force at `day_index`'s first bar; `None` = unset.
+    pub day_start_capital: Option<Money>,
 }
 
 /// End state for the `--resume` file: everything the next tick needs.
@@ -201,6 +222,13 @@ pub struct EndState {
     pub cum_fills: u64,
     pub cum_gross: i64,
     pub cum_fees: i64,
+    /// UTC day index of the last processed bar (`open_ts_ms / 86_400_000`,
+    /// floor); `None` only when the tick saw no bars.
+    pub day_index: Option<i64>,
+    /// Fills inside `day_index`.
+    pub day_fills: u32,
+    /// Capital in force at `day_index`'s first bar.
+    pub day_start_capital: Money,
 }
 
 pub fn run_paper_engine(
@@ -223,7 +251,28 @@ pub fn run_paper_engine_from(
     limits: &RiskLimits,
     resume: &ResumeState,
 ) -> (Vec<PaperFillEvent>, Ledger, EndState) {
-    let day_start = capital;
+    // Day boundary (UTC day index = `open_ts_ms / 86_400_000`, floor). A tick
+    // that starts mid-day carries the persisted boundary and fill count
+    // forward, so its daily window continues; a tick whose first bar falls on
+    // a strictly later day than the persisted one — or a fresh run, where the
+    // first bar establishes the boundary — re-anchors at this tick's capital.
+    // The per-bar check below re-runs the same rule at every boundary, so a
+    // panel spanning several days inside ONE tick rolls over exactly once per
+    // day (previously `day_start` was re-derived from `capital` on every
+    // tick, resetting the daily-loss denominator mid-day).
+    let first_day = candles.first().map(|c| c.open_ts_ms / 86_400_000);
+    let rollover = match (first_day, resume.day_index) {
+        (Some(today), Some(prev)) => today > prev,
+        (Some(_), None) => true, // fresh run: first bar establishes it.
+        (None, _) => false,      // empty panel: nothing to establish.
+    };
+    let mut day_index = first_day.or(resume.day_index).unwrap_or(0);
+    let mut day_fills = if rollover { 0 } else { resume.day_fills };
+    let mut day_start = if rollover {
+        capital
+    } else {
+        resume.day_start_capital.unwrap_or(capital)
+    };
     let mut peak = resume.peak.unwrap_or(capital);
     // Closed-round-trip PnL only: open entries never move the equity window
     // (an entry's -99M proceeds is inventory, not a 10% daily loss).
@@ -250,6 +299,14 @@ pub fn run_paper_engine_from(
     });
 
     for (i, candle) in candles.iter().enumerate() {
+        // Per-bar day boundary: a panel spanning several days inside ONE tick
+        // rolls over exactly once per day, matching a per-day tick split.
+        let bar_day = candle.open_ts_ms / 86_400_000;
+        if bar_day > day_index {
+            day_index = bar_day;
+            day_fills = 0;
+            day_start = capital;
+        }
         let step = Money(scale(candle.open.0, cfg.step_bp, 10_000));
 
         match position {
@@ -290,11 +347,12 @@ pub fn run_paper_engine_from(
                     day_start,
                 };
                 let tp = tracker.window(&tp_key, candle.open_ts_ms, 3_600_000);
+                // Daily-count gate sees ONLY fills inside the current UTC
+                // day. Cumulative `event_count` is ledger bookkeeping; using
+                // it here halted every replay permanently at
+                // `max_trades_per_day = 10` total fills across days.
                 let intent = TradeIntent {
-                    trades_today: usize::min(
-                        resume.event_count.saturating_add(events.len()),
-                        u32::MAX as usize,
-                    ) as u32,
+                    trades_today: day_fills,
                     ..TradeIntent::default()
                 };
                 let Ok((appr, halt)) = approve_full(
@@ -330,6 +388,7 @@ pub fn run_paper_engine_from(
                     qty_base_micros: qty_signed,
                     fee: fill.fee_micros,
                 });
+                day_fills = day_fills.saturating_add(1);
                 ledger.apply(fill);
                 tracker.record(
                     &tp_key,
@@ -431,7 +490,14 @@ pub fn run_paper_engine_from(
                     Order {
                         qty_base_micros: exit_qty,
                         price_micros: exit_price,
-                        fee_bp: cfg.fee_bp,
+                        // Maker schedule for a resting target exit (TS's
+                        // `theoreticalExitPrice: target` is a resting limit
+                        // fill); stops and entries pay taker.
+                        fee_bp: if reason == FillReason::Target {
+                            cfg.maker_fee_bp
+                        } else {
+                            cfg.fee_bp
+                        },
                     },
                 );
                 events.push(PaperFillEvent {
@@ -442,6 +508,7 @@ pub fn run_paper_engine_from(
                     qty_base_micros: exit_qty,
                     fee: fill.fee_micros,
                 });
+                day_fills = day_fills.saturating_add(1);
                 ledger.apply(fill);
                 tracker.record(
                     &tp_key,
@@ -478,6 +545,12 @@ pub fn run_paper_engine_from(
         cum_fills: resume.cum_fills.saturating_add(tick.fills),
         cum_gross: resume.cum_gross.saturating_add(tick.gross_micros),
         cum_fees: resume.cum_fees.saturating_add(tick.fees_micros),
+        day_index: candles
+            .last()
+            .map(|c| c.open_ts_ms / 86_400_000)
+            .or(resume.day_index),
+        day_fills,
+        day_start_capital: day_start,
     };
     (events, ledger, end)
 }

@@ -4,6 +4,7 @@
 // paper OPENED x1 at 13:49Z and x2 at 14:04Z (late, chasing). This replays
 // grid-only vs sleeves on the same bars and asserts sleeves enter no later
 // than grid with positive net — the missed-pump filter gap, on real data.
+use nt_execution::{HONEST_MAKER_FEE_BP, HONEST_TAKER_EXIT_BP};
 use nt_grid::{FilterKind, PaperEngineConfig, SleeveCfg, run_paper_engine, run_sleeve_backtest};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
@@ -26,7 +27,9 @@ fn cfg() -> PaperEngineConfig {
         grid_max_grids: 2,
         slippage_bps: 50,
         max_position_size_pct: 10,
-        fee_bp: 6,
+        fee_bp: HONEST_TAKER_EXIT_BP,
+        // Honest schedule: target exits are resting maker fills.
+        maker_fee_bp: HONEST_MAKER_FEE_BP,
     }
 }
 

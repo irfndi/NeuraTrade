@@ -129,9 +129,17 @@ fn main() {
         max_position_size_pct: 10,
         // Same run at two realized costs: 6bp honest floor vs 69bp
         // PUMPFUN-class drag. Sizes/prices must not move; only fees do.
+        // maker_fee_bp stays at the taker value so the pinned fixture
+        // totals (fees=242113) are unchanged by the maker/taker split.
         fee_bp: HONEST_TAKER_EXIT_BP,
+        maker_fee_bp: HONEST_TAKER_EXIT_BP,
     };
-    let drag = PaperEngineConfig { fee_bp: 69, ..cfg };
+    let drag = PaperEngineConfig {
+        fee_bp: 69,
+        // PUMPFUN-class drag applies to every fill, target exits included.
+        maker_fee_bp: 69,
+        ..cfg
+    };
     let capital = Money::usdt(1000);
     let limits = RiskLimits::live();
 
@@ -251,6 +259,9 @@ fn main() {
         cum_fills: h_end.cum_fills,
         cum_gross: h_end.cum_gross,
         cum_fees: h_end.cum_fees,
+        day_index: h_end.day_index,
+        day_fills: h_end.day_fills,
+        day_start_capital: Some(h_end.day_start_capital),
     };
     let (t_events, t_ledger, t_end) =
         run_paper_engine_from(&candles[2..], &cfg, capital, &limits, &resume);

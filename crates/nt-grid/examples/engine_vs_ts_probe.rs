@@ -38,6 +38,10 @@ fn main() {
         slippage_bps: 50,
         max_position_size_pct: 10,
         fee_bp: HONEST_TAKER_EXIT_BP,
+        // TS parity: the fixture charges flat 6bp on every fill, so the
+        // maker rate stays at the taker value here. The honest maker/taker
+        // split lives on the shadow path (nt-cli), not in this probe.
+        maker_fee_bp: HONEST_TAKER_EXIT_BP,
     };
     let capital = Money::usdt(1000);
     let limits = RiskLimits::live();

@@ -19,11 +19,12 @@
 //     engine.rs:124 ("deliberately simplified symmetric rule — NOT TS's
 //     asymmetric times/div"). Asserted as a bounded delta, not parity.
 // Long delta <= 1u; short delta <= 3000u (bound = 1.01 * the measured ~2525u).
-use nt_execution::HONEST_TAKER_EXIT_BP;
+use nt_execution::{HONEST_MAKER_FEE_BP, HONEST_TAKER_EXIT_BP};
 use nt_grid::{FillReason, PaperEngineConfig, Side, run_paper_engine};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};
 use std::fs;
+use std::path::Path;
 
 struct FxTrade {
     side: Side,
@@ -37,10 +38,12 @@ fn num(s: &str) -> i64 {
 }
 
 fn main() {
-    let candles_raw = fs::read_to_string("nt-grid/examples/grid_parity_fixture.candles.csv")
-        .expect(
-            "fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts",
-        );
+    // Manifest-relative, not cwd-relative: the example must run from the repo
+    // root, from crates/, or from anywhere else.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let candles_raw = fs::read_to_string(dir.join("grid_parity_fixture.candles.csv")).expect(
+        "fixture missing — regenerate via: cd services/neuratrade-cli-ts && bun run grid_parity_fixture.ts",
+    );
     let candles: Vec<Candle> = candles_raw
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -58,8 +61,8 @@ fn main() {
         })
         .collect();
 
-    let trades_raw = fs::read_to_string("nt-grid/examples/grid_parity_fixture.trades.csv").expect(
-        "fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts",
+    let trades_raw = fs::read_to_string(dir.join("grid_parity_fixture.trades.csv")).expect(
+        "fixture missing — regenerate via: cd services/neuratrade-cli-ts && bun run grid_parity_fixture.ts",
     );
     let trades: Vec<FxTrade> = trades_raw
         .lines()
@@ -89,6 +92,10 @@ fn main() {
         slippage_bps: 50,
         max_position_size_pct: 10,
         fee_bp: HONEST_TAKER_EXIT_BP,
+        // Honest schedule: the long leg exits on TARGET (resting maker fill)
+        // while the short leg stops (taker), so parity asserts the target leg
+        // at maker bp and the stop leg at taker bp.
+        maker_fee_bp: HONEST_MAKER_FEE_BP,
     };
     let capital = Money(1000 * 1_000_000);
     let limits = RiskLimits::live();

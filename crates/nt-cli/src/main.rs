@@ -4,7 +4,10 @@
 // (Export with: sqlite3 demo.db ".headers on" "SELECT ..." > bars.csv)
 // Live-shadow runs: pass --capital-usdt = per-symbol partition (e.g. 200/4
 // = 50 for the 4-ticker demo) + per-symbol --fee-bp, else parity diffs are
-// config artifacts, not engine divergence.
+// config artifacts, not engine divergence. Fees follow the champion soak's
+// honestFees schedule: --fee-bp is TAKER (entries + stop exits, 6bp),
+// --maker-fee-bp is MAKER (resting target exits, 2bp). Both default to the
+// honest constants; pass --fee-bp alone to keep the old flat-taker behaviour.
 // --state is a tick cursor (last open_ts): each tick replays only newer
 // candles instead of double-counting. --resume persists open position +
 // equity state so an exit whose entry sat in a prior tick still fires;
@@ -24,7 +27,7 @@ use std::env;
 
 fn usage() -> ! {
     eprintln!(
-        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--timeframe-ms N] [--state <file>] [--resume <file>] [--ledger <file>] [--step-bp N] [--target-x100 N] [--stop-grids N] [--slip-bp N] [--pos-pct N]"
+        "usage: nt-cli shadow --bars <csv> [--capital-usdt N] [--fee-bp N] [--maker-fee-bp N] [--timeframe-ms N] [--state <file>] [--resume <file>] [--ledger <file>] [--step-bp N] [--target-x100 N] [--stop-grids N] [--slip-bp N] [--pos-pct N]"
     );
     std::process::exit(2);
 }
@@ -48,6 +51,7 @@ fn main() {
     let mut bars: Option<String> = None;
     let mut capital_usdt: i64 = 50;
     let mut fee_bp: i64 = nt_execution_bp();
+    let mut maker_fee_bp: i64 = nt_execution_maker_bp();
     let mut timeframe_ms: Option<i64> = None;
     let mut state_path: Option<String> = None;
     let mut resume_path: Option<String> = None;
@@ -77,6 +81,14 @@ fn main() {
             "--fee-bp" => {
                 i += 1;
                 fee_bp = args
+                    .get(i)
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+            }
+            "--maker-fee-bp" => {
+                i += 1;
+                maker_fee_bp = args
                     .get(i)
                     .unwrap_or_else(|| usage())
                     .parse()
@@ -233,7 +245,9 @@ fn main() {
     };
     // Paper-engine geometry: fixture scale by default, champion knobs via
     // flags (step130/target195/stop2 for champion-soak.json parity).
-    // Fee per symbol via --fee-bp.
+    // Fee per symbol via --fee-bp (taker: entries + stop exits) and
+    // --maker-fee-bp (resting target exits), mirroring the soak's
+    // honestFees maker0.02/takerExit0.06 schedule.
     let cfg = PaperEngineConfig {
         step_bp,
         target_ratio_x100: target_x100,
@@ -241,6 +255,7 @@ fn main() {
         slippage_bps: slip_bp,
         max_position_size_pct: pos_pct,
         fee_bp,
+        maker_fee_bp,
     };
     let capital = Money(capital_usdt * 1_000_000);
     let limits = RiskLimits {
@@ -470,6 +485,14 @@ fn fetch_public_candles(url: &str, out: &str) -> Result<(), String> {
 
 /// Honest taker-exit default (6bp) without depending on nt-execution
 /// (which would pull the RiskApproval seal into a paper-only binary).
+/// Mirrors `nt_execution::HONEST_TAKER_EXIT_BP`; the maker helper mirrors
+/// `nt_execution::HONEST_MAKER_FEE_BP` (2bp) for the same reason — the
+/// champion soak's `honestFees` schedule maker0.02/takerExit0.06. Keep the
+/// two literals in sync if the soak schedule is ever rescored.
 fn nt_execution_bp() -> i64 {
     6
+}
+
+fn nt_execution_maker_bp() -> i64 {
+    2
 }
