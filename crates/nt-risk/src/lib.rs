@@ -53,6 +53,12 @@ pub struct RiskLimits {
 
 impl RiskLimits {
     /// Live defaults mirror `defaultRiskLimits` (live) in guards.ts.
+    ///
+    /// `min_capital` is 100 here, but the champion soak partitions 200 USDT
+    /// across 4 symbols (50 each) and `nt-cli shadow` lowers the floor to 30
+    /// for that reason. Any caller using `RiskLimits::live()` directly
+    /// against a per-symbol partition rejects EVERY entry — pin the floor
+    /// explicitly or a parity diff is a config artifact, not divergence.
     pub fn live() -> RiskLimits {
         RiskLimits {
             min_capital: Money::usdt(100),
