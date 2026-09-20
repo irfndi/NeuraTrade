@@ -2,8 +2,9 @@
 // paper engine and prints ledger totals. Paper-only: no venue, no orders,
 // no secrets. Input CSV columns: open_ts_ms,open,high,low,close micros.
 // (Export with: sqlite3 demo.db ".headers on" "SELECT ..." > bars.csv)
-// Live-shadow runs: pass --capital-usdt = per-symbol partition (e.g. 200/4
-// = 50 for the 4-ticker demo) + per-symbol --fee-bp, else parity diffs are
+// Live-shadow runs: pass --capital-usdt = per-symbol partition. Production
+// default is 10 USDT per symbol (min_capital floor 1, so the floor never
+// itself closes trading). + per-symbol --fee-bp, else parity diffs are
 // config artifacts, not engine divergence. Fees follow the champion soak's
 // honestFees schedule: --fee-bp is TAKER (entries + stop exits, 6bp) and
 // --maker-fee-bp is MAKER (resting target exits, 2bp), each defaulting
@@ -52,7 +53,7 @@ fn main() {
         }
     }
     let mut bars: Option<String> = None;
-    let mut capital_usdt: i64 = 50;
+    let mut capital_usdt: i64 = 10;
     let mut fee_bp: i64 = nt_execution_bp();
     let mut maker_fee_bp: i64 = nt_execution_maker_bp();
     let mut timeframe_ms: Option<i64> = None;
@@ -261,8 +262,12 @@ fn main() {
         maker_fee_bp,
     };
     let capital = Money(capital_usdt * 1_000_000);
+    // Production runs 10 USDT per symbol. The floor must sit BELOW that or
+    // every entry is rejected — and it must not be derived from capital
+    // itself, or a small drawdown would close trading permanently.
+    let min_capital = Money(1_000_000);
     let limits = RiskLimits {
-        min_capital: Money(30 * 1_000_000),
+        min_capital,
         // Champion sizing parity: the entry sizes position_value at pos_pct
         // of capital, so the risk cap must match or every entry is rejected.
         max_position_size_pct: pos_pct,

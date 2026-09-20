@@ -1,9 +1,9 @@
 // ponytail: regression check for the resumed day-start denominator.
 // A resume file with no `day_start` line (v1, or the first tick after the
 // v2 deploy) used to fall back to the raw deposit while `current` was
-// `capital + closed_realized`. With capital 50M and closed_realized -8M the
-// daily-loss gate read (50M-42M)/50M = 16% against a 5% cap and halted
-// every tick. Also covers the tick-entry rollover path a per-interval soak
+// `capital + closed_realized`. With capital 10M and closed_realized -2M the
+// daily-loss gate read (10M-8M)/10M = 20% against a 5% cap and halted every
+// tick. Also covers the tick-entry rollover path a per-interval soak
 // loop actually hits at midnight (it never spans midnight inside one tick).
 //
 // Run: cd crates && cargo run -q -p nt-grid --example day_start_check
@@ -43,14 +43,14 @@ fn entering_bars(day: i64, n: usize) -> Vec<Candle> {
 }
 
 fn main() {
-    // Shadow parity: nt-cli lowers the floor to 30 for per-symbol partitions
-    // (200/4). RiskLimits::live() defaults to 100, which rejects every entry
-    // at the soak's 50-per-symbol capital.
+    // Production shadow config: 10 USDT per symbol. RiskLimits::live()
+    // defaults min_capital to 100 and nt-cli's floor is 1 — a floor at or
+    // above capital rejects every entry, so pin it below the partition.
     let limits = RiskLimits {
-        min_capital: Money(30 * 1_000_000),
+        min_capital: Money(1_000_000),
         ..RiskLimits::live()
     };
-    let capital = Money(50 * 1_000_000);
+    let capital = Money(10 * 1_000_000);
 
     // 1. v1-shaped resume: no day_start, negative realized, same day.
     //    The denominator must land on equity (42M), not the deposit (50M).
@@ -58,34 +58,34 @@ fn main() {
         day_index: None,
         day_fills: 0,
         day_start_capital: None,
-        closed_realized: -8_000_000,
-        peak: Some(Money(50_000_000)),
+        closed_realized: -2_000_000,
+        peak: Some(Money(10_000_000)),
         ..ResumeState::default()
     };
     let (_ev, _l, end) =
         run_paper_engine_from(&entering_bars(20_456, 6), &cfg(), capital, &limits, &v1);
     assert_eq!(
-        end.day_start_capital.0, 42_000_000,
+        end.day_start_capital.0, 8_000_000,
         "v1 fallback must anchor on equity, got {}",
         end.day_start_capital.0
     );
-    println!("v1 resume: day_start=42000000 (equity, not the 50M deposit)");
+    println!("v1 resume: day_start=8000000 (equity, not the 10M deposit)");
 
     // 2. Tick-entry rollover with carried losses: prior day down 8M, resume
     //    one bar into the NEXT day. day_start must re-anchor on equity.
     let carry = ResumeState {
         day_index: Some(20_456),
         day_fills: 3,
-        day_start_capital: Some(Money(50_000_000)),
-        closed_realized: -8_000_000,
-        peak: Some(Money(50_000_000)),
+        day_start_capital: Some(Money(10_000_000)),
+        closed_realized: -2_000_000,
+        peak: Some(Money(10_000_000)),
         ..ResumeState::default()
     };
     let (_ev, _l, end) =
         run_paper_engine_from(&entering_bars(20_457, 6), &cfg(), capital, &limits, &carry);
     assert_eq!(end.day_fills, 0, "rollover must reset the daily fill count");
     assert_eq!(
-        end.day_start_capital.0, 42_000_000,
+        end.day_start_capital.0, 8_000_000,
         "rollover denominator must anchor on equity, got {}",
         end.day_start_capital.0
     );
@@ -94,7 +94,7 @@ fn main() {
         Some(20_457),
         "day index must advance to the last bar's day"
     );
-    println!("midnight rollover: day_start=42000000 day_fills=0 day_index=20457");
+    println!("midnight rollover: day_start=8000000 day_fills=0 day_index=20457");
 
     // 3. Continuous vs incremental across the same boundary must agree.
     let mut panel = entering_bars(20_456, 12);
