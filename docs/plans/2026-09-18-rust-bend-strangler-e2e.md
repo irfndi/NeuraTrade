@@ -418,3 +418,20 @@ pending (Gate 4 open).
 path) → P5 Step 6 (cut champion-paper to Rust on shadow parity) → Gate 3
 fill → P6 Zig ship (`build/zig-build.sh` missing; `.zig-version` pins
 0.16.0) → P8 sunset.
+
+## Progress log (2026-09-20 — parallel switch, no-cutover session)
+
+> Box writes: versioned binaries only (`nt-cli-8440d006`, `nt-search-8440d006`);
+> live symlink untouched (`nt-cli -> nt-cli-7a7b18cc`). No TS/PM2/config writes.
+> TS fixes are read-only ground truth; all new fixes land in Rust+Bend (TS sunsets).
+
+| Slice | Result | Evidence |
+| --- | --- | --- |
+| CI artifacts | VERIFIED | run 35502231204 green; sha256 OK both; `nt-search` → `11`, `nt-cli health` → `status=ok runtime=rust-strangler` on box |
+| P4 liveness shadow | PASS | PM2 one-shot `nt-search-a07b3dd0` printed pinned `11`; process deleted after |
+| P5 shadow fix (Rust+Bend) | FIXED | `nt-cli shadow` sized entries at `--pos-pct` but approved vs hardcoded `max_position_size_pct=10` → every champion entry rejected, `fills=0` on ANY panel. Now `max_position_size_pct: pos_pct`. Default runs still pin `paper_engine_check` byte-identical |
+| P5 4-symbol shadow | RUN | same 39,877-bar bybit-futures 15m panels per symbol, capital 50, champion knobs step130/target195/stop2/slip2/pos50: BTC 10 fills net -3.40 / ETH 10 fills net -0.81 / SOL 10 fills net -0.78 / LINK 10 fills net -0.86 |
+| Gate 4 read | DIVERGENCE EXPLAINED (structural, pre-cutover) | same window: TS paper holds SOL open=1 + LINK open=2 with ladder-live-market-entries attribution + sizing skips armed rungs (multi-rung, reseeds per interval, open inventory counts in equity); Rust shadow closed all rounds (single-position, inventory-not-equity) |
+
+**Attribution note:** Rust `fills=10` per symbol = `max_trades_per_day=10` daily-count gate saturating on the full-history replay (burst 5 entries + 5 exits early, then halted) — a backfill artifact, NOT a live rate. TS tick-walk never replays this way.
+**Not cutover-ready:** P5 Step 6 uncut, Bend search not in PM2 steady-state, demo `opened-count-demo=0`, Gate 3 open.
