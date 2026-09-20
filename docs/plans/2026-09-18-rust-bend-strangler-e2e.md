@@ -471,3 +471,40 @@ fill → P6 Zig ship (`build/zig-build.sh` missing; `.zig-version` pins
 **Gate 4 honest status:** grid half green in CI (step verified executing, not just green overall). Ladder half BLOCKED on the P5 Step 3 port — the spec is now the work order. Gate 3 still blocked on the ladder port (demo runs the ladder engine).
 **Spec findings that matter for Gate 4:** (1) TS adds `liveEntryCrossBps` (15bp) to BOTH fee lines — Rust has no cross term. (2) With `--fee 0.02` and zero taker hits in the ecosystem config the soak has NO maker/taker asymmetry, so Gate 4 needs `--fee-bp 2 --maker-fee-bp 2` or a recorded re-baseline; three-leg delta: entry 3.0x over, target 9.5x UNDER (dominant), stop 3.2x over. (3) `RiskLimits::live().min_capital = 100` but `nt-cli` overrides it to 30, while the soak partitions 200/4 = 50 per symbol — so `RiskLimits::live()` used directly rejects EVERY entry at soak capital (bit `day_start_check` too; fixed there by lowering the floor to 30). Any Rust-vs-TS parity comparison must pin this or the diff is a config artifact, not engine divergence. (3) LADDER-STEP-ANCHOR: TS freezes stop at entry step but uses current-bar step for the stopRatio boundary — Rust uses exit-bar step for both.
 **Note:** `bend/fixtures/ladder-6bar.md` pins TS-ladder-vs-`runLadderGridBacktest` agreement, which means the oscillator vector is engine-vs-engine (not a pure vector) — a Rust port must replay the bars itself, not port `ladder-grid.ts`.
+
+## Progress log (2026-09-20 night — Gate 3 root cause)
+
+> TS-only change (the live path is TS; Rust has no live adapter yet). Read-only
+> box work; no PM2 restart, no soak writes.
+
+**Root cause of `opened-count-demo=0` — fill confirmation, not rung seeding.**
+From the box's own Bybit testnet history: Open Sell 0.2 SOL @109.55 at
+19:57:42Z, then two Close Buys @108.27/108.28 (+0.25 realized). The demo log
+for the same minute reads `not filled (status=, qty=0, avgPrice=0)` with
+`open=0 closed=0`. The fills happen on the venue; the engine cannot prove them.
+
+`96629fd1` gave limit entries a 10-attempt (~2.5s) window and left market
+orders at ONE attempt on the assumption they fill instantly. The demo runs
+`--demo-live-market-entries`, so every rung fill is MARKET — one `getOrder`
+0ms after submit reads `status=""` (testnet not-yet-indexed), the one-shot
+history fallback runs before the venue indexes it, and the bar rolls back a
+real fill.
+
+**Fix (1ee5c153):** market entries share the limit-entry window; reduce-only
+closes get 3 attempts. Regression test verified by temporary revert — fails on
+the old code, passes on the new. 55 adapter tests pass, tsc clean, oxfmt clean.
+
+**Deploy BLOCKED (owner decision, not a code gap):** picking this up needs a
+demo restart, and the ladder engine's live-state load force-CLOSES unknown
+venue positions (`ladder-engine.ts:1794-1818`, `openRungCount(w) === 0`)
+instead of adopting them — the grid engine has `reconcileLivePosition`, the
+ladder never calls it. Ledger is flat (0 filled rungs on all 4 symbols), but
+the ledger is exactly what the rollback corrupted, so it cannot certify the
+venue is flat. No read-only Bybit position CLI exists (`exchange` only exposes
+`test`; `bybit-snapshot` is not registered in the subcommand list).
+
+**Deploy checklist when approved:** (1) confirm venue SOL position flat via
+Bybit UI/API, (2) preserve the dirty `autoresearch/knobs.ts` (already snapshotted
+at `autoresearch/results/knobs-live-20260920T1600Z.ts`), (3) `git pull` on the
+box, (4) restart ONLY `neuratrade-champion-demo`, (5) verify the first interval
+reads `open=1` or a market reason, (6) watch `opened-count-demo`.
