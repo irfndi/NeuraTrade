@@ -59,21 +59,13 @@ jobs:
           cargo run -q -p nt-grid --example sleeves_check
           cargo run -q -p nt-grid --example pump_catch
 
-      # Gate 4 GRID half: both sides executed. TS paper engine writes the
-      # fixture, Rust replays it. Ladder soak is NOT covered (P5 Step 3).
-      - name: Install Bun
-        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
-        with:
-          bun-version: "1.4.0"
-
-      - name: Grid parity vs TS paper engine
-        run: |
-          cd services/neuratrade-cli-ts
-          bun install --frozen-lockfile
-          bun run grid_parity_fixture.ts
-          cp grid_parity_fixture.candles.csv grid_parity_fixture.trades.csv ../../crates/
-          cd ../../crates
-          cargo run -q -p nt-grid --example grid_parity
+      # Gate 4 GRID half: Rust-only. The TS paper engine's output is FROZEN
+      # as committed CSV (nt-grid/examples/grid_parity_fixture.*.csv, written
+      # once by services/neuratrade-cli-ts/grid_parity_fixture.ts). No bun in
+      # CI — TS leaves this gate entirely when it sunsets.
+      # Ladder soak is NOT covered (P5 Step 3 scope).
+      - name: Grid parity vs frozen TS fixture
+        run: cd crates && cargo run -q -p nt-grid --example grid_parity
 
   bend:
     name: Bend parity (grid + guards + search kernels)
@@ -84,7 +76,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       - name: Install Bend (pinned ${{ env.BEND_VERSION }} via install.sh)
         env:
