@@ -245,6 +245,9 @@ fn main() {
     let capital = Money(capital_usdt * 1_000_000);
     let limits = RiskLimits {
         min_capital: Money(30 * 1_000_000),
+        // Champion sizing parity: the entry sizes position_value at pos_pct
+        // of capital, so the risk cap must match or every entry is rejected.
+        max_position_size_pct: pos_pct,
         ..RiskLimits::live()
     };
     let (events, ledger, end) = run_paper_engine_from(&candles, &cfg, capital, &limits, &resume);
