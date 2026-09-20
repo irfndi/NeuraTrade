@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BEND_VERSION: "2.0.5"
+  BEND_VERSION: "2.0.20"
 
 jobs:
   rust:
@@ -70,25 +70,16 @@ jobs:
         with:
           bun-version: "1.4.0"
 
-      - name: Install Bend (pinned via install.sh + pre-seeded tarball)
+      - name: Install Bend (pinned ${{ env.BEND_VERSION }} via install.sh)
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          curl -fsSL https://bend-lang.com/dl/${{ env.BEND_VERSION }}.tar.gz -o /tmp/bend.tgz
-          echo "4db70e77ce1b1027f1d0e15dee025921fa794a9b415add4350ec7c64acf2775b  /tmp/bend.tgz" | sha256sum -c -
-          # Tarball root holds bend2/ + guide/ (no version dir): extract into
-          # app/<ver>/ci mirroring the launcher layout, then symlink with a
-          # RELATIVE target (launcher does `ln -sfn app/...` from $B) so
-          # $B/current/bend2/main.ts resolves on the runner.
-          mkdir -p "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci" && tar -xzf /tmp/bend.tgz -C "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci"
-          test -f "$HOME/.bend/app/${{ env.BEND_VERSION }}/ci/bend2/main.ts"
-          (cd "$HOME/.bend" && ln -sfn "app/${{ env.BEND_VERSION }}/ci" current)
           curl -fsSL https://bend-lang.com/install.sh | sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
           # pin check below resolves bend in THIS step.
           export PATH="$HOME/.bend/bin:$PATH"
-          bend --version
+          test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
       - name: Run grid kernel (parity checksum 663097394)
         run: |
           test "$(bend bend/grid.bend)" = "663097394"
@@ -109,7 +100,7 @@ jobs:
           test "$(/tmp/sleeves)" = "13"
 
       - name: Verify Bend pin
-        run: test "$(bend --version)" = "bend ${{ env.BEND_VERSION }}"
+        run: test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
 
   zig:
     name: Zig cross-build (box artifact)
