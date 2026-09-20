@@ -61,6 +61,11 @@ jobs:
 
       # Gate 4 GRID half: both sides executed. TS paper engine writes the
       # fixture, Rust replays it. Ladder soak is NOT covered (P5 Step 3).
+      - name: Install Bun
+        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2
+        with:
+          bun-version: "1.4.0"
+
       - name: Grid parity vs TS paper engine
         run: |
           cd services/neuratrade-cli-ts
