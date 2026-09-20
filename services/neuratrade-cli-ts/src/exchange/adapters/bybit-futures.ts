@@ -1165,7 +1165,12 @@ function bybitOrderHasFill(order: BybitOrder): boolean {
 
 // Live resting states confirmed by the venue. Single source of truth for
 // both the poll-continue predicate and the cancel guard below.
-const BYBIT_RESTING_STATUSES = ["Created", "New", "PartiallyFilled", "Untriggered"];
+const BYBIT_RESTING_STATUSES = [
+  "Created",
+  "New",
+  "PartiallyFilled",
+  "Untriggered",
+];
 
 function bybitOrderCanStillFill(order: BybitOrder): boolean {
   return bybitOrderStatusCanStillFill(order.orderStatus);
@@ -1226,9 +1231,19 @@ function pollBybitOrderFill(
 ): Effect.Effect<FuturesOrderFill, ExchangeError> {
   return Effect.gen(function* () {
     const { request, symbol, ack, client, withError } = input;
-    const isEntryLimit =
-      request.type === "limit" && request.reduceOnly !== true;
-    const pollAttempts = isEntryLimit ? 10 : 1;
+    // Poll every order type. 96629fd1 gave limit entries 10 attempts
+    // (~2.5s) for touch-then-fill and skipped the wait for market orders on
+    // the assumption they fill instantly. Testnet indexing latency broke
+    // that: `--demo-live-market-entries` sends MARKET rung fills, one
+    // getOrder 0ms later reads status="" / qty=0 (not yet indexed), the
+    // history fallback runs once before the venue has indexed it either,
+    // and the bar rolls back a fill that really happened. Bybit's own
+    // history showed the fills (SOL 19:57:42Z sell 0.2 @109.55) while the
+    // soak logged open=0 (clever-cabin-85m). Reduce-only closes keep the
+    // short window: they run against a known position and the venue
+    // acks them synchronously.
+    const isReduceOnlyClose = request.reduceOnly === true;
+    const pollAttempts = isReduceOnlyClose ? 3 : 10;
     let data = yield* withError(
       client.getOrder({ symbol, orderId: ack.orderId }),
     );

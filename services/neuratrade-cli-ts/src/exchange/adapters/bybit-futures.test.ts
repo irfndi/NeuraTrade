@@ -376,6 +376,47 @@ describe("BybitFuturesExchangeAdapter", () => {
     }
     expect(calls).toContain("cancelOrder:BTCUSDT:bybit-1");
   });
+  it("polls market entries through empty status (Gate3: demo-live-market-entries)", async () => {
+    // Gate 3 exhibit, SOL 19:57:42Z: the demo soak runs
+    // --demo-live-market-entries, so rung fills are MARKET orders. Testnet
+    // indexing latency means one getOrder 0ms after submit reads
+    // status="" / qty=0 — the old `isEntryLimit ? 10 : 1` gave market
+    // orders ONE attempt, so the fill rolled back a fill the venue had
+    // really made (Bybit history: sell 0.2 @109.55). Now market entries
+    // share the limit-entry window.
+    getOrderCalls = 0;
+    getOrderStatuses = ["", "", "Filled"];
+    orderStatus = "Filled";
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "sell",
+            type: "market",
+            size: money(0.0001),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 1,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(getOrderCalls).toBeGreaterThan(2);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.fill.filledQty.toString()).not.toBe("0");
+    }
+    expect(calls.join("\n")).not.toContain("cancelOrder");
+  });
+
   it("keeps polling through empty status instead of failing fast (clever-cabin-85m)", async () => {
     // SOL 00:18Z exhibit: venue 112.92 vs bid 113.09 (marketable) yet
     // status empty/qty 0. Old code broke the poll on `""` and rolled back
@@ -411,7 +452,6 @@ describe("BybitFuturesExchangeAdapter", () => {
     }
     expect(calls.join("\n")).not.toContain("cancelOrder");
   });
-
 
   it("does not attempt a cancel when the order was already rejected", async () => {
     orderStatus = "Rejected";
