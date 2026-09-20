@@ -1,9 +1,9 @@
-// ponytail: per-rung parity probe — whole-run replay is ground truth; each
-// closed round-trip is attributed to its ENTRY's rung band (k around the
-// run-anchored base, same integer convention as nt_grid::evaluate) and the
-// per-rung sums must equal the whole-run ledger totals exactly. Position is
-// carried across bars (entry in one bar exits in a later bar) — no fresh
-// capital per slice, so this partitions by RUNG, not by time.
+// ponytail: rung-ATTRIBUTION check (NOT parity proof) — whole-run replay is
+// ground truth; each closed pair is attributed to its entry's rung band and
+// the per-rung sums are asserted equal to the whole-run ledger. This proves
+// the attribution math is internally consistent, NOT rung-concurrency
+// parity: the engine is single-position while TS runs a multi-rung ladder,
+// so the 0-vs-3 shadow gap still needs a direct engine-vs-TS comparison.
 use nt_execution::HONEST_TAKER_EXIT_BP;
 use nt_grid::{FillReason, PaperEngineConfig, Side, run_paper_engine};
 use nt_market::Candle;

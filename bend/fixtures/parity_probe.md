@@ -1,4 +1,4 @@
-# Parity probe spec: TS eval vs Bend gates on the pinned 6-bar panel
+# Parity probe spec: PROVENANCE-ONLY TS eval + shared-guard-input Bend checks (NOT end-to-end parity)
 
 Fixture: `bend/fixtures/pinned_6bar_panel.md` (panelHash `d3023228`).
 Sources of truth (read-only, never edited by this probe):
@@ -61,11 +61,14 @@ bend bend/search.bend -o /tmp/p4_search && /tmp/p4_search  # expect 11
   `KEEP_GUARDS` v2 (`mlr>0`, `wr>=52`, `dd<=12`, `tpm>=4`, `ep>0`).
 - `11` = `SCREEN_SLACK` 0.0025 survival bitmask (`b0+b1+b3`, exact-floor
   `0.0475` dies) → proves Bend `survives` matches `loop.ts`.
-- Fixture mapping (no NaN literal needed in Bend): the TS `emptyResult`
-  carries NaN guard inputs; every TS comparison against NaN is false, so
-  `checkKeepGuards` pushes all guards → `ok: false`. On the Bend side any
-  non-finite input fails the `±1e6` range idiom (`is_finite`) → `fail`
-  bits set → `ok: False{}`. Both sides `guardsOk == false` by construction.
+- Provenance-only scope: the 1-symbol panel forces TS `emptyResult`
+  (`insufficient_symbols`, `prepare.ts:691-692`) BEFORE the backtest, so the
+  TS side never produces a GuardInput — while Bend `2065`/`11` check
+  `check_keep_guards`/`survives` on the pre-existing `mutate.test.ts`
+  fixtures. No shared GuardInput is compared, so this probe pins
+  provenance + plumbing only. Follow-up: real-size pinned panel (≥3
+  symbols, ≥minCandles) feeding the SAME GuardInput to TS
+  `checkKeepGuards` + Bend `check_keep_guards` for true parity.
 
 ## 3. Agreement tolerance
 
