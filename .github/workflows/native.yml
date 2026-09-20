@@ -85,7 +85,13 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          curl -fsSL https://bend-lang.com/install.sh | sh
+          # Retry: bend-lang.com install.sh flaked twice (upstream network,
+          # not the repo), and a red CI run hides real failures.
+          for attempt in 1 2 3; do
+            curl -fsSL https://bend-lang.com/install.sh | sh && break
+            echo "bend install attempt $attempt failed, retrying" >&2
+            sleep $((attempt * 15))
+          done
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
           # pin check below resolves bend in THIS step.
@@ -132,7 +138,13 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          curl -fsSL https://bend-lang.com/install.sh | sh
+          # Retry: bend-lang.com install.sh flaked twice (upstream network,
+          # not the repo), and a red CI run hides real failures.
+          for attempt in 1 2 3; do
+            curl -fsSL https://bend-lang.com/install.sh | sh && break
+            echo "bend install attempt $attempt failed, retrying" >&2
+            sleep $((attempt * 15))
+          done
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.bend/bin:$PATH"
           test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
