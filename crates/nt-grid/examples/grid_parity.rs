@@ -84,7 +84,9 @@ fn main() {
         .collect();
 
     // paper_engine_check geometry (step 100bp, target 1.0x, stop 2 grids,
-    // slippage 50bp, pos 10%, fee 6bp), capital 1000 (fixture's capital).
+    // slippage 50bp, pos 10%, fee 6bp taker / 2bp maker on target exits),
+    // capital 1000 (fixture's capital). Parity asserts PRICES, which are
+    // fee-blind, so the split cannot move any assertion below.
     let cfg = PaperEngineConfig {
         step_bp: 100,
         target_ratio_x100: 100,

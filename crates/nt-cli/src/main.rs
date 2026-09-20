@@ -5,9 +5,12 @@
 // Live-shadow runs: pass --capital-usdt = per-symbol partition (e.g. 200/4
 // = 50 for the 4-ticker demo) + per-symbol --fee-bp, else parity diffs are
 // config artifacts, not engine divergence. Fees follow the champion soak's
-// honestFees schedule: --fee-bp is TAKER (entries + stop exits, 6bp),
-// --maker-fee-bp is MAKER (resting target exits, 2bp). Both default to the
-// honest constants; pass --fee-bp alone to keep the old flat-taker behaviour.
+// honestFees schedule: --fee-bp is TAKER (entries + stop exits, 6bp) and
+// --maker-fee-bp is MAKER (resting target exits, 2bp), each defaulting
+// independently. The two flags are independent, so a per-symbol drag run
+// (--fee-bp 69) charges target exits at the 2bp DEFAULT unless
+// --maker-fee-bp 69 is passed too; pass BOTH to reproduce the old flat
+// model on every fill.
 // --state is a tick cursor (last open_ts): each tick replays only newer
 // candles instead of double-counting. --resume persists open position +
 // equity state so an exit whose entry sat in a prior tick still fires;
@@ -360,6 +363,20 @@ fn load_resume(path: &str) -> ResumeState {
                 st.cum_gross = gross.parse().unwrap_or(0);
                 st.cum_fees = fees.parse().unwrap_or(0);
             }
+            // v2 day boundary (i64::MIN = unset). v1 files lack these lines,
+            // so an old resume reads as "no boundary" and re-establishes.
+            ["day_index", v] => match v.parse::<i64>() {
+                Ok(d) if d != i64::MIN => st.day_index = Some(d),
+                _ => st.day_index = None,
+            },
+            ["day_fills", v] => {
+                st.day_fills = v.parse().unwrap_or(0);
+            }
+            ["day_start", v] => {
+                if let Ok(m) = v.parse::<i64>() {
+                    st.day_start_capital = Some(Money(m));
+                }
+            }
             _ => {} // v1 header, blanks: skip
         }
     }
@@ -367,7 +384,7 @@ fn load_resume(path: &str) -> ResumeState {
 }
 
 fn store_resume(path: &str, end: &EndState) {
-    let mut out = String::from("v1\n");
+    let mut out = String::from("v2\n");
     out.push_str(&format!("closed_realized {}\n", end.closed_realized));
     out.push_str(&format!("peak {}\n", end.peak.0));
     match end.position {
@@ -392,6 +409,12 @@ fn store_resume(path: &str, end: &EndState) {
         "cum {} {} {}\n",
         end.cum_fills, end.cum_gross, end.cum_fees
     ));
+    out.push_str(&format!(
+        "day_index {}\n",
+        end.day_index.unwrap_or(i64::MIN)
+    ));
+    out.push_str(&format!("day_fills {}\n", end.day_fills));
+    out.push_str(&format!("day_start {}\n", end.day_start_capital.0));
     if let Err(e) = std::fs::write(path, out) {
         eprintln!("resume write {path}: {e}");
     }

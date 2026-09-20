@@ -28,7 +28,10 @@ fn cfg() -> PaperEngineConfig {
         slippage_bps: 50,
         max_position_size_pct: 10,
         fee_bp: HONEST_TAKER_EXIT_BP,
-        // Honest schedule: target exits are resting maker fills.
+        // Declared for the honest schedule, but run_sleeves_backtest does
+        // NOT route per reason (sleeves.rs charges base.fee_bp on every
+        // fill), so this value is inert today. Keep it at the honest maker
+        // rate so the field is correct once sleeves learns the split.
         maker_fee_bp: HONEST_MAKER_FEE_BP,
     }
 }

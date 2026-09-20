@@ -4,7 +4,7 @@
 // the attribution math is internally consistent, NOT rung-concurrency
 // parity: the engine is single-position while TS runs a multi-rung ladder,
 // so the 0-vs-3 shadow gap still needs a direct engine-vs-TS comparison.
-use nt_execution::{HONEST_MAKER_FEE_BP, HONEST_TAKER_EXIT_BP};
+use nt_execution::HONEST_TAKER_EXIT_BP;
 use nt_grid::{FillReason, PaperEngineConfig, Side, run_paper_engine};
 use nt_market::Candle;
 use nt_risk::{Money, RiskLimits};

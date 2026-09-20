@@ -305,7 +305,10 @@ pub fn run_paper_engine_from(
         if bar_day > day_index {
             day_index = bar_day;
             day_fills = 0;
-            day_start = capital;
+            // Re-anchor on equity (capital + closed realized), not raw
+            // `capital`: re-anchoring on the fixed deposit would make the
+            // daily-loss denominator ignore prior-day PnL entirely.
+            day_start = Money(capital.0 + closed_realized);
         }
         let step = Money(scale(candle.open.0, cfg.step_bp, 10_000));
 
