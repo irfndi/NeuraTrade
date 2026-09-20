@@ -106,5 +106,45 @@ fn main() {
         other => panic!("short rung line must fail, got {other:?}"),
     }
 
+    // 6. A truncated file must FAIL, not parse as a valid zero-capital state.
+    //    The tick loop rewrites this file every interval, so a partial write
+    //    is a real failure mode. `capital` alone is not a state.
+    match load("ladder v3\ncapital 50000000\n") {
+        Err(ResumeError::MissingField(k)) => {
+            println!("truncated resume rejected (missing {k})")
+        }
+        other => panic!("truncated resume must fail MissingField, got {other:?}"),
+    }
+    // Header only: no fields at all.
+    match load("ladder v3\n") {
+        Err(ResumeError::MissingField(k)) => {
+            println!("header-only resume rejected (missing {k})")
+        }
+        other => panic!("header-only resume must fail MissingField, got {other:?}"),
+    }
+
+    // 7. BadRungLine reports the TRUE file line, not a rung count. The header
+    //    is line 1, so a rung on line 4 must report 4 even when it is the
+    //    first rung in the file.
+    let good_save = save(&st);
+    let bad_line = format!("{good_save}rung 1 long 99000000\n");
+    match load(&bad_line) {
+        Err(ResumeError::BadRungLine(n)) => {
+            let expected = good_save.lines().count() + 1; // header + this new line
+            assert_eq!(n, expected, "BadRungLine must report the true line");
+            println!("bad rung line reports true line {n} (expected {expected})");
+        }
+        other => panic!("malformed rung line must fail BadRungLine, got {other:?}"),
+    }
+
+    // 8. Fixed point: the tick loop rewrites this file every interval, so
+    //    save/load must be idempotent. Only a fixed point proves repeated
+    //    rewrites cannot drift.
+    let once = load(&save(&st)).expect("first round-trip");
+    let twice = load(&save(&once)).expect("second round-trip");
+    assert_eq!(once, twice, "save/load must be a fixed point");
+    assert_eq!(once, st, "and must equal the original state");
+    println!("fixed point ok (save/load idempotent across rewrites)");
+
     println!("nt-ladder check ok");
 }

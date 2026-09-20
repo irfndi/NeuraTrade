@@ -337,6 +337,11 @@ pub fn load(text: &str) -> Result<LadderState, ResumeError> {
         return Err(ResumeError::BadVersion(header.to_string()));
     }
 
+    // Seed with an all-zero config so every scalar field is distinguishable
+    // from "parsed 0". A truncated file must FAIL, not parse as a valid
+    // zero-capital state: slice 2 compares this fingerprint against live
+    // options to decide force-reseed, and an all-zero fingerprint would
+    // make that decision meaningless.
     let mut st = LadderState::fresh(
         Money::ZERO,
         LadderConfig {
@@ -352,39 +357,110 @@ pub fn load(text: &str) -> Result<LadderState, ResumeError> {
             conservative_intrabar: true,
         },
     );
-    st.long_rungs = Vec::new();
-    st.short_rungs = Vec::new();
 
-    let mut rung_lines = 0usize;
-    for line in lines {
+    // Required scalar fields. Absence is a truncated file, which is an error
+    // rather than a silent default.
+    let mut seen: Vec<&'static str> = Vec::new();
+    let require = |key: &'static str, seen: &mut Vec<&'static str>| {
+        if !seen.contains(&key) {
+            seen.push(key);
+        }
+    };
+
+    // `enumerate()` from 1 so BadRungLine reports the TRUE file line: the
+    // header is line 1, so data lines start at 2.
+    for (lineno, line) in lines.enumerate() {
+        let lineno = lineno + 2; // header consumed separately
         let f: Vec<&str> = line.split_whitespace().collect();
         if f.is_empty() {
             continue;
         }
         match f.as_slice() {
-            ["initial_capital", v] => st.initial_capital = Money(num(v)?),
-            ["capital", v] => st.capital = Money(num(v)?),
-            ["peak_capital", v] => st.peak_capital = Money(num(v)?),
-            ["total_wins", v] => st.total_wins = num(v)? as u64,
-            ["total_losses", v] => st.total_losses = num(v)? as u64,
-            ["long_base", v] => st.long_base = Money(num(v)?),
-            ["short_base", v] => st.short_base = Money(num(v)?),
-            ["paused", v] => st.paused = num(v)? as u64,
-            ["grid_step_bp", v] => st.config.grid_step_bp = num(v)?,
-            ["grid_max_grids", v] => st.config.grid_max_grids = num(v)?,
-            ["grid_pause_after_loss_bars", v] => st.config.grid_pause_after_loss_bars = num(v)?,
-            ["rungs", v] => st.config.rungs = num(v)? as u32,
-            ["target_ratio_x100", v] => st.config.target_ratio_x100 = num(v)?,
-            ["only_with_trend", v] => st.config.only_with_trend = num(v)? != 0,
-            ["chop_gate_adx", v] => st.config.chop_gate_adx = num(v)?,
-            ["max_hold_bars", v] => st.config.max_hold_bars = num(v)?,
-            ["stop_ratio_x100", v] => st.config.stop_ratio_x100 = num(v)?,
-            ["conservative_intrabar", v] => st.config.conservative_intrabar = num(v)? != 0,
-            ["last_ts", "none"] => st.last_ts_ms = None,
-            ["last_ts", v] => st.last_ts_ms = Some(num(v)?),
-            ["bars_consumed", v] => st.bars_consumed = num(v)? as u64,
+            ["initial_capital", v] => {
+                st.initial_capital = Money(num(v)?);
+                require("initial_capital", &mut seen);
+            }
+            ["capital", v] => {
+                st.capital = Money(num(v)?);
+                require("capital", &mut seen);
+            }
+            ["peak_capital", v] => {
+                st.peak_capital = Money(num(v)?);
+                require("peak_capital", &mut seen);
+            }
+            ["total_wins", v] => {
+                st.total_wins = num(v)? as u64;
+                require("total_wins", &mut seen);
+            }
+            ["total_losses", v] => {
+                st.total_losses = num(v)? as u64;
+                require("total_losses", &mut seen);
+            }
+            ["long_base", v] => {
+                st.long_base = Money(num(v)?);
+                require("long_base", &mut seen);
+            }
+            ["short_base", v] => {
+                st.short_base = Money(num(v)?);
+                require("short_base", &mut seen);
+            }
+            ["paused", v] => {
+                st.paused = num(v)? as u64;
+                require("paused", &mut seen);
+            }
+            ["grid_step_bp", v] => {
+                st.config.grid_step_bp = num(v)?;
+                require("grid_step_bp", &mut seen);
+            }
+            ["grid_max_grids", v] => {
+                st.config.grid_max_grids = num(v)?;
+                require("grid_max_grids", &mut seen);
+            }
+            ["grid_pause_after_loss_bars", v] => {
+                st.config.grid_pause_after_loss_bars = num(v)?;
+                require("grid_pause_after_loss_bars", &mut seen);
+            }
+            ["rungs", v] => {
+                st.config.rungs = num(v)? as u32;
+                require("rungs", &mut seen);
+            }
+            ["target_ratio_x100", v] => {
+                st.config.target_ratio_x100 = num(v)?;
+                require("target_ratio_x100", &mut seen);
+            }
+            ["only_with_trend", v] => {
+                st.config.only_with_trend = num(v)? != 0;
+                require("only_with_trend", &mut seen);
+            }
+            ["chop_gate_adx", v] => {
+                st.config.chop_gate_adx = num(v)?;
+                require("chop_gate_adx", &mut seen);
+            }
+            ["max_hold_bars", v] => {
+                st.config.max_hold_bars = num(v)?;
+                require("max_hold_bars", &mut seen);
+            }
+            ["stop_ratio_x100", v] => {
+                st.config.stop_ratio_x100 = num(v)?;
+                require("stop_ratio_x100", &mut seen);
+            }
+            ["conservative_intrabar", v] => {
+                st.config.conservative_intrabar = num(v)? != 0;
+                require("conservative_intrabar", &mut seen);
+            }
+            ["last_ts", "none"] => {
+                st.last_ts_ms = None;
+                require("last_ts", &mut seen);
+            }
+            ["last_ts", v] => {
+                st.last_ts_ms = Some(num(v)?);
+                require("last_ts", &mut seen);
+            }
+            ["bars_consumed", v] => {
+                st.bars_consumed = num(v)? as u64;
+                require("bars_consumed", &mut seen);
+            }
             ["rung", index, side, level, step, filled, ep, ebar, ets, qty] => {
-                rung_lines += 1;
                 let side = Side::parse(side)
                     .ok_or_else(|| ResumeError::BadField("rung side", side.to_string()))?;
                 let rung = Rung {
@@ -403,8 +479,40 @@ pub fn load(text: &str) -> Result<LadderState, ResumeError> {
                     Side::Short => st.short_rungs.push(rung),
                 }
             }
-            _ => return Err(ResumeError::BadRungLine(rung_lines + 1)),
+            _ => return Err(ResumeError::BadRungLine(lineno)),
         }
     }
+
+    // Every required field must be present exactly once-worth: absent means a
+    // truncated write (the tick loop rewrites this file every interval, so a
+    // partial file is a real failure mode, not a theoretical one).
+    const REQUIRED: [&str; 20] = [
+        "initial_capital",
+        "capital",
+        "peak_capital",
+        "total_wins",
+        "total_losses",
+        "long_base",
+        "short_base",
+        "paused",
+        "grid_step_bp",
+        "grid_max_grids",
+        "grid_pause_after_loss_bars",
+        "rungs",
+        "target_ratio_x100",
+        "only_with_trend",
+        "chop_gate_adx",
+        "max_hold_bars",
+        "stop_ratio_x100",
+        "conservative_intrabar",
+        "last_ts",
+        "bars_consumed",
+    ];
+    for key in REQUIRED {
+        if !seen.contains(&key) {
+            return Err(ResumeError::MissingField(key));
+        }
+    }
+
     Ok(st)
 }
