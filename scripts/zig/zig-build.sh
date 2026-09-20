@@ -9,7 +9,7 @@ PROFILE="${1:-release}"
 DEST="${2:-host}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WANT_ZIG="$(cat "$ROOT/.zig-version")"
-BEND_WANT="${BEND_VERSION:-2.0.20}"
+BEND_WANT="${BEND_VERSION:-2.0.21}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
