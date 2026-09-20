@@ -58,34 +58,38 @@ fn main() {
         day_index: None,
         day_fills: 0,
         day_start_capital: None,
-        closed_realized: -2_000_000,
+        closed_realized: -800_000,
         peak: Some(Money(10_000_000)),
         ..ResumeState::default()
     };
     let (_ev, _l, end) =
         run_paper_engine_from(&entering_bars(20_456, 6), &cfg(), capital, &limits, &v1);
     assert_eq!(
-        end.day_start_capital.0, 8_000_000,
+        end.day_start_capital.0, 9_200_000,
         "v1 fallback must anchor on equity, got {}",
         end.day_start_capital.0
     );
-    println!("v1 resume: day_start=8000000 (equity, not the 10M deposit)");
+    println!("v1 resume: day_start=9200000 (equity, not the 10M deposit)");
 
-    // 2. Tick-entry rollover with carried losses: prior day down 8M, resume
-    //    one bar into the NEXT day. day_start must re-anchor on equity.
+    // 2. Tick-entry rollover with carried losses: prior day down 0.8M, resume
+    //    into the NEXT day. day_start must re-anchor on equity and the
+    //    carried day_fills must reset (3 -> the 6 this tick actually fills).
     let carry = ResumeState {
         day_index: Some(20_456),
         day_fills: 3,
         day_start_capital: Some(Money(10_000_000)),
-        closed_realized: -2_000_000,
+        closed_realized: -800_000,
         peak: Some(Money(10_000_000)),
         ..ResumeState::default()
     };
     let (_ev, _l, end) =
         run_paper_engine_from(&entering_bars(20_457, 6), &cfg(), capital, &limits, &carry);
-    assert_eq!(end.day_fills, 0, "rollover must reset the daily fill count");
     assert_eq!(
-        end.day_start_capital.0, 8_000_000,
+        end.day_fills, 6,
+        "rollover must reset the carried count, then count this tick's fills"
+    );
+    assert_eq!(
+        end.day_start_capital.0, 9_200_000,
         "rollover denominator must anchor on equity, got {}",
         end.day_start_capital.0
     );
@@ -94,7 +98,7 @@ fn main() {
         Some(20_457),
         "day index must advance to the last bar's day"
     );
-    println!("midnight rollover: day_start=8000000 day_fills=0 day_index=20457");
+    println!("midnight rollover: day_start=9200000 day_fills=6 day_index=20457");
 
     // 3. Continuous vs incremental across the same boundary must agree.
     let mut panel = entering_bars(20_456, 12);

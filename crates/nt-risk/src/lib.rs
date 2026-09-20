@@ -54,11 +54,13 @@ pub struct RiskLimits {
 impl RiskLimits {
     /// Live defaults mirror `defaultRiskLimits` (live) in guards.ts.
     ///
-    /// `min_capital` is 100 here, but the champion soak partitions 200 USDT
-    /// across 4 symbols (50 each) and `nt-cli shadow` lowers the floor to 30
-    /// for that reason. Any caller using `RiskLimits::live()` directly
-    /// against a per-symbol partition rejects EVERY entry — pin the floor
-    /// explicitly or a parity diff is a config artifact, not divergence.
+    /// `min_capital` is 100 here, but production runs 10 USDT per symbol and
+    /// `nt-cli shadow` lowers the floor to 1 for that reason. Note this gate
+    /// checks the STARTING capital only (`basic_risk_violations`), so it is a
+    /// launch sanity check — equity protection is the drawdown / daily-loss
+    /// gates' job. Any caller using `RiskLimits::live()` directly against a
+    /// per-symbol partition rejects EVERY entry — pin the floor explicitly or
+    /// a parity diff is a config artifact, not divergence.
     pub fn live() -> RiskLimits {
         RiskLimits {
             min_capital: Money::usdt(100),
