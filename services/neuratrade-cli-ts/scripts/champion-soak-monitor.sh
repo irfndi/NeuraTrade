@@ -8,7 +8,7 @@
 # The champion soak is incompatible with both assumptions:
 #   - isolated homes: ~/.neuratrade-champion-paper + ~/.neuratrade-champion-demo
 #   - ladder fills land in ladder_paper_trades (grid_paper_trades stays empty)
-#   - entry logs print OPENED (formatPaperIterationLog action.toUpperCase()),
+#   - ladder closes come from ladder_paper_trades rows (24h window),
 #     never ENTER
 #   - intentionally stopped jobs (e.g. *-candidate, candle-sync between cron
 #     ticks) must not page
@@ -23,7 +23,7 @@
 #        a. ladder_paper_trades fills in the last 24h + cumulative total.
 #           The total is stateful vs STATE_DIR (first-fill detection: alert on
 #           increase, re-baseline silently on first run).
-#        b. OPENED entry count in the champion out logs (grep OPENED, not
+#        b. 24h ladder close count from ladder_paper_trades (DB rows, not
 #           ENTER) — stateful per home, alerts on increase.
 #   4. Disk usage of the champion homes' filesystem(s) vs DISK_THRESHOLD_PCT
 #      (default 85) — stateful breach transition, fails while breached.
@@ -34,7 +34,7 @@
 #
 # Exit codes:
 #   0  healthy, no state changes
-#   1  stateful alert (new CLAIM, new fills, new OPENED entries)
+#   1  stateful alert (new CLAIM, new fills, new ladder closes)
 #   2  health failure (required champion app offline, disk breach, bad usage)
 #
 # Env overrides: PAPER_HOME DEMO_HOME CLAIMED_FILE STATE_DIR LOG_DIR
@@ -169,7 +169,7 @@ else
   log "claim: no claimed.json yet"
 fi
 
-# --- 3. Per-home ladder fills + OPENED entries --------------------------------
+# --- 3. Per-home ladder fills + 24h closes ---------------------------------
 check_home() {
   home_name=$1
   db_path=$2
@@ -214,34 +214,49 @@ check_home() {
     warn "$home_name: log missing at $out_log"
     return
   fi
-  # The ladder engine never prints an "OPENED" token (it prints
-  # "HOLD | ... open=N"), so grepping for it counted ZERO forever — this
-  # gate read 0 for paper while paper had genuinely opened positions.
-  # Count the engine's own field instead: open=N with N >= 1.
-  OPENED=$(grep -oE "open=[1-9][0-9]*" "$out_log" 2>/dev/null | wc -l | tr -d '[:space:]' || true)
-  case "$OPENED" in
-    '' | *[!0-9]*) OPENED=0 ;;
+  # Gate 3's real signal is CLOSED round-trips: one row per trade in
+  # ladder_paper_trades. Counting log lines was the original bug (the engine
+  # never printed "OPENED", so the old grep read 0 forever); counting
+  # "open=N" lines instead would count ONE open position once per interval
+  # it survives, which is not a trade count either. DB rows cannot
+  # double-count: a rung that opens and holds is not a fill.
+  #
+  # A failed query yields the literal "unknown" — that must NOT be coerced
+  # to 0, because a broken DB would then read as "zero closes", the same
+  # silent-zero failure the log counter had.
+  case "$F24" in
+    unknown)
+      warn "$home_name: 24h close count unavailable (query failed); not reporting a gate number"
+      return
+      ;;
   esac
-  OPENED_FILE="$STATE_DIR/opened-count-$home_name.txt"
-  if [ -f "$OPENED_FILE" ]; then
-    PREV_O=$(cat "$OPENED_FILE" 2>/dev/null | tr -d '[:space:]' || true)
-    case "$PREV_O" in
-      *[!0-9]* | '') PREV_O="" ;;
+  CLOSES=$F24
+  case "$CLOSES" in
+    '' | *[!0-9]*)
+      warn "$home_name: 24h close count not numeric ($CLOSES); not reporting a gate number"
+      return
+      ;;
+  esac
+  CLOSES_FILE="$STATE_DIR/closed-count-$home_name.txt"
+  if [ -f "$CLOSES_FILE" ]; then
+    PREV_C=$(cat "$CLOSES_FILE" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$PREV_C" in
+      *[!0-9]* | '') PREV_C="" ;;
     esac
   else
-    PREV_O=""
+    PREV_C=""
   fi
-  if [ -z "$PREV_O" ]; then
-    printf '%s\n' "$OPENED" > "$OPENED_FILE"
-    log "$home_name: OPENED entries baseline: $OPENED"
-  elif [ "$OPENED" -gt "$PREV_O" ]; then
-    printf '%s\n' "$OPENED" > "$OPENED_FILE"
-    alert "$home_name: NEW LADDER ENTRIES: OPENED count $OPENED (was $PREV_O)"
-  elif [ "$OPENED" -lt "$PREV_O" ]; then
-    printf '%s\n' "$OPENED" > "$OPENED_FILE"
-    warn "$home_name: OPENED count DECREASED $PREV_O -> $OPENED (log rotated?); baseline reset"
+  if [ -z "$PREV_C" ]; then
+    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    log "$home_name: 24h ladder closes baseline: $CLOSES"
+  elif [ "$CLOSES" -gt "$PREV_C" ]; then
+    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    alert "$home_name: NEW LADDER CLOSES: 24h count $CLOSES (was $PREV_C)"
+  elif [ "$CLOSES" -lt "$PREV_C" ]; then
+    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    warn "$home_name: 24h close count DECREASED $PREV_C -> $CLOSES (DB reset?); baseline reset"
   else
-    log "$home_name: OPENED entries unchanged: $OPENED"
+    log "$home_name: 24h ladder closes unchanged: $CLOSES"
   fi
 }
 

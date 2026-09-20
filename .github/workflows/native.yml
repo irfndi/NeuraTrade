@@ -85,9 +85,14 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # The upstream installer is now pinned to 2.0.21 and its script
-          # carries the version itself, so this install is deterministic —
-          # a mismatch here is a pin error, never a flake.
+          # The installer script carries its own VER and upstream can bump it
+          # at any time (that is exactly what broke CI at 2.0.20), so the
+          # install is NOT self-deterministic — the pin assertion below is
+          # what makes it so. If upstream moves past the pin, this fails
+          # loudly instead of silently installing a different version.
+          set -o pipefail
+          curl -fsSL https://bend-lang.com/install.sh -o /tmp/bend-install.sh
+          BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
           # pin check below resolves bend in THIS step.
@@ -134,9 +139,14 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # The upstream installer is now pinned to 2.0.21 and its script
-          # carries the version itself, so this install is deterministic —
-          # a mismatch here is a pin error, never a flake.
+          # The installer script carries its own VER and upstream can bump it
+          # at any time (that is exactly what broke CI at 2.0.20), so the
+          # install is NOT self-deterministic — the pin assertion below is
+          # what makes it so. If upstream moves past the pin, this fails
+          # loudly instead of silently installing a different version.
+          set -o pipefail
+          curl -fsSL https://bend-lang.com/install.sh -o /tmp/bend-install.sh
+          BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.bend/bin:$PATH"
           test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
