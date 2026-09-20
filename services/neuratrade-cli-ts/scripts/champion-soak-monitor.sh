@@ -214,8 +214,11 @@ check_home() {
     warn "$home_name: log missing at $out_log"
     return
   fi
-  # Entry lines print OPENED (never ENTER): "[ts] <exchange>:<symbol> OPENED | ...".
-  OPENED=$(grep -c "OPENED" "$out_log" 2>/dev/null || true)
+  # The ladder engine never prints an "OPENED" token (it prints
+  # "HOLD | ... open=N"), so grepping for it counted ZERO forever — this
+  # gate read 0 for paper while paper had genuinely opened positions.
+  # Count the engine's own field instead: open=N with N >= 1.
+  OPENED=$(grep -oE "open=[1-9][0-9]*" "$out_log" 2>/dev/null | wc -l | tr -d '[:space:]' || true)
   case "$OPENED" in
     '' | *[!0-9]*) OPENED=0 ;;
   esac
