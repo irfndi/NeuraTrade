@@ -38,7 +38,9 @@ fn num(s: &str) -> i64 {
 
 fn main() {
     let candles_raw = fs::read_to_string("nt-grid/examples/grid_parity_fixture.candles.csv")
-        .expect("fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts");
+        .expect(
+            "fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts",
+        );
     let candles: Vec<Candle> = candles_raw
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -56,9 +58,9 @@ fn main() {
         })
         .collect();
 
-    let trades_raw =
-        fs::read_to_string("nt-grid/examples/grid_parity_fixture.trades.csv")
-            .expect("fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts");
+    let trades_raw = fs::read_to_string("nt-grid/examples/grid_parity_fixture.trades.csv").expect(
+        "fixture missing — regenerate via services/neuratrade-cli-ts/grid_parity_fixture.ts",
+    );
     let trades: Vec<FxTrade> = trades_raw
         .lines()
         .filter(|l| !l.trim().is_empty())
