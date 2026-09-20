@@ -515,6 +515,9 @@ export function runLadderGridBacktest(
     ddBlocked: boolean,
   ): LadderSideState => {
     if (state.rungs.some((r) => r.filled)) return state;
+    // Keep armed rungs across flat bars: gates apply to the empty-seed only —
+    // a blocked bar must NOT wipe armed rungs (mirror ladder-engine.ts).
+    if (state.rungs.length > 0) return state;
     const trendPass =
       trend !== null &&
       !isNaN(trend) &&
@@ -522,6 +525,10 @@ export function runLadderGridBacktest(
     const canSeed =
       !chopGateActive && !ddBlocked && (!onlyWithTrend || trendPass);
     if (!canSeed) return emptySide();
+    // Keep armed rungs across flat bars (mirror ladder-engine.ts): only seed
+    // when EMPTY, not merely unfilled — re-centering every bar lets sideways
+    // price chase rungs forever (clever-cabin-85m).
+    if (state.rungs.length > 0) return state;
     return { rungs: buildSideRungs(side, mid, step), base: mid };
   };
 

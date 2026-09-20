@@ -604,6 +604,9 @@ function seedLadderSide(ctx: LadderBarContext, side: LadderSide): void {
   const { w, candle, opts } = ctx;
   const rungs = sideRungs(w, side);
   if (rungs.some((rung) => rung.filled)) return;
+  // Keep armed rungs across flat bars: gates apply to the empty-seed only —
+  // a blocked bar must NOT wipe armed rungs (clever-cabin-85m).
+  if (rungs.length > 0) return;
   const trendAllows =
     !ctx.onlyWithTrend ||
     (ctx.trend !== null &&
@@ -1929,6 +1932,14 @@ function buildLadderIterationResult(
     chopGateThreshold > 0 &&
     lastAdx >= chopGateThreshold;
   const ddKilled = accountDrawdownBreached(w, options);
+  const trendNote =
+    openBefore === 0 &&
+    openAfter === 0 &&
+    iterationFills.length === 0 &&
+    closedThisIteration === 0 &&
+    (options.onlyWithTrend ?? false)
+      ? `; seeds need trend (onlyWithTrend, period ${options.trendFilterPeriod ?? 0})`
+      : "";
   return {
     action,
     capital: toNumber(state.capital),
@@ -1945,7 +1956,8 @@ function buildLadderIterationResult(
         : "") +
       (ddKilled
         ? `; ACCOUNT DRAWDOWN KILL active (max ${options.maxDrawdownPct ?? 0}% from peak — no new seeds)`
-        : ""),
+        : "") +
+      trendNote,
   };
 }
 
