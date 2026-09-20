@@ -58,6 +58,9 @@ jobs:
           cargo run -q -p nt-grid --example paper_engine_check
           cargo run -q -p nt-grid --example sleeves_check
           cargo run -q -p nt-grid --example pump_catch
+          cargo run -q -p nt-grid --example rung_parity_probe
+          cargo run -q -p nt-grid --example engine_vs_ts_probe
+          cargo run -q -p nt-grid --example day_start_check
 
       # Gate 4 GRID half: Rust-only. The TS paper engine's output is FROZEN
       # as committed CSV (nt-grid/examples/grid_parity_fixture.*.csv, written
