@@ -435,3 +435,18 @@ fill → P6 Zig ship (`build/zig-build.sh` missing; `.zig-version` pins
 
 **Attribution note:** Rust `fills=10` per symbol = `max_trades_per_day=10` daily-count gate saturating on the full-history replay (burst 5 entries + 5 exits early, then halted) — a backfill artifact, NOT a live rate. TS tick-walk never replays this way.
 **Not cutover-ready:** P5 Step 6 uncut, Bend search not in PM2 steady-state, demo `opened-count-demo=0`, Gate 3 open.
+
+## Progress log (2026-09-20 evening — parity harness, bun out of parity CI)
+
+> No box writes this block. All work in-repo, pushed to
+> `feat/rust-bend-strangler-p0-p5`; CI `Native` green.
+
+| Slice | Result | Evidence |
+| --- | --- | --- |
+| Gate 4 GRID half | CLOSED (grid only, not ladder) | `nt-grid/examples/grid_parity.rs` replays frozen TS output; `long` leg delta **0u**, `short` leg 2525u bounded by the documented asymmetric-slippage simplification (`engine.rs:124`) |
+| Parity gate CI | Rust-only | TS engine's output frozen as committed CSV (deterministic, md5-stable); generator kept at `services/neuratrade-cli-ts/grid_parity_fixture.ts` as provenance. No bun in the parity step |
+| Slippage debt | FOUND (bounded) | TS short leg enters/stops at `level/(1+slip)`; Rust uses `x*(10000-bps)/10000` — O(slip^2) ~2525u at 50bp. Long leg symmetric ⇒ exact. Fix is a real candidate, NOT a blocker |
+| Box hygiene | DONE | live knobs snapshot at `autoresearch/results/knobs-live-20260920T1600Z.ts` (untracked, survives any restart/pull); probe PM2 entries deleted |
+
+**Gate 4 status:** grid half green, ladder half still requires the P5 Step 3 multi-rung port (2099-line `ladder-engine.ts`). Do not read grid green as soak parity.
+**Out of scope, noted:** `services/telegram-service` (grammY/Hono/gRPC) and `ccxt-service` are NOT in P8's deletion list — telegram is not a trading path; ccxt is the exchange plane Rust must absorb later (separate port, bigger than P5).
