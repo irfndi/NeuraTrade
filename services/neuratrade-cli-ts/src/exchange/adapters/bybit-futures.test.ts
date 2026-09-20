@@ -19,6 +19,8 @@ const GATEWAY_PRICE = 40000;
 let calls: string[] = [];
 let lastOrder: BybitOrderRequest | undefined;
 let orderStatus = "Filled";
+let getOrderCalls = 0;
+let getOrderStatuses: string[] | null = null;
 let cancelError: string | undefined;
 let openOrders: ReadonlyArray<{ orderId: string }> = [];
 let lastTradingStop:
@@ -33,8 +35,8 @@ let tradingStopError: string | undefined;
 
 function makeStubClient(): BybitClientImpl {
   calls = [];
-  lastOrder = undefined;
-  orderStatus = "Filled";
+  getOrderCalls = 0;
+  getOrderStatuses = null;
   cancelError = undefined;
   openOrders = [];
   lastTradingStop = undefined;
@@ -85,21 +87,28 @@ function makeStubClient(): BybitClientImpl {
         return { orderId: "bybit-1", clientOrderId: "link-1" };
       }),
     getOrder: () =>
-      Effect.succeed({
-        orderId: "bybit-1",
-        clientOrderId: "link-1",
-        symbol: lastOrder?.symbol ?? "BTCUSDT",
-        side: lastOrder?.side ?? "Buy",
-        orderType: lastOrder?.orderType ?? "Market",
-        orderStatus,
-        qty: lastOrder?.qty ?? "0",
-        price: lastOrder?.price ?? "0",
-        avgPrice:
-          orderStatus === "Filled"
-            ? (lastOrder?.price ?? String(GATEWAY_PRICE))
-            : "0",
-        cumExecQty: orderStatus === "Filled" ? (lastOrder?.qty ?? "0") : "0",
-        cumExecFee: orderStatus === "Filled" ? "0.5" : "0",
+      Effect.sync(() => {
+        getOrderCalls += 1;
+        const seqStatus =
+          getOrderStatuses !== null && getOrderStatuses.length > 0
+            ? (getOrderStatuses.shift() as string)
+            : orderStatus;
+        return {
+          orderId: "bybit-1",
+          clientOrderId: "link-1",
+          symbol: lastOrder?.symbol ?? "BTCUSDT",
+          side: lastOrder?.side ?? "Buy",
+          orderType: lastOrder?.orderType ?? "Market",
+          orderStatus: seqStatus,
+          qty: lastOrder?.qty ?? "0",
+          price: lastOrder?.price ?? "0",
+          avgPrice:
+            seqStatus === "Filled"
+              ? (lastOrder?.price ?? String(GATEWAY_PRICE))
+              : "0",
+          cumExecQty: seqStatus === "Filled" ? (lastOrder?.qty ?? "0") : "0",
+          cumExecFee: seqStatus === "Filled" ? "0.5" : "0",
+        };
       }),
     getOpenOrders: () => Effect.succeed(openOrders as never),
     getOrderHistory: () => Effect.succeed(null),
@@ -368,6 +377,42 @@ describe("BybitFuturesExchangeAdapter", () => {
     }
     expect(calls).toContain("cancelOrder:BTCUSDT:bybit-1");
   });
+  it("keeps polling through empty status instead of failing fast (clever-cabin-85m)", async () => {
+    // SOL 00:18Z exhibit: venue 112.92 vs bid 113.09 (marketable) yet
+    // status empty/qty 0. Old code broke the poll on `""` and rolled back
+    // before the 2.5s window; now `""` polls like New, then fills.
+    getOrderStatuses = ["", "", "Filled"];
+    const outcome = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter
+          .placeOrder({
+            symbol: "BTC/USDT:USDT",
+            side: "buy",
+            type: "limit",
+            size: money(0.0001),
+            price: money(66000),
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            leverage: 10,
+          })
+          .pipe(
+            Effect.map((fill) => ({ ok: true as const, fill })),
+            Effect.catch((err) =>
+              Effect.succeed({ ok: false as const, reason: err.reason }),
+            ),
+          );
+      }),
+    );
+
+    expect(getOrderCalls).toBeGreaterThan(2);
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.fill.filledQty.toString()).not.toBe("0");
+    }
+    expect(calls.join("\n")).not.toContain("cancelOrder");
+  });
+
 
   it("does not attempt a cancel when the order was already rejected", async () => {
     orderStatus = "Rejected";

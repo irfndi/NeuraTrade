@@ -1168,6 +1168,11 @@ function bybitOrderCanStillFill(order: BybitOrder): boolean {
 }
 
 function bybitOrderStatusCanStillFill(status: string): boolean {
+  // Empty status = order not yet indexed on testnet — NOT terminally done.
+  // Keep polling through the window; the history fallback after the loop
+  // resolves filled-then-aged vs never-indexed (clever-cabin-85m: SOL 00:18Z
+  // venue 112.92 vs bid 113.09, marketable yet status empty/qty 0).
+  if (status === "") return true;
   return ["Created", "New", "PartiallyFilled", "Untriggered"].includes(status);
 }
 
