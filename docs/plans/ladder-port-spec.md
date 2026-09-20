@@ -114,6 +114,16 @@ restored from a pre-bar snapshot and re-persisted (`ladder-engine.ts:1888-1890`)
 so the persisted state is the paper ledger, and a failed live order never
 advances it (`ladder-engine.ts:1861-1866`, `1887-1898`).
 
+**Orphan policy (slice 1 requirement — verified gap in TS):** the ladder
+engine's live-state load (`ladder-engine.ts:1794-1818`) force-CLOSES any venue
+position the local ledger doesn't know about (`openRungCount(w) === 0`) —
+close-and-forget, no adoption. The grid engine has the proper
+`reconcileLivePosition` (`grid-engine.ts:682-791`, with matched / adopt /
+unadoptable / mismatch verdicts) but the ladder never calls it. Consequence:
+a restart while a rung fill sits unconfirmed closes that position at market
+instead of adopting it. The Rust port must carry reconciliation into the
+ladder state load, not the close-and-forget policy.
+
 ### Required Rust resume shape
 
 `ResumeState` (`engine.rs:188-208`) is single-position: one
