@@ -20,14 +20,14 @@ writing; re-pin them before implementation starts. Citations against
 armed rungs, two independent side ladders, or per-rung take-profits. The
 multi-rung ladder that the Bend-parity example uses
 (`crate::GridConfig` / `crate::evaluate`) is explicitly "a different,
-unrelated model (portfolio ladder vs. single position)" (`engine.rs:10-11`).
+unrelated model (portfolio ladder vs. single position)" (`engine.rs:11-12`).
 **Why the port is required:** the box soaks run the ladder engine
 (`docs/plans/2026-09-18-rust-bend-strangler-e2e.md:434` — "the box soaks run
 the LADDER engine (`ladder iter over 1 bars`, multi-rung). A fill/PnL diff
 between them is meaningless"), so Gate 4 cannot be read until Rust can run
 the same state machine.
 
-**Precedent for narrowing scope:** `engine.rs:4-8` fixes leverage at 1 and
+**Precedent for narrowing scope:** `engine.rs:5-7` fixes leverage at 1 and
 drops trend filter, chop gate, max-hold-bars and pause-after-loss-bars, with
 the ruling documented in the module header. This spec follows the same
 pattern: Slice 1 is **leverage 1 only**, and every dropped feature is named
@@ -65,7 +65,7 @@ Neither unit passes `--fully-dynamic-leverage` or `--max-leverage`, so
 (`ladder-engine.ts:1165`) never influence the soak.
 
 **Deferred, therefore out of Slice 1:** `dynamicLeverage` / `fullyDynamicLeverage`
-(`ladder-engine.ts:1198-1235`, options at `ladder-engine.ts:125-128`),
+(`ladder-engine.ts:1198-1236`, options at `ladder-engine.ts:120-126`),
 `accountScaledLeverageCap` (`ladder-engine.ts:1165-1195`), and the leverage
 branch of `ladderRungQty` (`ladder-engine.ts:1243-1333`). At leverage 1
 `liquidationPrice` returns 0 (`ladder-engine.ts:476` `if (l <= 1) return 0;`),
@@ -116,7 +116,7 @@ advances it (`ladder-engine.ts:1861-1866`, `1887-1898`).
 
 ### Required Rust resume shape
 
-`ResumeState` (`engine.rs:188-200`) is single-position: one
+`ResumeState` (`engine.rs:188-208`) is single-position: one
 `Option<ResumePosition>` (`engine.rs:162-167`), plus `closed_realized`,
 `peak`, `window_fills`, `bar_offset`, `event_count`, `cum_*`. The ladder port
 needs a **different** resume payload; the port must add a parallel type
@@ -154,7 +154,7 @@ into the persisted capital — `engine.rs:154-156` currently holds `capital`
 fixed for the whole run and documents that as a first-pass simplification,
 so this is a real behavioural change the port must carry.
 
-### Slice 1 exit evidence
+### Slice 1 exit evidence (state + resume)
 A resume round-trip test: seed → fill rung 1 on bar k → persist → new tick
 from the persisted state → rung 1 closes at target on bar k+j and capital
 matches the TS fixture for the same bars; `paused`, `longBase`, `shortBase`
@@ -197,7 +197,7 @@ is what produced 220 seedless HOLDs.
 
 **Why the Rust port is at risk of re-importing it:** `run_paper_engine`
 re-derives levels from the current bar's open on every flat bar
-(`engine.rs:310-314`: `let step = Money(scale(candle.open.0, cfg.step_bp,
+(`engine.rs:313-318`: `let step = Money(scale(candle.open.0, cfg.step_bp,
 10_000));` then `buy_level = candle.open - step`, `sell_level = candle.open
 + step`). A naive ladder port that keeps that flat-bar re-derivation and
 adds a gate check before it will wipe armed rungs on any blocked bar —
@@ -206,7 +206,7 @@ only:** once a side's rung list is non-empty, the rungs' persisted `level`
 and `step` (`types.ts:252-254`) are the only source of truth for touch and
 target, and no bar's open may move them.
 
-### Slice 1 exit evidence
+### Slice 2 exit evidence (seed rule / a07b3dd0 invariant)
 A regression test named for the rule: with a blocked gate (drawdown kill or
 trend disallow) active while rungs are armed but unfilled, assert the rung
 list and base are **unchanged** after the bar, and that the next unblocked
@@ -218,10 +218,10 @@ the rung list is empty and the gate blocks, the list stays empty and base is
 
 ## 3. Rounding policy decision
 
-**TS:** all sizing is `decimal.js` `Decimal` (`utils/money.ts:8-13`, `Money =
+**TS:** all sizing is `decimal.js` `Decimal` (`utils/money.ts:9-15`, `Money =
 Decimal`). Per-rung allocation is `capital * positionFraction / rungs`
 (`ladder-engine.ts:1145-1150`), qty is `perRungAllocation / fillPrice`
-(`ladder-engine.ts:1272` `marginSizedRaw`), clamped by the notional cap
+(`ladder-engine.ts:1274` `marginSizedRaw`), clamped by the notional cap
 (`ladder-engine.ts:1278-1285`), then contract-rounded by `orderableQty`
 (`types.ts:31-50`: ceil to `qtyStep`, floor back down if the up-round breaks
 the cap, then raise to `minQty`). PnL is a Decimal ratio
@@ -237,7 +237,7 @@ fill accounting.
 **Rust:** `Money(i64)` micro-USDT (`crates/nt-risk/src/lib.rs:9`), and all
 ratio math is `scale(a, num, denom)` — truncating toward zero
 (`engine.rs:118-120`), including slippage (`engine.rs:129-134`), sizing
-(`engine.rs:329`) and target delta (`engine.rs:405`).
+(`engine.rs:335-336`) and target delta (`engine.rs:414`).
 
 **Decision: mirror-exact is not achievable; use explicit micro-tolerance.**
 Rationale:
@@ -278,7 +278,7 @@ Rationale:
    scope for Slice 1 (live-path only) and must be re-added when the Rust
    live path exists — record it as a named deferral, not a permanent drop.
 
-### Slice 1 exit evidence
+### Slice 3 exit evidence (fill + sizing)
 A ladder-parity example replaying a frozen TS ladder fixture (rungs=2,
 step 1.3, target 1.95, stop 1.58, lev 1) asserting, per rung: side match,
 `entry_price` within budget, exit price within budget, and total capital
@@ -292,7 +292,7 @@ measured max delta, exactly like `grid_parity.rs`.
 **TS:** `step` is re-derived from the **current** bar's open every bar
 (`ladder-engine.ts:927` `step: candle.open * (opts.gridStepPct / 100)`,
 inside `createLadderBarContext`, called per bar at
-`ladder-engine.ts:966-973`). Two consequences:
+`ladder-engine.ts:963-972`). Two consequences:
 
 - Touch for an **armed** rung uses the current bar's `step` for nothing —
   the rung's persisted `level` is fixed at seed time (`ladder-engine.ts:591-593`).
@@ -309,15 +309,15 @@ inside `createLadderBarContext`, called per bar at
   `min/max(entryPrice) ± ctx.step * stopRatio` (`ladder-engine.ts:679-682`)
   — i.e. **the current bar's step times the ratio**, not the entry step.
 
-**Rust:** `step` is likewise re-derived per bar (`engine.rs:306`), and
+**Rust:** `step` is likewise re-derived per bar (`engine.rs:313`), and
 target/stop deltas are computed from that per-bar `step` against the
-position's `entry_price` (`engine.rs:406-413`).
+position's `entry_price` (`engine.rs:414-423`).
 
 **The divergence:** when a position spans bars and the open moves, TS uses
 the **entry-time** `rung.step` for the target (`ladder-engine.ts:845`) but
 the **exit-bar** `ctx.step` for the stop boundary
 (`ladder-engine.ts:681`). Rust uses the **exit-bar** step for both
-(`engine.rs:406-413`). So on a multi-bar hold with a drifting open, TS's
+(`engine.rs:414-423`). So on a multi-bar hold with a drifting open, TS's
 target and Rust's target can sit at different prices.
 
 **Named deviation: `LADDER-STEP-ANCHOR`.**
@@ -352,7 +352,7 @@ during bar N is first eligible for an exit check on bar N+1") but must apply
 it **per rung**, not per position — with N=2 rungs, rung 1 filled on bar N
 and rung 2 filled on bar N+1 have different same-bar eligibility.
 
-### Slice 1 exit evidence
+### Slice 4 exit evidence (exits)
 A fixture case where a rung is filled on bar k and the open moves ≥ 5% by
 bar k+3, asserting the Rust target equals `entry_price + rung.step *
 targetRatio` computed from the **entry** bar, and that the recorded
@@ -393,32 +393,101 @@ schedule rather than the live soak's. This is a real, citable difference
 between the research scoring and the box soak and must be called out in the
 port's fee decision rather than silently reconciled.
 
-**Rust:** `HONEST_MAKER_FEE_BP = 2` and `HONEST_TAKER_EXIT_BP = 6`
+**Rust (current tree — the split ALREADY EXISTS, do not re-implement):**
+`HONEST_MAKER_FEE_BP = 2` and `HONEST_TAKER_EXIT_BP = 6`
 (`crates/nt-execution/src/lib.rs:21`, `crates/nt-execution/src/lib.rs:31`),
-charged per order as `|notional| * fee_bp / 10000`
-(`crates/nt-execution/src/lib.rs:63-66`), and `engine.rs` passes a single
-`cfg.fee_bp` on **both** entry and exit (`engine.rs:376`
-— one `fee_bp` field at `engine.rs:72`).
+charged per order as `fee = |notional| * fee_bp / 10000`
+(`crates/nt-execution/src/lib.rs:62-64`). `PaperEngineConfig` carries **two**
+rates — `fee_bp` (taker) at `engine.rs:72` and `maker_fee_bp` at
+`engine.rs:77` — and the exit order selects between them by reason
+(`engine.rs:499-503`): `FillReason::Target` pays `cfg.maker_fee_bp` (a
+resting limit fill), everything else pays `cfg.fee_bp`. Entries pay taker
+(`engine.rs:383`). The CLI exposes both, defaulting to the honest constants
+(`crates/nt-cli/src/main.rs:53-54`, flags at `crates/nt-cli/src/main.rs:81-93`,
+rationale at `crates/nt-cli/src/main.rs:486-491`). So the maker/taker split
+by exit reason is **already shipped** — the port must reuse it, not rebuild
+it.
 
-**Divergence:** Rust charges one flat rate on entry and exit; TS charges
-maker×2 + cross on target and maker + taker + cross on stops. Until the Rust
-ladder port splits the exit fee by reason (maker for `FillReason::Target`,
-taker for `FillReason::Stop`, plus the entry cross), the shadow diff has a
-systematic, explainable-but-unclosed fee gap.
+### The two real gaps
 
-**Requirement for Gate 4:** Gate 4 cannot claim "0 unexplained divergence"
-until (a) the Rust split matches the TS split per reason, (b) the entry fee
-timing matches (TS: folded into the close; Rust: charged at entry), and (c)
-the taker rate question above is resolved — either the port mirrors the
-soak's effective 0.02 taker, or the soak config is corrected to 0.06 and the
-soak is re-baselined. The port spec must pick one and record it; do not
-carry two different "honest" fee schedules.
+**(1) Entry-cross fee — dominant, and Rust has no term for it.** TS adds
+`crossFee = liveEntryCrossBps / 10000` to **both** fee lines
+(`ladder-engine.ts:307-309`): `targetFee = makerFee*2 + crossFee` and
+`stopFee = makerFee + takerFee + crossFee`. At the soak's
+`--live-entry-cross-bps 15` (`ecosystem.champion-soak.config.cjs:120-121`)
+that is **+0.0015 on every close, on both target and stop**. Rust's
+`submit` computes `fee = |notional| * fee_bp / 10000` with no cross
+component at all (`crates/nt-execution/src/lib.rs:62-64`), and slippage
+lives only in `worse_price` on the **price** path (`engine.rs:129-134`) —
+the cross is a *fee*, not a price, in TS, so it cannot be folded into
+slippage without double-counting or mis-attributing. This is the largest
+single fee divergence, larger than the maker/taker asymmetry it gets
+confused with.
 
-### Slice 1 exit evidence
-A fee-split assertion in the ladder parity example: for each closed rung,
-`fee` charged by Rust within budget of the TS `closeRung` line for the same
-reason, with the entry-cross component itemised separately so the
-`liveEntryCrossBps` term is visibly accounted for.
+**(2) Effective rates — the deployed soak has NO maker/taker asymmetry.**
+With `--fee 0.02` (`ecosystem.champion-soak.config.cjs:111-112`) and no
+`--taker-exit-fee-pct` anywhere in the ecosystem config (verified: zero
+grep hits for "taker" in that file), `takerFee` falls back to `feePct`
+(`ladder-engine.ts:302`), so:
+
+```
+targetFee = 0.0002 * 2 + 0.0015 = 0.0019
+stopFee   = 0.0002 + 0.0002 + 0.0015 = 0.0019
+```
+
+**Both are exactly 0.0019.** The box soak therefore charges the *same* rate
+on target and stop, and 0.0019 — not the `honestFees` 0.0002/0.0006
+research schedule (`champion-soak.json:21`), which describes the autoresearch
+scoring, not the deployed PM2 run.
+
+**The residual, per leg, at Rust's DEFAULT 6bp taker / 2bp maker.** The two
+engines charge on different bases — Rust charges **per order** at fill time
+(`crates/nt-execution/src/lib.rs:62-64`), TS charges **once, at close**, as
+one fraction of the position covering both legs plus the cross
+(`ladder-engine.ts:308-311`, `:316`). So the comparison is per-leg, and the
+cross term is inside every TS number:
+
+| Leg | Rust (default 6/2bp) | TS (soak, at close) | Ratio | Direction |
+| --- | --- | --- | --- | --- |
+| Entry | 0.0006 (`engine.rs:383`, `cfg.fee_bp`) | 0.0002 folded into the close (`ladder-engine.ts:308-309`) | 3.0x | Rust overcharges |
+| Target exit | 0.0002 (`engine.rs:499-500`, `maker_fee_bp`) | 0.0019 (`ladder-engine.ts:308`) | 9.5x | Rust **undercharges** |
+| Stop exit | 0.0006 (`engine.rs:501-502`, `cfg.fee_bp`) | 0.0019 (`ladder-engine.ts:309`) | 3.2x | Rust overcharges |
+
+The **target leg is the dominant error and it is an undercharge** — Rust
+0.0002 against TS 0.0019, because TS's `targetFee` is `makerFee * 2` (both
+legs) plus the 15bp cross, while Rust's target exit is a single 2bp maker
+order with no cross term. Sizing the residual as "3x on stops" understates
+the target leg by roughly 7x, which is exactly the error that would make a
+shadow diff look smaller than it is.
+
+An unflagged `nt-cli shadow` therefore overcharges entries 3.0x, overcharges
+stops 3.2x, and **undercharges targets 9.5x** — the target leg dominates and
+it runs the opposite way from the other two, so the three do not cancel.
+
+**Requirement for Gate 4 — pick one, record it:**
+
+- **Option A (recommended): make the shadow comparable.** Run the shadow
+  with `--fee-bp 2 --maker-fee-bp 2` so both TS lines (0.0019 each) and the
+  Rust lines are on the same 2bp base, then carry the 15bp cross as the one
+  named, quantified residual — because Rust has no cross term, the residual
+  is `+0.0015 * notional` per close, which is deterministic and itemisable,
+  not "unexplained".
+- **Option B: re-baseline the soak** to `--taker-exit-fee-pct 0.06` (and
+  `--fee`/`--maker-fee-bp` matching), then re-run the soak and re-attribute
+  the diff against Rust's honest 6/2bp defaults.
+
+Do not run the comparison at Rust's default 6/2bp against the soak's
+effective 2/2 — that conflates a config difference with a port defect, and
+the resulting diff is not interpretable.
+
+### Slice 5 exit evidence
+For each closed rung in the ladder parity example, the Rust fee line must be
+within budget of TS's `closeRung` line for the same reason, **with the cross
+component itemised separately** so the `liveEntryCrossBps` term is visibly
+accounted for rather than absorbed into the rounding budget. Plus one
+explicit assertion that the shadow was run at `--fee-bp 2 --maker-fee-bp 2`
+(or the recorded Option B equivalent), so a future reader can tell which fee
+basis the diff was measured on.
 
 ---
 
@@ -443,9 +512,9 @@ must exist before Gate 4's ladder diff is worth running.**
 unexplained PnL/fill divergence. Current state: grid half closed, ladder half
 open (`docs/plans/2026-09-18-rust-bend-strangler-e2e.md:446-451`); the
 `--shadow` path exists and holds resume state
-(`crates/nt-cli/src/main.rs:9-15`, `:228`), and the P5 shadow sizing bug
+(`crates/nt-cli/src/main.rs:11-14`, `:242`), and the P5 shadow sizing bug
 (`--pos-pct` sizing vs hardcoded approval cap) is fixed
-(`docs/plans/2026-09-18-rust-bend-strangler-e2e.md:433`).
+(`docs/plans/2026-09-18-rust-bend-strangler-e2e.md:432`).
 
 Evidence that closes the ladder half of Gate 4:
 
@@ -492,7 +561,7 @@ list of what is deliberately absent and why, which is what lets Gate 4's
 "unexplained divergence" claim be bounded rather than absolute.
 
 **Note on `runs` and equity:** `estimateUnrealizedPnl`
-(`ladder-engine.ts:440-467`) is mark-to-market reporting only (it feeds
+(`ladder-engine.ts:440-472`) is mark-to-market reporting only (it feeds
 `equity`/`unrealizedPnl` in the iteration result,
 `ladder-engine.ts:1949-1951`) and never touches `capital`. It is required
 for the shadow output to be comparable, but it is **not** on the critical
@@ -506,7 +575,7 @@ whichever lands first, and record which.
 Marked, not assumed:
 
 - **Inference:** TS `entryBar` is window-relative
-  (`types.ts:260-261`) and the port's absolute-vs-relative decision is mine,
+  (`types.ts:257-258`) and the port's absolute-vs-relative decision is mine,
   not read from TS.
 - **Inference:** the deployed soak charges taker 0.02 on stops (not the
   `honestFees` 0.06) because `--taker-exit-fee-pct` is absent from
@@ -525,4 +594,4 @@ Marked, not assumed:
   `ladder-engine.ts:301-311`; the `a07b3dd0` guard at
   `ladder-engine.ts:606-610`; `HONEST_MAKER_FEE_BP = 2` /
   `HONEST_TAKER_EXIT_BP = 6` (`crates/nt-execution/src/lib.rs:21`, `:31`);
-  the per-bar step re-derivation at `engine.rs:306`.
+  the per-bar step re-derivation at `engine.rs:313`.
