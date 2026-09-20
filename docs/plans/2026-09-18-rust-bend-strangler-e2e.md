@@ -450,3 +450,22 @@ fill → P6 Zig ship (`build/zig-build.sh` missing; `.zig-version` pins
 
 **Gate 4 status:** grid half green, ladder half still requires the P5 Step 3 multi-rung port (2099-line `ladder-engine.ts`). Do not read grid green as soak parity.
 **Out of scope, noted:** `services/telegram-service` (grammY/Hono/gRPC) and `ccxt-service` are NOT in P8's deletion list — telegram is not a trading path; ccxt is the exchange plane Rust must absorb later (separate port, bigger than P5).
+
+## Progress log (2026-09-20 night — debt closure, four parallel agents)
+
+> No box writes. All work in-repo on `feat/rust-bend-strangler-p0-p5`;
+> CI `Native` green at each push.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| Day boundary (engine.rs) | FIXED | `ResumeState`/`EndState` persist `day_index`/`day_fills`/`day_start_capital`; rollover at tick entry AND mid-tick; `trades_today` sources per-day fills (was cumulative `event_count` → permanent halt at 10 total fills). CLI proof: 3-day panel → tick1 fills=30, then days 4-5 → fills=50 with `day_index` 20456→20458 |
+| Resume persistence | FIXED (was the real gap) | `store_resume`/`load_resume` write+parse the triple (v2 header; v1 files still parse — missing lines = unset). In-process proof never covered the file round trip, which is the only production path |
+| Equity fallback | FIXED | v1 resume (no `day_start` line) fell back to the raw deposit → daily-loss gate read 16% vs 5% cap on capital 50M / realized -8M → permanent halt at every midnight and on first tick after deploy. Now `capital + closed_realized`; proven `day_start = 42M` |
+| Fee split | SHIPPED | `PaperEngineConfig.maker_fee_bp`; target exits pay maker 2bp, entries/stops taker 6bp (`champion-soak.json honestFees`). CLI: `--fee-bp`/`--maker-fee-bp`, `--fee-bp` alone keeps flat-taker reproducible (fees=242113). `paper_engine_check` pinned byte-identical; PUMPFUN drag pinned flat 69/69 |
+| Parity examples | 6/6 GREEN | paper_engine_check (fees=242113 net=-1748112), grid_parity (long 0u / short 2525u), rung_parity_probe, engine_vs_ts_probe, sleeves_check, pump_catch — all exit 0; fmt+clippy `-D warnings` clean |
+| Ladder fixtures | EXTRACTED | `bend/fixtures/ladder-{6bar,boundary,drawdown}.md` — 4 portable vectors (oscillator, boundary stop-out, peak re-anchor/reseed, drawdown risk-exit), each with bars+knobs+pinned outcome and the a07b3dd0 port rule; `bun test src/paper-trading/ladder-engine.test.ts` 24 pass as ground truth |
+| Ladder port spec | WRITTEN | `docs/plans/ladder-port-spec.md` (597 lines): 6 slices, state/resume model, rounding decision (micro-tolerance), named deviations |
+
+**Gate 4 honest status:** grid half green in CI (step verified executing, not just green overall). Ladder half BLOCKED on the P5 Step 3 port — the spec is now the work order. Gate 3 still blocked on the ladder port (demo runs the ladder engine).
+**Spec findings that matter for Gate 4:** (1) TS adds `liveEntryCrossBps` (15bp) to BOTH fee lines — Rust has no cross term. (2) With `--fee 0.02` and zero taker hits in the ecosystem config the soak has NO maker/taker asymmetry, so Gate 4 needs `--fee-bp 2 --maker-fee-bp 2` or a recorded re-baseline; three-leg delta: entry 3.0x over, target 9.5x UNDER (dominant), stop 3.2x over. (3) LADDER-STEP-ANCHOR: TS freezes stop at entry step but uses current-bar step for the stopRatio boundary — Rust uses exit-bar step for both.
+**Note:** `bend/fixtures/ladder-6bar.md` pins TS-ladder-vs-`runLadderGridBacktest` agreement, which means the oscillator vector is engine-vs-engine (not a pure vector) — a Rust port must replay the bars itself, not port `ladder-grid.ts`.
