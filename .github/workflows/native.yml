@@ -59,6 +59,17 @@ jobs:
           cargo run -q -p nt-grid --example sleeves_check
           cargo run -q -p nt-grid --example pump_catch
 
+      # Gate 4 GRID half: both sides executed. TS paper engine writes the
+      # fixture, Rust replays it. Ladder soak is NOT covered (P5 Step 3).
+      - name: Grid parity vs TS paper engine
+        run: |
+          cd services/neuratrade-cli-ts
+          bun install --frozen-lockfile
+          bun run grid_parity_fixture.ts
+          cp grid_parity_fixture.candles.csv grid_parity_fixture.trades.csv ../../crates/
+          cd ../../crates
+          cargo run -q -p nt-grid --example grid_parity
+
   bend:
     name: Bend parity (grid + guards + search kernels)
     runs-on: ubuntu-latest
