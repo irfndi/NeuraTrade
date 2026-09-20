@@ -508,3 +508,45 @@ Bybit UI/API, (2) preserve the dirty `autoresearch/knobs.ts` (already snapshotte
 at `autoresearch/results/knobs-live-20260920T1600Z.ts`), (3) `git pull` on the
 box, (4) restart ONLY `neuratrade-champion-demo`, (5) verify the first interval
 reads `open=1` or a market reason, (6) watch `opened-count-demo`.
+
+## Progress log (2026-09-21 — gate metric repaired, Bend pin, slice 1)
+
+> Box writes: monitor script only (no PM2 restart, no soak config). Demo was
+> restarted once earlier to pick up the poll fix.
+
+**Gate metric was broken, so prior Gate-3 readings were invalid.**
+`champion-soak-monitor.sh` grepped the soak logs for the token `OPENED`,
+which the ladder engine has never printed — it prints `HOLD | ... open=N`.
+The counter therefore read 0 permanently: paper held genuinely open
+positions (2 log lines) while its counter said 0. Every earlier
+"`opened-count-demo=0`, Gate 3 open" conclusion measured a broken instrument.
+
+**Metric now counts closed round-trips** from `ladder_paper_trades` (one row
+per trade, indexed on `closed_at`), 24h window. Counting `open=N` log lines
+was rejected as a replacement: one position surviving N intervals would read
+as N. A failed query returns instead of coercing `unknown` to 0, so a broken
+DB cannot read as zero closes. Verified on the box: **demo 0, paper 3** —
+matching the DB exactly.
+
+**Gate 3 honest status:** the market-entry poll fix (`1ee5c153`, deployed) is
+confirmed live — SOL opened on the venue, the ledger booked it, it survived an
+interval boundary, uPnL improving (-0.1605 → -0.0224). But the demo has
+**0 closes in 24h**, so the gate's success condition (sustained fills) is NOT
+met. The fix works; the evidence is not yet collected.
+
+**Bend pin:** upstream installer moved to 2.0.21 while CI pinned 2.0.20, which
+failed the version assertion deterministically (~1.4s — not a network flake, so
+retrying could never help). All four kernel checksums re-verified locally on
+2.0.21 before bumping: grid 663097394, guards 2065, search 11, sleeves 13.
+`search` matters most — its header documents F32 codegen quirks verified against
+an older compiler, and it reproduces exactly. A patch that deleted the install
+line from both steps was caught and reverted in the same session.
+
+**Slice 1 landed (`nt-ladder` crate):** `Rung`/`Side`/`LadderState` 1:1 with TS
+`LadderPaperState`/`LadderPaperRungState`, resume in a new `ladder v3` format so
+a grid resume fails loudly rather than parsing zeros. Two parser defects shipped
+in the first commit and were fixed in the next: `load` accepted a truncated file
+(`ladder v3\ncapital 50000000\n`) as a valid zero-capital state, and
+`BadRungLine` reported a rung count instead of a file line. A fixed-point
+assertion guards the tick loop's per-interval rewrite. `entry_bar` is stored
+absolute rather than window-relative (recorded deviation).
