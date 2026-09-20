@@ -71,16 +71,20 @@ field-for-field so the Rust shadow can dual-write with no translation.
 
 - One dataset per `(exchange, symbol, timeframe)`, partitioned by month.
 - Columns: `open_ts_ms INT64, open/high/low/close INT64 (micro-USDT),
-  volume_base_micros INT64`.
+  volume_base_micros INT64, panel_hash TEXT NOT NULL` — SHA-256 over the
+  ordered `(open_ts_ms, o, h, l, c, v)` rows of the panel; Bend/Bun
+  champion agreement gate compares hashes before promoting.
 - Writers: candle-sync job (replaces SQLite candle growth); readers:
   autoresearch + Bend kernel via DuckDB or native readers.
 - SQLite keeps no candles after cutover — ephemeral cache only.
 
-## Cutover order (matches plan)
+## Cutover order (matches plan — 5 steps)
 
-1. Dual-write fills/positions from TS soak (feature-flagged).
-2. Backfill candles to Parquet; point readers at Parquet.
-3. Cut reads; freeze SQLite; drop the same-host `.bak` policy.
+1. Inventory SQLite tables by size (top offenders migrate first to Parquet).
+2. Dual-write fills/positions from TS soak → Postgres (feature-flagged); keep SQLite readable.
+3. Backfill candles to Parquet; point autoresearch readers at Parquet.
+4. Cut reads; shrink or freeze SQLite; drop the same-host `.bak` policy.
+5. Bake-off: ledger survives restarts in Postgres; new candle growth never inflates the trading DB.
 
 ## Binary deploy (CI-built, box runs artifacts)
 

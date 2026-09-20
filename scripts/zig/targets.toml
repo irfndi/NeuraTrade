@@ -1,4 +1,4 @@
-# P6 build targets. Box is x86_64 Linux (Ubuntu 24.04, glibc); local dev is arm64 macOS.
+# P6 build targets. Box is x86_64 Linux (Ubuntu 24.04, glibc 2.39, no zig); local dev is arm64 macOS.
 [host]
 target = "aarch64-apple-darwin"
 
