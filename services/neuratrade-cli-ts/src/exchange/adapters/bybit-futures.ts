@@ -1163,6 +1163,10 @@ function bybitOrderHasFill(order: BybitOrder): boolean {
   );
 }
 
+// Live resting states confirmed by the venue. Single source of truth for
+// both the poll-continue predicate and the cancel guard below.
+const BYBIT_RESTING_STATUSES = ["Created", "New", "PartiallyFilled", "Untriggered"];
+
 function bybitOrderCanStillFill(order: BybitOrder): boolean {
   return bybitOrderStatusCanStillFill(order.orderStatus);
 }
@@ -1173,7 +1177,7 @@ function bybitOrderStatusCanStillFill(status: string): boolean {
   // resolves filled-then-aged vs never-indexed (clever-cabin-85m: SOL 00:18Z
   // venue 112.92 vs bid 113.09, marketable yet status empty/qty 0).
   if (status === "") return true;
-  return ["Created", "New", "PartiallyFilled", "Untriggered"].includes(status);
+  return BYBIT_RESTING_STATUSES.includes(status);
 }
 
 interface BybitFillInput {
@@ -1202,7 +1206,9 @@ function cancelUnfilledBybitOrder(
   orderId: string,
   orderStatus: string,
 ): Effect.Effect<string> {
-  if (!bybitOrderStatusCanStillFill(orderStatus)) {
+  // Only cancel when the venue confirms a live resting state — never-indexed
+  // ("") must NOT trigger a cancelOrder against an unknown orderId.
+  if (!BYBIT_RESTING_STATUSES.includes(orderStatus)) {
     return Effect.succeed(`final state ${orderStatus}`);
   }
   return client.cancelOrder({ symbol, orderId }).pipe(

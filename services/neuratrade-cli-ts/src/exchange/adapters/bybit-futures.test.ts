@@ -35,6 +35,8 @@ let tradingStopError: string | undefined;
 
 function makeStubClient(): BybitClientImpl {
   calls = [];
+  lastOrder = undefined;
+  orderStatus = "Filled";
   getOrderCalls = 0;
   getOrderStatuses = null;
   cancelError = undefined;
@@ -88,11 +90,8 @@ function makeStubClient(): BybitClientImpl {
       }),
     getOrder: () =>
       Effect.sync(() => {
+        const seqStatus = getOrderStatuses?.[getOrderCalls] ?? orderStatus;
         getOrderCalls += 1;
-        const seqStatus =
-          getOrderStatuses !== null && getOrderStatuses.length > 0
-            ? (getOrderStatuses.shift() as string)
-            : orderStatus;
         return {
           orderId: "bybit-1",
           clientOrderId: "link-1",

@@ -38,15 +38,15 @@ pub struct Fill {
     pub proceeds_micros: Money,
 }
 
-/// TECH-DEBT (from TS strangler, clever-cabin-85m): the TS
-/// `pollBybitOrderFill` loop breaks on `!canStillFill(status)`, which also
-/// fires on EMPTY status (order not yet indexed on testnet) — conflating
-/// "never indexed" with "terminally done" and skipping the 2.5s poll window
-/// for a premature history read. SOL 00:18Z (venue 112.92 vs bid 113.09,
-/// marketable yet status empty/qty 0) is the exhibit. When the native live
-/// path grows a fill-poll loop, break on known-terminal states only and
-/// keep polling while status is empty. Price path is innocent (ruled out
-/// twice: 15bps cross + marketable-yet-unfilled probe).
+/// MIRROR (fixed in TS 997cb97f+, clever-cabin-85m): TS
+/// `bybitOrderStatusCanStillFill("")` is now `true` — empty status
+/// (not-yet-indexed on testnet) polls through the 2.5s window; the cancel
+/// path uses an inline resting-state list that EXCLUDES "" (never cancel an
+/// unknown orderId). SOL 00:18Z was the exhibit (venue 112.92 vs bid 113.09,
+/// marketable yet status empty/qty 0). When the native live path grows a
+/// fill-poll loop, mirror this split: poll-continue INCLUDES "", cancel
+/// EXCLUDES "". Price path is innocent (ruled out twice).
+///
 /// Fill an approved order at its price. Fee = |notional| * fee_bp / 10000.
 pub fn submit(_approval: RiskApproval, order: Order) -> Fill {
     let notional = (order.qty_base_micros as i128).abs() * order.price_micros.0 as i128 / 1_000_000;
