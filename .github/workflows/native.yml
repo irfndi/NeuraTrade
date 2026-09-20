@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BEND_VERSION: "2.0.20"
+  BEND_VERSION: "2.0.21"
 
 jobs:
   rust:
@@ -85,13 +85,9 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # Retry: bend-lang.com install.sh flaked twice (upstream network,
-          # not the repo), and a red CI run hides real failures.
-          for attempt in 1 2 3; do
-            curl -fsSL https://bend-lang.com/install.sh | sh && break
-            echo "bend install attempt $attempt failed, retrying" >&2
-            sleep $((attempt * 15))
-          done
+          # The upstream installer is now pinned to 2.0.21 and its script
+          # carries the version itself, so this install is deterministic —
+          # a mismatch here is a pin error, never a flake.
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
           # pin check below resolves bend in THIS step.
@@ -138,13 +134,9 @@ jobs:
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # Retry: bend-lang.com install.sh flaked twice (upstream network,
-          # not the repo), and a red CI run hides real failures.
-          for attempt in 1 2 3; do
-            curl -fsSL https://bend-lang.com/install.sh | sh && break
-            echo "bend install attempt $attempt failed, retrying" >&2
-            sleep $((attempt * 15))
-          done
+          # The upstream installer is now pinned to 2.0.21 and its script
+          # carries the version itself, so this install is deterministic —
+          # a mismatch here is a pin error, never a flake.
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.bend/bin:$PATH"
           test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
