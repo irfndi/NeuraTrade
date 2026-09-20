@@ -499,7 +499,16 @@ pub fn run_sleeve_backtest(
                     Order {
                         qty_base_micros: exit_qty,
                         price_micros: exit_price,
-                        fee_bp: base.fee_bp,
+                        // Mirror engine.rs: a resting target exit pays maker,
+                        // a stop crosses the spread and pays taker. Without
+                        // this every sleeves backtest overcharged target
+                        // exits by 4bp, biasing the comparison against
+                        // high-target-hit-rate combinations.
+                        fee_bp: if reason == FillReason::Target {
+                            base.maker_fee_bp
+                        } else {
+                            base.fee_bp
+                        },
                     },
                 );
                 events.push(SleeveFillEvent {
