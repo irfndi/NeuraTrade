@@ -117,6 +117,15 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Install Bend (for nt-search)
+        env:
+          BEND_NO_TELEMETRY: "1"
+        run: |
+          curl -fsSL https://bend-lang.com/install.sh | sh
+          echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.bend/bin:$PATH"
+          test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
+
       - name: Install Zig + cargo-zigbuild
         run: |
           pipx install cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild
@@ -126,7 +135,6 @@ jobs:
           curl -fsSL "https://ziglang.org/download/${ZIG_WANT}/zig-x86_64-linux-${ZIG_WANT}.tar.xz" -o /tmp/zig.tar.xz
           tar -xf /tmp/zig.tar.xz -C /tmp
           echo "/tmp/zig-x86_64-linux-${ZIG_WANT}" >> "$GITHUB_PATH"
-
       - name: Build host binary + health probe
         run: |
           ./scripts/zig/zig-build.sh release host
@@ -135,14 +143,16 @@ jobs:
       - name: Cross-build box binary
         run: ./scripts/zig/zig-build.sh release box
 
-      - name: Checksum + upload box artifact
+      - name: Checksum + upload box artifacts
         run: |
-          sha256sum crates/target/x86_64-unknown-linux-gnu/release/nt-cli | tee nt-cli.sha256
+          sha256sum crates/target/x86_64-unknown-linux-gnu/release/nt-cli crates/target/x86_64-unknown-linux-gnu/release/nt-search | tee nt-cli.sha256
+          test "$(crates/target/x86_64-unknown-linux-gnu/release/nt-search)" = "11"
 
       - uses: actions/upload-artifact@v4
         with:
           name: nt-cli-linux-x64
           path: |
             crates/target/x86_64-unknown-linux-gnu/release/nt-cli
+            crates/target/x86_64-unknown-linux-gnu/release/nt-search
             nt-cli.sha256
           retention-days: 30
