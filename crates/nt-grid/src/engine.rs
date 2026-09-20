@@ -255,23 +255,42 @@ pub fn run_paper_engine_from(
     // that starts mid-day carries the persisted boundary and fill count
     // forward, so its daily window continues; a tick whose first bar falls on
     // a strictly later day than the persisted one — or a fresh run, where the
-    // first bar establishes the boundary — re-anchors at this tick's capital.
-    // The per-bar check below re-runs the same rule at every boundary, so a
-    // panel spanning several days inside ONE tick rolls over exactly once per
-    // day (previously `day_start` was re-derived from `capital` on every
-    // tick, resetting the daily-loss denominator mid-day).
+    // first bar establishes the boundary — re-anchors. The per-bar check below
+    // re-runs the same rule at every boundary, so a panel spanning several days
+    // inside ONE tick rolls over exactly once per day (previously `day_start`
+    // was re-derived from `capital` on every tick, resetting the daily-loss
+    // denominator mid-day).
+    //
+    // `day_index` only ever moves forward, including for a stale replay whose
+    // bars all predate the persisted boundary: rewinding it while `day_fills`
+    // stays high would hand the next tick a day window it already spent.
     let first_day = candles.first().map(|c| c.open_ts_ms / 86_400_000);
     let rollover = match (first_day, resume.day_index) {
         (Some(today), Some(prev)) => today > prev,
         (Some(_), None) => true, // fresh run: first bar establishes it.
         (None, _) => false,      // empty panel: nothing to establish.
     };
-    let mut day_index = first_day.or(resume.day_index).unwrap_or(0);
+    let mut day_index = match (first_day, resume.day_index) {
+        (Some(today), Some(prev)) => today.max(prev),
+        (Some(today), None) => today,
+        (None, prev) => prev.unwrap_or(0),
+    };
     let mut day_fills = if rollover { 0 } else { resume.day_fills };
     let mut day_start = if rollover {
-        capital
+        // Equity (capital + realized), not the raw deposit: re-anchoring on
+        // capital alone would make the daily-loss denominator ignore realized
+        // PnL from prior ticks, so an incremental run could diverge from a
+        // continuous one that accumulated the same fills.
+        Money(capital.0.saturating_add(resume.closed_realized))
     } else {
-        resume.day_start_capital.unwrap_or(capital)
+        // A resumed same-day tick with no persisted day_start (a v1 resume
+        // file) must fall back on EQUITY, not the raw deposit: with capital
+        // 50M and closed_realized -8M, falling back to 50M makes the
+        // daily-loss gate compute (50M-42M)/50M = 16% against a 5% cap and
+        // trip permanently, since nothing re-baselines it afterward.
+        resume
+            .day_start_capital
+            .unwrap_or_else(|| Money(capital.0.saturating_add(resume.closed_realized)))
     };
     let mut peak = resume.peak.unwrap_or(capital);
     // Closed-round-trip PnL only: open entries never move the equity window
@@ -548,10 +567,15 @@ pub fn run_paper_engine_from(
         cum_fills: resume.cum_fills.saturating_add(tick.fills),
         cum_gross: resume.cum_gross.saturating_add(tick.gross_micros),
         cum_fees: resume.cum_fees.saturating_add(tick.fees_micros),
-        day_index: candles
-            .last()
-            .map(|c| c.open_ts_ms / 86_400_000)
-            .or(resume.day_index),
+        // `day_index` only ever advances inside the loop (seeded with
+        // `max(first bar, persisted)`, then `bar_day > day_index`), so the
+        // loop value is already monotone. An empty tick emits whatever the
+        // resumed state carried — never a rewound.
+        day_index: if candles.is_empty() {
+            resume.day_index
+        } else {
+            Some(day_index)
+        },
         day_fills,
         day_start_capital: day_start,
     };
