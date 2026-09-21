@@ -600,9 +600,15 @@ Three facts this settles, all previously speculation in this plan:
 2. **`max_hold` is per-rung, not per-ladder.** `open` went 2 → 1 at the close:
    one rung exited, the other is still held. So `closed-24h-demo` counts rows
    in `ladder_paper_trades` and two rungs closing is 2, not 1.
-3. **The exit was a loss** (111.50 vs 109.63 on a short) — expected for a
-   max-hold exit, since neither target nor stop was reached in 9.75h. This is
-   evidence the exit path works, NOT that the strategy is profitable.
+3. **The exit was a `max_hold` timeout at a loss** (111.50 vs 109.63 on a
+   short). This is WEAK evidence and must not be read as the round-trip clause
+   being satisfied: neither the target nor the stop was reached in 9.75h, so
+   the position closed by timing out rather than by taking profit. It proves
+   the exit path fires and that `max_hold` is per-rung; it says nothing about
+   expectancy. A strategy that only ever closes by timing out is not taking
+   profits, and one `max_hold` close is not a sustained count. Record
+   `exit_reason` per close — a healthy ladder should show `target` closes
+   outnumbering `max_hold` and `stop` ones.
 
 **Gate 3 status:** fills clause proven earlier (SOL rung 1 at 16:46:52Z booked
 and surviving an interval boundary, rung 2 added by design); round-trip clause
