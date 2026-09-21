@@ -62,6 +62,9 @@ jobs:
           cargo run -q -p nt-grid --example engine_vs_ts_probe
           cargo run -q -p nt-grid --example day_start_check
 
+      - name: Run unit tests
+        run: cd crates && cargo test -q --workspace
+
       # Gate 4 GRID half: Rust-only. The TS paper engine's output is FROZEN
       # as committed CSV (nt-grid/examples/grid_parity_fixture.*.csv, written
       # once by services/neuratrade-cli-ts/grid_parity_fixture.ts). No bun in

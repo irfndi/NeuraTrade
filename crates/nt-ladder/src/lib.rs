@@ -516,3 +516,110 @@ pub fn load(text: &str) -> Result<LadderState, ResumeError> {
 
     Ok(st)
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2: the a07b3dd0 seed rule
+// ---------------------------------------------------------------------------
+
+/// Per-bar context the seed decision needs. Deliberately minimal: the trend
+/// gate is expressed as an `Option<Money>` (None = no filter configured),
+/// which is how TS's `ctx.trend === null` reads.
+#[derive(Debug, Clone, Copy)]
+pub struct SeedContext {
+    /// The bar's open — the anchor for a NEW seed only.
+    pub open: Money,
+    /// The bar's close — the trend gate compares against this.
+    pub close: Money,
+    /// Grid step in price units, derived by the caller from the bar's open.
+    pub step: Money,
+    /// Trend SMA value; None disables the trend gate.
+    pub trend: Option<Money>,
+    /// When true, longs need close > trend and shorts need close < trend.
+    pub only_with_trend: bool,
+    /// Chop gate: when active, no new seed is created.
+    pub chop_gate_active: bool,
+    /// Account drawdown breached: when true, no new seed is created.
+    pub drawdown_breached: bool,
+    /// Number of rungs per side (`opts.rungs`).
+    pub rung_count: u32,
+}
+
+/// What a seed attempt did. Returned rather than applied so the caller
+/// controls mutation — mirrors how TS's `seedLadderSide` is one of several
+/// per-bar mutators and keeps this function pure and testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedOutcome {
+    /// A side already has a filled rung; nothing may change.
+    FilledRungsPresent,
+    /// A side has armed (unfilled) rungs; they are KEPT untouched. This is
+    /// the `a07b3dd0` invariant: a blocked bar must not wipe armed rungs.
+    ArmedRungsKept,
+    /// A gate blocked the seed and the side was empty, so it stays empty.
+    BlockedEmpty,
+    /// A new seed was created.
+    Seeded,
+}
+
+fn side_rungs_mut(state: &mut LadderState, side: Side) -> &mut Vec<Rung> {
+    state.rungs_mut(side)
+}
+
+/// Port of TS `seedLadderSide` (`ladder-engine.ts:603-627`).
+///
+/// Three-tier precedence, in this exact order:
+/// 1. A filled rung exists → return, nothing may move.
+/// 2. Armed rungs exist → return, they are KEPT. Gates apply to the EMPTY
+///    seed only; a blocked bar must never wipe armed rungs.
+/// 3. Otherwise evaluate gates; blocked → stay empty, allowed → seed.
+///
+/// The anti-pattern this replaces: re-deriving levels from the current bar's
+/// open on every flat bar (as `nt_grid`'s single-position engine does) and
+/// adding a gate check before it, which wipes armed rungs on any blocked
+/// bar. Once seeded, the rungs' persisted `level`/`step` are the only
+/// source of truth and no later bar may move them.
+pub fn seed_side(state: &mut LadderState, side: Side, ctx: &SeedContext) -> SeedOutcome {
+    // Tier 1: a filled rung exists.
+    if state.rungs(side).iter().any(|r| r.filled) {
+        return SeedOutcome::FilledRungsPresent;
+    }
+    // Tier 2: armed rungs exist — keep them, gates do not apply.
+    if !state.rungs(side).is_empty() {
+        return SeedOutcome::ArmedRungsKept;
+    }
+    // Tier 3: empty seed — gates decide.
+    let trend_allows = !ctx.only_with_trend
+        || match (ctx.trend, side) {
+            (Some(t), Side::Long) => ctx.close > t,
+            (Some(t), Side::Short) => ctx.close < t,
+            (None, _) => false,
+        };
+    let allowed = !ctx.drawdown_breached && !ctx.chop_gate_active && trend_allows;
+    if !allowed {
+        return SeedOutcome::BlockedEmpty;
+    }
+    // Anchor: this bar's open, and only this bar's.
+    let n = ctx.rung_count.max(1);
+    let mut rungs = Vec::with_capacity(n as usize);
+    for k in 1..=n {
+        let offset = Money(ctx.step.0.saturating_mul(k as i64));
+        let level = match side {
+            Side::Long => Money(ctx.open.0.saturating_sub(offset.0)),
+            Side::Short => Money(ctx.open.0.saturating_add(offset.0)),
+        };
+        rungs.push(Rung::armed(k, side, level, ctx.step));
+    }
+    *side_rungs_mut(state, side) = rungs;
+    match side {
+        Side::Long => state.long_base = ctx.open,
+        Side::Short => state.short_base = ctx.open,
+    }
+    SeedOutcome::Seeded
+}
+
+/// Convenience: seed both sides for one bar, mirroring TS's per-bar loop
+/// which calls `seedLadderSide` for long then short.
+pub fn seed_bar(state: &mut LadderState, ctx: &SeedContext) -> (SeedOutcome, SeedOutcome) {
+    let long = seed_side(state, Side::Long, ctx);
+    let short = seed_side(state, Side::Short, ctx);
+    (long, short)
+}
