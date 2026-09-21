@@ -235,20 +235,26 @@ check_home() {
       return
       ;;
   esac
-  case "$FTOT" in
+  # Gate on the 24h WINDOW. The lifetime total cannot be the criterion: the
+  # demo's total is 28 and all of it predates the poll fix, so a total-based
+  # gate passes on history it was created to supersede. The window reads 0
+  # both while healthy-with-open-positions and while dead, so it is also not
+  # sufficient alone — the pair (window, total) is the honest statement and
+  # the total is logged as context below.
+  case "$F24" in
     unknown)
-      warn "$home_name: total close count unavailable (query failed); not reporting a gate number"
+      warn "$home_name: 24h close count unavailable (query failed); not reporting a gate number"
       return
       ;;
   esac
-  CLOSES=$FTOT
+  CLOSES=$F24
   case "$CLOSES" in
     '' | *[!0-9]*)
-      warn "$home_name: total close count not numeric ($CLOSES); not reporting a gate number"
+      warn "$home_name: 24h close count not numeric ($CLOSES); not reporting a gate number"
       return
       ;;
   esac
-  CLOSES_FILE="$STATE_DIR/closed-total-$home_name.txt"
+  CLOSES_FILE="$STATE_DIR/closed-24h-$home_name.txt"
   if [ -f "$CLOSES_FILE" ]; then
     PREV_C=$(cat "$CLOSES_FILE" 2>/dev/null | tr -d '[:space:]' || true)
     case "$PREV_C" in
@@ -259,15 +265,15 @@ check_home() {
   fi
   if [ -z "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    log "$home_name: total ladder closes baseline: $CLOSES (24h window: $F24)"
+    log "$home_name: 24h ladder closes baseline: $CLOSES (lifetime total: $FTOT)"
   elif [ "$CLOSES" -gt "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    alert "$home_name: NEW LADDER CLOSES: total $CLOSES (was $PREV_C; 24h window $F24)"
+    alert "$home_name: NEW LADDER CLOSES: 24h count $CLOSES (was $PREV_C; lifetime total $FTOT)"
   elif [ "$CLOSES" -lt "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    warn "$home_name: total close count DECREASED $PREV_C -> $CLOSES (DB reset or reseed); baseline reset"
+    warn "$home_name: 24h close count DECREASED $PREV_C -> $CLOSES (window aged out, or DB reset); baseline reset"
   else
-    log "$home_name: total ladder closes unchanged: $CLOSES (24h window: $F24)"
+    log "$home_name: 24h ladder closes unchanged: $CLOSES (lifetime total: $FTOT)"
   fi
 }
 
