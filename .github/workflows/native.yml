@@ -84,38 +84,40 @@ jobs:
         with:
           bun-version: "1.4.2"
 
-      - name: Install Bend (pinned ${{ env.BEND_VERSION }} via install.sh)
+      - name: Install Bend (pinned ${{ env.BEND_VERSION }} from an immutable release asset)
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # The installer script carries its own VER and upstream can bump it
-          # at any time (that is exactly what broke CI at 2.0.20), so the
-          # install is NOT self-deterministic — the pin assertion below is
-          # what makes it so. If upstream moves past the pin, this fails
-          # loudly instead of silently installing a different version.
+          # Download the PINNED version's release asset, NOT the mutable
+          # install.sh. Upstream ships new Bend releases roughly daily
+          # (2.0.20 -> 2.0.21 -> 2.0.22 -> 2.0.23 within two days), so piping
+          # install.sh lets the installed version drift off the pin and the
+          # version assertion fails on a release nobody asked for. The asset
+          # URL is immutable per version, which also removes the `curl | sh`
+          # supply-chain exposure.
           set -o pipefail
-          # bend-lang.com is intermittently unreachable FROM GITHUB RUNNERS
-          # (verified reachable from a dev machine 3/3, identical bytes), so
-          # retry the download. Downloading to a file rather than piping keeps
-          # a failed fetch legible: `curl | sh` would feed empty stdin, exit
-          # 0, and surface as "bend: command not found".
-          for attempt in 1 2 3 4; do
-            if curl -fsSL --retry 3 --retry-delay 5 https://bend-lang.com/install.sh -o /tmp/bend-install.sh; then
-              break
-            fi
-            echo "bend download attempt $attempt failed" >&2
-            if [ "$attempt" = 4 ]; then
-              echo "bend-lang.com unreachable from runner; failing rather than installing nothing" >&2
-              exit 1
-            fi
+          VER="${{ env.BEND_VERSION }}"
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
+            Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
+            Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
+            Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
+            *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
+            echo "bend download attempt $attempt failed: $url" >&2
+            [ "$attempt" = 3 ] && exit 1
             sleep $((attempt * 10))
           done
-          BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
-          echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.bend"
+          tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
+          echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
           # pin check below resolves bend in THIS step.
-          export PATH="$HOME/.bend/bin:$PATH"
-          test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
+          export PATH="$HOME/.bend/bend/bin:$PATH"
+          test "$(bend version)" = "bend ${VER}"
       - name: Run grid kernel (parity checksum 663097394)
         run: |
           test "$(bend bend/grid.bend)" = "663097394"
@@ -153,36 +155,34 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Install Bend (for nt-search)
+      - name: Install Bend (pinned ${{ env.BEND_VERSION }} from an immutable release asset)
         env:
           BEND_NO_TELEMETRY: "1"
         run: |
-          # The installer script carries its own VER and upstream can bump it
-          # at any time (that is exactly what broke CI at 2.0.20), so the
-          # install is NOT self-deterministic — the pin assertion below is
-          # what makes it so. If upstream moves past the pin, this fails
-          # loudly instead of silently installing a different version.
+          # Same pinned-asset install as the bend job: upstream ships daily
+          # releases, so a mutable install.sh drifts off the pin. See that
+          # step's comment for the full rationale.
           set -o pipefail
-          # bend-lang.com is intermittently unreachable FROM GITHUB RUNNERS
-          # (verified reachable from a dev machine 3/3, identical bytes), so
-          # retry the download. Downloading to a file rather than piping keeps
-          # a failed fetch legible: `curl | sh` would feed empty stdin, exit
-          # 0, and surface as "bend: command not found".
-          for attempt in 1 2 3 4; do
-            if curl -fsSL --retry 3 --retry-delay 5 https://bend-lang.com/install.sh -o /tmp/bend-install.sh; then
-              break
-            fi
-            echo "bend download attempt $attempt failed" >&2
-            if [ "$attempt" = 4 ]; then
-              echo "bend-lang.com unreachable from runner; failing rather than installing nothing" >&2
-              exit 1
-            fi
+          VER="${{ env.BEND_VERSION }}"
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
+            Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
+            Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
+            Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
+            *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
+            echo "bend download attempt $attempt failed: $url" >&2
+            [ "$attempt" = 3 ] && exit 1
             sleep $((attempt * 10))
           done
-          BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
-          echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.bend/bin:$PATH"
-          test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
+          mkdir -p "$HOME/.bend"
+          tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
+          echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.bend/bend/bin:$PATH"
+          test "$(bend version)" = "bend ${VER}"
 
       - name: Install Zig + cargo-zigbuild
         run: |

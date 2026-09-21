@@ -384,8 +384,9 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
   change; `opened-count-*` never regresses to a sizing/min-capital block;
   fill-count deltas explained per cycle (clever-cabin-85m).
 - [ ] **Gate 3 — Testnet momentum:** demo orders fill on testnet
-  (`liveEntryCrossBps` cross-touch); `closed-total-demo > 0` sustained (a
-  monotonic total, NOT a 24h rolling window — see the 2026-09-21 note);
+  (`liveEntryCrossBps` cross-touch); `closed-24h-demo > 0` sustained across
+  N consecutive monitor cycles (see the 2026-09-21 note for why the window,
+  not the total, is the criterion);
   paper-vs-demo comparison runs on the SAME feed.
 
 > **Gate 3 criterion correction (2026-09-21).** The original metric
@@ -399,15 +400,20 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
 > rung across 3 intervals read as 3).
 >
 > The metric now counts closed round-trips from `ladder_paper_trades` — one
-> row per trade, logs rotate but tables don't. Because that is a CLOSE
+> row per trade, logs rotate but tables don't. **The criterion is the 24h
+> WINDOW, not the lifetime total.** The demo's lifetime total is 28, all of
+> it pre-fix history, so a total-based criterion is satisfied by work done
+> before the poll fix shipped and proves nothing about it. The total is
+> logged alongside as context; `total 28 / window 0` is the honest complete
+> statement, and either number alone is misleading. Because this is a CLOSE
 > count, it cannot see the event the poll fix actually fixed (a venue fill
 > being booked); a rung that opens and holds produces zero closes by
 > construction. Status is therefore two separate claims:
 > - **Fills clause — SATISFIED.** SOL opened on the venue 2026-09-20
 >   16:46:52Z, the ledger booked it, it survived an interval boundary, and
 >   the ladder later added a second rung after price fell through the first.
-> - **Round-trip clause — PENDING on a multi-hour clock.** `closed-total-demo`
->   = 28 historical / 0 in the last 24h. With `maxHoldBars: 39` (~9.75h) and
+> - **Round-trip clause — PENDING on a multi-hour clock.** `closed-24h-demo`
+>   = 0 (lifetime total 28, all pre-fix). With `maxHoldBars: 39` (~9.75h) and
 >   a ~2.5% target distance, a close cannot arrive before ~02:30Z at the
 >   earliest, so a 0 here is neither a pass nor a failure for hours.
 - [ ] **Gate 4 — Parallel live-shadow:** `nt-cli` paper `--shadow` replicates
@@ -425,7 +431,7 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
 
 | Slice | Result | Evidence |
 | --- | --- | --- |
-| Rust tests | PASS | `cargo test --workspace` exit 0 (6 crates, 0 unit tests each — coverage lives in `examples/`); `cargo clippy --offline --all-targets` no warnings |
+| Rust tests | PASS | `cargo test -q --workspace` exit 0 (nt-ladder: 5 unit tests — the seed-rule regression set; the rest carry coverage in `examples/`); `cargo clippy --offline --all-targets` no warnings |
 | Rust examples | PASS (9 in CI) | `nt-grid`: check / paper_engine_check (fills=4 net=-1.74) / parity_checksum (`663097394`) / pump_catch / sleeves_check / grid_parity / rung_parity_probe / engine_vs_ts_probe / day_start_check; `nt-execution` + `nt-ledger`: check — all exit 0 |
 | Bend proofs | PASS | `bend PROOF.bend` → `laws hold` exit 0; `bend/grid.bend` → `663097394` (matches Rust parity checksum); search/guards/sleeves elaborate exit 0 |
 | TS Gate1 | PASS | `bunx tsc --noEmit` exit 0; `bun test src/paper-trading/` 152 pass 0 fail; tree clean in scope |
