@@ -384,8 +384,32 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
   change; `opened-count-*` never regresses to a sizing/min-capital block;
   fill-count deltas explained per cycle (clever-cabin-85m).
 - [ ] **Gate 3 — Testnet momentum:** demo orders fill on testnet
-  (`liveEntryCrossBps` cross-touch); `opened-count-demo > 0` sustained;
+  (`liveEntryCrossBps` cross-touch); `closed-total-demo > 0` sustained (a
+  monotonic total, NOT a 24h rolling window — see the 2026-09-21 note);
   paper-vs-demo comparison runs on the SAME feed.
+
+> **Gate 3 criterion correction (2026-09-21).** The original metric
+> `opened-count-demo` never worked: the monitor grepped the soak logs for an
+> `OPENED` token the ladder engine has never emitted (it prints
+> `HOLD | ... open=N`), so the counter read 0 for the entire history of BOTH
+> soaks. Every earlier "Gate 3 open, `opened-count-demo=0`" entry in this
+> log measured a broken instrument, and no before/after comparison across
+> the fix is valid. An intermediate version counted `open=N` log LINES,
+> which over-reports by the number of intervals a position is held (one SOL
+> rung across 3 intervals read as 3).
+>
+> The metric now counts closed round-trips from `ladder_paper_trades` — one
+> row per trade, logs rotate but tables don't. Because that is a CLOSE
+> count, it cannot see the event the poll fix actually fixed (a venue fill
+> being booked); a rung that opens and holds produces zero closes by
+> construction. Status is therefore two separate claims:
+> - **Fills clause — SATISFIED.** SOL opened on the venue 2026-09-20
+>   16:46:52Z, the ledger booked it, it survived an interval boundary, and
+>   the ladder later added a second rung after price fell through the first.
+> - **Round-trip clause — PENDING on a multi-hour clock.** `closed-total-demo`
+>   = 28 historical / 0 in the last 24h. With `maxHoldBars: 39` (~9.75h) and
+>   a ~2.5% target distance, a close cannot arrive before ~02:30Z at the
+>   earliest, so a 0 here is neither a pass nor a failure for hours.
 - [ ] **Gate 4 — Parallel live-shadow:** `nt-cli` paper `--shadow` replicates
   the champion-paper loop with 0 unexplained PnL/fill divergence; then cut
   paper → demo → bridge → TS per the sunset checklist.
