@@ -580,3 +580,31 @@ in the first commit and were fixed in the next: `load` accepted a truncated file
 `BadRungLine` reported a rung count instead of a file line. A fixed-point
 assertion guards the tick loop's per-interval rewrite. `entry_bar` is stored
 absolute rather than window-relative (recorded deviation).
+
+## Gate 3 — first round-trip observed (2026-09-21 02:30Z)
+
+The demo completed its first closed round-trip under the corrected metric.
+
+| Field | Value |
+|---|---|
+| Symbol / side | SOL/USDT:USDT short |
+| Entry → exit | 109.62519496 → 111.502296 |
+| Reason | `max_hold` |
+| Closed at | 2026-09-21T02:30:00Z |
+| Metric | `closed-24h-demo` 0 → **1** |
+
+Three facts this settles, all previously speculation in this plan:
+
+1. **The exit path fires.** The rung filled at 16:46:52Z and max-hold closed it at
+   02:30Z — 9.75h = `maxHoldBars: 39` × 15m, exactly on schedule.
+2. **`max_hold` is per-rung, not per-ladder.** `open` went 2 → 1 at the close:
+   one rung exited, the other is still held. So `closed-24h-demo` counts rows
+   in `ladder_paper_trades` and two rungs closing is 2, not 1.
+3. **The exit was a loss** (111.50 vs 109.63 on a short) — expected for a
+   max-hold exit, since neither target nor stop was reached in 9.75h. This is
+   evidence the exit path works, NOT that the strategy is profitable.
+
+**Gate 3 status:** fills clause proven earlier (SOL rung 1 at 16:46:52Z booked
+and surviving an interval boundary, rung 2 added by design); round-trip clause
+now has its first data point. Sustained > 0 still needs accumulation across
+cycles — one close is the criterion becoming measurable, not the criterion met.
