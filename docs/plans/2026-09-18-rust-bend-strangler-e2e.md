@@ -381,7 +381,7 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
   clean, `bunx tsc --noEmit` clean (minus pre-existing TS2688 bun-types),
   `bun test` green on touched suites. No new warnings introduced per commit.
 - [ ] **Gate 2 — No regression:** paper + demo soaks stay up through every
-  change; `opened-count-*` never regresses to a sizing/min-capital block;
+  change; `closed-24h-*` never regresses to a sizing/min-capital block;
   fill-count deltas explained per cycle (clever-cabin-85m).
 - [ ] **Gate 3 — Testnet momentum:** demo orders fill on testnet
   (`liveEntryCrossBps` cross-touch); `closed-24h-demo > 0` sustained across
@@ -395,7 +395,12 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
 > `HOLD | ... open=N`), so the counter read 0 for the entire history of BOTH
 > soaks. Every earlier "Gate 3 open, `opened-count-demo=0`" entry in this
 > log measured a broken instrument, and no before/after comparison across
-> the fix is valid. An intermediate version counted `open=N` log LINES,
+> the fix is valid. **Current state (2026-09-21, superseded):**
+> `closed-24h-demo=1` — the round-trip clause now has one observation, a SOL
+> short closed `max_hold` at 02:30Z. The `opened-count-*` and
+> `closed-total-*` files this criterion once named no longer exist (the four
+> state files were deleted from the box); see the Gate 3 entry below for the
+> evidence and its limits. An intermediate version counted `open=N` log LINES,
 > which over-reports by the number of intervals a position is held (one SOL
 > rung across 3 intervals read as 3).
 >
@@ -537,7 +542,7 @@ venue is flat. No read-only Bybit position CLI exists (`exchange` only exposes
 Bybit UI/API, (2) preserve the dirty `autoresearch/knobs.ts` (already snapshotted
 at `autoresearch/results/knobs-live-20260920T1600Z.ts`), (3) `git pull` on the
 box, (4) restart ONLY `neuratrade-champion-demo`, (5) verify the first interval
-reads `open=1` or a market reason, (6) watch `opened-count-demo`.
+reads `open=1` or a market reason, (6) watch `closed-24h-demo`.
 
 ## Progress log (2026-09-21 — gate metric repaired, Bend pin, slice 1)
 
