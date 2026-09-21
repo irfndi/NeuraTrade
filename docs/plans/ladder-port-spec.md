@@ -309,6 +309,25 @@ measured max delta, exactly like `grid_parity.rs`.
 while reproducing nothing the box does. Verified runtime values (see below):
 **5x**, `maxPositionPct` **100**, `maxNotionalPct` **100**.
 
+**Fixture geometry provenance — `rungs=2` comes from the whitelist row, not
+the CLI.** `scalp.ts:3789` reads `rungs: gridParams?.rungs ?? 1`, where
+`gridParams` is the per-row whitelist entry. Unlike the other geometry knobs
+it is read **raw** — `pickFrozenKnob` freezes the rest, but `rungs` bypasses
+that. Verified on the box: every one of the four whitelist rows carries
+`gridParams.rungs = 2` and `gridParams.allocatedWeight = 0.25` explicitly
+(BTC, ETH, SOL, LINK). Runtime agrees — the SOL rung state showed
+`open=2`. Two consequences for the fixture: (a) `rungs` must be taken from
+the frozen whitelist row, not from a `--rungs` flag or
+`champion-soak.json`; (b) if the whitelist regenerates with a different
+`rungs`, every rung size changes silently, so the fixture pins the value it
+was built from and asserts against it rather than defaulting to 1.
+
+**`allocatedWeight` is likewise per-row and explicit (0.25), not an inferred
+4-way split.** `allocateLadderPortfolioCapital`
+(`ladder-portfolio.ts:20-42`) divides `args.capital` by the total weight, so
+`rawWeight = allocatedCapital / 200 = 50/200 = 0.25` follows from the stored
+weight rather than from a symbol count.
+
 #### `ladderRungQty` (ladder-engine.ts:1243-1339) — the four sizing traps
 
 All four are verified in source and each is a structural divergence, not a
