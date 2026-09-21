@@ -179,6 +179,11 @@ check_home() {
     return
   fi
   F24=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM ladder_paper_trades WHERE closed_at >= datetime('now','-1 day');" 2>/dev/null || echo unknown)
+  # Monotonic total. The 24h window AGES CLOSES OUT, so a correctly working
+  # engine that closes a rung every few hours reads 0 most of the time and a
+  # "sustained > 0" gate becomes structurally unsatisfiable. The total only
+  # ever grows, which is what "sustained" actually means.
+  FTOT=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM ladder_paper_trades;" 2>/dev/null || echo unknown)
   case "$F24" in
     unknown) warn "$home_name: ladder 24h fill query failed (no ladder_paper_trades?)" ;;
     *) log "$home_name: ladder fills (24h): $F24" ;;
@@ -230,14 +235,20 @@ check_home() {
       return
       ;;
   esac
-  CLOSES=$F24
-  case "$CLOSES" in
-    '' | *[!0-9]*)
-      warn "$home_name: 24h close count not numeric ($CLOSES); not reporting a gate number"
+  case "$FTOT" in
+    unknown)
+      warn "$home_name: total close count unavailable (query failed); not reporting a gate number"
       return
       ;;
   esac
-  CLOSES_FILE="$STATE_DIR/closed-count-$home_name.txt"
+  CLOSES=$FTOT
+  case "$CLOSES" in
+    '' | *[!0-9]*)
+      warn "$home_name: total close count not numeric ($CLOSES); not reporting a gate number"
+      return
+      ;;
+  esac
+  CLOSES_FILE="$STATE_DIR/closed-total-$home_name.txt"
   if [ -f "$CLOSES_FILE" ]; then
     PREV_C=$(cat "$CLOSES_FILE" 2>/dev/null | tr -d '[:space:]' || true)
     case "$PREV_C" in
@@ -248,15 +259,15 @@ check_home() {
   fi
   if [ -z "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    log "$home_name: 24h ladder closes baseline: $CLOSES"
+    log "$home_name: total ladder closes baseline: $CLOSES (24h window: $F24)"
   elif [ "$CLOSES" -gt "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    alert "$home_name: NEW LADDER CLOSES: 24h count $CLOSES (was $PREV_C)"
+    alert "$home_name: NEW LADDER CLOSES: total $CLOSES (was $PREV_C; 24h window $F24)"
   elif [ "$CLOSES" -lt "$PREV_C" ]; then
     printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
-    warn "$home_name: 24h close count DECREASED $PREV_C -> $CLOSES (DB reset?); baseline reset"
+    warn "$home_name: total close count DECREASED $PREV_C -> $CLOSES (DB reset or reseed); baseline reset"
   else
-    log "$home_name: 24h ladder closes unchanged: $CLOSES"
+    log "$home_name: total ladder closes unchanged: $CLOSES (24h window: $F24)"
   fi
 }
 
