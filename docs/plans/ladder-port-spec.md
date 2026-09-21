@@ -300,10 +300,14 @@ Rationale:
 
 ### Slice 3 exit evidence (fill + sizing)
 A ladder-parity example replaying a frozen TS ladder fixture (rungs=2,
-step 1.3, target 1.95, stop 1.58, lev 1) asserting, per rung: side match,
+step 1.3, target 1.95, stop 1.58) asserting, per rung: side match,
 `entry_price` within budget, exit price within budget, and total capital
 delta within a stated micro budget — with the budget printed next to the
 measured max delta, exactly like `grid_parity.rs`.
+
+**The fixture is NOT pinned at "lev 1".** A Rust example pinned at 1x passes
+while reproducing nothing the box does. Verified runtime values (see below):
+**5x**, `maxPositionPct` **100**, `maxNotionalPct` **100**.
 
 #### `ladderRungQty` (ladder-engine.ts:1243-1339) — the four sizing traps
 
@@ -321,22 +325,53 @@ specs-absent branch and silently diverge when specs resolve.
    `notional > notionalCapShare` returns `skipReason "min orderable notional
    ... exceeds the ... notional cap share"` (the latter only when
    `maxNotionalPct` is defined). Neither is reachable by the raw size alone.
-3. **`raw = min(marginSizedRaw, notionalSizedRaw)`, and `notionalSizedRaw` is
-   the binding term at lev 1.** It is
-   `capital * (maxNotionalPct/100) / max(1, floor(rungs)) / fillPrice` — so
-   with `rungs=2` the cap share is halved. When `maxNotionalPct` is undefined
-   `notionalSizedRaw` collapses to `marginSizedRaw` and margin sizing binds.
+3. **`raw = min(marginSizedRaw, notionalSizedRaw)`, and at the soak's runtime
+   values this is a TIE — neither term "binds".** `marginSizedRaw` is
+   `capital * (maxPositionPct/100) / rungs / fillPrice` and `notionalSizedRaw`
+   is `capital * (maxNotionalPct/100) / max(1, floor(rungs)) / fillPrice`.
+   Both percentages are **100** at runtime (see below), so both expressions
+   reduce to `capital / rungs / fillPrice` and `min(a, a) === a`. The
+   "notional binds at lev 1" framing from an earlier advisory was wrong and
+   is retracted; the port must still implement both terms because they
+   diverge whenever the two percentages differ.
 4. **`orderableQty` (types.ts:31-48) ceils to `qtyStep`, floors back ONLY if
    the ceiled qty exceeds `cap` (= `perRungAllocation`), then UNCONDITIONALLY
    raises to `minQty`.** That final raise is exactly what makes trap 2's two
    skips reachable — `qty` can exceed the cap with no fallback.
 
-**Live config (demo, verified via `pm2 describe`):** `--leverage 1`,
-`--capital 200`, `--max-position-size-pct 50`, `--grid-max-grids 2`, and NO
-`--max-notional-pct` flag. So `maxNotionalPct` is undefined unless the
-watchlist sets it — the notional-cap skip path (trap 2, second branch) is
-likely dead for this soak, and margin sizing binds. The port must still
-implement it; it must not be assumed present.
+**Verified live config (demo).** The pm2 args are `--leverage 1`,
+`--capital 200`, `--max-position-size-pct 50`, `--grid-max-grids 2`, and
+there is NO `--max-notional-pct` flag — but **the absence of a flag does not
+mean the option is unset.** `scalp.ts:4690-4702` (`makeLadderOptions`)
+hardcodes all three of these on every ladder call, so the effective runtime
+values differ from the CLI args in all three cases:
+
+| Param | CLI arg says | **Runtime actually is** | Source |
+|---|---|---|---|
+| Leverage | `--leverage 1` | **5x** | `fullyDynamicLeverage: true` (`scalp.ts:4702`) makes `dynamicLeverage` (`ladder-engine.ts:1206-1211`) return `Math.max(1, cap)` and ignore `--leverage` entirely |
+| `maxPositionPct` | 50 | **100** | `ladderPartitionPositionPct(rawWeight, 50, cap)` (`scalp.ts:4690`, `:3886-3896`) → `min(100, 50/0.25)` |
+| `maxNotionalPct` | absent | **100** | hardcoded `maxNotionalPct: 100` (`scalp.ts:4698`) |
+
+So the **notional-cap skip branch (trap 2, second branch) IS LIVE**, not
+"likely dead" as an earlier revision of this spec claimed. That revision was
+wrong and is corrected here.
+
+**How the runtime values are derived, each traced to source:**
+- `rawWeight = capitalPartition / args.capital` (`scalp.ts:4641`). The
+  watchlist has 4 equal-weight symbols, so `capitalPartition ≈ 50` and
+  `rawWeight ≈ 0.25`. `ladderPartitionPositionPct` then expands
+  `50 → min(100, 50/0.25) = 100`.
+- `accountScaledLeverageCap` (`ladder-engine.ts:1165-1187`) with
+  `capital ≈ 48.35` (< 500) gives `sizeCap = 10`; the per-position budget is
+  1.0 (`> 0.25`) so `budgetFactor = 0.5`; hence
+  `floor(10 × 0.5) = 5`, clamped to `maxLeverage` (10). **5x.**
+- `capital` is the **per-partition** capital (48.35 in the persisted state,
+  `initialCapital` 50), not the `--capital 200` account total. Sizing must
+  use the partition figure.
+
+Slice 3 must port `accountScaledLeverageCap`, the `fullyDynamic` branch of
+`dynamicLeverage`, `ladderPartitionPositionPct`, and the hardcoded
+`maxNotionalPct: 100` — not a static 1x.
 
 **Runtime evidence, honestly bounded:** the demo's rung state holds one
 filled SOL short rung (`filledQty 0.2`, `level 111.05424`) and unfilled
