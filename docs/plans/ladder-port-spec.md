@@ -277,9 +277,12 @@ Rationale:
    plain truncation, or a min-qty rung will differ in size, not just in
    rounding. The port either reimplements `orderableQty` in integer micros
    or carries the contract spec into `nt-grid`. **Decision:** implement the
-   same ceil-then-floor-back rule; Slice 1 may omit `contractSpecs` only if
-   the soak symbols are configured without specs — verify against the live
-   CLI flag before dropping it.
+   same ceil-then-floor-back rule. **Verified: `contractSpecs` is NOT
+   omittable.** `scalp.ts:4716-4719` populates it for the bybit-futures ladder
+   path (`resolvedLadderExchange === "bybit-futures" && contractSpecs !==
+   undefined`), and the demo runs `--exchange bybit-futures`, so the port
+   must carry the contract spec. It is a live input to `ladderRungQty`
+   (`ladder-engine.ts:1272`).
 4. Every parity assertion uses an explicit per-leg micro budget derived
    from the fixture (same shape as `grid_parity.rs:110-141`), and the
    budget is a **measured bound × 1.01**, never widened to force green
@@ -595,9 +598,15 @@ Marked, not assumed:
 - **Inference:** the freeze-step stop boundary (Section 4) is a deliberate
   divergence from `ladder-engine.ts:681`, chosen for the stated reasons — it
   is not a TS behaviour.
-- **Inference:** `contractSpecs` may be omittable from Slice 3 depending on
-  whether the soak symbols are launched with contract specs; unverified, and
-  flagged as a check for the implementer rather than a decision.
+- **Verified, not inferred:** `contractSpecs` IS populated for the soak —
+  `scalp.ts:4716-4719` attaches it whenever the resolved ladder exchange is
+  `bybit-futures` and specs resolve, and the demo runs that exchange. So the
+  port carries the spec; it is not optional. The floor-unorderable HOLD path
+  is therefore load-bearing, not theoretical: `ladder-engine.test.ts:504-506`
+  guards a BTC-like floor (`minQty 0.001` on a ~100k price ≈ $100/rung)
+  against a 25 USDT rung, which is the same class as the documented
+  "BTC $50/rung → 162% > 100% guard HOLD" case. A small partition can
+  legitimately produce no fill.
 - **Verified, not inferred:** `--leverage 1` for both champion units
   (`ecosystem.champion-soak.config.cjs:123-124`, `:167-169`, `:190-192`);
   `a07b3dd0` is an ancestor of HEAD; the fee lines at
