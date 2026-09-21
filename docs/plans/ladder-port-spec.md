@@ -305,6 +305,46 @@ step 1.3, target 1.95, stop 1.58, lev 1) asserting, per rung: side match,
 delta within a stated micro budget — with the budget printed next to the
 measured max delta, exactly like `grid_parity.rs`.
 
+#### `ladderRungQty` (ladder-engine.ts:1243-1339) — the four sizing traps
+
+All four are verified in source and each is a structural divergence, not a
+rounding detail. Implementing only the happy path makes slice 3 pass on the
+specs-absent branch and silently diverge when specs resolve.
+
+1. **The specs-absent branch is structurally different.** `spec === undefined`
+   returns `Decimal.max(0, raw)` with NO `orderableQty` and NO margin check.
+   So the two branches are not the same code with rounding applied — one can
+   skip and the other cannot. Both must exist in the port.
+2. **Two skip paths fire only AFTER `orderableQty` raises qty to `minQty`.**
+   `margin > perRungAllocation` returns `skipReason "min orderable notional
+   ... requires margin ... exceeding the ... per-rung cap"`, and
+   `notional > notionalCapShare` returns `skipReason "min orderable notional
+   ... exceeds the ... notional cap share"` (the latter only when
+   `maxNotionalPct` is defined). Neither is reachable by the raw size alone.
+3. **`raw = min(marginSizedRaw, notionalSizedRaw)`, and `notionalSizedRaw` is
+   the binding term at lev 1.** It is
+   `capital * (maxNotionalPct/100) / max(1, floor(rungs)) / fillPrice` — so
+   with `rungs=2` the cap share is halved. When `maxNotionalPct` is undefined
+   `notionalSizedRaw` collapses to `marginSizedRaw` and margin sizing binds.
+4. **`orderableQty` (types.ts:31-48) ceils to `qtyStep`, floors back ONLY if
+   the ceiled qty exceeds `cap` (= `perRungAllocation`), then UNCONDITIONALLY
+   raises to `minQty`.** That final raise is exactly what makes trap 2's two
+   skips reachable — `qty` can exceed the cap with no fallback.
+
+**Live config (demo, verified via `pm2 describe`):** `--leverage 1`,
+`--capital 200`, `--max-position-size-pct 50`, `--grid-max-grids 2`, and NO
+`--max-notional-pct` flag. So `maxNotionalPct` is undefined unless the
+watchlist sets it — the notional-cap skip path (trap 2, second branch) is
+likely dead for this soak, and margin sizing binds. The port must still
+implement it; it must not be assumed present.
+
+**Runtime evidence, honestly bounded:** the demo's rung state holds one
+filled SOL short rung (`filledQty 0.2`, `level 111.05424`) and unfilled
+LINK/BTC/ETH rungs. Successful venue fills prove the spec path resolved, but
+NO case was observed where specs changed the result (no sub-min-orderable
+HOLD), so the honest statement is **"specs resolved, no observed size
+adjustment"** — not proof that ceiling ever bit.
+
 ---
 
 ## 4. Step-anchoring divergence (decide and record)
