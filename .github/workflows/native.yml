@@ -94,7 +94,22 @@ jobs:
           # what makes it so. If upstream moves past the pin, this fails
           # loudly instead of silently installing a different version.
           set -o pipefail
-          curl -fsSL https://bend-lang.com/install.sh -o /tmp/bend-install.sh
+          # bend-lang.com is intermittently unreachable FROM GITHUB RUNNERS
+          # (verified reachable from a dev machine 3/3, identical bytes), so
+          # retry the download. Downloading to a file rather than piping keeps
+          # a failed fetch legible: `curl | sh` would feed empty stdin, exit
+          # 0, and surface as "bend: command not found".
+          for attempt in 1 2 3 4; do
+            if curl -fsSL --retry 3 --retry-delay 5 https://bend-lang.com/install.sh -o /tmp/bend-install.sh; then
+              break
+            fi
+            echo "bend download attempt $attempt failed" >&2
+            if [ "$attempt" = 4 ]; then
+              echo "bend-lang.com unreachable from runner; failing rather than installing nothing" >&2
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
           BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           # GITHUB_PATH applies to NEXT steps only: export in-step so the
@@ -148,7 +163,22 @@ jobs:
           # what makes it so. If upstream moves past the pin, this fails
           # loudly instead of silently installing a different version.
           set -o pipefail
-          curl -fsSL https://bend-lang.com/install.sh -o /tmp/bend-install.sh
+          # bend-lang.com is intermittently unreachable FROM GITHUB RUNNERS
+          # (verified reachable from a dev machine 3/3, identical bytes), so
+          # retry the download. Downloading to a file rather than piping keeps
+          # a failed fetch legible: `curl | sh` would feed empty stdin, exit
+          # 0, and surface as "bend: command not found".
+          for attempt in 1 2 3 4; do
+            if curl -fsSL --retry 3 --retry-delay 5 https://bend-lang.com/install.sh -o /tmp/bend-install.sh; then
+              break
+            fi
+            echo "bend download attempt $attempt failed" >&2
+            if [ "$attempt" = 4 ]; then
+              echo "bend-lang.com unreachable from runner; failing rather than installing nothing" >&2
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
           BEND_HOME="$HOME/.bend" sh /tmp/bend-install.sh
           echo "$HOME/.bend/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.bend/bin:$PATH"
