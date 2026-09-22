@@ -376,10 +376,15 @@ So the **notional-cap skip branch (trap 2, second branch) IS LIVE**, not
 wrong and is corrected here.
 
 **How the runtime values are derived, each traced to source:**
-- `rawWeight = capitalPartition / args.capital` (`scalp.ts:4641`). The
-  watchlist has 4 equal-weight symbols, so `capitalPartition ≈ 50` and
-  `rawWeight ≈ 0.25`. `ladderPartitionPositionPct` then expands
-  `50 → min(100, 50/0.25) = 100`.
+- `rawWeight = capitalPartition / args.capital` (`scalp.ts:4641`), where
+  `capitalPartition` comes from `allocateLadderPortfolioCapital`
+  (`ladder-portfolio.ts:20-42`), which divides `args.capital` by the **sum of
+  the per-row `allocatedWeight` values**. The whitelist is the source: all
+  four rows carry `allocatedWeight = 0.25` explicitly (verified on the box),
+  so the weights sum to 1 and `capitalPartition = 200 × 0.25 = 50`, giving
+  `rawWeight = 50/200 = 0.25`. This is NOT "4 symbols split equally" — the
+  equality is coincidental to equal weights, and the fixture must cite the
+  whitelist so a future re-weighting is visible in the pinned value.
 - `accountScaledLeverageCap` (`ladder-engine.ts:1165-1187`) with
   `capital ≈ 48.35` (< 500) gives `sizeCap = 10`; the per-position budget is
   1.0 (`> 0.25`) so `budgetFactor = 0.5`; hence
@@ -391,6 +396,27 @@ wrong and is corrected here.
 Slice 3 must port `accountScaledLeverageCap`, the `fullyDynamic` branch of
 `dynamicLeverage`, `ladderPartitionPositionPct`, and the hardcoded
 `maxNotionalPct: 100` — not a static 1x.
+
+**Reuse `account_scaled_leverage_cap` (`sleeves.rs:241`); do NOT reimplement
+it with float semantics.** It already exists, and its rounding differs from TS
+in ways that happen not to matter at the soak's numbers:
+
+| Aspect | TS (`ladder-engine.ts:1184-1186`) | Rust (`sleeves.rs:258-264`) |
+|---|---|---|
+| Mid tier | `floor(sizeCap × 0.75)` (float) | `size_cap * 3 / 4` (integer) |
+| Low tier | `floor(sizeCap × 0.5)` (float) | `size_cap / 2` (integer) |
+| Thresholds | `budgetFrac <= 0.1` / `<= 0.25` | `per_position_budget_bp <= 1000` / `<= 2500` |
+
+At the soak's values (capital 48.35 → `sizeCap 10`, budget 1.0 → 10000bp) both
+give `floor(10 × 0.5) = 10 / 2 = 5`, so the soak agrees. The integer forms
+also coincide for every tier TS defines (10/25/50/150: `25×3/4 = 18 =
+floor(18.75)`, `50×3/4 = 37 = floor(37.5)`, `150×3/4 = 112 = floor(112.5)`),
+so there is **no observed divergence** — but the residual is real and recorded
+here rather than silently absorbed: if a budget fraction ever lands between
+the bp boundaries (e.g. a float `0.25` that converts to `2500.0000001`bp), the
+two threshold comparisons can disagree. Callers must convert the budget to
+basis points once, at the boundary, and assert the resulting cap rather than
+recomputing it.
 
 **Runtime evidence, honestly bounded:** the demo's rung state holds one
 filled SOL short rung (`filledQty 0.2`, `level 111.05424`) and unfilled
