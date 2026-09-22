@@ -73,6 +73,7 @@ fn bar(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
         max_hold_bars: 0,
         ms_per_bar: 900_000,
         conservative_intrabar: true,
+        max_drawdown_pct: 0, // fixture has no maxDrawdownPct → TS default 0
     }
 }
 
@@ -145,6 +146,88 @@ fn replay(leverage: i64) -> Run {
     }
 }
 
+/// Boundary fixture (bend/fixtures/ladder-boundary.md): one rung fills, price
+/// craters through the legacy boundary, the WHOLE ladder force-closes at the
+/// boundary, losses count, the post-loss pause engages, and a further bar
+/// just ticks the pause down. `stop_ratio_x100 = 0` is the fixture's legacy
+/// boundary — TS-exact on the exit-bar step, which is what pins 93.049.
+/// `158` (the soak's stopRatio) instead proves the LADDER-STEP-ANCHOR
+/// deviation: boundary from the rung's FROZEN entry-time step (96.42), not
+/// TS's exit-bar step (96.424774) — a deliberate divergence, so it carries
+/// no TS pin by design.
+struct BoundaryRun {
+    fills: Vec<usize>,
+    closes: Vec<usize>,
+    exit_prices: Vec<i64>,
+    fill_qty_deltas: f64,
+    final_capital: f64,
+    wins: u64,
+    losses: u64,
+    paused_after_stop: u64,
+    paused_after_free_tick: u64,
+    free_tick_closes: usize,
+    long_rungs_left: usize,
+    long_base: i64,
+}
+
+fn replay_boundary(stop_ratio_x100: i64) -> BoundaryRun {
+    let cfg = LadderConfig {
+        grid_pause_after_loss_bars: 3,
+        stop_ratio_x100,
+        ..cfg()
+    };
+    let mut state = LadderState::fresh(m(100.0), cfg);
+    let bars = [
+        (0u64, 100.0, 100.0, 100.0, 100.0),
+        (1, 100.0, 99.5, 98.9, 99.3),
+        (2, 99.3, 99.3, 90.0, 90.0),
+    ];
+    let mut fills = Vec::new();
+    let mut closes = Vec::new();
+    let mut fill_qty_deltas = 0.0f64;
+    let mut exit_prices = Vec::new();
+
+    for (i, o, h, l, c) in bars {
+        let ev = advance_bar(&mut state, &bar(i, o, h, l, c), opts(1));
+        fills.push(ev.fills.len());
+        closes.push(ev.closes.len());
+        for f in &ev.fills {
+            // Fixture pins rung1 qty 50/99 (bar 1) and rung2 qty 50/98
+            // (bar 2, capital still 100 — nothing closed before the crater).
+            let expected = if f.rung_index == 1 {
+                50.0 / 99.0
+            } else {
+                50.0 / 98.0
+            };
+            fill_qty_deltas = fill_qty_deltas.max((f.qty as f64 / 1e6 - expected).abs());
+        }
+        exit_prices.extend(ev.closes.iter().map(|c| c.exit_price.0));
+    }
+    let paused_after_stop = state.paused;
+    // Only the LONG side must clear; the short rungs stay armed-but-empty
+    // throughout (fixture: "Short rungs stay armed-but-empty").
+    let long_rungs_left = state.rungs(Side::Long).len();
+    let long_base = state.long_base.0;
+
+    // Free tick: replay bar 0 while paused — no events, counter decrements.
+    let free = advance_bar(&mut state, &bar(0, 100.0, 100.0, 100.0, 100.0), opts(1));
+
+    BoundaryRun {
+        fills,
+        closes,
+        exit_prices,
+        fill_qty_deltas,
+        final_capital: state.capital.0 as f64 / 1e6,
+        wins: state.total_wins,
+        losses: state.total_losses,
+        paused_after_stop,
+        paused_after_free_tick: state.paused,
+        free_tick_closes: free.closes.len(),
+        long_rungs_left,
+        long_base,
+    }
+}
+
 fn main() {
     // ---- V1 (leverage 1): the fixture's primary pin ----
     let v1 = replay(1);
@@ -208,7 +291,74 @@ fn main() {
     println!("  capital delta  {v1b_delta:.3e} USDT  (budget 1e-6)");
     assert!(v1b_delta < 1e-6, "V1b capital drifted: {v1b_delta:.3e}");
 
+    // ---- Boundary (ladder-boundary.md): whole-ladder stop-out + pause ----
+    let b = replay_boundary(0);
+    // Shapes include the seed bar (index 0, no events); TS's vectors start at
+    // bar 1 because its pass never processes bar 0.
+    println!("Boundary (legacy stop, pause 3)");
     println!(
-        "ladder_parity: V1 capital delta {v1_delta:.3e} / V1b {v1b_delta:.3e} — event shapes and pins match"
+        "  fills/closes   {:?}/{:?}  (TS bars 1-2: [1, 1]/[0, 2])",
+        b.fills, b.closes
+    );
+    println!(
+        "  exit prices    {:?}  (TS: [93.049, 93.049])",
+        b.exit_prices
+    );
+    println!("  wins/losses    {}/{}  (TS: 0/2)", b.wins, b.losses);
+    println!(
+        "  final capital  {:.15}  (TS: 94.447135770975057503)",
+        b.final_capital
+    );
+    println!(
+        "  paused         {} -> {} after free tick, {} closes (TS: 3 -> 2, 0)",
+        b.paused_after_stop, b.paused_after_free_tick, b.free_tick_closes
+    );
+
+    assert_eq!(
+        b.fills,
+        vec![0, 1, 1],
+        "boundary fill shape (seed, rung1 bar1, rung2 bar2)"
+    );
+    assert_eq!(b.closes, vec![0, 0, 2], "boundary close shape");
+    assert!(
+        b.exit_prices.iter().all(|p| *p == 93_049_000),
+        "legacy boundary must be the TS-exact exit-bar-step 93.049: {:?}",
+        b.exit_prices
+    );
+    assert_eq!((b.wins, b.losses), (0, 2), "boundary win/loss");
+    assert_eq!(b.long_rungs_left, 0, "long ladder cleared");
+    assert_eq!(b.long_base, 0, "side base reset");
+    assert_eq!(b.paused_after_stop, 3, "post-loss pause");
+    assert_eq!(b.paused_after_free_tick, 2, "free tick consumes one pause");
+    assert_eq!(b.free_tick_closes, 0, "paused bar emits nothing");
+    let b_delta = (b.final_capital - 94.447_135_770_975_05).abs();
+    println!("  capital delta  {b_delta:.3e} USDT  (budget 1e-6)");
+    assert!(b_delta < 1e-6, "boundary capital drifted: {b_delta:.3e}");
+    assert!(
+        b.fill_qty_deltas < 1e-6,
+        "boundary fill qty drifted: {}",
+        b.fill_qty_deltas
+    );
+
+    // ---- Boundary, stopRatio 1.58: the frozen-step (LADDER-STEP-ANCHOR)
+    // deviation. min entry 98 - rung.step 1.0 * 1.58 = 96.42; TS would use
+    // the exit-bar step (99.3 * 1% * 1.58) and give 96.424774.
+    let s = replay_boundary(158);
+    println!("Boundary (stopRatio 1.58, frozen step)");
+    println!(
+        "  exit prices    {:?}  (frozen-step 96.42; TS exit-bar form 96.424774)",
+        s.exit_prices
+    );
+    assert_eq!(s.closes, vec![0, 0, 2], "stopRatio close shape");
+    assert!(
+        s.exit_prices.iter().all(|p| *p == 96_420_000),
+        "stopRatio boundary must use the frozen rung step: {:?}",
+        s.exit_prices
+    );
+    assert_eq!(s.paused_after_stop, 3, "stopRatio pause");
+
+    println!(
+        "ladder_parity: V1 {v1_delta:.3e} / V1b {v1b_delta:.3e} / boundary {b_delta:.3e} \
+         — event shapes and pins match"
     );
 }

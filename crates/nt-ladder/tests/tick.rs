@@ -63,6 +63,7 @@ fn ctx(open: f64, high: f64, low: f64, close: f64, ts_ms: i64, bar_index: u64) -
         max_hold_bars: 39,
         ms_per_bar: 15 * 60 * 1000,
         conservative_intrabar: true,
+        max_drawdown_pct: 0,
     }
 }
 

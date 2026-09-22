@@ -968,6 +968,11 @@ pub struct BarContext {
     pub max_hold_bars: i64,
     pub ms_per_bar: i64,
     pub conservative_intrabar: bool,
+    /// TS `opts.maxDrawdownPct` — NOT persisted (the 10-field fingerprint
+    /// does not include it; TS reads it off per-invocation opts). 0 or >=100
+    /// disables the drawdown kill and the flat re-anchor, matching TS's
+    /// `accountDrawdownBreached` guards.
+    pub max_drawdown_pct: i64,
 }
 
 /// Fee schedule. TS reads `feePct` (maker), `takerExitFeePct` (falls back to
@@ -999,12 +1004,13 @@ impl FeeSchedule {
 }
 
 /// Advance the ladder by one bar: pause decay, drawdown re-anchor, re-seed
-/// flat sides, fill touched rungs, then close on target or max-hold.
+/// flat sides, fill touched rungs, then whole-side risk exits or per-rung
+/// target/max-hold closes.
 ///
 /// Deliberately NOT ported yet (each named, per the spec's pattern): the chop
-/// gate and trend filter (both 0 in the soak config), the ladder stop and
-/// liquidation risk exits (`resolveLadderRiskExit`), and the maker/taker fee
-/// split. Those are slices 5+; this is fills + target/max-hold exits.
+/// gate and trend filter (both 0 in the soak config), liquidation (dead at
+/// leverage 1) and `maxPositionDrawdownPct` (slice 6). The stop boundary and
+/// account drawdown kill ARE ported — see `resolve_risk_exit`.
 pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOptions) -> BarEvents {
     let mut events = BarEvents::default();
 
@@ -1018,10 +1024,14 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
     // never trade its way back, so the kill latched forever with no operator
     // reset path (TS comment, ENA shadow 2026-09-03: a +2.64 book went
     // permanently silent after an 8% peak-to-capital slide). Re-anchor peak
-    // to capital and take the pause instead.
+    // to capital and take the pause instead. Condition is TS's threshold
+    // (`accountDrawdownBreached`, peak-to-capital slide >= maxDrawdownPct),
+    // NOT "any dip": below the cap TS keeps the old peak and keeps seeding.
     let any_filled = state.rungs(Side::Long).iter().any(|r| r.filled)
         || state.rungs(Side::Short).iter().any(|r| r.filled);
-    if !any_filled && state.peak_capital > state.capital {
+    if !any_filled
+        && account_drawdown_breached(state.peak_capital, state.capital, ctx.max_drawdown_pct)
+    {
         state.peak_capital = state.capital;
         state.paused = state.config.grid_pause_after_loss_bars.max(0) as u64;
     }
@@ -1033,7 +1043,11 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
         trend: None,
         only_with_trend: state.config.only_with_trend,
         chop_gate_active: false,
-        drawdown_breached: state.peak_capital > state.capital,
+        drawdown_breached: account_drawdown_breached(
+            state.peak_capital,
+            state.capital,
+            ctx.max_drawdown_pct,
+        ),
         rung_count: ctx.rung_count,
     };
     let _ = seed_side(state, Side::Long, &seed_ctx);
@@ -1048,9 +1062,11 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
     events
 }
 
-/// TS `manageLadderSide` (ladder-engine.ts:892-904): fill, then close. The
-/// risk exit is not ported yet, so a stop-out falls through to
-/// `close_ladder_targets` rather than exiting early.
+/// TS `manageLadderSide` (ladder-engine.ts:892-904): fill, then whole-side
+/// risk exits (stop boundary / account drawdown), else per-rung closes. The
+/// risk exit runs BEFORE the target loop and has no same-bar gate: a rung
+/// filled on this very bar is closed by the boundary in the same pass
+/// (boundary fixture, bar 2).
 fn manage_side(
     state: &mut LadderState,
     ctx: &BarContext,
@@ -1063,7 +1079,17 @@ fn manage_side(
         return;
     }
     fill_side(state, ctx, opts, side, events);
-    if state.rungs(side).iter().all(|r| !r.filled) {
+    let filled: Vec<Rung> = state
+        .rungs(side)
+        .iter()
+        .copied()
+        .filter(|r| r.filled)
+        .collect();
+    if filled.is_empty() {
+        return;
+    }
+    if let Some(exit) = resolve_risk_exit(state, ctx, side, &filled) {
+        apply_risk_exit(state, ctx, side, &filled, exit, fees, events);
         return;
     }
     close_targets(state, ctx, fees, side, events);
@@ -1118,6 +1144,120 @@ fn fill_side(
             level: rung.level,
             qty: sized.qty,
         });
+    }
+}
+
+/// One whole-side risk exit (TS `LadderRiskExit`, :550-556). Both ported
+/// branches close ALL filled rungs and reset the side; the partial branch
+/// (`maxPositionDrawdownPct`, `resetAll: false`) arrives with slice 6.
+struct RiskExit {
+    exit_price: Money,
+    reason: CloseReason,
+    pause_after_loss: bool,
+}
+
+/// TS `resolveLadderRiskExit` (:734-793), evaluated in TS's order. Ported:
+/// (1) stop boundary — legacy and `stopRatio > 0`; (2) account drawdown kill.
+/// NOT ported, each named: liquidation (`sideLiquidationLevel`, dead at
+/// leverage 1, slice 6) and `maxPositionDrawdownPct` (slice 6).
+///
+/// **Stop boundary anchoring.** TS uses the EXIT bar's step for BOTH forms
+/// (:681-682 ratio, :685-686 legacy). The `stopRatio > 0` form here uses the
+/// rung's FROZEN entry-time step instead — the named `LADDER-STEP-ANCHOR`
+/// deviation (port spec §4): a risk level must not drift with price after
+/// entry, the same class of bug `a07b3dd0` removed from seeding. The legacy
+/// form stays TS-exact on the exit-bar step because the boundary fixture's
+/// `93.049` pin depends on it.
+fn resolve_risk_exit(
+    state: &LadderState,
+    ctx: &BarContext,
+    side: Side,
+    filled: &[Rung],
+) -> Option<RiskExit> {
+    // 1. Stop boundary: long stops under the lowest entry, short above the
+    //    highest (TS min/max over entries, :679-682).
+    let boundary = if state.config.stop_ratio_x100 > 0 {
+        let ratio = state.config.stop_ratio_x100;
+        match side {
+            Side::Long => {
+                let r = filled.iter().min_by_key(|r| r.entry_price.0)?;
+                Money(r.entry_price.0 - scale(r.step.0, ratio, 100))
+            }
+            Side::Short => {
+                let r = filled.iter().max_by_key(|r| r.entry_price.0)?;
+                Money(r.entry_price.0 + scale(r.step.0, ratio, 100))
+            }
+        }
+    } else {
+        // Legacy: sideBase ± ctx.step * (rungCount + gridMaxGrids), TS-exact.
+        let span = scale(
+            ctx.step.0,
+            ctx.rung_count as i64 + state.config.grid_max_grids,
+            1,
+        );
+        match side {
+            Side::Long => Money(state.base(side).0 - span),
+            Side::Short => Money(state.base(side).0 + span),
+        }
+    };
+    let touched = match side {
+        Side::Long => ctx.candle.low <= boundary,
+        Side::Short => ctx.candle.high >= boundary,
+    };
+    if touched {
+        return Some(RiskExit {
+            exit_price: side_exit_price(side, boundary, ctx.slippage_bp),
+            reason: CloseReason::Stop,
+            pause_after_loss: true,
+        });
+    }
+
+    // 2. Account drawdown kill: whole side out at the bar close. No pause —
+    //    the flat re-anchor in `advance_bar` takes the pause instead (TS
+    //    `pauseAfterLoss: false`, :788-790).
+    if account_drawdown_breached(state.peak_capital, state.capital, ctx.max_drawdown_pct) {
+        return Some(RiskExit {
+            exit_price: side_exit_price(side, ctx.candle.close, ctx.slippage_bp),
+            reason: CloseReason::Stop,
+            pause_after_loss: false,
+        });
+    }
+    None
+}
+
+/// TS `applyLadderRiskExit` (:795-831), `resetAll` branch: close every
+/// filled rung in order at the exit price, clear the side + base, then take
+/// the post-loss pause when configured.
+fn apply_risk_exit(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    side: Side,
+    filled: &[Rung],
+    exit: RiskExit,
+    fees: &FeeSchedule,
+    events: &mut BarEvents,
+) {
+    for rung in filled {
+        close_rung(
+            state,
+            ctx,
+            CloseRequest {
+                side,
+                rung: *rung,
+                exit_price: exit.exit_price,
+                reason: exit.reason,
+                fees,
+            },
+            events,
+        );
+    }
+    *state.rungs_mut(side) = Vec::new();
+    match side {
+        Side::Long => state.long_base = Money::ZERO,
+        Side::Short => state.short_base = Money::ZERO,
+    }
+    if exit.pause_after_loss && state.config.grid_pause_after_loss_bars > 0 {
+        state.paused = state.config.grid_pause_after_loss_bars as u64;
     }
 }
 
@@ -1229,9 +1369,9 @@ struct CloseRequest<'a> {
 /// the capital math at all — it is only the size the live executor sends.
 /// A qty-times-price implementation diverges immediately.
 ///
-/// Fees (slice 5 ports the split properly): `target` exits pay
-/// `makerFee*2 + crossFee`, everything else `makerFee + takerFee + crossFee`.
-/// Funding cost is not ported yet.
+/// Fees mirror TS `closeRung` (:301-310): `target` exits pay
+/// `maker*2 + cross`, everything else `maker + taker + cross`. Funding cost
+/// is not ported (slice 6).
 fn close_rung(
     state: &mut LadderState,
     ctx: &BarContext,
@@ -1273,7 +1413,7 @@ fn close_rung(
     } else {
         net * fees.leverage
     };
-    // `leveraged` is already in 1e12; sizePerRung is positionFraction/rungs,
+    // `leveraged` is already in 1e18; sizePerRung is positionFraction/rungs,
     // and positionFraction is 1 here, so this is a plain divide.
     let equity_return = if is_liquidation {
         -scale(1_000_000_000_000_000_000, 1, ctx.rung_count.max(1) as i64)
@@ -1314,12 +1454,27 @@ fn close_rung(
     });
 }
 
-/// TS `sideExitPrice`: market close at the bar's close, slipped.
-fn side_exit_price(side: Side, close: Money, slippage_bp: i64) -> Money {
+/// TS `accountDrawdownBreached` (ladder-engine.ts:519-528): peak-to-capital
+/// slide >= cap. Cap `<= 0` or `>= 100` disables; non-positive peak disables.
+fn account_drawdown_breached(peak: Money, capital: Money, max_drawdown_pct: i64) -> bool {
+    let cap = max_drawdown_pct;
+    if cap <= 0 || cap >= 100 || peak.0 <= 0 {
+        return false;
+    }
+    ((peak.0 - capital.0) as i128) * 100 >= (peak.0 as i128) * cap as i128
+}
+
+/// TS `sideExitPrice` (ladder-engine.ts:708-717): MULTIPLICATIVE slip —
+/// `long: p*(1-slippage)`, `short: p*(1+slippage)`. This is a different
+/// function from TS's target exit (`target / slippage`, :856): max-hold and
+/// the whole-side risk exits use this one. Was the division form here, which
+/// is wrong for those paths by O(slip^2) — the same class as nt-grid's
+/// recorded short-leg slippage debt; at slippage 0 both forms coincide.
+fn side_exit_price(side: Side, price: Money, slippage_bp: i64) -> Money {
     if side == Side::Long {
-        Money(scale(close.0, 10_000, 10_000 + slippage_bp))
+        Money(scale(price.0, 10_000 - slippage_bp, 10_000))
     } else {
-        Money(scale(close.0, 10_000 + slippage_bp, 10_000))
+        Money(scale(price.0, 10_000 + slippage_bp, 10_000))
     }
 }
 
