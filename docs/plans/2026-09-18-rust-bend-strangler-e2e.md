@@ -624,3 +624,23 @@ Three facts this settles, all previously speculation in this plan:
 and surviving an interval boundary, rung 2 added by design); round-trip clause
 now has its first data point. Sustained > 0 still needs accumulation across
 cycles — one close is the criterion becoming measurable, not the criterion met.
+
+## Progress log (2026-09-22 — ladder slice 4 complete: parity + risk exits)
+
+> No box writes. All work in-repo on `feat/rust-bend-strangler-p0-p5`.
+
+| Slice | Result | Evidence |
+| --- | --- | --- |
+| 6bar parity (`fdadd642`) | PASS | `nt-ladder/examples/ladder_parity.rs` replays `bend/fixtures/ladder-6bar.md`: fills/closes/reasons/win-loss exact, V1 capital delta **7.9e-7**, V1b **1.7e-7** (budget 1e-6 = `Money` micro-USDT's 6dp ceiling — TS uses arbitrary-precision Decimal, so 1e-9 would fail correct code). Fees now bp-exact (`maker*2+cross` target / `maker+taker+cross` stop), capital conversion rounds (truncating twice per round-trip compounded to 1.2e-6, past the ceiling) |
+| Boundary stop-out (`1932746`) | PASS | Whole-side risk exits ported: `resolve_risk_exit` runs after fill, before targets, no same-bar gate. Legacy boundary TS-exact on the EXIT-bar step → exits **93.049 x2** pinned, capital delta **7.7e-7**, losses 2, pause 3→2 on free tick, long side cleared, short stays armed |
+| `LADDER-STEP-ANCHOR` stopRatio | PROVEN DIVERGENT | stopRatio 1.58 boundary uses the rung's FROZEN entry step → **96.42**; TS exit-bar form would be 96.424774. The deviation is now executable, not just documented |
+| Drawdown semantics fix | FIXED | Re-anchor + seed gate used `peak > capital` (any dip fires) instead of TS's `accountDrawdownBreached` threshold — below `maxDrawdownPct` TS keeps seeding with the old peak, never pauses. One shared helper now feeds both sites; `BarContext.max_drawdown_pct` carries the knob (TS reads opts; not in the 10-field fingerprint) |
+| `side_exit_price` form fix | FIXED | Was division (`p/(1+slip)`); TS `sideExitPrice` is multiplicative (`p*(1±slip)`) — wrong for max-hold + every risk exit by O(slip^2), same class as nt-grid's recorded short-leg debt. Fixtures run at slip 0, so no pin moved |
+| Suite | PASS | 21 tests, clippy 0 warnings, fmt clean, all 13 CI examples exit 0 |
+
+**Ladder port status:** slices 1-4 code-complete against the frozen fixtures
+(6bar + boundary). Remaining: slice 5 (fee basis pin to the soak
+`--fee-bp 2 --maker-fee-bp 2` + shadow assertion), slice 6 (deferred-surface
+triage: liquidation, `maxPositionDrawdownPct`, funding, leverage branch),
+then the drawdown fixture (`ladder-drawdown.md`) replay, then Gate 4's
+ladder half can run.
