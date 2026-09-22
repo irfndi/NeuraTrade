@@ -636,11 +636,13 @@ cycles — one close is the criterion becoming measurable, not the criterion met
 | `LADDER-STEP-ANCHOR` stopRatio | PROVEN DIVERGENT | stopRatio 1.58 boundary uses the rung's FROZEN entry step → **96.42**; TS exit-bar form would be 96.424774. The deviation is now executable, not just documented |
 | Drawdown semantics fix | FIXED | Re-anchor + seed gate used `peak > capital` (any dip fires) instead of TS's `accountDrawdownBreached` threshold — below `maxDrawdownPct` TS keeps seeding with the old peak, never pauses. One shared helper now feeds both sites; `BarContext.max_drawdown_pct` carries the knob (TS reads opts; not in the 10-field fingerprint) |
 | `side_exit_price` form fix | FIXED | Was division (`p/(1+slip)`); TS `sideExitPrice` is multiplicative (`p*(1±slip)`) — wrong for max-hold + every risk exit by O(slip^2), same class as nt-grid's recorded short-leg debt. Fixtures run at slip 0, so no pin moved |
+| Drawdown fixture (`63d4c043`) | PASS | Replays `ladder-drawdown.md` (ENA-latch case): peak 91/paused 3 pinned on bar 1, armed rungs survive 3 pause ticks, bar-5 fill entryBar 5 / entryTimestamp 4500000 / qty 45.5/99, capital 91 untouched |
+| `entry_bar` window-index fix | FIXED (found by the fixture's `entryBar 5` pin) | Fill bar was stored as `bars_consumed` (skips paused bars, starts 0 for a window beginning at bar 1) while the conservative gate reads `ctx.bar_index` — two coordinate systems; post-resume `entry_bar` (400+) could never be `< bar_index`, barring target exits forever. Now `ctx.bar_index` = TS `entryBar` 1:1 (`types.ts:257-258`); `bars_consumed` stays a persisted stat |
 | Suite | PASS | 21 tests, clippy 0 warnings, fmt clean, all 13 CI examples exit 0 |
 
-**Ladder port status:** slices 1-4 code-complete against the frozen fixtures
-(6bar + boundary). Remaining: slice 5 (fee basis pin to the soak
-`--fee-bp 2 --maker-fee-bp 2` + shadow assertion), slice 6 (deferred-surface
-triage: liquidation, `maxPositionDrawdownPct`, funding, leverage branch),
-then the drawdown fixture (`ladder-drawdown.md`) replay, then Gate 4's
-ladder half can run.
+**Ladder port status:** slices 1-4 code-complete against THREE frozen
+fixtures (6bar target, boundary stop-out, drawdown re-anchor). Remaining:
+slice 5 (fee basis pin to the soak `--fee-bp 2 --maker-fee-bp 2` + shadow
+assertion), slice 6 (deferred-surface triage: liquidation,
+`maxPositionDrawdownPct`, funding, leverage branch), then Gate 4's ladder
+half can run.
