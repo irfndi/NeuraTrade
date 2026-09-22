@@ -43,6 +43,7 @@ fn main() {
             println!("nt-cli 0.1.0 status=ok runtime=rust-strangler");
             return;
         }
+        Some("ladder-shadow") => ladder_shadow(&args),
         Some("shadow") => {}
         _ => {
             if args.len() <= 1 {
@@ -185,49 +186,7 @@ fn main() {
         std::process::exit(2);
     }
     let path = bars.unwrap_or_else(|| usage());
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        eprintln!("read {path}: {e}");
-        std::process::exit(1);
-    });
-    let mut candles = Vec::new();
-    for (n, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with("open_ts_ms") {
-            continue;
-        }
-        let f: Vec<&str> = line.split(',').collect();
-        if f.len() < 5 {
-            eprintln!("line {}: want 5 cols, got {}", n + 1, f.len());
-            std::process::exit(1);
-        }
-        let num = |s: &str| -> i64 {
-            s.trim().parse().unwrap_or_else(|_| {
-                eprintln!("line {}: bad number {s:?}", n + 1);
-                std::process::exit(1);
-            })
-        };
-        candles.push(Candle {
-            open_ts_ms: num(f[0]),
-            open: Money(num(f[1])),
-            high: Money(num(f[2])),
-            low: Money(num(f[3])),
-            close: Money(num(f[4])),
-            volume_base_micros: 1_000_000,
-        });
-    }
-    candles.sort_by_key(|c| c.open_ts_ms); // oldest-first contract for run_paper_engine
-    // Closed-only (nt-market Panel contract): with --timeframe-ms a bar is
-    // closed iff now >= open_ts + timeframe; without it, drop the newest row
-    // (a CSV export's tail is the forming candle). Never both.
-    if let Some(tf) = timeframe_ms {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(i64::MAX);
-        candles.retain(|c| c.open_ts_ms.saturating_add(tf) <= now_ms);
-    } else if candles.len() > 1 {
-        candles.pop();
-    }
+    let mut candles = load_panel(&path, timeframe_ms);
     // Incremental walk (TS forwardOnly parity): --state persists last open_ts
     // so each tick replays only newer candles instead of double-counting.
     if let Some(sp) = &state_path {
@@ -303,6 +262,323 @@ fn main() {
         && let Some(last) = candles.last()
     {
         let _ = std::fs::write(sp, last.open_ts_ms.to_string());
+    }
+}
+
+/// Panel load, shared by `shadow` and `ladder-shadow`: parse 5-col micros
+/// CSV, oldest-first sort, then the nt-market closed-only contract — with
+/// `--timeframe-ms` a bar is closed iff now >= open_ts + timeframe; without
+/// it, drop the newest row (a CSV export's tail is the forming candle).
+/// Never both.
+fn load_panel(path: &str, timeframe_ms: Option<i64>) -> Vec<Candle> {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("read {path}: {e}");
+        std::process::exit(1);
+    });
+    let mut candles = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("open_ts_ms") {
+            continue;
+        }
+        let f: Vec<&str> = line.split(',').collect();
+        if f.len() < 5 {
+            eprintln!("line {}: want 5 cols, got {}", n + 1, f.len());
+            std::process::exit(1);
+        }
+        let num = |s: &str| -> i64 {
+            s.trim().parse().unwrap_or_else(|_| {
+                eprintln!("line {}: bad number {s:?}", n + 1);
+                std::process::exit(1);
+            })
+        };
+        candles.push(Candle {
+            open_ts_ms: num(f[0]),
+            open: Money(num(f[1])),
+            high: Money(num(f[2])),
+            low: Money(num(f[3])),
+            close: Money(num(f[4])),
+            volume_base_micros: 1_000_000,
+        });
+    }
+    candles.sort_by_key(|c| c.open_ts_ms); // oldest-first contract for the engines
+    if let Some(tf) = timeframe_ms {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(i64::MAX);
+        candles.retain(|c| c.open_ts_ms.saturating_add(tf) <= now_ms);
+    } else if candles.len() > 1 {
+        candles.pop();
+    }
+    candles
+}
+
+/// `nt-cli ladder-shadow`: replay a closed-candle panel through the native
+/// LADDER engine (`nt-ladder`) — the Gate 4 ladder-half primitive. Paper
+/// only: no venue, no orders, no secrets, same CSV contract as `shadow`.
+///
+/// Tick continuity lives entirely in `--resume` (ladder v3): the state blob
+/// carries BOTH the engine state and the candle cursor (`last_ts`), so
+/// there is no separate `--state` flag — two files would drift apart.
+/// Fresh (no resume): starts at window index 1, mirroring TS
+/// `resolveLadderStartIndex` (`ladder-engine.ts:1733-1740`, fresh +
+/// non-forwardOnly + no trend => `Math.max(1, trendFilterPeriod)` = 1):
+/// bar 0 is the seed/prev reference and is NEVER processed.
+/// `bar_index` is always the index into THIS window — the coordinate
+/// `Rung::entry_bar` and the conservative same-bar gate both use.
+///
+/// Defaults are the deployed champion soak's ladder knobs (read from
+/// `ecosystem.champion-soak.config.cjs` args + `knobs.*` + PM2 process
+/// args): step 1.3%, target 1.95, stopRatio 1.58, pause 2, grids 2,
+/// maxHold 39, fee 0.02 both sides, cross 15bp, slip 2bp, pos 50%,
+/// drawdown 15%, 2 rungs, 15m, 50 USDT per symbol (200/4). Pass the
+/// matching flags explicitly on any diff artifact so the basis is in the
+/// command line, not in this comment.
+fn ladder_shadow(args: &[String]) -> ! {
+    fn usage_ladder() -> ! {
+        eprintln!(
+            "usage: nt-cli ladder-shadow --bars <csv> [--capital-usdt N] [--timeframe-ms N] \
+             [--resume <file>] [--ledger <file>] [--rungs N] [--step-bp N] [--target-x100 N] \
+             [--stop-x100 N] [--max-grids N] [--pause-bars N] [--max-hold-bars N] \
+             [--max-drawdown-pct N] [--conservative 0|1] [--fee-bp N] [--maker-fee-bp N] \
+             [--cross-bp N] [--slip-bp N] [--pos-pct N] [--leverage N]"
+        );
+        std::process::exit(2);
+    }
+    let mut bars: Option<String> = None;
+    let mut capital_usdt: i64 = 50; // soak: 200 / 4 symbols
+    let mut timeframe_ms: i64 = 900_000; // 15m
+    let mut resume_path: Option<String> = None;
+    let mut ledger_path: Option<String> = None;
+    let mut rungs: u32 = 2;
+    let mut step_bp: i64 = 130; // knobs.gridStepPct 1.3
+    let mut target_x100: i64 = 195; // knobs.targetRatio 1.95
+    let mut stop_x100: i64 = 158; // knobs.stopRatio 1.58
+    let mut max_grids: i64 = 2; // knobs.gridMaxGrids 2
+    let mut pause_bars: i64 = 2; // knobs.gridPauseAfterLossBars 2
+    let mut max_hold_bars: i64 = 39; // knobs.maxHoldBars 39
+    let mut max_drawdown_pct: i64 = 15; // --max-drawdown-pct 15
+    let mut conservative: i64 = 1; // TS option default true
+    let mut fee_bp: i64 = 2; // --fee 0.02 (taker falls back to maker)
+    let mut maker_fee_bp: i64 = 2;
+    let mut cross_bp: i64 = 15; // --live-entry-cross-bps 15
+    let mut slip_bp: i64 = 2; // --slippage-bps 2
+    let mut pos_pct: i64 = 50; // --max-position-size-pct 50
+    let mut leverage: i64 = 1; // --leverage 1
+    let mut i = 2;
+    let mut next_i64 = |i: &mut usize| -> i64 {
+        *i += 1;
+        args.get(*i)
+            .unwrap_or_else(|| usage_ladder())
+            .parse()
+            .unwrap_or_else(|_| usage_ladder())
+    };
+    let _ = &mut next_i64; // closure used below via macro-free helper
+    let arg = |i: &mut usize| -> String {
+        *i += 1;
+        args.get(*i).unwrap_or_else(|| usage_ladder()).clone()
+    };
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bars" => bars = Some(arg(&mut i)),
+            "--resume" => resume_path = Some(arg(&mut i)),
+            "--ledger" => ledger_path = Some(arg(&mut i)),
+            "--capital-usdt" => capital_usdt = next_i64(&mut i),
+            "--timeframe-ms" => timeframe_ms = next_i64(&mut i),
+            "--rungs" => rungs = next_i64(&mut i).max(1) as u32,
+            "--step-bp" => step_bp = next_i64(&mut i),
+            "--target-x100" => target_x100 = next_i64(&mut i),
+            "--stop-x100" => stop_x100 = next_i64(&mut i),
+            "--max-grids" => max_grids = next_i64(&mut i),
+            "--pause-bars" => pause_bars = next_i64(&mut i),
+            "--max-hold-bars" => max_hold_bars = next_i64(&mut i),
+            "--max-drawdown-pct" => max_drawdown_pct = next_i64(&mut i),
+            "--conservative" => conservative = next_i64(&mut i),
+            "--fee-bp" => fee_bp = next_i64(&mut i),
+            "--maker-fee-bp" => maker_fee_bp = next_i64(&mut i),
+            "--cross-bp" => cross_bp = next_i64(&mut i),
+            "--slip-bp" => slip_bp = next_i64(&mut i),
+            "--pos-pct" => pos_pct = next_i64(&mut i),
+            "--leverage" => leverage = next_i64(&mut i),
+            _ => usage_ladder(),
+        }
+        i += 1;
+    }
+    let path = bars.unwrap_or_else(|| usage_ladder());
+    let candles = load_panel(&path, Some(timeframe_ms));
+
+    let cfg = nt_ladder::LadderConfig {
+        grid_step_bp: step_bp,
+        grid_max_grids: max_grids,
+        grid_pause_after_loss_bars: pause_bars,
+        rungs,
+        target_ratio_x100: target_x100,
+        only_with_trend: false, // soak trend-filter-period 0; no trend series here
+        chop_gate_adx: 0,       // soak chop-gate-adx 0 (fingerprint field)
+        max_hold_bars,
+        stop_ratio_x100: stop_x100,
+        conservative_intrabar: conservative != 0,
+    };
+    let sizing = nt_ladder::SizingOptions {
+        max_position_pct: pos_pct,
+        max_notional_pct: None, // soak sets no notional cap
+        rungs: i64::from(rungs),
+        leverage,
+        fully_dynamic: false, // soak runs fixed --leverage 1
+        max_leverage: 10,     // TS default
+        spec: None,           // no contractSpecs in the replay path
+        maker_fee_bp,
+        taker_exit_fee_bp: Some(fee_bp), // independent of maker, like grid --fee-bp
+        live_entry_cross_bps: cross_bp,
+    };
+
+    // Resume doubles as the cursor: missing file => fresh (TS startIndex 1).
+    let mut state = match &resume_path {
+        None => nt_ladder::LadderState::fresh(Money(capital_usdt * 1_000_000), cfg),
+        Some(rp) => match std::fs::read_to_string(rp) {
+            Err(_) => nt_ladder::LadderState::fresh(Money(capital_usdt * 1_000_000), cfg),
+            Ok(text) => match nt_ladder::load(&text) {
+                Ok(st) => st,
+                Err(e) => {
+                    eprintln!("resume {rp}: {e}");
+                    std::process::exit(1);
+                }
+            },
+        },
+    };
+    // TS `resolveLadderStartIndex`: fresh => 1 (bar 0 never processed);
+    // resumed => first candle newer than lastTimestamp, else hold.
+    let start = match state.last_ts_ms {
+        None => 1.min(candles.len()),
+        Some(ts) => candles
+            .iter()
+            .position(|c| c.open_ts_ms > ts)
+            .unwrap_or(candles.len()),
+    };
+
+    let mut fills = 0usize;
+    let mut closes = 0usize;
+    let mut target = 0usize;
+    let mut stop = 0usize;
+    let mut maxhold = 0usize;
+    let mut liquidation = 0usize;
+    for (k, c) in candles[start..].iter().enumerate() {
+        let bar_index = (start + k) as u64; // window coordinate (entry_bar)
+        // BarContext::step = open * gridStepPct / 100 (TS
+        // createLadderBarContext), re-derived EVERY bar.
+        let step = Money((i128::from(c.open.0) * i128::from(step_bp) / 10_000) as i64);
+        let ctx = nt_ladder::BarContext {
+            bar_index,
+            candle: nt_ladder::Candle {
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                ts_ms: c.open_ts_ms,
+            },
+            step,
+            slippage_bp: slip_bp,
+            rung_count: rungs,
+            target_ratio_x100: target_x100,
+            max_hold_bars,
+            ms_per_bar: timeframe_ms,
+            conservative_intrabar: conservative != 0,
+            max_drawdown_pct,
+        };
+        let ev = nt_ladder::advance_bar(&mut state, &ctx, sizing);
+        fills += ev.fills.len();
+        closes += ev.closes.len();
+        for c in &ev.closes {
+            match c.reason {
+                nt_ladder::CloseReason::Target => target += 1,
+                nt_ladder::CloseReason::Stop => stop += 1,
+                nt_ladder::CloseReason::MaxHold => maxhold += 1,
+                nt_ladder::CloseReason::Liquidation => liquidation += 1,
+            }
+        }
+        if let Some(lp) = &ledger_path {
+            append_ladder_ledger(lp, &ev.closes);
+        }
+    }
+    let open = state
+        .rungs(nt_ladder::Side::Long)
+        .iter()
+        .filter(|r| r.filled)
+        .count()
+        + state
+            .rungs(nt_ladder::Side::Short)
+            .iter()
+            .filter(|r| r.filled)
+            .count();
+    // Machine-readable line: the daily Gate 4 diff parses this next to the
+    // TS ledger. Reasons are itemised so a max_hold timeout can never be
+    // counted as target/stop edge (Gate 3 lesson).
+    println!(
+        "ladder-shadow bars={} fills={} closes={} target={} stop={} maxhold={} liquidation={} \
+         wins={} losses={} capital={} paused={} open={}",
+        state.bars_consumed,
+        fills,
+        closes,
+        target,
+        stop,
+        maxhold,
+        liquidation,
+        state.total_wins,
+        state.total_losses,
+        state.capital.0,
+        state.paused,
+        open,
+    );
+    eprintln!(
+        "tick bars={} fills={} closes={}",
+        candles.len().saturating_sub(start),
+        fills,
+        closes
+    );
+    if let Some(rp) = &resume_path
+        && let Err(e) = std::fs::write(rp, nt_ladder::save(&state))
+    {
+        eprintln!("resume write {rp}: {e}");
+    }
+    std::process::exit(0);
+}
+
+/// Append this tick's ladder closes to a CSV ledger (created with a header
+/// on first use): one row per closed rung, reasons itemised.
+fn append_ladder_ledger(path: &str, closes: &[nt_ladder::CloseEvent]) {
+    use std::fmt::Write as _;
+    use std::io::Write as _;
+    let fresh = !std::path::Path::new(path).exists();
+    let mut out = String::new();
+    if fresh {
+        out.push_str(
+            "closed_ts_ms,rung_index,side,reason,entry_micros,exit_micros,pnl_micros,\
+             qty_base_micros,capital_after_micros\n",
+        );
+    }
+    for c in closes {
+        let _ = writeln!(
+            out,
+            "{},{},{:?},{:?},{},{},{},{},{}",
+            c.closed_ts_ms,
+            c.rung_index,
+            c.side,
+            c.reason,
+            c.entry_price.0,
+            c.exit_price.0,
+            c.pnl.0,
+            c.qty,
+            c.capital_after.0
+        );
+    }
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(out.as_bytes()))
+    {
+        eprintln!("ledger append {path}: {e}");
     }
 }
 
