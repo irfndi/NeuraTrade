@@ -62,7 +62,7 @@ fn main() {
     assert_eq!(st, back, "populated state must round-trip exactly");
     assert_eq!(back.open_rung_count(), 1, "only rung 1 is open");
     assert_eq!(back.long_rungs[0].filled_qty, 1_005_075);
-    assert_eq!(back.long_rungs[0].entry_bar, 416, "absolute bar survives");
+    assert_eq!(back.long_rungs[0].entry_bar, 416, "entry_bar survives");
     assert_eq!(back.short_rungs.len(), 1);
     assert_eq!(back.rungs(Side::Short)[0].level, usdt(102));
     assert!(!back.is_flat(), "armed rungs mean not flat");

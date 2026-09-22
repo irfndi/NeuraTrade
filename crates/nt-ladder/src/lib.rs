@@ -16,12 +16,15 @@
 //! rounding policy that slice 3 settles — until then, state round-trip
 //! fidelity is what this module proves, not numeric parity with TS.
 //!
-//! `entry_bar` is stored ABSOLUTE (bars consumed since the state's first
-//! bar), not window-relative as TS does (`types.ts:259-261`). TS gets away
-//! with window-relative because it resolves the index into the freshly
-//! fetched array each tick; a resume that carries a window-relative index
-//! across ticks would compare it against a different window. Recorded as a
-//! deviation from TS.
+//! `entry_bar` is the WINDOW-relative index of the fill — TS `entryBar`
+//! (`types.ts:257-258`) — and the conservative gate compares it only against
+//! `BarContext::bar_index` from the same window, exactly as TS does. The
+//! earlier absolute-counter scheme (`bars_consumed`) silently drifted from
+//! TS whenever a bar was skipped (paused bars do not count) and put the
+//! gate's two operands in different coordinate systems, which would have
+//! barred target exits outright after a resume. If a caller slides the
+//! window between ticks it must re-anchor `entry_bar` — the same contract
+//! TS's own live loop carries.
 
 use nt_grid::account_scaled_leverage_cap;
 use nt_risk::Money;
@@ -69,7 +72,8 @@ pub struct Rung {
     pub filled: bool,
     /// Post-slippage entry price, micro-USDT. 0 while unfilled.
     pub entry_price: Money,
-    /// Absolute bar index of the fill (see module note on window-relative).
+    /// Window bar index of the fill — TS `entryBar`
+    /// (`types.ts:257-258`), compared only against `BarContext::bar_index`.
     pub entry_bar: u64,
     /// Absolute fill time, ms epoch — the live max-hold clock.
     pub entry_ts_ms: i64,
@@ -153,8 +157,10 @@ pub struct LadderState {
     pub config: LadderConfig,
     /// Timestamp of the last processed candle (the tick cursor).
     pub last_ts_ms: Option<i64>,
-    /// Bars consumed since the state's first bar — the absolute counter
-    /// `Rung::entry_bar` is measured against.
+    /// Non-paused bars advanced by this state — a plain stat, persisted for
+    /// resume. NOT what `Rung::entry_bar` counts: that follows the caller's
+    /// window index (`BarContext::bar_index`), because paused bars never
+    /// reach this counter.
     pub bars_consumed: u64,
 }
 
@@ -1132,7 +1138,7 @@ fn fill_side(
         state.rungs_mut(side)[index] = Rung {
             filled: true,
             entry_price: fill_price,
-            entry_bar: state.bars_consumed,
+            entry_bar: ctx.bar_index,
             entry_ts_ms: ctx.candle.ts_ms,
             filled_qty: sized.qty,
             ..rung

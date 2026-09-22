@@ -77,6 +77,14 @@ fn bar(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
     }
 }
 
+/// Same bar under the drawdown fixture's knob (`maxDrawdownPct 8`).
+fn bar_dd(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
+    BarContext {
+        max_drawdown_pct: 8,
+        ..bar(i, o, h, l, c)
+    }
+}
+
 struct Run {
     final_capital: f64,
     wins: u64,
@@ -228,6 +236,82 @@ fn replay_boundary(stop_ratio_x100: i64) -> BoundaryRun {
     }
 }
 
+/// Drawdown fixture (bend/fixtures/ladder-drawdown.md): a flat account 9%
+/// under peak with an 8% kill line must re-anchor peak to capital and take
+/// the post-lock pause (the ENA-shadow latch fix), keep armed rungs across
+/// pause ticks (a07b3dd0), and fill again once the pause expires. Starts at
+/// bar 1 on fresh state — TS's exact shape — so the pinned `peak 91 /
+/// paused 3 AFTER BAR 1` lands on the same bar. Returns (capital,
+/// per-bar (fills, closes)).
+fn replay_drawdown() -> (f64, Vec<(usize, usize)>) {
+    let cfg = LadderConfig {
+        grid_pause_after_loss_bars: 3,
+        ..cfg()
+    };
+    let mut state = LadderState::fresh(m(100.0), cfg);
+    state.capital = m(91.0); // opens 9% under peak 100 — past the 8% line
+    let bars = [
+        (1u64, 100.0, 100.1, 99.9, 100.0),
+        (2, 100.0, 100.1, 99.9, 100.0),
+        (3, 100.0, 100.1, 99.9, 100.0),
+        (4, 100.0, 100.1, 99.9, 100.0),
+        (5, 100.0, 99.0, 98.9, 99.3),
+    ];
+    let mut events = Vec::new();
+
+    for (i, o, h, l, c) in bars {
+        let ev = advance_bar(&mut state, &bar_dd(i, o, h, l, c), opts(1));
+        events.push((ev.fills.len(), ev.closes.len()));
+        match i {
+            1 => {
+                // Re-anchor fires on THIS bar (flat, 9% >= 8%): peak 100 -> 91,
+                // pause 3 — then the gates see 0% drawdown and seed anyway,
+                // all within the same call (TS block order).
+                assert_eq!(
+                    state.peak_capital.0, 91_000_000,
+                    "peak re-anchored to capital"
+                );
+                assert_eq!(state.paused, 3, "pause taken on the re-anchor bar");
+                assert_eq!(state.rungs(Side::Long).len(), 2, "long rungs armed");
+                assert_eq!(state.rungs(Side::Short).len(), 2, "short rungs armed");
+                assert_eq!(state.capital.0, 91_000_000, "capital untouched");
+            }
+            2..=4 => {
+                assert_eq!(events[i as usize - 1], (0, 0), "paused bar emits nothing");
+                assert!(state.paused >= 1 || i == 4, "pause still ticking");
+            }
+            5 => {
+                assert_eq!(ev.fills.len(), 1, "reseeded rung fills");
+                assert_eq!(ev.closes.len(), 0, "no close on the fill bar");
+                let rung = state.rungs(Side::Long)[0];
+                assert!(rung.filled, "rung 1 filled");
+                assert_eq!(rung.entry_price.0, 99_000_000, "entry 99");
+                assert_eq!(rung.entry_bar, 5, "entryBar 5 (window index)");
+                assert_eq!(rung.entry_ts_ms, 4_500_000, "entryTimestamp");
+                assert!(
+                    (ev.fills[0].qty as f64 / 1e6 - 45.5 / 99.0).abs() < 1e-6,
+                    "qty = 45.5/99: {}",
+                    ev.fills[0].qty as f64 / 1e6
+                );
+                assert!(!state.rungs(Side::Long)[1].filled, "rung 2 stays armed");
+                assert_eq!(state.base(Side::Long).0, 100_000_000, "longBase 100");
+                assert_eq!(state.total_wins + state.total_losses, 0, "no closes");
+            }
+            _ => unreachable!(),
+        }
+        if i == 4 {
+            assert_eq!(state.paused, 0, "pause expired after bar 4");
+            assert_eq!(
+                state.rungs(Side::Long).len(),
+                2,
+                "armed rungs survive the pause ticks"
+            );
+        }
+    }
+    assert_eq!(state.capital.0, 91_000_000, "capital still 91 after bar 5");
+    (state.capital.0 as f64 / 1e6, events)
+}
+
 fn main() {
     // ---- V1 (leverage 1): the fixture's primary pin ----
     let v1 = replay(1);
@@ -357,8 +441,14 @@ fn main() {
     );
     assert_eq!(s.paused_after_stop, 3, "stopRatio pause");
 
+    // ---- Drawdown (ladder-drawdown.md): re-anchor + paused-then-retry ----
+    let (dd_capital, dd_events) = replay_drawdown();
+    println!("Drawdown (capital 91, peak 100, maxDrawdownPct 8)");
+    println!("  events/bar     {dd_events:?}  (TS: no events bars 1-4, 1 fill bar 5)");
+    println!("  final capital  {dd_capital}  (TS: 91, untouched)");
+
     println!(
-        "ladder_parity: V1 {v1_delta:.3e} / V1b {v1b_delta:.3e} / boundary {b_delta:.3e} \
-         — event shapes and pins match"
+        "ladder_parity: V1 {v1_delta:.3e} / V1b {v1b_delta:.3e} / boundary {b_delta:.3e} / \
+         drawdown {dd_capital} — event shapes and pins match"
     );
 }
