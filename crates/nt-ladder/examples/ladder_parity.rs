@@ -95,7 +95,15 @@ struct Run {
     max_qty_delta_units: f64,
 }
 
-fn replay(leverage: i64) -> Run {
+fn replay(leverage: i64, cross_bp: i64) -> Run {
+    // Slice 5: the entry-cross term rides BOTH fee lines (TS
+    // `liveEntryCrossBps`, ladder-engine.ts:307-309). cross_bp 0 = the
+    // 6bar/boundary fixtures; 15 = the soak's value, which any Gate 4
+    // shadow diff must carry.
+    let sizing = SizingOptions {
+        live_entry_cross_bps: cross_bp,
+        ..opts(leverage)
+    };
     let mut state = LadderState::fresh(m(100.0), cfg());
     let mut fills_by_bar = Vec::new();
     let mut closes_by_bar = Vec::new();
@@ -107,11 +115,7 @@ fn replay(leverage: i64) -> Run {
         // reference). advance_bar is a single-bar mutator, so replay the same
         // shape: bar 0 seeds, bars 1-3 are processed.
         if i == 0 {
-            let ev = advance_bar(
-                &mut state,
-                &bar(0, 100.0, 100.0, 100.0, 100.0),
-                opts(leverage),
-            );
+            let ev = advance_bar(&mut state, &bar(0, 100.0, 100.0, 100.0, 100.0), sizing);
             assert_eq!(ev.fills.len(), 0, "seed bar must not fill");
             assert_eq!(ev.closes.len(), 0, "seed bar must not close");
         } else {
@@ -121,7 +125,7 @@ fn replay(leverage: i64) -> Run {
                 (3, 100.8, 100.8, 100.8, 100.8),
             ];
             let (idx, o, h, l, c) = bars.iter().find(|(x, ..)| *x == i).unwrap();
-            let ev = advance_bar(&mut state, &bar(*idx, *o, *h, *l, *c), opts(leverage));
+            let ev = advance_bar(&mut state, &bar(*idx, *o, *h, *l, *c), sizing);
             // Fixture pins bar-1 qty: long 50/99, short 50/101. Compare against
             // the EXACT ratio, not the 8-significant-digit value the fixture
             // prints — TS's own value is Decimal-exact, and my earlier
@@ -314,7 +318,7 @@ fn replay_drawdown() -> (f64, Vec<(usize, usize)>) {
 
 fn main() {
     // ---- V1 (leverage 1): the fixture's primary pin ----
-    let v1 = replay(1);
+    let v1 = replay(1, 0);
     println!("V1 (leverage 1)");
     println!("  fills by bar   {:?}  (TS: [2, 0, 0])", v1.fills_by_bar);
     println!("  closes by bar  {:?}  (TS: [0, 2, 0])", v1.closes_by_bar);
@@ -361,7 +365,7 @@ fn main() {
     );
 
     // ---- V1b (leverage 3): same event shape, different capital ----
-    let v1b = replay(3);
+    let v1b = replay(3, 0);
     println!("V1b (leverage 3)");
     println!("  fills by bar   {:?}  (TS: [2, 0, 0])", v1b.fills_by_bar);
     println!("  closes by bar  {:?}  (TS: [0, 2, 0])", v1b.closes_by_bar);
@@ -374,6 +378,31 @@ fn main() {
     let v1b_delta = (v1b.final_capital - 102.71852683).abs();
     println!("  capital delta  {v1b_delta:.3e} USDT  (budget 1e-6)");
     assert!(v1b_delta < 1e-6, "V1b capital drifted: {v1b_delta:.3e}");
+
+    // ---- V1c (leverage 1, cross 15bp): the slice-5 cross term is LIVE ----
+    // Fee line becomes maker 5bp*2 + cross 15bp = 25bp per target close.
+    // The itemisation matters: a Gate 4 shadow diff at the soak's
+    // liveEntryCrossBps must attribute -0.1506 USDT of this round trip
+    // (100.902125 -> 100.751506) to the cross component, not to
+    // "rounding" or "unexplained".
+    let v1c = replay(1, 15);
+    println!("V1c (leverage 1, entry-cross 15bp)");
+    println!("  fee line       target = maker 5bp * 2 + cross 15bp = 25bp");
+    println!(
+        "  final capital  {:.12}  (exact rational line: 100.7515063850135)",
+        v1c.final_capital
+    );
+    assert_eq!(
+        v1c.close_reasons,
+        vec![CloseReason::Target, CloseReason::Target],
+        "V1c reasons"
+    );
+    let v1c_delta = (v1c.final_capital - 100.751_506_385_014_f64).abs();
+    println!("  capital delta  {v1c_delta:.3e} USDT  (budget 1e-6)");
+    assert!(
+        v1c_delta < 1e-6,
+        "V1c cross-term capital drifted: {v1c_delta:.3e}"
+    );
 
     // ---- Boundary (ladder-boundary.md): whole-ladder stop-out + pause ----
     let b = replay_boundary(0);
@@ -448,7 +477,7 @@ fn main() {
     println!("  final capital  {dd_capital}  (TS: 91, untouched)");
 
     println!(
-        "ladder_parity: V1 {v1_delta:.3e} / V1b {v1b_delta:.3e} / boundary {b_delta:.3e} / \
-         drawdown {dd_capital} — event shapes and pins match"
+        "ladder_parity: V1 {v1_delta:.3e} / V1b {v1b_delta:.3e} / V1c {v1c_delta:.3e} / \
+         boundary {b_delta:.3e} / drawdown {dd_capital} — event shapes and pins match"
     );
 }
