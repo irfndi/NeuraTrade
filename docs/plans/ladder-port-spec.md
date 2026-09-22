@@ -58,6 +58,23 @@ with the reason it is deferred.
 
 `--leverage 1` is verified in the shared `championArgs` array
 (`ecosystem.champion-soak.config.cjs:95-165`), consumed by both units
+
+**But the CLI value is NOT the runtime value — do not port this table
+verbatim.** `makeLadderOptions` (`scalp.ts:4686-4709`) hardcodes
+`maxNotionalPct: 100` and `fullyDynamicLeverage: true` on every ladder call,
+and `ladderPartitionPositionPct` expands the 50 to 100 from the whitelist
+weights. Effective runtime values, each traced and box-verified:
+
+| Knob | CLI arg | **Runtime** | Why |
+|---|---|---|---|
+| Leverage | 1 | **5x** | `fullyDynamicLeverage: true` (`scalp.ts:4702`) → `dynamicLeverage` returns `Math.max(1, cap)`, ignoring `--leverage`; capital 48.35 < 500 → sizeCap 10, budget 1.0 → factor 0.5 → `floor(10×0.5)` = 5 |
+| `maxPositionPct` | 50 | **100** | `ladderPartitionPositionPct(rawWeight 0.25, 50, cap)` → `min(100, 50/0.25)` |
+| `maxNotionalPct` | absent | **100** | hardcoded `scalp.ts:4698` |
+| capital (sizing) | 200 | **50 per partition** | whitelist rows carry `allocatedWeight 0.25`; `200 × 0.25` |
+
+Consequence: `marginSizedRaw == notionalSizedRaw` (both `capital/rungs/price`),
+so `raw = min(a, a)` is a **tie** and neither term binds. See the sizing
+section for the four `ladderRungQty` traps this makes reachable.
 `neuratrade-champion-paper` (`ecosystem.champion-soak.config.cjs:167-169`)
 and `neuratrade-champion-demo` (`ecosystem.champion-soak.config.cjs:190-192`).
 Neither unit passes `--fully-dynamic-leverage` or `--max-leverage`, so
