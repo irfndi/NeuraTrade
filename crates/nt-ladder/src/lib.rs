@@ -124,6 +124,13 @@ pub struct LadderConfig {
     /// Stop distance as a multiple of the grid step; 0 = legacy boundary.
     pub stop_ratio_x100: i64,
     pub conservative_intrabar: bool,
+    // NOTE: sizing knobs (maxPositionPct / maxNotionalPct / leverage /
+    // fullyDynamicLeverage / maxLeverage) deliberately do NOT live here. TS
+    // persists exactly these 10 fingerprint fields and compares exactly them
+    // (`matchesLadderGridSettings`), while `configMatchesLadderState` ignores
+    // sizing entirely. Adding them would silently drop them on the
+    // save/load round trip and force-reseed on every tick. They belong on
+    // `SizingOptions`, which is never persisted.
 }
 
 /// Persistent ladder state: 1:1 with TS `LadderPaperState`
@@ -642,6 +649,10 @@ pub fn seed_bar(state: &mut LadderState, ctx: &SeedContext) -> (SeedOutcome, See
 
 /// Exchange contract sizing constraints. Mirrors TS `ContractSizeSpec`.
 ///
+/// **Units are BASE-ASSET MICROS**, unlike TS where `minQty`/`qtyStep` are
+/// whole-asset floats (`0.001` SOL). The adapter converts once, at the
+/// boundary, via `x * 1_000_000`, so all math in this module stays integer.
+///
 /// `None` when the bybit instrument fetch fails or the resolved contract is
 /// malformed (`bybitContractSpecs` returns undefined,
 /// ladder-engine.ts:3629-3647), so the specs-absent branch is a real runtime
@@ -777,17 +788,22 @@ pub fn rung_qty(capital: Money, opts: SizingOptions, fill_price: Money) -> RungQ
     let qty = orderable_qty(raw, spec, fill_price, alloc);
     let notional = notional_usdt(qty, fill_price);
     let leverage = dynamic_leverage(notional, alloc, opts, cap);
-    let margin = Money(notional.0 / leverage.max(1));
+    let lev = leverage.max(1);
+    // Compare in NOTIONAL space: `notional > alloc * leverage` is exactly TS's
+    // `notional/leverage > alloc` with no truncating division, so a rung whose
+    // margin sits exactly on the cap reads the same way TS reads it.
+    let margin = Money(notional.0 / lev);
+    let margin_exceeds = notional.0 > alloc.0.saturating_mul(lev);
 
     // Trap 2a: minQty raise pushed margin past the per-rung cap.
-    if margin > alloc {
+    if margin_exceeds {
         return RungQty {
             qty: 0,
-            leverage,
+            leverage: lev,
             skip: Some(SkipReason::MinNotionalExceedsMargin {
                 notional,
                 margin,
-                leverage,
+                leverage: lev,
                 cap: alloc,
             }),
         };
