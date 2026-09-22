@@ -88,14 +88,14 @@ const repo: PaperTradingRepositoryService = {
   listRecentTrades: () => Effect.succeed(trades),
   countTradesForDate: () => Effect.succeed(trades.length),
   getTodayRealizedPnl: () => Effect.succeed(money(0)),
-  getStartOfDayCapital: (_d: Date, cap) => Effect.succeed(cap),
-  getGridState: (ex, sym, tf) =>
+  getStartOfDayCapital: (_d: Date, cap: ReturnType<typeof money>) => Effect.succeed(cap),
+  getGridState: (ex: string, sym: string, tf: string) =>
     Effect.succeed(
       state && state.exchange === ex && state.symbol === sym && state.timeframe === tf
         ? state
         : null,
     ),
-  saveGridState: (s) =>
+  saveGridState: (s: GridPaperState) =>
     Effect.sync(() => {
       state = s;
     }),
@@ -105,11 +105,11 @@ const repo: PaperTradingRepositoryService = {
     Effect.sync(() => {
       state = null;
     }),
-  recordGridTrade: (t) =>
+  recordGridTrade: (t: GridPaperTrade) =>
     Effect.sync(() => {
       trades.push(t);
     }),
-  listRecentGridTrades: (ex, sym, tf) =>
+  listRecentGridTrades: (ex: string, sym: string, tf: string) =>
     Effect.succeed(
       trades.filter(
         (t) => t.exchange === ex && t.symbol === sym && t.timeframe === tf,

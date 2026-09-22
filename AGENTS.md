@@ -269,7 +269,8 @@ See `README.md` and `docs/QUICKSTART.md` for full bd workflow.
 - Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 - New test files are opt-in. Do not create unit, integration, end-to-end, or spec files, or new test-only helpers/fixtures, unless the user explicitly requests their creation or approves it first. A request to implement, fix, test, or verify something does not by itself authorize new test files. Assume no by default; ask only when creating them has a concrete benefit, not as a routine step.
 - Prefer running existing tests and direct browser/runtime checks without adding test files. Where test changes are in scope, exercise observable behavior rather than asserting source-code strings, implementation shapes, or that tests exist.
-
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact. 
+- If you must test a system in isolation, FIRST write all the ways it could fail, THEN write the code.
 
 When using Bend:
 - run `bend guide` to learn it
