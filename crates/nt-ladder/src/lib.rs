@@ -711,6 +711,13 @@ pub struct SizingOptions {
     pub max_leverage: i64,
     /// Contract sizing, or `None` when specs did not resolve.
     pub spec: Option<ContractSpec>,
+    /// Maker fee in BASIS POINTS. TS's `feePct` is a percent (0.05 = 5bp), so
+    /// the caller converts once: `feePct * 100`.
+    pub maker_fee_bp: i64,
+    /// Taker exit fee in bp; falls back to `maker_fee_bp` (TS `takerExitFeePct`).
+    pub taker_exit_fee_bp: Option<i64>,
+    /// Live-entry cross cost in bps; 0 unless explicitly set.
+    pub live_entry_cross_bps: i64,
 }
 
 /// Per-rung allocation: `capital * (maxPositionPct/100) / rungs`.
@@ -865,6 +872,18 @@ fn scale(a: i64, num: i64, denom: i64) -> i64 {
     ((a as i128 * num as i128) / denom as i128) as i64
 }
 
+/// `scale` rounded to nearest rather than truncated. Used where a value is
+/// converted into `Money` micros and truncation would compound.
+fn scale_round(a: i64, num: i64, denom: i64) -> i64 {
+    let prod = a as i128 * num as i128;
+    let d = denom as i128;
+    if prod >= 0 {
+        ((prod + d / 2) / d) as i64
+    } else {
+        ((prod - d / 2) / d) as i64
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Slice 4: the per-bar tick loop. Port of TS `advanceLadderBar`
 // (ladder-engine.ts:949-1004) + `fillLadderSide` (:638-670) +
@@ -951,6 +970,34 @@ pub struct BarContext {
     pub conservative_intrabar: bool,
 }
 
+/// Fee schedule. TS reads `feePct` (maker), `takerExitFeePct` (falls back to
+/// `feePct`), and `liveEntryCrossBps` (0 unless explicitly set), then forms
+/// `targetFee = maker*2 + cross` and `stopFee = maker + taker + cross`.
+/// Stored in basis points (1bp = 0.01%).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeSchedule {
+    pub maker_bp: i64,
+    pub taker_bp: i64,
+    pub cross_bp: i64,
+    /// Leverage multiplier applied to the net return.
+    pub leverage: i64,
+}
+
+impl FeeSchedule {
+    pub fn from_options(opts: &SizingOptions) -> Self {
+        FeeSchedule {
+            maker_bp: opts.maker_fee_bp,
+            taker_bp: opts.taker_exit_fee_bp.unwrap_or(opts.maker_fee_bp),
+            cross_bp: opts.live_entry_cross_bps,
+            // In fully-dynamic mode the engine's cap is applied at sizing
+            // time and the return is NOT multiplied by it here — TS's
+            // `closeRung` uses `opts.leverage`, which the fully-dynamic path
+            // leaves at its requested value.
+            leverage: opts.leverage.max(1),
+        }
+    }
+}
+
 /// Advance the ladder by one bar: pause decay, drawdown re-anchor, re-seed
 /// flat sides, fill touched rungs, then close on target or max-hold.
 ///
@@ -992,8 +1039,9 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
     let _ = seed_side(state, Side::Long, &seed_ctx);
     let _ = seed_side(state, Side::Short, &seed_ctx);
 
-    manage_side(state, ctx, opts, Side::Long, &mut events);
-    manage_side(state, ctx, opts, Side::Short, &mut events);
+    let fees = FeeSchedule::from_options(&opts);
+    manage_side(state, ctx, opts, &fees, Side::Long, &mut events);
+    manage_side(state, ctx, opts, &fees, Side::Short, &mut events);
 
     state.bars_consumed += 1;
     state.last_ts_ms = Some(ctx.candle.ts_ms);
@@ -1007,6 +1055,7 @@ fn manage_side(
     state: &mut LadderState,
     ctx: &BarContext,
     opts: SizingOptions,
+    fees: &FeeSchedule,
     side: Side,
     events: &mut BarEvents,
 ) {
@@ -1017,7 +1066,7 @@ fn manage_side(
     if state.rungs(side).iter().all(|r| !r.filled) {
         return;
     }
-    close_targets(state, ctx, side, events);
+    close_targets(state, ctx, fees, side, events);
 }
 
 /// TS `fillLadderSide` (:638-670): progressive fill on touch.
@@ -1078,7 +1127,13 @@ fn fill_side(
 /// step — the LADDER-STEP-ANCHOR divergence the spec records. `can_close_on_
 /// same_bar` is the conservative-intrabar rule: a rung cannot target-exit on
 /// the bar it filled unless the config explicitly opts out.
-fn close_targets(state: &mut LadderState, ctx: &BarContext, side: Side, events: &mut BarEvents) {
+fn close_targets(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    fees: &FeeSchedule,
+    side: Side,
+    events: &mut BarEvents,
+) {
     let mut still_open: Vec<Rung> = Vec::new();
     let mut any_closed = false;
     let rungs = state.rungs(side).to_vec();
@@ -1104,7 +1159,18 @@ fn close_targets(state: &mut LadderState, ctx: &BarContext, side: Side, events: 
             } else {
                 Money(scale(target.0, 10_000 + ctx.slippage_bp, 10_000))
             };
-            close_rung(state, ctx, side, rung, exit, CloseReason::Target, events);
+            close_rung(
+                state,
+                ctx,
+                CloseRequest {
+                    side,
+                    rung,
+                    exit_price: exit,
+                    reason: CloseReason::Target,
+                    fees,
+                },
+                events,
+            );
             any_closed = true;
             continue;
         }
@@ -1114,7 +1180,18 @@ fn close_targets(state: &mut LadderState, ctx: &BarContext, side: Side, events: 
             && held >= ctx.max_hold_bars.saturating_mul(ctx.ms_per_bar)
         {
             let exit = side_exit_price(side, ctx.candle.close, ctx.slippage_bp);
-            close_rung(state, ctx, side, rung, exit, CloseReason::MaxHold, events);
+            close_rung(
+                state,
+                ctx,
+                CloseRequest {
+                    side,
+                    rung,
+                    exit_price: exit,
+                    reason: CloseReason::MaxHold,
+                    fees,
+                },
+                events,
+            );
             any_closed = true;
             continue;
         }
@@ -1131,36 +1208,97 @@ fn close_targets(state: &mut LadderState, ctx: &BarContext, side: Side, events: 
     }
 }
 
-/// TS `closeRung`: apply PnL to capital, drop the rung, emit the event.
-///
-/// PnL is `(exit - entry) * qty` for longs and `(entry - exit) * qty` for
-/// shorts, in base micros x USDT micros -> USDT micros (hence the 1e6 scale).
-/// Fees are NOT applied yet (slice 5).
-fn close_rung(
-    state: &mut LadderState,
-    ctx: &BarContext,
+/// One rung close, bundled so `close_rung` stays within the arg limit.
+#[derive(Debug, Clone, Copy)]
+struct CloseRequest<'a> {
     side: Side,
     rung: Rung,
     exit_price: Money,
     reason: CloseReason,
+    fees: &'a FeeSchedule,
+}
+
+/// TS `closeRung` (ladder-engine.ts:~285-345): apply the return fraction to
+/// capital, drop the rung, emit the event.
+///
+/// **PnL is a RETURN FRACTION, not a qty-times-price amount.** TS computes
+/// `pricePnl = (exit - entry) / entry` (long) or `(entry - exit) / entry`
+/// (short), subtracts a fee, multiplies by leverage, then by
+/// `sizePerRung = positionFraction / rungs`, and applies it MULTIPLICATIVELY:
+/// `capital *= 1 + equityReturn`. So the rung's `filled_qty` does not enter
+/// the capital math at all — it is only the size the live executor sends.
+/// A qty-times-price implementation diverges immediately.
+///
+/// Fees (slice 5 ports the split properly): `target` exits pay
+/// `makerFee*2 + crossFee`, everything else `makerFee + takerFee + crossFee`.
+/// Funding cost is not ported yet.
+fn close_rung(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    close: CloseRequest,
     events: &mut BarEvents,
 ) {
+    let CloseRequest {
+        side,
+        rung,
+        exit_price,
+        reason,
+        fees,
+    } = close;
     let capital_before = state.capital;
-    let delta = if side == Side::Long {
+    let price_pnl_num = if side == Side::Long {
         exit_price.0 - rung.entry_price.0
     } else {
         rung.entry_price.0 - exit_price.0
     };
-    let pnl = Money(scale(rung.filled_qty, delta, 1_000_000));
-    state.capital = Money(capital_before.0 + pnl.0);
-    if pnl.0 > 0 {
-        state.total_wins += 1;
-    } else if pnl.0 < 0 {
+    // pricePnl is (exit - entry)/entry. Both are micros, so the ratio is
+    // already dimensionless; scale it to 1e18 fixed point so a 5bp fee
+    // subtracts exactly rather than truncating.
+    let price_pnl = scale(
+        price_pnl_num,
+        1_000_000_000_000_000_000,
+        rung.entry_price.0.max(1),
+    );
+    let is_liquidation = reason == CloseReason::Liquidation;
+    let fee = if is_liquidation {
+        0
+    } else if reason == CloseReason::Target {
+        fees.maker_bp * 2 + fees.cross_bp
+    } else {
+        fees.maker_bp + fees.taker_bp + fees.cross_bp
+    };
+    let net = price_pnl - scale(fee, 1_000_000_000_000_000_000, 10_000);
+    let leveraged = if is_liquidation {
+        -1_000_000_000_000_000_000
+    } else {
+        net * fees.leverage
+    };
+    // `leveraged` is already in 1e12; sizePerRung is positionFraction/rungs,
+    // and positionFraction is 1 here, so this is a plain divide.
+    let equity_return = if is_liquidation {
+        -scale(1_000_000_000_000_000_000, 1, ctx.rung_count.max(1) as i64)
+    } else {
+        leveraged / ctx.rung_count.max(1) as i64
+    };
+    // capital *= (1 + equity_return), floored at 0 like TS's Decimal.max.
+    // Round rather than truncate: `Money` is micro-USDT, and truncating twice
+    // per round-trip compounds to ~1.2e-6 on the 6-bar fixture, which exceeds
+    // the representation's own ceiling.
+    let next = scale_round(
+        capital_before.0,
+        1_000_000_000_000_000_000 + equity_return,
+        1_000_000_000_000_000_000,
+    );
+    state.capital = Money(next.max(0));
+    if is_liquidation || net < 0 {
         state.total_losses += 1;
+    } else {
+        state.total_wins += 1;
     }
     if state.capital > state.peak_capital {
         state.peak_capital = state.capital;
     }
+    let pnl = Money(state.capital.0 - capital_before.0);
     events.closes.push(CloseEvent {
         rung_index: rung.rung_index,
         side,

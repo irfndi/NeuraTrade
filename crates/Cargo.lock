@@ -33,6 +33,7 @@ dependencies = [
 name = "nt-ladder"
 version = "0.1.0"
 dependencies = [
+ "nt-grid",
  "nt-risk",
 ]
 

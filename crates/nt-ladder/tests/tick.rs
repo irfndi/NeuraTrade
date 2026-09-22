@@ -40,6 +40,9 @@ fn opts() -> SizingOptions {
             min_qty: 0,
             qty_step: 1_000,
         }),
+        maker_fee_bp: 5,
+        taker_exit_fee_bp: None,
+        live_entry_cross_bps: 0,
     }
 }
 

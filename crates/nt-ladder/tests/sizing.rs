@@ -26,6 +26,9 @@ fn soak(spec: Option<ContractSpec>) -> SizingOptions {
         fully_dynamic: true,
         max_leverage: 10,
         spec,
+        maker_fee_bp: 5,
+        taker_exit_fee_bp: None,
+        live_entry_cross_bps: 0,
     }
 }
 
