@@ -864,3 +864,332 @@ fn ceil_div(a: i64, b: i64) -> i64 {
 fn scale(a: i64, num: i64, denom: i64) -> i64 {
     ((a as i128 * num as i128) / denom as i128) as i64
 }
+
+// ---------------------------------------------------------------------------
+// Slice 4: the per-bar tick loop. Port of TS `advanceLadderBar`
+// (ladder-engine.ts:949-1004) + `fillLadderSide` (:638-670) +
+// `closeLadderTargets` (:833-885).
+//
+// Mirrors TS's signature: state and options are SEPARATE parameters
+// (`advanceLadderBar(w, candles, i, opts)`) — `opts` is caller-supplied per
+// invocation, `state` is what gets persisted. `SizingOptions` therefore
+// threads alongside `&mut LadderState`, never inside it.
+// ---------------------------------------------------------------------------
+
+/// One OHLCV bar. TS `CandleLike` is `open/high/low/close` + `timestamp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Candle {
+    pub open: Money,
+    pub high: Money,
+    pub low: Money,
+    pub close: Money,
+    /// Bar open time, ms epoch.
+    pub ts_ms: i64,
+}
+
+/// A rung filled on this bar. Mirrors TS `LadderFillEvent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillEvent {
+    pub rung_index: u32,
+    pub side: Side,
+    /// Post-slippage entry price used by the paper ledger.
+    pub fill_price: Money,
+    /// Raw grid level, pre-slippage.
+    pub level: Money,
+    /// Orderable qty in base micros, resolved at fill time.
+    pub qty: i64,
+}
+
+/// Why a rung closed. Mirrors TS's four reasons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseReason {
+    Target,
+    Stop,
+    Liquidation,
+    MaxHold,
+}
+
+/// A rung closed on this bar. Mirrors TS `LadderCloseEvent`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CloseEvent {
+    pub rung_index: u32,
+    pub side: Side,
+    pub entry_price: Money,
+    pub exit_price: Money,
+    pub reason: CloseReason,
+    pub capital_before: Money,
+    pub capital_after: Money,
+    pub pnl: Money,
+    /// The rung's persisted filled qty — the exact size the close sends.
+    pub qty: i64,
+    pub entry_ts_ms: i64,
+    pub closed_ts_ms: i64,
+}
+
+/// One bar's events. Mirrors TS `LadderBarEvents`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BarEvents {
+    pub fills: Vec<FillEvent>,
+    pub closes: Vec<CloseEvent>,
+}
+
+/// Per-bar context, mirroring TS `LadderBarContext`'s derived knobs.
+#[derive(Debug, Clone, Copy)]
+pub struct BarContext {
+    pub bar_index: u64,
+    pub candle: Candle,
+    /// Current bar's step: `open * gridStepPct/100` — re-derived EVERY bar
+    /// (TS `createLadderBarContext`), unlike `Rung::step` which is frozen at
+    /// seed time.
+    pub step: Money,
+    /// Slippage as a multiplier in 1e4: 10000 = no slippage.
+    pub slippage_bp: i64,
+    pub rung_count: u32,
+    pub target_ratio_x100: i64,
+    pub max_hold_bars: i64,
+    pub ms_per_bar: i64,
+    pub conservative_intrabar: bool,
+}
+
+/// Advance the ladder by one bar: pause decay, drawdown re-anchor, re-seed
+/// flat sides, fill touched rungs, then close on target or max-hold.
+///
+/// Deliberately NOT ported yet (each named, per the spec's pattern): the chop
+/// gate and trend filter (both 0 in the soak config), the ladder stop and
+/// liquidation risk exits (`resolveLadderRiskExit`), and the maker/taker fee
+/// split. Those are slices 5+; this is fills + target/max-hold exits.
+pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOptions) -> BarEvents {
+    let mut events = BarEvents::default();
+
+    // Pause decay happens before anything else and short-circuits the bar.
+    if state.paused > 0 {
+        state.paused -= 1;
+        return events;
+    }
+
+    // Drawdown-peak re-anchor: a flat account blocked by realized drawdown can
+    // never trade its way back, so the kill latched forever with no operator
+    // reset path (TS comment, ENA shadow 2026-09-03: a +2.64 book went
+    // permanently silent after an 8% peak-to-capital slide). Re-anchor peak
+    // to capital and take the pause instead.
+    let any_filled = state.rungs(Side::Long).iter().any(|r| r.filled)
+        || state.rungs(Side::Short).iter().any(|r| r.filled);
+    if !any_filled && state.peak_capital > state.capital {
+        state.peak_capital = state.capital;
+        state.paused = state.config.grid_pause_after_loss_bars.max(0) as u64;
+    }
+
+    let seed_ctx = SeedContext {
+        open: ctx.candle.open,
+        close: ctx.candle.close,
+        step: ctx.step,
+        trend: None,
+        only_with_trend: state.config.only_with_trend,
+        chop_gate_active: false,
+        drawdown_breached: state.peak_capital > state.capital,
+        rung_count: ctx.rung_count,
+    };
+    let _ = seed_side(state, Side::Long, &seed_ctx);
+    let _ = seed_side(state, Side::Short, &seed_ctx);
+
+    manage_side(state, ctx, opts, Side::Long, &mut events);
+    manage_side(state, ctx, opts, Side::Short, &mut events);
+
+    state.bars_consumed += 1;
+    state.last_ts_ms = Some(ctx.candle.ts_ms);
+    events
+}
+
+/// TS `manageLadderSide` (ladder-engine.ts:892-904): fill, then close. The
+/// risk exit is not ported yet, so a stop-out falls through to
+/// `close_ladder_targets` rather than exiting early.
+fn manage_side(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    opts: SizingOptions,
+    side: Side,
+    events: &mut BarEvents,
+) {
+    if state.rungs(side).is_empty() {
+        return;
+    }
+    fill_side(state, ctx, opts, side, events);
+    if state.rungs(side).iter().all(|r| !r.filled) {
+        return;
+    }
+    close_targets(state, ctx, side, events);
+}
+
+/// TS `fillLadderSide` (:638-670): progressive fill on touch.
+///
+/// Two guards carried exactly: a rung fills only if the PREVIOUS rung on that
+/// side is filled (or it is index 0), and a floor-unorderable size is a clean
+/// HOLD — the rung is not marked filled and no event is emitted, so paper and
+/// live stay aligned.
+fn fill_side(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    opts: SizingOptions,
+    side: Side,
+    events: &mut BarEvents,
+) {
+    let count = state.rungs(side).len();
+    for index in 0..count {
+        let prev_filled = index == 0 || state.rungs(side)[index - 1].filled;
+        if !prev_filled {
+            continue;
+        }
+        let rung = state.rungs(side)[index];
+        if rung.filled || !level_touched(side, &ctx.candle, rung.level) {
+            continue;
+        }
+        // TS uses asymmetric slippage here: `level * slippage` for longs and
+        // `level / slippage` for shorts — NOT nt_grid's symmetric rule.
+        let fill_price = if side == Side::Long {
+            Money(scale(rung.level.0, 10_000 + ctx.slippage_bp, 10_000))
+        } else {
+            Money(scale(rung.level.0, 10_000, 10_000 + ctx.slippage_bp))
+        };
+        let sized = rung_qty(state.capital, opts, fill_price);
+        if sized.qty <= 0 || sized.skip.is_some() {
+            continue;
+        }
+        state.rungs_mut(side)[index] = Rung {
+            filled: true,
+            entry_price: fill_price,
+            entry_bar: state.bars_consumed,
+            entry_ts_ms: ctx.candle.ts_ms,
+            filled_qty: sized.qty,
+            ..rung
+        };
+        events.fills.push(FillEvent {
+            rung_index: rung.rung_index,
+            side,
+            fill_price,
+            level: rung.level,
+            qty: sized.qty,
+        });
+    }
+}
+
+/// TS `closeLadderTargets` (:833-885): per-rung take-profit, else max-hold.
+///
+/// Target uses the rung's FROZEN `step` (seed-time), not the bar's current
+/// step — the LADDER-STEP-ANCHOR divergence the spec records. `can_close_on_
+/// same_bar` is the conservative-intrabar rule: a rung cannot target-exit on
+/// the bar it filled unless the config explicitly opts out.
+fn close_targets(state: &mut LadderState, ctx: &BarContext, side: Side, events: &mut BarEvents) {
+    let mut still_open: Vec<Rung> = Vec::new();
+    let mut any_closed = false;
+    let rungs = state.rungs(side).to_vec();
+    for rung in rungs {
+        if !rung.filled {
+            still_open.push(rung);
+            continue;
+        }
+        let target = if side == Side::Long {
+            Money(rung.entry_price.0 + scale(rung.step.0, ctx.target_ratio_x100, 100))
+        } else {
+            Money(rung.entry_price.0 - scale(rung.step.0, ctx.target_ratio_x100, 100))
+        };
+        let target_touched = if side == Side::Long {
+            ctx.candle.high >= target
+        } else {
+            ctx.candle.low <= target
+        };
+        let can_close_same_bar = !ctx.conservative_intrabar || rung.entry_bar < ctx.bar_index;
+        if target_touched && can_close_same_bar {
+            let exit = if side == Side::Long {
+                Money(scale(target.0, 10_000, 10_000 + ctx.slippage_bp))
+            } else {
+                Money(scale(target.0, 10_000 + ctx.slippage_bp, 10_000))
+            };
+            close_rung(state, ctx, side, rung, exit, CloseReason::Target, events);
+            any_closed = true;
+            continue;
+        }
+        let held = ctx.candle.ts_ms.saturating_sub(rung.entry_ts_ms);
+        if ctx.max_hold_bars > 0
+            && rung.entry_ts_ms > 0
+            && held >= ctx.max_hold_bars.saturating_mul(ctx.ms_per_bar)
+        {
+            let exit = side_exit_price(side, ctx.candle.close, ctx.slippage_bp);
+            close_rung(state, ctx, side, rung, exit, CloseReason::MaxHold, events);
+            any_closed = true;
+            continue;
+        }
+        still_open.push(rung);
+    }
+    *state.rungs_mut(side) = still_open;
+    if any_closed && state.rungs(side).iter().all(|r| !r.filled) {
+        *state.rungs_mut(side) = Vec::new();
+        if side == Side::Long {
+            state.long_base = Money::ZERO;
+        } else {
+            state.short_base = Money::ZERO;
+        }
+    }
+}
+
+/// TS `closeRung`: apply PnL to capital, drop the rung, emit the event.
+///
+/// PnL is `(exit - entry) * qty` for longs and `(entry - exit) * qty` for
+/// shorts, in base micros x USDT micros -> USDT micros (hence the 1e6 scale).
+/// Fees are NOT applied yet (slice 5).
+fn close_rung(
+    state: &mut LadderState,
+    ctx: &BarContext,
+    side: Side,
+    rung: Rung,
+    exit_price: Money,
+    reason: CloseReason,
+    events: &mut BarEvents,
+) {
+    let capital_before = state.capital;
+    let delta = if side == Side::Long {
+        exit_price.0 - rung.entry_price.0
+    } else {
+        rung.entry_price.0 - exit_price.0
+    };
+    let pnl = Money(scale(rung.filled_qty, delta, 1_000_000));
+    state.capital = Money(capital_before.0 + pnl.0);
+    if pnl.0 > 0 {
+        state.total_wins += 1;
+    } else if pnl.0 < 0 {
+        state.total_losses += 1;
+    }
+    if state.capital > state.peak_capital {
+        state.peak_capital = state.capital;
+    }
+    events.closes.push(CloseEvent {
+        rung_index: rung.rung_index,
+        side,
+        entry_price: rung.entry_price,
+        exit_price,
+        reason,
+        capital_before,
+        capital_after: state.capital,
+        pnl,
+        qty: rung.filled_qty,
+        entry_ts_ms: rung.entry_ts_ms,
+        closed_ts_ms: ctx.candle.ts_ms,
+    });
+}
+
+/// TS `sideExitPrice`: market close at the bar's close, slipped.
+fn side_exit_price(side: Side, close: Money, slippage_bp: i64) -> Money {
+    if side == Side::Long {
+        Money(scale(close.0, 10_000, 10_000 + slippage_bp))
+    } else {
+        Money(scale(close.0, 10_000 + slippage_bp, 10_000))
+    }
+}
+
+/// TS `sideLevelTouched`: a long rung fills when price falls TO the level, a
+/// short rung when price rises TO it.
+fn level_touched(side: Side, candle: &Candle, level: Money) -> bool {
+    match side {
+        Side::Long => candle.low <= level,
+        Side::Short => candle.high >= level,
+    }
+}
