@@ -646,3 +646,24 @@ slice 5 (fee basis pin to the soak `--fee-bp 2 --maker-fee-bp 2` + shadow
 assertion), slice 6 (deferred-surface triage: liquidation,
 `maxPositionDrawdownPct`, funding, leverage branch), then Gate 4's ladder
 half can run.
+
+## Progress log (2026-09-22 later — V1c cross pin + nt-cli ladder-shadow)
+
+> No box writes yet this block. All work in-repo, pushed.
+
+| Slice | Result | Evidence |
+| --- | --- | --- |
+| V1c cross term (`98b187ae`) | PASS | `ladder_parity` V1c replays at the soak's `liveEntryCrossBps 15`: fee line = maker 5bp*2 + 15bp = 25bp/target close, capital 100.7515063850135 exact-rational, micros delta 6.15e-7. Cross cost of the round trip **-0.1506 USDT** — the item a Gate 4 diff must attribute to cross, not rounding. `replay()` now takes `cross_bp` |
+| `nt-cli ladder-shadow` (`e0cf5687`) | PASS | Gate 4 ladder-half primitive: panel CSV → `nt-ladder`, output line itemises `target/stop/maxhold/liquidation` reasons + `capital/paused/open`; `--ledger` appends one CSV row per closed rung. Cursor lives IN the ladder v3 `--resume` (`last_ts`), so there is no second `--state` file to drift; fresh start = window index 1 (TS `resolveLadderStartIndex:1739`). Defaults = the deployed soak's exact knobs (step130/target195/stop158/pause2/grids2/hold39/fee2-2/cross15/slip2/pos50/dd15/rungs2/15m/50U), every one a flag so a diff artifact carries its basis on the command line |
+| Grid-shadow non-regression | PASS | Panel load extracted to shared `load_panel()`; same CSV before/after → byte-identical `shadow bars=4 fills=3 gross=1010030 fees=1400 net=1008630 events=3` |
+| CLI fixture pins | PASS | 6bar V1 through `ladder-shadow` → `capital=100902126` (=100.902126, the example's pin); boundary → `capital=94447135`, `stop=2` exits @93.049, `paused=3`; rerun with no new bars → `tick bars=0`, cumulative wins/losses/capital intact |
+
+**Next:** CI x86_64 artifact → versioned `nt-cli` on the box (symlink
+untouched, per the box-write rule) → first Gate 4 ladder diff: TS
+`ladder_paper_trades` rows vs `nt-cli ladder-shadow --ledger` over the
+same window at the soak knobs, with every line item attributed
+(rounding 1e-6, `LADDER-STEP-ANCHOR`, fee split, cross 15bp, taker rate).
+P4 Step 5 stays BLOCKED-as-written: `nt-search` is the screen-slack
+kernel (prints its checksum), not a trial loop — swapping PM2's
+`autoresearch-w*` for it would kill research. The swap needs the worker
+to call the kernel first; never regress the running loop.
