@@ -23,6 +23,7 @@
 //! across ticks would compare it against a different window. Recorded as a
 //! deviation from TS.
 
+use nt_grid::account_scaled_leverage_cap;
 use nt_risk::Money;
 
 /// Which ladder a rung belongs to. TS: `LadderSide = "long" | "short"`.
@@ -622,4 +623,228 @@ pub fn seed_bar(state: &mut LadderState, ctx: &SeedContext) -> (SeedOutcome, See
     let long = seed_side(state, Side::Long, ctx);
     let short = seed_side(state, Side::Short, ctx);
     (long, short)
+}
+
+// ---------------------------------------------------------------------------
+// Slice 3: rung sizing. Port of TS `ladderRungQty`
+// (ladder-engine.ts:1243-1339) + `orderableQty` (types.ts:31-48).
+//
+// Four traps are reproduced deliberately, each a structural divergence rather
+// than a rounding detail (see docs/plans/ladder-port-spec.md):
+//   1. specs-absent returns raw with NO orderableQty and NO margin check
+//   2. two skips fire only AFTER orderableQty raises qty to minQty
+//   3. raw = min(marginSized, notionalSized); at the soak's runtime values
+//      the two are equal, so this is a tie and neither term binds
+//   4. orderableQty ceils to qtyStep, floors back only if the ceiled qty
+//      exceeds cap, then UNCONDITIONALLY raises to minQty — which is exactly
+//      what makes trap 2's skips reachable
+// ---------------------------------------------------------------------------
+
+/// Exchange contract sizing constraints. Mirrors TS `ContractSizeSpec`.
+///
+/// `None` when the bybit instrument fetch fails or the resolved contract is
+/// malformed (`bybitContractSpecs` returns undefined,
+/// ladder-engine.ts:3629-3647), so the specs-absent branch is a real runtime
+/// state and not a defensive fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractSpec {
+    pub min_qty: i64,
+    pub qty_step: i64,
+}
+
+/// Why a rung was not sized. Mirrors TS's `skipReason` strings so a monitor
+/// reading either runtime sees the same diagnosis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    PerRungAllocationZero,
+    NonPositiveFillPrice,
+    /// The min-orderable floor pushed notional past the per-rung cap.
+    MinNotionalExceedsMargin {
+        notional: Money,
+        margin: Money,
+        leverage: i64,
+        cap: Money,
+    },
+    /// The min-orderable floor pushed notional past the notional cap share.
+    MinNotionalExceedsCap {
+        notional: Money,
+        cap_share: Money,
+    },
+}
+
+/// Sizing outcome. `qty` is base-asset micros, matching `qty_base_micros`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RungQty {
+    pub qty: i64,
+    pub leverage: i64,
+    pub skip: Option<SkipReason>,
+}
+
+/// Sizing inputs, mirroring the `LadderPaperTradingOptions` fields the TS path
+/// actually reads.
+#[derive(Debug, Clone, Copy)]
+pub struct SizingOptions {
+    /// `maxPositionPct` as percent (0-100). Runtime value for the soak is 100
+    /// (partition-expanded), not the CLI's 50.
+    pub max_position_pct: i64,
+    /// `maxNotionalPct` as percent, or `None` when unset. Hardcoded to 100 on
+    /// every ladder call, so `Some(100)` is the soak's value.
+    pub max_notional_pct: Option<i64>,
+    /// `rungs` — from the whitelist row, not a CLI flag.
+    pub rungs: i64,
+    /// Requested leverage. Ignored when `fully_dynamic` is true.
+    pub leverage: i64,
+    /// When true, leverage is the account-scaled cap and `leverage` is ignored.
+    pub fully_dynamic: bool,
+    /// Ceiling from `NEURATRADE_MAX_LADDER_LEVERAGE` (default 10).
+    pub max_leverage: i64,
+    /// Contract sizing, or `None` when specs did not resolve.
+    pub spec: Option<ContractSpec>,
+}
+
+/// Per-rung allocation: `capital * (maxPositionPct/100) / rungs`.
+/// Mirrors TS `ladderRungSize` (ladder-engine.ts:1140-1154).
+pub fn per_rung_allocation(capital: Money, opts: SizingOptions) -> Money {
+    let rungs = opts.rungs.max(1);
+    let frac = opts.max_position_pct.clamp(0, 100);
+    Money(scale(capital.0, frac, 100) / rungs)
+}
+
+/// Ceil-then-floor-back contract rounding, then an unconditional minQty raise.
+/// Port of TS `orderableQty` (types.ts:31-48).
+///
+/// The final minQty raise is what makes the two margin/cap skips reachable:
+/// `qty` can exceed `cap` with no fallback, exactly as in TS.
+pub fn orderable_qty(raw_qty: i64, spec: ContractSpec, fill_price: Money, cap: Money) -> i64 {
+    if raw_qty <= 0 || spec.qty_step <= 0 {
+        return raw_qty.max(0);
+    }
+    let step = spec.qty_step;
+    let up = ceil_div(raw_qty, step) * step;
+    let qty = if notional_usdt(up, fill_price) <= cap {
+        up
+    } else {
+        (raw_qty / step) * step
+    };
+    qty.max(spec.min_qty)
+}
+
+/// TS `ladderRungQty` (ladder-engine.ts:1243-1339).
+pub fn rung_qty(capital: Money, opts: SizingOptions, fill_price: Money) -> RungQty {
+    let alloc = per_rung_allocation(capital, opts);
+    let leverage_floor = opts.leverage.max(1);
+    if alloc.0 <= 0 {
+        return RungQty {
+            qty: 0,
+            leverage: leverage_floor,
+            skip: Some(SkipReason::PerRungAllocationZero),
+        };
+    }
+    if fill_price.0 <= 0 {
+        return RungQty {
+            qty: 0,
+            leverage: leverage_floor,
+            skip: Some(SkipReason::NonPositiveFillPrice),
+        };
+    }
+    let cap = account_scaled_leverage_cap(
+        capital,
+        opts.max_position_pct.clamp(0, 100) * 100,
+        opts.max_leverage,
+    );
+    // `raw` is BASE micros (TS: Decimal.div gives base units), so USDT micros
+    // must be scaled by 1e6 before dividing by the price micros.
+    let margin_sized = scale(alloc.0, 1_000_000, fill_price.0);
+    let notional_sized = match opts.max_notional_pct {
+        None => margin_sized,
+        Some(pct) => {
+            let share = scale(capital.0, pct.clamp(0, 100), 100) / opts.rungs.max(1);
+            scale(share, 1_000_000, fill_price.0)
+        }
+    };
+    let raw = margin_sized.min(notional_sized);
+
+    // Trap 1: specs absent is structurally different — no rounding, no skips.
+    let Some(spec) = opts.spec else {
+        let lev = dynamic_leverage(notional_usdt(raw, fill_price), alloc, opts, cap);
+        return RungQty {
+            qty: raw.max(0),
+            leverage: lev,
+            skip: None,
+        };
+    };
+
+    let qty = orderable_qty(raw, spec, fill_price, alloc);
+    let notional = notional_usdt(qty, fill_price);
+    let leverage = dynamic_leverage(notional, alloc, opts, cap);
+    let margin = Money(notional.0 / leverage.max(1));
+
+    // Trap 2a: minQty raise pushed margin past the per-rung cap.
+    if margin > alloc {
+        return RungQty {
+            qty: 0,
+            leverage,
+            skip: Some(SkipReason::MinNotionalExceedsMargin {
+                notional,
+                margin,
+                leverage,
+                cap: alloc,
+            }),
+        };
+    }
+    // Trap 2b: same raise pushed notional past the cap share.
+    if let Some(pct) = opts.max_notional_pct {
+        let cap_share = Money(scale(capital.0, pct.clamp(0, 100), 100) / opts.rungs.max(1));
+        if notional > cap_share {
+            return RungQty {
+                qty: 0,
+                leverage,
+                skip: Some(SkipReason::MinNotionalExceedsCap {
+                    notional,
+                    cap_share,
+                }),
+            };
+        }
+    }
+    RungQty {
+        qty,
+        leverage,
+        skip: None,
+    }
+}
+
+/// TS `dynamicLeverage` (ladder-engine.ts:1198-1227).
+fn dynamic_leverage(raw_notional: Money, alloc: Money, opts: SizingOptions, cap: i64) -> i64 {
+    let cap = cap.max(1);
+    if opts.fully_dynamic {
+        return cap.max(1);
+    }
+    let requested = opts.leverage.max(1);
+    if alloc.0 <= 0 || raw_notional.0 <= 0 {
+        return requested;
+    }
+    let needed = ceil_div(raw_notional.0, alloc.0);
+    cap.min(requested.max(needed)).max(1)
+}
+
+/// Base micros -> USDT micros (the inverse of the `raw` scaling above).
+fn notional_usdt(qty_base_micros: i64, fill_price: Money) -> Money {
+    Money(scale(qty_base_micros, fill_price.0, 1_000_000))
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    if b <= 0 {
+        return 0;
+    }
+    let q = a / b;
+    if a % b != 0 && (a > 0) == (b > 0) {
+        q + 1
+    } else {
+        q
+    }
+}
+
+/// Integer scale, matching the engine's existing helper.
+fn scale(a: i64, num: i64, denom: i64) -> i64 {
+    ((a as i128 * num as i128) / denom as i128) as i64
 }

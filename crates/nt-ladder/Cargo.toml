@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 nt-risk = { path = "../nt-risk" }
+nt-grid = { path = "../nt-grid" }
