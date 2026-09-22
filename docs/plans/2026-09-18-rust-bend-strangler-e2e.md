@@ -382,7 +382,10 @@ Execute **Task 0 → Task 3** immediately on the live box (ops), then Task 4 in 
   `bun test` green on touched suites. No new warnings introduced per commit.
 - [ ] **Gate 2 — No regression:** paper + demo soaks stay up through every
   change; `closed-24h-*` never regresses to a sizing/min-capital block;
-  fill-count deltas explained per cycle (clever-cabin-85m).
+  fill-count deltas explained per cycle (clever-cabin-85m). The criterion is
+  `closed-24h-demo` **strictly increasing** over the window, read together
+  with the per-close `exit_reason` mix (`target` / `stop` / `max_hold`) from
+  `ladder_paper_trades` — so a timeout is never read as an edge.
 - [ ] **Gate 3 — Testnet momentum:** demo orders fill on testnet
   (`liveEntryCrossBps` cross-touch); `closed-24h-demo > 0` sustained across
   N consecutive monitor cycles (see the 2026-09-21 note for why the window,
@@ -542,7 +545,9 @@ venue is flat. No read-only Bybit position CLI exists (`exchange` only exposes
 Bybit UI/API, (2) preserve the dirty `autoresearch/knobs.ts` (already snapshotted
 at `autoresearch/results/knobs-live-20260920T1600Z.ts`), (3) `git pull` on the
 box, (4) restart ONLY `neuratrade-champion-demo`, (5) verify the first interval
-reads `open=1` or a market reason, (6) watch `closed-24h-demo`.
+reads `open=1` or a market reason, (6) watch `closed-24h-demo` — strictly
+increasing, and check each close's `exit_reason` so a `max_hold` timeout is
+not counted as a target or stop edge.
 
 ## Progress log (2026-09-21 — gate metric repaired, Bend pin, slice 1)
 
