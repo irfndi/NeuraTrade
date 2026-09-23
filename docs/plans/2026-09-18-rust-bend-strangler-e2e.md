@@ -688,7 +688,17 @@ live Rust caller must keep supplying a monotonically growing window (or
 re-anchor `entry_bar`) so the conservative gate keeps TS's same-bar
 semantics without inheriting its starvation.
 
-**Next:** watch Lightweight at `2d7e6ae` → install versioned `nt-cli`
-(symlink untouched) → forward shadow ledger: `--resume` over appended
-panel rows each interval, daily diff against `ladder_paper_trades` with
-per-line attribution (Gate 4's standing criterion: 0 unexplained).
+**Next:** ~~watch Lightweight at `2d7e6ae`~~ → GREEN (`d090fb3b`, first
+green Lightweight on this branch: install fix + test realign both proven
+in CI). Versioned binaries installed (`nt-cli-6f207dc4`,
+`nt-search-6f207dc4`, sha-verified, `health`=ok, search gate `=11`,
+symlink untouched — one scp-followed-symlink incident during the deploy
+was fully repaired: `nt-cli-7a7b18cc` restored byte-true from the local
+cross-build, stable path re-created). Forward diff driver landed as
+`scripts/gate4-shadow-diff.sh` (box read-only, local `/tmp/gate4`,
+idempotent): first forward run walked 3 new bars per symbol
+(`tick bars=3`, no new rust closes) and printed the window diff —
+TS 25 closes (0 target) vs Rust 38 (5 Target). Remaining: accumulate
+Gate 3/4 evidence across cycles, then P5 Step 6 cutover prep; P4 Step 5
+stays blocked-as-written (kernel must be called by the worker, never
+swap PM2 under a running research loop).
