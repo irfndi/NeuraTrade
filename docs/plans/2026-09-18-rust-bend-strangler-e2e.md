@@ -667,3 +667,28 @@ P4 Step 5 stays BLOCKED-as-written: `nt-search` is the screen-slack
 kernel (prints its checksum), not a trial loop — swapping PM2's
 `autoresearch-w*` for it would kill research. The swap needs the worker
 to call the kernel first; never regress the running loop.
+
+## Progress log (2026-09-23 — first Gate 4 ladder diff + TS live target-gate root cause)
+
+> Box touched only read-only (sqlite/pm2/log reads). CI gate repair is
+> in-repo. No live-path writes.
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| Lightweight gate, root cause 1 | FIXED (`96f399db`) | Workflow ran `bun test` on a fresh checkout with no `bun install` → `Cannot find package 'effect'` in 8s on every push since the workflow existed. Added frozen-lockfile installs for `neuratrade-cli-ts` + `telegram-service` before `make test`. Run time 13s → 2m12s (tests actually execute) |
+| Lightweight gate, root cause 2 | FIXED (`2d7e6ae`) | After install, one failure remained: `champion-soak-monitor.test.ts` pinned the pre-09-21 contract (`opened-count-*.txt`, `NEW LADDER ENTRIES`) while the monitor now counts closed round-trips from `ladder_paper_trades` (`closed-24h-*.txt`, `NEW LADDER CLOSES`). Test realigned; `bun test champion-soak-monitor` → 2 pass, typecheck clean. The 4 remaining oxlint errors (3× complexity in the sunset engine, 1× assertion in `grid_parity_fixture.ts`) predate this work — debt, not this gate |
+| First Gate 4 ladder diff (TS ledger vs Rust replay, soak knobs, window `09-18T00:00`) | RAN — divergence quantified | TS closes since 09-18: **24** (BTC4/ETH6/SOL6/LINK8); Rust fresh replay: **38** (BTC8/ETH9/SOL9/LINK12). Capital: BTC/ETH/SOL within ±4.5 USDT; **LINK widest: TS 52.78 vs Rust 48.26**. Rust reasons include 5 `target` exits (ETH1/SOL1/LINK3); TS reasons: `max_hold`/`stop` only |
+| Root cause of the target gap | PROVEN FROM SOURCE | TS lifetime ledger: **70 closes = 52 max_hold + 18 stop + 0 target**. With the deployed soak knobs (`trend 0`, `chop 0`, no replay), `ladderRequiredCandles` returns **2** (`ladder-engine.ts:1968-1973`): every live iteration is a 2-candle sliding window, so a fill stamps `entryBar 1` and every later iteration's current bar is also `1`. The conservative gate `entryBar < barIndex` (`types.ts` same-bar rule) is therefore false **forever** across interval boundaries — target exits are structurally unreachable in live TS; only the ungated `stop`/`max_hold` paths ever fire. Unit fixtures don't catch it because they replay one growing window |
+| Diff attribution (what is NOT a Rust defect) | RECORDED | The 24-vs-38 gap and the LINK capital split decompose into: (a) window origin — TS state was seeded 09-07…09-11 and carries capital/rungs across the 09-18 cohort lock, Rust replay starts fresh; (b) target-gate starvation — Rust finding targets where TS structurally cannot is the fix inheriting with the cutover, NOT divergence to chase to parity; (c) rounding 1e-6 / `LADDER-STEP-ANCHOR` / cross-15bp, itemised earlier |
+
+**Cutover note (P5 Step 6):** when champion-paper cuts to Rust, `target`
+closes start appearing for the first time — soak dashboards and Gate 3
+expectancy reading must treat that as the corrected baseline, and the
+live Rust caller must keep supplying a monotonically growing window (or
+re-anchor `entry_bar`) so the conservative gate keeps TS's same-bar
+semantics without inheriting its starvation.
+
+**Next:** watch Lightweight at `2d7e6ae` → install versioned `nt-cli`
+(symlink untouched) → forward shadow ledger: `--resume` over appended
+panel rows each interval, daily diff against `ladder_paper_trades` with
+per-line attribution (Gate 4's standing criterion: 0 unexplained).
