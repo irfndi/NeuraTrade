@@ -77,7 +77,7 @@ function run(env: Record<string, string>): MonitorRun {
 }
 
 describe("champion-soak-monitor.sh (clever-cabin-8rs)", () => {
-  it("baselines silently, then alerts statefully on new CLAIM/fills/OPENED", () => {
+  it("baselines silently, then alerts statefully on new CLAIM/fills/closes", () => {
     const root = mkdtempSync(join(tmpdir(), "champion-mon-"));
     const paperHome = setupHome(root, ".neuratrade-champion-paper", 1);
     const demoHome = setupHome(root, ".neuratrade-champion-demo", 1);
@@ -96,10 +96,10 @@ describe("champion-soak-monitor.sh (clever-cabin-8rs)", () => {
       SKIP_DISK: "1",
     };
 
-    // Run 1: baselines fills + OPENED, no claim yet -> exit 0.
+    // Run 1: baselines fills + 24h closes, no claim yet -> exit 0.
     expect(run(baseEnv).code).toBe(0);
     expect(existsSync(join(stateDir, "ladder-total-paper.txt"))).toBe(true);
-    expect(existsSync(join(stateDir, "opened-count-demo.txt"))).toBe(true);
+    expect(existsSync(join(stateDir, "closed-24h-demo.txt"))).toBe(true);
 
     // Run 2: a fresh CLAIM appears -> exit 1, logged once.
     writeFileSync(
@@ -116,7 +116,10 @@ describe("champion-soak-monitor.sh (clever-cabin-8rs)", () => {
     // Run 3: unchanged -> exit 0 (stateful, no repeat alert).
     expect(run(baseEnv).code).toBe(0);
 
-    // Run 4: new ladder fill + new OPENED entry in paper home -> exit 1.
+    // Run 4: new ladder fill (2nd DB row) in paper home -> exit 1.
+    // The row also lands in the 24h close window, so both the fills
+    // and the closes counters advance (the 09-21 metric: closed
+    // round-trips from ladder_paper_trades, not log greps).
     const paperDb = join(paperHome, "data", "neuratrade.db");
     sqlite(
       paperDb,
@@ -128,18 +131,13 @@ describe("champion-soak-monitor.sh (clever-cabin-8rs)", () => {
         100, 102, 202, 204, 2, 1, '100', '102', '202', '204', '2', '1',
         'take-profit', datetime('now','-30 minutes'), datetime('now','-10 minutes'));`,
     );
-    writeFileSync(
-      join(paperHome, "logs", "champion-paper.out.log"),
-      "[2026-09-07T01:00:00.000Z] bybit-futures:ETH/USDT:USDT OPENED | capital=204.00 | open=1 | closed=0\n",
-      { flag: "a" },
-    );
     expect(run(baseEnv).code).toBe(1);
     const logAfterFill = readFileSync(
       join(logDir, "champion-soak-monitor.log"),
       "utf8",
     );
     expect(logAfterFill).toContain("NEW LADDER FILLS");
-    expect(logAfterFill).toContain("NEW LADDER ENTRIES");
+    expect(logAfterFill).toContain("NEW LADDER CLOSES");
 
     // Run 5: unchanged again -> exit 0.
     expect(run(baseEnv).code).toBe(0);
