@@ -476,6 +476,18 @@ fn ladder_shadow(args: &[String]) -> ! {
             },
         },
     };
+    // The persisted fingerprint wins on resume (TS `matchesLadderGridSettings`
+    // policy), so a `--chop-gate-adx` that disagrees with the file would be
+    // silently ignored — the exact failure mode that made every earlier
+    // "candidate" replay test something other than the candidate. Refuse it.
+    if resume_path.is_some() && state.config.chop_gate_adx != chop_gate_adx {
+        eprintln!(
+            "resume has chop_gate_adx {} but --chop-gate-adx {chop_gate_adx}\n\
+             pass the persisted value (or a fresh --resume path) so the run matches the state",
+            state.config.chop_gate_adx,
+        );
+        std::process::exit(1);
+    }
     // TS `resolveLadderStartIndex`: fresh => 1 (bar 0 never processed);
     // resumed => first candle newer than lastTimestamp, else hold.
     let start = match state.last_ts_ms {

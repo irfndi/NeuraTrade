@@ -1179,6 +1179,30 @@ interaction is not even sign-stable across symbols. Also note fills *rise* with
 the gate (BTC 14 → 25, ETH 33 → 36) — blocked seeds re-arm later on cleaner
 trends, so the intuitive "a gate only removes trades" is wrong here.
 
+**Reproduce the 2×2** (deterministic: three fresh runs reproduce
+`108224963` digit for digit). The `max-grids 3` / `max-drawdown 5` pair is
+part of the basis — omitting it silently moves the `adx 20` arm to `108044490`:
+
+```bash
+cd crates && cargo build --release -p nt-cli
+for A in 0 20; do rm -f /tmp/e$A.txt; ./target/release/nt-cli ladder-shadow \
+  --bars /tmp/gate4/ETH-15m.csv --capital-usdt 100 --step-bp 75 --target-x100 300 \
+  --stop-x100 200 --max-hold-bars 0 --pause-bars 24 --max-grids 3 \
+  --max-drawdown-pct 5 --fee-bp 2 --maker-fee-bp 2 --cross-bp 15 --slip-bp 1 \
+  --pos-pct 50 --leverage 1 --chop-gate-adx $A --resume /tmp/e$A.txt; done
+```
+
+**Resume rule (enforced, not documented-only):** the persisted fingerprint
+wins on resume, so `--chop-gate-adx` disagreeing with the file used to be
+*ignored silently* — the same class of failure as the missing gate itself.
+`ladder-shadow` now exits 1 with `resume has chop_gate_adx 20 but
+--chop-gate-adx 0` instead. Passing the persisted value re-runs incrementally
+as before.
+
+**Default-off is bit-identical:** with no flag, the four deployed-soak sleeves
+still replay **74 closes / 75 fills**, BTC 47.93 / ETH 51.77 / SOL 47.25 /
+LINK 47.27 — the numbers already pinned elsewhere in this plan.
+
 **Status:** this is a hypothesis generator, not evidence of edge — one 32-day
 window, n = 9–34 closes per arm, no walk-forward, no disjoint-window check, and
 the trend filter is still unimplemented (every registered candidate has
