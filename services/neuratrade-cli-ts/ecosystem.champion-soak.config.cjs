@@ -91,6 +91,25 @@ const demoHome = path.join(
   ".neuratrade-champion-demo",
 );
 
+const PAR_PER_SYMBOL = 200 / 4;
+/**
+ * Floor a sleeve's capital must clear to be allowed to trade.
+ *
+ * This is a POLICY knob, not an orderability guard: whether a rung can be
+ * placed is decided downstream by `ladderRungQty` (contract-spec min qty,
+ * dynamic leverage, and a visible skip reason), so the floor never has to
+ * stand in for "is this size tradeable".
+ *
+ * History — the floor ratchets, so it must start with real headroom:
+ *   clever-cabin-qgc: 50 == par was a one-loss deadlock, lowered to 30.
+ *   2026-10-20: SOL hit 28.54 and died at 30 — the same deadlock one notch
+ *   down. The demo's whole value is testnet execution coverage across four
+ *   symbols, and a blocked sleeve produces none, so a floor expressed as a
+ *   fraction of par is the only version that survives its own purpose.
+ * 30% of par (15) still refuses a sleeve that has lost 70% of its stake.
+ */
+const MIN_CAPITAL_PER_SYMBOL = Math.floor(PAR_PER_SYMBOL * 0.3);
+
 function championArgs(extra) {
   return [
     "run",
@@ -124,11 +143,8 @@ function championArgs(extra) {
     "1",
     "--capital",
     "200",
-    // 30, not 50: per-symbol capital is 200/4=50, so a min-capital equal to
-    // par is a one-loss ratchet deadlock (clever-cabin-qgc) — the floor
-    // needs headroom below par to survive normal drawdown.
     "--min-capital",
-    "30",
+    String(MIN_CAPITAL_PER_SYMBOL),
     "--max-position-size-pct",
     "50",
     "--max-drawdown-pct",

@@ -932,3 +932,35 @@ a corrected baseline, not a strategy shift.
 **Unchanged by this deploy:** demo SOL is still blocked (`capital 29.36 <
 --min-capital 30`), which is the separate min-capital decision, and the
 stranded-rung re-anchor question is still open.
+
+## Demo SOL unblock — decision (2026-10-20)
+
+**Decision: lower the floor to 30% of par (`--min-capital` 30 → **15**),
+expressed as a derived constant, not a new magic number.**
+
+The ecosystem file's own comment already recorded the first occurrence of
+this deadlock: `—min-capital 50` (== par) was a one-loss ratchet, so it was
+lowered to 30. SOL then hit 28.54 and died at 30 — the same deadlock one
+notch down. A fixed number cannot survive its own purpose here; a fraction of
+par can be reasoned about.
+
+Why this is not a risk weakening: `minCapital` was never the orderability
+guard. `ladderRungQty` decides whether a rung can be placed — contract-spec
+min qty, `orderableQty` floor-up, `dynamicLeverage`, account-scaled cap, and
+a visible `skipReason` when it cannot. At the SOL sleeve's capital the engine
+needs 1.48x for one min-size rung (0.1 SOL) and the account-scaled cap at
+under 500 USDT is 10x discounted by the 50% budget → 5x, so the rung is
+placeable. 15 still refuses a sleeve that has lost 70% of its stake.
+
+Rejected alternatives: reseeding the SOL sleeve to 50 (breaks PnL continuity
+— the sleeve's loss is the measurement), and leaving it blocked (the demo
+exists to prove testnet routing across four symbols; a dead sleeve proves
+nothing and the block is permanent by construction).
+
+Applied to **both** champion apps, because they share one config path: paper's
+smallest sleeve is 43.19 so its behaviour is unchanged today, and leaving it
+on a stale 30 would desync `pm2 save` from the file.
+
+**Acceptance check:** the SOL iteration line must stop carrying
+`pre-trade risk check failed: capital ... is below minimum 30` and read as a
+normal `HOLD` alongside the other three symbols.
