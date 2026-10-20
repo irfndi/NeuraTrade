@@ -1213,16 +1213,77 @@ gate cannot pass without direction, armed rungs survive a blocked bar
 and `--verdict` (Lean v4.34.0 kernel) prints `ALL PROOFS CHECK` too — installed
 and run locally 2026-10-21. Flipping one expected action to `Blocked{}` makes
 the gate exit 1, so the proofs are load-bearing rather than decorative.
-CI: the `Native` workflow's `bend` job now runs the gate (and its path filter
-covers root `LAWS.bend` / `PROOF.bend`, which it previously ignored); the pin
-moved 2.0.21 → 2.0.37 after confirming all four kernel checksums reproduce.
+CI: the `Native` workflow's `bend` job runs the gate on every push (its path
+filter now covers root `LAWS.bend` / `PROOF.bend`, which it previously
+ignored), pin moved 2.0.21 → 2.0.37 after confirming all four kernel checksums
+reproduce; `--verdict` needs the Lean toolchain, so it runs weekly and on
+demand from `.github/workflows/bend-verdict.yml` instead of per PR.
 
-**Status:** this is a hypothesis generator, not evidence of edge — one 32-day
-window, n = 9–34 closes per arm, no walk-forward, no disjoint-window check, and
-the trend filter is still unimplemented (every registered candidate has
-`trendFilterPeriod 0`, so that is faithful for now). What it does establish:
-any ladder validation run from here must pass `--chop-gate-adx`, because
-without it the replay is not testing the registered candidate at all.
+### Walk-forward on 5.4 months: the +8.22% was the window, not the edge
+
+The 2×2 above is 32 days. Re-ran every arm on the full Bybit 15m history the
+box holds for these three symbols — **15,770 bars, 2026-05-09 → 2026-10-20**
+(read-only `PRAGMA query_only=ON` select; `scripts/gate4-shadow-diff.sh`'s
+query shape, no box writes), one continuous state per arm so no window pays a
+warm-up, P&L attributed from the ledger's `closed_ts_ms`:
+
+| symbol | exits | `adx` | closes (T/S/MH) | capital | net |
+| --- | --- | --- | --- | --- | --- |
+| ETH | candidate | 0 | 116 (22/45/49) | 87.13 | −12.87% |
+| ETH | candidate | 20 | 98 (14/36/48) | 84.01 | −15.99% |
+| ETH | grid-like | 0 | 90 (31/59/0) | 74.32 | −25.68% |
+| ETH | grid-like | 20 | 82 (34/48/0) | 86.27 | **−13.73%** |
+| BTC | candidate | 0 | 133 (31/58/44) | 85.88 | −14.12% |
+| BTC | candidate | 15 | 96 (25/33/38) | 96.89 | −3.11% |
+| BTC | grid-like | 0 | 103 (51/52/0) | 95.50 | −4.50% |
+| BTC | grid-like | 15 | 103 (56/47/0) | 102.19 | **+2.19%** |
+| SOL | candidate | 0 | 54 (2/19/33) | 79.01 | −20.99% |
+| SOL | candidate | 28 | 62 (1/21/40) | 75.55 | −24.45% |
+| SOL | grid-like | 0 | 38 (9/29/0) | 72.54 | −27.46% |
+| SOL | grid-like | 28 | 48 (15/33/0) | 75.32 | −24.68% |
+
+28-day window attribution for the arm that looked best on the short window
+(ETH, grid-like exits, `adx 20`): **−14.14 / −1.03 / 0.00 / −3.52 / −3.41 /
++8.36**. The previous section's +8.22% is the last column; the preceding 5
+windows sum to −22.1. That is the whole story: **a single favourable window
+was reported as a hypothesis and the longer sample refutes the level**, while
+keeping the gate's sign effect.
+
+What survives, and it is worth keeping: the gate **improves** the grid-like arm
+on all three symbols (ETH +11.95 pts, BTC +6.69, SOL +2.78) and the candidate
+exits on BTC (+11.01) but **worsens** them on ETH (−3.12) and SOL (−3.46). So
+"gate helps" is true for the exit rule the candidate was fitted with, not for
+the ladder's own exits — still a real interaction, still not an edge: only
+BTC ends positive.
+
+Two things a reader must not mistake for bugs:
+
+- **`w3 = 0.00` for every arm is real.** 2,688 bars exist there; the arms are
+  flat with *armed, never-filled* rungs. Armed rungs are kept by design
+  (`a07b3dd0`) and the shipped `--seed-reanchor-bps 0` never clears them, so a
+  trend away from the anchor parks that side. Same mechanism as the 49–77 day
+  gaps in the ledgers (ETH 2026-07-02 → 08-21, SOL 06-06 → 08-22), and the
+  reason the re-anchor sweep exists at all.
+- **`--max-drawdown-pct 5` latches hard.** Capital falling 13–27% below a
+  100 peak blocks seeding until the flat-state re-anchor fires, which is why
+  most arms flatline in the 80s–90s instead of compounding down.
+
+Verdict on the sleeve question: the walk-forward does **not** support taking
+the ETH sleeve live expecting profit — not on the candidate's exits, and not on
+the grid-like ones either (ETH −13.73% over 5.4 months). It supports one
+narrow claim: BTC grid-like exits + `adx 15` is the only arm that ends above
+par, on 103 closes, 4 of 6 windows positive. That is a candidate to validate
+properly, not a green light.
+
+**Status, after the walk-forward:** the 32-day table above is a *window*, not
+an edge — the same arm loses 13.73% over 5.4 months. What the longer sample
+does establish: any ladder validation run from here must pass
+`--chop-gate-adx` (without it the replay is not testing the registered
+candidate at all), and the trend filter is still unimplemented — harmless only
+because every registered candidate has `trendFilterPeriod 0`. The remaining
+gap is not statistical but structural: `--max-drawdown-pct` latches and armed
+rungs park, so a multi-month replay is mostly a measure of how often the
+book is idle.
 
 ## `tsrs` typecheck (2026-10-20, bun 1.4.3)
 
