@@ -884,3 +884,51 @@ keeps resume files written before `entry_ts` readable.
 The Rust module docs previously told callers to re-anchor `entry_bar` when
 sliding the window; measuring the entry in time removes that obligation, so
 the note now says what it actually guarantees.
+
+## DEPLOYED to the box (2026-10-20 15:16–15:19 UTC)
+
+The owner approved the deploy window. Only the two champion apps were
+restarted; every other pm2 app was left untouched.
+
+| Step | Evidence |
+| --- | --- |
+| Box checkout `601c5e8a` → `21771e37` (fast-forward, ancestor verified locally) | `git log --oneline -1` on `/opt/neuratrade` = `21771e37` |
+| Box-local edits parked, nothing discarded | `champion-soak-monitor.sh` stash hash **== HEAD** (the edit was already upstream, loss impossible); the `knobs.ts` experiment differs from HEAD and survives in `stash@{0}` + `/tmp/predeploy-20261020T151634Z/box-local.diff`. It is not in the live path — both soaks pass explicit CLI flags |
+| Deps under the new runtime (`effect` 4.0.5, zod 4.6.7, ky 2.2.0, alchemy beta.83) | `bun install --frozen-lockfile` → 69 packages; `bun x tsc --noEmit` exit **0** on the box; `scalp --help` and `scalp paper-trade --help` exit **0** |
+| Restart | `pm2 restart neuratrade-champion-paper neuratrade-champion-demo`; both `online`, restarts 1 |
+| **The running process is the fixed code** | file mtime `15:16:40Z` < process start `15:19:10Z` (paper) / `15:19:11Z` (demo) |
+| State continuity | paper `capital 187.74082479` / equity 186.50, per-symbol BTC 47.99 · ETH 48.81 · SOL 47.75 · LINK 43.19 — identical before and after; demo `178.85168868` unchanged. Open rung counts preserved (BTC 1 · ETH 1 · SOL 2 · LINK 2) |
+
+### The defect, visible in the production state itself
+
+Reading `ladder_paper_state` on the box: **all six open rungs carry
+`entryBar = 1`** (BTC short r1, ETH short r1, LINK short r1/r2, SOL short
+r1/r2). That is the root cause in production data, not an inference from a
+test — with the live 2-candle window the current bar is always index 1, so
+`entryBar < barIndex` was false for every rung that ever existed.
+
+Reason mix proving the starvation: **paper 187 closes = 137 max_hold + 50 stop
++ 0 target; demo 72 = 54 stop + 18 max_hold + 0 target.**
+
+### What must happen next, and how it will be visible
+
+No close appeared on the 15:30Z bar (no target touched). The open shorts sit
+1.0–2.4% from their targets:
+
+| Rung | Target | Mark | Distance |
+| --- | --- | --- | --- |
+| LINK short r2 | 12.0263 | 12.1630 | **−1.12%** |
+| SOL short r2 | 104.4765 | 105.5500 | **−1.02%** |
+| BTC short r1 | 81138.65 | 82382.30 | −1.51% |
+| ETH short r1 | 2385.50 | 2436.00 | −2.07% |
+| SOL short r1 | 103.1191 | 105.5500 | −2.30% |
+| LINK short r1 | 11.8701 | 12.1630 | −2.41% |
+
+The first `target` row in `ladder_paper_trades` — a reason value that has
+**never once appeared in 259 lifetime closes** — is now a price event, not a
+code event. Gate 3's expectancy read must treat the first few target closes as
+a corrected baseline, not a strategy shift.
+
+**Unchanged by this deploy:** demo SOL is still blocked (`capital 29.36 <
+--min-capital 30`), which is the separate min-capital decision, and the
+stranded-rung re-anchor question is still open.
