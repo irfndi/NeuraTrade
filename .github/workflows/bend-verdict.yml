@@ -12,6 +12,12 @@ on:
   schedule:
     - cron: "0 5 * * 1" # Mondays 05:00 UTC
   workflow_dispatch:
+  # Editing this job is the only way to test it: `workflow_dispatch` and
+  # `schedule` both resolve against the default branch, so a dispatch from a
+  # feature branch 404s. A push that touches this file runs it on any branch.
+  push:
+    paths:
+      - ".github/workflows/bend-verdict.yml"
 
 permissions:
   contents: read
