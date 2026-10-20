@@ -95,9 +95,14 @@ describe("live execution safety", () => {
       );
 
       expect(result.exitCode).not.toBe(0);
+      // The gate now names the drifted fields (the message was extended to say
+      // which knob is wrong); the safety property is still "rejected", and the
+      // second assertion keeps the diagnostic from regressing to a bare line.
       expect(result.output).toContain(
-        "live grid must use a validated readiness cohort candidate",
+        "live grid must use the validated readiness cohort candidate",
       );
+      expect(result.output).toContain("gridStepPct");
+      expect(result.output).toContain("!=");
     } finally {
       await rm(home, { recursive: true, force: true });
     }

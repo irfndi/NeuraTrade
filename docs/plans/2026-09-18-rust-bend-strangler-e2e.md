@@ -1039,6 +1039,46 @@ flag stays in the engine **off by default** purely as the instrument, so the
 owner can re-run the sweep on new data without rebuilding it; no live path
 passes a non-zero value, and the default arm is covered by the existing suite.
 
+## Live path — FOUR gates, and why trial-live could never start (2026-10-20)
+
+Asked "when we live, is it set?", I audited the trial-live sleeve instead of
+trusting its header. It could not start, for four independent reasons — only
+one of which the header knew about:
+
+| Gate | Before | Now |
+| --- | --- | --- |
+| 1. Venue (`validateLiveSandboxMode`) | `--live` + non-sandbox ⇒ rejected, no override existed | `--allow-mainnet-live` **and** `NEURATRADE_MAINNET_CONFIRM=I-CONFIRM-MAINNET`; either missing fails closed |
+| 2. Watchlist (`validateLiveGridWatchlist`) | every mainnet grid watchlist rejected | same two-key gate; without both it still refuses |
+| 3. Cohort candidate (`validateLiveGridConfiguration`) | registry is BTC/SOL/ETH — **LINK is not in it**, so a LINK-only trial could never run | trial repointed to the ETH candidate; message now names the remedy (unvalidated symbol vs drifted field, with both values) |
+| 4. Symbol | `--symbol` defaults to `BTC/USDT` while the registry keys on `BTC/USDT:USDT` — even BTC failed the lookup | `candidateForSymbol` matches on the base pair; trial passes `--symbol ETH/USDT:USDT` |
+
+**Why ETH, not LINK.** LINK was chosen for its low venue floor, not its edge;
+the cohort gate makes that choice impossible. Of the validated set ETH is best
+on the 32-day soak window (+3.5% vs BTC −1.4% / SOL −5.5%) and is orderable at
+$100 with a 50% position (0.0103 ETH ≥ the 0.01 venue minimum). BTC cannot be:
+0.001 BTC ≈ $82 exceeds a $50 rung.
+
+**Config fixes in the same pass:** `--min-capital` 20 → 30 (30% of par, the rule
+the soaks now use), `--max-drawdown-pct` 15 → **5** and `--max-daily-loss-pct`
+5 → **2** (the candidate's caps; the gate only allows tightening), `--fee 0.02`
+plus an explicit `--taker-exit-fee-pct 0.06` so the stop-fee basis is visible
+rather than hidden in a default, and the geometry pinned to the candidate
+(step 0.75 / grids 3 / pause 24 / target 3 / adx 20 / slip 1bp) instead of
+following `champion.json`.
+
+**Verified end-to-end with dummy credentials:** no token → exits 1 with
+`mainnet live execution requires NEURATRADE_MAINNET_CONFIRM=...`; with the
+token → all four gates pass and the startup line reads
+`signalFeed=bybit-mainnet (https://api.bybit.com) | executionEnv=bybit-live`.
+No order can be placed with dummy keys and no process was left running (0
+stray, 0 rows in the temp ledger).
+
+**Residual risk, deliberately not papered over:** the validated candidate was
+fitted on the **grid** engine while the live path executes the **ladder**, and
+`stopRatio` / `maxHoldBars` are ladder-only knobs the candidate never covered.
+The gate cannot see that difference. That is the main reason the first live
+sleeve should be a routing test with a small stake, not a profit proof.
+
 **What this does not measure** (stated so it is not over-read): only the
 "follow the market" family. A *widen-rather-than-recentre* policy (leave the
 armed rungs and add one beyond them) is a different strategy that this

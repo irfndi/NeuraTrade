@@ -273,6 +273,7 @@ import {
   maxPositionDrawdownPctOption,
   stopRatioOption,
   liveEntryCrossBpsOption,
+  allowMainnetLiveOption,
   demoLiveMarketEntriesOption,
   takerExitFeePctOption,
   fundingRatePct8hOption,
@@ -2798,6 +2799,8 @@ export interface PaperTradeArgs extends ResolvedBacktestArgs {
   readonly liveEntryCrossBps: number;
   /** Ladder: market-type demo entries (default false = limit; testnet-only). */
   readonly demoLiveMarketEntries: boolean;
+  /** Live execution on a NON-sandbox account; needs the confirm token too. */
+  readonly allowMainnetLive: boolean;
   /** Per-side taker fee percent for non-target (market) exits. */
   readonly takerExitFeePct: number;
   /** Funding cost percent of notional per 8h held on open positions. */
@@ -3095,6 +3098,7 @@ export const paperTradeCommand = Command.make(
     stopRatio: stopRatioOption,
     liveEntryCrossBps: liveEntryCrossBpsOption,
     demoLiveMarketEntries: demoLiveMarketEntriesOption,
+    allowMainnetLive: allowMainnetLiveOption,
     takerExitFeePct: takerExitFeePctOption,
     fundingRatePct8h: fundingRatePct8hOption,
     maintenanceMarginRatePct: maintenanceMarginRatePctOption,
@@ -3249,12 +3253,38 @@ export function validateLiveExecutionMarket(
   return undefined;
 }
 
+/**
+ * The exact token an operator must export to authorize MAINNET execution.
+ * Deliberately not a boolean: an empty/typo'd value must not read as "on".
+ */
+export const MAINNET_CONFIRM_ENV = "NEURATRADE_MAINNET_CONFIRM";
+export const MAINNET_CONFIRM_TOKEN = "I-CONFIRM-MAINNET";
+
+/**
+ * Live-execution venue gate.
+ *
+ * Sandbox/testnet live is allowed as before. MAINNET live (`live` without a
+ * demo account) needs TWO independent, deliberate acts:
+ *   1. `--allow-mainnet-live` — visible in the ecosystem config, so it shows up
+ *      in a code review and in `git diff`;
+ *   2. `NEURATRADE_MAINNET_CONFIRM=I-CONFIRM-MAINNET` exported in the launching
+ *      shell — an operator action at start time, never stored in the repo's
+ *      config file.
+ * Missing either one fails closed BEFORE any credential or exchange object is
+ * built, so a typo'd env var cannot quietly route real money to api2.
+ */
 export function validateLiveSandboxMode(
   live: boolean,
   sandbox: boolean,
+  allowMainnet = false,
+  confirmToken: string | undefined = undefined,
 ): string | undefined {
-  if (live && !sandbox) {
-    return "live execution is disabled until the demo/testnet account is enabled (BITGET_USE_SANDBOX=true or BYBIT_USE_TESTNET=true)";
+  if (!live || sandbox) return undefined;
+  if (!allowMainnet) {
+    return "live execution is disabled until the demo/testnet account is enabled (BITGET_USE_SANDBOX=true or BYBIT_USE_TESTNET=true); mainnet requires --allow-mainnet-live";
+  }
+  if (confirmToken !== MAINNET_CONFIRM_TOKEN) {
+    return `mainnet live execution requires ${MAINNET_CONFIRM_ENV}=${MAINNET_CONFIRM_TOKEN} exported in the launching environment`;
   }
   return undefined;
 }
@@ -3446,16 +3476,63 @@ function liveGridRiskPctError(
     : undefined;
 }
 
+/** Fields the live config is compared on, for a diff-able error message. */
+function cohortMismatches(
+  config: LiveGridConfiguration,
+  candidate: ValidatedGridCandidate,
+): readonly string[] {
+  const pairs: readonly (readonly [string, unknown, unknown])[] = [
+    ["exchange", config.exchange, candidate.exchange],
+    ["timeframe", config.timeframe, candidate.timeframe],
+    ["productType", config.productType, candidate.productType],
+    ["gridStepPct", config.gridStepPct, candidate.gridStepPct],
+    ["gridMaxGrids", config.gridMaxGrids, candidate.gridMaxGrids],
+    [
+      "gridPauseAfterLossBars",
+      config.gridPauseAfterLossBars,
+      candidate.gridPauseAfterLossBars,
+    ],
+    ["feePct", config.feePct, candidate.feePct],
+    ["slippageBps", config.slippageBps, candidate.slippageBps],
+    [
+      "trendFilterPeriod",
+      config.trendFilterPeriod,
+      candidate.trendFilterPeriod,
+    ],
+    ["onlyWithTrend", config.onlyWithTrend, candidate.onlyWithTrend],
+    ["targetRatio", config.targetRatio, candidate.targetRatio],
+    ["chopGateAdx", config.chopGateAdx, candidate.chopGateAdx],
+  ];
+  return pairs
+    .filter(([, mine, theirs]) => mine !== theirs)
+    .map(
+      ([name, mine, theirs]) => `${name} ${String(mine)} != ${String(theirs)}`,
+    );
+}
+
 export function validateLiveGridConfiguration(
   config: LiveGridConfiguration,
   sandbox = false,
 ): string | undefined {
-  const candidate = candidateForSymbol(config.symbol);
-  if (!isLiveGridCohortCandidate(config, candidate) && !sandbox) {
-    return "live grid must use a validated readiness cohort candidate";
+  if (!sandbox) {
+    const candidate = candidateForSymbol(config.symbol);
+    // Two different failures, two different remedies: a symbol outside the
+    // registry is a RESEARCH task (it must be validated and added), while a
+    // mismatched config is a one-line fix. Saying which one it is avoids an
+    // operator editing knobs that can never satisfy the gate.
+    if (candidate === undefined) {
+      const validated = READINESS_COHORT_CANDIDATES.map((c) => c.symbol).join(
+        ", ",
+      );
+      return `live grid has no validated readiness candidate for ${config.symbol} (validated: ${validated}); validate and register it before live trading`;
+    }
+    if (!isLiveGridCohortCandidate(config, candidate)) {
+      const diff = cohortMismatches(config, candidate);
+      return `live grid must use the validated readiness cohort candidate for ${config.symbol}${diff.length > 0 ? `: ${diff.join("; ")}` : ""}`;
+    }
+    return firstLiveGridRiskError(config, liveGridRiskCaps(candidate));
   }
-  if (sandbox) return undefined;
-  return firstLiveGridRiskError(config, liveGridRiskCaps(candidate));
+  return undefined;
 }
 
 interface LiveGridRiskCaps {
@@ -3507,6 +3584,8 @@ export function validateLiveGridWatchlist(
   strategyType: "signal" | "grid",
   entries: readonly Pick<WatchlistEntry, "symbol">[] | undefined,
   sandbox = false,
+  allowMainnet = false,
+  confirmToken: string | undefined = undefined,
 ): string | undefined {
   if (
     live &&
@@ -3517,7 +3596,15 @@ export function validateLiveGridWatchlist(
     if (sandbox) {
       return undefined;
     }
-    return "live grid watchlists are disabled; run the validated BTC candidate directly";
+    // Mainnet grid watchlists are allowed only under the same two-key gate as
+    // the venue check: a code-visible flag plus an operator-supplied token.
+    // Without BOTH this stays disabled, exactly as before.
+    if (!allowMainnet) {
+      return "live grid watchlists are disabled; run the validated BTC candidate directly";
+    }
+    if (confirmToken !== MAINNET_CONFIRM_TOKEN) {
+      return `mainnet live grid watchlists require ${MAINNET_CONFIRM_ENV}=${MAINNET_CONFIRM_TOKEN} exported in the launching environment`;
+    }
   }
   return undefined;
 }
@@ -3908,13 +3995,20 @@ function firstPaperTradeValidationError(
   return (
     validateLiveExecutionMarket(args.live, args.futures) ??
     validateShadowMode(args.shadow ?? false, args.live) ??
-    validateLiveSandboxMode(args.live, isDemoAccount) ??
+    validateLiveSandboxMode(
+      args.live,
+      isDemoAccount,
+      args.allowMainnetLive,
+      process.env[MAINNET_CONFIRM_ENV],
+    ) ??
     validateLiveExecutionStrategy(args.live, strategyType) ??
     validateLiveGridWatchlist(
       args.live,
       strategyType,
       args.entries,
       isDemoAccount,
+      args.allowMainnetLive,
+      process.env[MAINNET_CONFIRM_ENV],
     )
   );
 }

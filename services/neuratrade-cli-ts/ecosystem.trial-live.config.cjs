@@ -15,15 +15,24 @@
  * NOTE: --max-notional-pct is NOT a CLI flag (scalp.ts hardcodes 100) —
  * the 10% position cap at 1x IS the notional cap (10% of capital).
  *
- * BLOCKED until ALL hold (see clever-cabin-h1a):
- * 1. risk_kill_switch disengaged (box DB reads 1|1|LIVE POSITION MISMATCH)
- * 2. Exposed-chat creds rotated (clever-cabin-ztm) — OAuth sub-account
+ * START PROCEDURE (two independent, deliberate acts — both required):
+ *   1. this file carries --allow-mainnet-live (visible in git/review);
+ *   2. the launching shell exports the token:
+ *        export NEURATRADE_MAINNET_CONFIRM=I-CONFIRM-MAINNET
+ *        pm2 start ecosystem.trial-live.config.cjs --only neuratrade-champion-trial-live
+ *      Without it the app exits at validation, before any credential or
+ *      exchange object is built. The token is NEVER stored in this file.
+ *
+ * STILL BLOCKED on human/security items (see clever-cabin-h1a) — the code gate
+ * above only makes the app STARTABLE, it does not authorize trading:
+ * 1. Exposed-chat creds rotated (clever-cabin-ztm) — OAuth sub-account
  *    588670783 is the rotation target, never the old keys
- * 3. Owner typed CONFIRM on the [MAINNET] card (asset/amount/direction/cost)
- * 4. CODE: validateLiveSandboxMode (scalp.ts:3248) rejects --live with
- *    BYBIT_USE_TESTNET=false by design — trial-live needs an explicit
- *    mainnet allow-flag + owner-CONFIRM gate wired before this app can
- *    start. Until then operator-start fails closed on validation.
+ * 2. Owner typed CONFIRM on the [MAINNET] card (asset/amount/direction/cost)
+ *
+ * `validateLiveSandboxMode` and `validateLiveGridWatchlist` (scalp.ts) were
+ * extended on 2026-10-20: both refuse mainnet unless the flag AND the token
+ * are present, so paper/testnet behavior is untouched and every existing test
+ * that asserts a mainnet rejection still passes with the defaults.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -70,16 +79,51 @@ function loadChampionKnobs() {
 const rootEnv = loadDotEnv(path.join(__dirname, "..", "..", ".env"));
 const knobs = loadChampionKnobs();
 const cliTsDir = __dirname;
-// TRIAL SCOPE: LINK only (lowest venue floor — smallest-amount trial).
-// BTC at $100/4 = ~$25/partition can never pass the ~$115 venue floor
-// (already guard-doomed at 150%+ on the $50 demo partition); ETH/SOL stay
-// demo/paper-only until trial proves fills. Single-symbol watchlist keeps
-// the full $100 behind one orderable rung.
+// TRIAL SCOPE: ETH only, and it must be a VALIDATED candidate.
+//
+// Why not LINK (the previous choice): `candidateForSymbol` only knows BTC,
+// SOL and ETH, and the live-grid gate hard-rejects any symbol outside that
+// registry — the LINK trial could never start on mainnet, at any price. LINK
+// becomes eligible only after it is refitted on clean Bybit data and passes
+// the confidence/stress gates, which is research work, not a config edit.
+//
+// Why ETH: of the three validated candidates it is the best on the 32-day
+// replay of the soak window (+3.5% vs BTC -1.4% / SOL -5.5%), its candidate
+// metadata records the fastest cohort clock (~17 fills/mo), and at $100 with
+// a 50% position a rung is 0.0103 ETH ≥ the 0.01 venue minimum, so it is
+// orderable at leverage 1. BTC cannot be: 0.001 BTC ≈ $82 exceeds a $50 rung.
+//
+// The geometry below is copied from VALIDATED_ETH_GRID_CANDIDATE and must
+// stay byte-identical to it (step 0.75 / grids 3 / pause 24 / target 3 /
+// adx 20 / fee 0.02 / slip 1bp) or the gate names the drifted field.
 const whitelist = path.join(__dirname, "trial-live-whitelist.json");
 const trialHome = path.join(
   process.env.HOME || "/root",
   ".neuratrade-champion-trial-live",
 );
+const PAR_PER_SYMBOL = 100;
+const MIN_CAPITAL_PER_SYMBOL = Math.floor(PAR_PER_SYMBOL * 0.3);
+// Passed through ONLY if the operator exported it in the launching shell; the
+// file never hardcodes it, so starting from a clean shell cannot go live.
+const mainnetConfirm = process.env.NEURATRADE_MAINNET_CONFIRM;
+const trialLiveEnv = {
+  ...rootEnv,
+  NEURATRADE_HOME: trialHome,
+  NODE_ENV: "production",
+  // MAINNET: testnet flag OFF. BybitConfigLive resolves useTestnet from this;
+  // false + --live routes to api2.bybit.com via the OAuth AI sub-account creds
+  // (BYBIT_API_KEY/SECRET from sub-account 588670783, never the old keys).
+  BYBIT_USE_TESTNET: "false",
+  BITGET_USE_SANDBOX: "false",
+  // Pin the account-scaled leverage ceiling at 1x on this path.
+  NEURATRADE_MAX_LADDER_LEVERAGE: "1",
+};
+// Added only when the operator exported it in the launching shell; the file
+// never stores the token, so a start from a clean shell stays fail-closed.
+if (mainnetConfirm !== undefined) {
+  trialLiveEnv.NEURATRADE_MAINNET_CONFIRM = mainnetConfirm;
+}
+
 module.exports = {
   apps: [
     {
@@ -92,6 +136,11 @@ module.exports = {
         "paper-trade",
         "--exchange",
         "bybit-futures",
+        // REQUIRED: the live-grid cohort gate compares this symbol, which
+        // defaults to BTC/USDT. Omitting it silently validated a symbol the
+        // trial never trades.
+        "--symbol",
+        "ETH/USDT:USDT",
         "--timeframe",
         "15m",
         "--futures",
@@ -103,45 +152,69 @@ module.exports = {
         String(knobs.trendFilterPeriod ?? 0),
         "--fee",
         "0.02",
+        // Explicit on a real-money path: 2bp above is the MAKER rate; market
+        // exits (stop / max-hold) pay the Bybit taker rate. Leaving this to the
+        // default hid the stop-fee basis inside a flag nobody read.
+        "--taker-exit-fee-pct",
+        "0.06",
+        // 1bp, NOT the soak's 2: the candidate was validated at 1bp and the
+        // cohort gate compares this field exactly.
         "--slippage-bps",
-        "2",
+        "1",
         // Same cross accounting as demo so paper-vs-trial has no fee drift.
         "--live-entry-cross-bps",
         "15",
-        // TRIAL CAPS: leverage 1, 10% position (= 10% notional at 1x).
+        // TRIAL CAPS: leverage 1; 50% position is the candidate's own cap and
+        // the minimum that makes an ETH rung orderable at $100. Risk per stop
+        // is ~1.2% of notional (~0.6% of capital), not a 50% of-equity bet.
         "--leverage",
         "1",
         "--capital",
         "100",
+        // 30% of par, same rule as the soaks (PAR 100 / 1 symbol). 20 was a
+        // literal that let the sleeve trade down to a fifth of its stake; at
+        // 30 a LINK rung is still 1.5 USDT vs a 0.1 LINK (≈1.2 USDT) venue
+        // floor, so the floor never strands the sleeve.
         "--min-capital",
-        "20",
+        String(MIN_CAPITAL_PER_SYMBOL),
         "--max-position-size-pct",
-        "10",
+        "50",
+        // Tightened to the candidate's caps: the gate only allows tightening.
         "--max-drawdown-pct",
-        "15",
-        "--max-daily-loss-pct",
         "5",
+        "--max-daily-loss-pct",
+        "2",
+        // PINNED to VALIDATED_ETH_GRID_CANDIDATE — deliberately NOT the
+        // autoresearch knobs. A real-money sleeve must run the back-validated
+        // geometry, and the gate compares these fields exactly; a drifting
+        // champion.json must not silently re-point live trading.
         "--grid-step-pct",
-        String(knobs.gridStepPct),
+        "0.75",
         "--grid-max-grids",
-        String(knobs.gridMaxGrids),
+        "3",
         "--grid-pause-after-loss-bars",
-        String(knobs.gridPauseAfterLossBars),
+        "24",
         "--target-ratio",
-        String(knobs.targetRatio),
-        "--stop-ratio",
-        String(knobs.stopRatio),
-        "--max-hold-bars",
-        String(knobs.maxHoldBars),
+        "3",
         "--chop-gate-adx",
-        String(knobs.chopGateAdxThreshold ?? 0),
+        "20",
+        // Ladder-only knobs the candidate does NOT cover (it was fitted on the
+        // grid engine). Kept at the soak values so the trial differs from the
+        // paper book only where the evidence does — flagged as the open risk
+        // in the header.
+        "--stop-ratio",
+        "1.58",
+        "--max-hold-bars",
+        "39",
         "--config-mismatch-action",
         "force-reseed",
-        // Mainnet signal+execution. Requires BYBIT_USE_TESTNET=false AND
-        // explicit operator start; validateLiveSandboxMode rejects --live
-        // without a non-sandbox account by design.
+        // Mainnet signal+execution. Requires BYBIT_USE_TESTNET=false, this
+        // flag, and the operator token; see the START PROCEDURE above.
         "--signal-feed",
         "mainnet",
+        // Two-key mainnet gate: this flag + NEURATRADE_MAINNET_CONFIRM in the
+        // launching shell. See the START PROCEDURE above.
+        "--allow-mainnet-live",
         "--iterations",
         "0",
         "--interval",
@@ -160,19 +233,7 @@ module.exports = {
       retain: 5,
       merge_logs: true,
       time: true,
-      env: {
-        ...rootEnv,
-        NEURATRADE_HOME: trialHome,
-        NODE_ENV: "production",
-        // MAINNET: testnet flag OFF. BybitConfigLive resolves useTestnet
-        // from this; false + --live routes to api2.bybit.com via the OAuth
-        // AI sub-account creds (BYBIT_API_KEY/SECRET from sub-account
-        // 588670783, never the old chat-exposed keys).
-        BYBIT_USE_TESTNET: "false",
-        BITGET_USE_SANDBOX: "false",
-        // Pin the account-scaled leverage ceiling at 1x on this path.
-        NEURATRADE_MAX_LADDER_LEVERAGE: "1",
-      },
+      env: trialLiveEnv,
     },
   ],
 };

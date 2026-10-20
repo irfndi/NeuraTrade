@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import * as fc from "fast-check";
 import {
+  MAINNET_CONFIRM_TOKEN,
   validateLiveGridConfiguration,
+  validateLiveGridWatchlist,
   validateLiveSandboxMode,
   type LiveGridConfiguration,
 } from "./scalp.js";
@@ -58,5 +60,73 @@ describe("validated live grid profile properties", () => {
       }),
       { numRuns: 100 },
     );
+  });
+
+  it("names the remedy: unvalidated symbol vs a one-line config mismatch", () => {
+    // The candidate fixture matches the BTC validated candidate exactly, so it
+    // is the reference for a clean config.
+    expect(validateLiveGridConfiguration(candidate)).toBeUndefined();
+
+    // A symbol outside the registry is a research task, not a knob fix.
+    const unregistered = { ...candidate, symbol: "LINK/USDT:USDT" };
+    const missing = validateLiveGridConfiguration(unregistered);
+    expect(missing).toContain("no validated readiness candidate for LINK");
+    expect(missing).toContain("BTC/USDT:USDT");
+
+    // A registered symbol with a drifted knob names the field and both values.
+    const drifted = { ...candidate, targetRatio: 1.95 };
+    const mismatch = validateLiveGridConfiguration(drifted);
+    expect(mismatch).toContain("validated readiness cohort candidate");
+    expect(mismatch).toContain("targetRatio 1.95 != 2");
+
+    // Sandbox still bypasses the cohort gate entirely.
+    expect(validateLiveGridConfiguration(unregistered, true)).toBeUndefined();
+  });
+
+  it("admits mainnet only with BOTH the flag and the exact token", () => {
+    // Two independent acts, fail-closed on either one missing. A typo, an
+    // empty string, or the flag alone must never open a real-money path.
+    expect(validateLiveSandboxMode(true, false)).toBeDefined();
+    expect(validateLiveSandboxMode(true, false, true)).toBeDefined();
+    expect(validateLiveSandboxMode(true, false, true, "")).toBeDefined();
+    expect(
+      validateLiveSandboxMode(true, false, true, "i-confirm-mainnet"),
+    ).toBeDefined();
+    expect(
+      validateLiveSandboxMode(true, false, true, MAINNET_CONFIRM_TOKEN),
+    ).toBeUndefined();
+    // Sandbox live is governed by the old rule alone, not by this gate.
+    expect(
+      validateLiveSandboxMode(true, true, false, undefined),
+    ).toBeUndefined();
+    expect(
+      validateLiveSandboxMode(false, false, false, undefined),
+    ).toBeUndefined();
+  });
+
+  it("applies the same two-key gate to mainnet grid watchlists", () => {
+    const entries = [{ symbol: "LINK/USDT:USDT" }];
+    expect(
+      validateLiveGridWatchlist(true, "grid", entries, false),
+    ).toBeDefined();
+    expect(
+      validateLiveGridWatchlist(true, "grid", entries, false, true),
+    ).toBeDefined();
+    expect(
+      validateLiveGridWatchlist(
+        true,
+        "grid",
+        entries,
+        false,
+        true,
+        MAINNET_CONFIRM_TOKEN,
+      ),
+    ).toBeUndefined();
+    // Testnet keeps the previous behavior: a watchlist is allowed outright.
+    expect(
+      validateLiveGridWatchlist(true, "grid", entries, true),
+    ).toBeUndefined();
+    // No watchlist at all is never a watchlist violation.
+    expect(validateLiveGridWatchlist(true, "grid", [], false)).toBeUndefined();
   });
 });

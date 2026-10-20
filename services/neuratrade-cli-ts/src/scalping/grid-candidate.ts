@@ -101,10 +101,21 @@ export const READINESS_COHORT_CANDIDATES = [
   VALIDATED_ETH_GRID_CANDIDATE,
 ] as const satisfies readonly ValidatedGridCandidate[];
 
+/**
+ * Look up the validated candidate for a symbol.
+ *
+ * The registry is keyed on the WIRE symbol (`BTC/USDT:USDT`) because that is
+ * what the exchange and the cohort rows use, while `--symbol` defaults to the
+ * display form (`BTC/USDT`). Matching on the base pair keeps an operator from
+ * being told "no validated candidate for BTC/USDT" when BTC is in fact
+ * validated — the whole point of the registry is to compare CONFIGS, not to
+ * trap a naming difference between two views of the same instrument.
+ */
 export function candidateForSymbol(
   symbol: string,
 ): ValidatedGridCandidate | undefined {
+  const base = symbol.split(":")[0].trim().toUpperCase();
   return READINESS_COHORT_CANDIDATES.find(
-    (candidate) => candidate.symbol === symbol,
+    (candidate) => candidate.symbol.split(":")[0].trim().toUpperCase() === base,
   );
 }

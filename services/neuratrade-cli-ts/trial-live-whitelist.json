@@ -1,15 +1,15 @@
 [
   {
-    "symbol": "LINK/USDT:USDT",
+    "symbol": "ETH/USDT:USDT",
     "exchange": "bybit-futures",
     "returnPct": 0,
     "gridParams": {
-      "gridStepPct": 1.29,
+      "gridStepPct": 0.75,
       "gridMaxGrids": 3,
-      "gridPauseAfterLossBars": 4,
+      "gridPauseAfterLossBars": 24,
       "rungs": 2,
-      "targetRatio": 1.9,
-      "chopGateAdx": 0,
+      "targetRatio": 3,
+      "chopGateAdx": 20,
       "allocatedWeight": 1.0
     }
   }

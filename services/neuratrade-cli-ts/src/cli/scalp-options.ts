@@ -163,6 +163,15 @@ export const demoLiveMarketEntriesOption = Options.boolean(
     "Demo live entries as market orders (default false = limit; testnet-only opt-in for thin books, clever-cabin-85m).",
   ),
 );
+export const allowMainnetLiveOption = Options.boolean(
+  "allow-mainnet-live",
+).pipe(
+  Options.withDefault(false),
+  Options.withDescription(
+    "Allow live execution on a NON-sandbox account (mainnet). Requires BOTH this flag and NEURATRADE_MAINNET_CONFIRM=I-CONFIRM-MAINNET exported in the launching environment; missing either fails closed before any exchange call.",
+  ),
+);
+
 export const takerExitFeePctOption = Options.float("taker-exit-fee-pct").pipe(
   Options.withDefault(0.06),
   Options.withDescription(
