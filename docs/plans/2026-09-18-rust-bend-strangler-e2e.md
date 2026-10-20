@@ -1203,6 +1203,20 @@ as before.
 still replay **74 closes / 75 fills**, BTC 47.93 / ETH 51.77 / SOL 47.25 /
 LINK 47.27 — the numbers already pinned elsewhere in this plan.
 
+**The decision table is now a proof, not a comment.** `LAWS.bend` models
+`chop_gate` / `trend_allows` / `seed_action` (the `seed_side` tier order) and
+states nine laws: gate inert at threshold 0, boundary inclusive at `adx ==
+threshold`, clean bar seeds, chop and drawdown block an empty seed, the trend
+gate cannot pass without direction, armed rungs survive a blocked bar
+(`a07b3dd0`), and filled rungs dominate every gate. Proven beside the laws;
+`bend PROOF.bend` prints `laws hold`, `--check-only` prints `ALL PROOFS CHECK`,
+and `--verdict` (Lean v4.34.0 kernel) prints `ALL PROOFS CHECK` too — installed
+and run locally 2026-10-21. Flipping one expected action to `Blocked{}` makes
+the gate exit 1, so the proofs are load-bearing rather than decorative.
+CI: the `Native` workflow's `bend` job now runs the gate (and its path filter
+covers root `LAWS.bend` / `PROOF.bend`, which it previously ignored); the pin
+moved 2.0.21 → 2.0.37 after confirming all four kernel checksums reproduce.
+
 **Status:** this is a hypothesis generator, not evidence of edge — one 32-day
 window, n = 9–34 closes per arm, no walk-forward, no disjoint-window check, and
 the trend filter is still unimplemented (every registered candidate has

@@ -5,6 +5,10 @@ on:
     paths:
       - "crates/**"
       - "bend/**"
+      # The repo-root law/proof pair is the gate itself; without these a proof
+      # change would never trigger the job that checks it.
+      - "LAWS.bend"
+      - "PROOF.bend"
       - "scripts/zig/**"
       - ".zig-version"
       - ".github/workflows/native.yml"
@@ -12,6 +16,8 @@ on:
     paths:
       - "crates/**"
       - "bend/**"
+      - "LAWS.bend"
+      - "PROOF.bend"
       - "scripts/zig/**"
       - ".zig-version"
       - ".github/workflows/native.yml"
@@ -26,7 +32,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BEND_VERSION: "2.0.21"
+  # 2.0.37: the version the chop-gate laws and the four kernel checksums were
+  # verified against (grid 663097394 / guards 2065 / search 11 / sleeves 13 all
+  # reproduce identically on 2.0.37, so the bump is a pin refresh, not a
+  # behaviour change).
+  BEND_VERSION: "2.0.37"
 
 jobs:
   rust:
@@ -118,6 +128,19 @@ jobs:
           # pin check below resolves bend in THIS step.
           export PATH="$HOME/.bend/bend/bin:$PATH"
           test "$(bend version)" = "bend ${VER}"
+      - name: Prove LAWS.bend (`bend PROOF.bend` is the gate)
+        run: |
+          # Exits non-zero and prints SOME PROOFS FAIL while any law is open or
+          # false; `main` printing "laws hold" is the passing marker. This is
+          # the one step that fails on a Bend regression — the kernels below
+          # would still print their sums with a broken proof.
+          #
+          # NOT run here: `--verdict`, which rechecks with a Lean kernel and
+          # needs Lean v4.34.0 (~1.5 GB toolchain). It is the local/periodic
+          # check: `bend PROOF.bend --verdict` prints ALL PROOFS CHECK only when
+          # the proof is mathematically valid.
+          test "$(bend PROOF.bend)" = "laws hold"
+
       - name: Run grid kernel (parity checksum 663097394)
         run: |
           test "$(bend bend/grid.bend)" = "663097394"
