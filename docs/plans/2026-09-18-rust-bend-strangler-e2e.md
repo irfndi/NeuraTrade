@@ -984,6 +984,14 @@ resume per arm so every arm starts from the same seed bar. The off arm
 reproduces the documented Rust replay exactly (**74 closes, 75 fills**, BTC
 47.93 / ETH 51.77 / SOL 47.25 / LINK 47.27) — that is the harness check.
 
+**Reproduce the table below with one command** (deterministic: re-running it
+reproduces all ten rows digit for digit, verified):
+
+```bash
+cargo build --offline --release -p nt-cli   # from crates/
+ARMS="0 10 25 50 100 200 400 600 1000 2000" ./scripts/seed-reanchor-diff.sh
+```
+
 | `bps` | capital (4 sleeves) | Δ vs off | closes | target | stop | max_hold | fills |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | **0 (shipped)** | **194.21** | — | **74** | 21 | 22 | 31 | 75 |
