@@ -18,7 +18,7 @@ import * as Redacted from "effect/Redacted";
  * Secrets are read from the deployer env and bound as Cloudflare
  * secret_text: CF_ADMIN_API_KEY (guards /scan and /seed).
  */
-const adminKey = Config.redacted("CF_ADMIN_API_KEY").pipe(
+const adminKey = Config.Redacted("CF_ADMIN_API_KEY").pipe(
   Config.withDefault(Redacted.make("")),
 );
 
@@ -26,16 +26,16 @@ const adminKey = Config.redacted("CF_ADMIN_API_KEY").pipe(
 // Cloudflare secret_text bindings. The universe-watch scan itself uses only
 // public market data; these are available for private-API features (e.g. the
 // leverage probe) without leaking into the worker bundle.
-const bitgetApiKey = Config.redacted("BITGET_API_KEY").pipe(
+const bitgetApiKey = Config.Redacted("BITGET_API_KEY").pipe(
   Config.withDefault(Redacted.make("")),
 );
-const bitgetApiSecret = Config.redacted("BITGET_API_SECRET").pipe(
+const bitgetApiSecret = Config.Redacted("BITGET_API_SECRET").pipe(
   Config.withDefault(Redacted.make("")),
 );
-const bitgetPassphrase = Config.redacted("BITGET_PASSPHRASE").pipe(
+const bitgetPassphrase = Config.Redacted("BITGET_PASSPHRASE").pipe(
   Config.withDefault(Redacted.make("")),
 );
-const bitgetUseSandbox = Config.boolean("BITGET_USE_SANDBOX").pipe(
+const bitgetUseSandbox = Config.Boolean("BITGET_USE_SANDBOX").pipe(
   Config.withDefault(true),
 );
 

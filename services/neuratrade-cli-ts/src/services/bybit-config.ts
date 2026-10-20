@@ -31,13 +31,13 @@ export const BybitConfigLive: Layer.Layer<BybitConfig, Config.ConfigError> =
   Layer.effect(
     BybitConfig,
     Effect.gen(function* () {
-      const apiKey = yield* Config.redacted("BYBIT_API_KEY").pipe(
+      const apiKey = yield* Config.Redacted("BYBIT_API_KEY").pipe(
         Config.withDefault(Redacted.make("")),
       );
-      const apiSecret = yield* Config.redacted("BYBIT_API_SECRET").pipe(
+      const apiSecret = yield* Config.Redacted("BYBIT_API_SECRET").pipe(
         Config.withDefault(Redacted.make("")),
       );
-      const useTestnet = yield* Config.boolean("BYBIT_USE_TESTNET").pipe(
+      const useTestnet = yield* Config.Boolean("BYBIT_USE_TESTNET").pipe(
         Config.withDefault(true),
       );
       return {

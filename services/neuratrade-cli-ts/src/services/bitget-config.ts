@@ -26,16 +26,16 @@ export const BitgetConfigLive: Layer.Layer<BitgetConfig, Config.ConfigError> =
   Layer.effect(
     BitgetConfig,
     Effect.gen(function* () {
-      const apiKey = yield* Config.redacted("BITGET_API_KEY").pipe(
+      const apiKey = yield* Config.Redacted("BITGET_API_KEY").pipe(
         Config.withDefault(Redacted.make("")),
       );
-      const apiSecret = yield* Config.redacted("BITGET_API_SECRET").pipe(
+      const apiSecret = yield* Config.Redacted("BITGET_API_SECRET").pipe(
         Config.withDefault(Redacted.make("")),
       );
-      const passphrase = yield* Config.redacted("BITGET_PASSPHRASE").pipe(
+      const passphrase = yield* Config.Redacted("BITGET_PASSPHRASE").pipe(
         Config.withDefault(Redacted.make("")),
       );
-      const useSandbox = yield* Config.boolean("BITGET_USE_SANDBOX").pipe(
+      const useSandbox = yield* Config.Boolean("BITGET_USE_SANDBOX").pipe(
         Config.withDefault(false),
       );
       return {

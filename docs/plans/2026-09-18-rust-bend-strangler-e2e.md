@@ -702,3 +702,91 @@ TS 25 closes (0 target) vs Rust 38 (5 Target). Remaining: accumulate
 Gate 3/4 evidence across cycles, then P5 Step 6 cutover prep; P4 Step 5
 stays blocked-as-written (kernel must be called by the worker, never
 swap PM2 under a running research loop).
+
+## Progress log (2026-09-28 — Gate 4 cycle 1 on post-deploy basis + attribution (d))
+
+> Box touched read-only (sqlite/pm2/log reads) except `pm2 stop
+> neuratrade-autoresearch-w2 w3` (plan Task 2 Step 2 drift revert, back to 2
+> workers). No live-path writes. `/tmp/gate4` reseeded from `SINCE=2026-09-18`
+> (994 bars/symbol); reseed reproduces the 09-23 basis (Rust BTC 8 closes /
+> 47.925355 byte-identical), so panels are comparable going forward.
+
+| Item | Result | Evidence |
+| --- | --- | --- |
+| Diff attribution (d): seed-persistence deploy boundary | RECORDED | `a07b3dd0` (2026-09-20 06:52Z, clever-cabin-85m) added Tier-2 keep-armed-rungs to `seedLadderSide` (+3 lines). Before it, TS re-centered base+rungs from every flat bar's open; after it, armed rungs persist. Rust (`seed_side` tier 2, `nt-ladder`) replays post-deploy semantics from the 09-18 panel start, but live TS ran old semantics 09-18→09-20. Proof: TS LINK long fill 09-20T02:30 entry 12.10402732 = `12.261 open − 1.3% step`, `×1.0002` slippage exact to 1e-8 (fresh same-bar seed); Rust LINK pins `long_base 11388000` (bar-0 open) 10 days later, panel min-low 11.337 never touching rung 11.24 — all 21 Rust LINK closes Short vs TS 9 long/12 short |
+| Ruled out for the 09-17→09-20 LINK gap | PROVEN | No unrecorded close (capital continuous 52.23→52.23; "52.57" was that row's `capital_before`), no DD block (sleeve peaks ≤4.5%: LINK 53.23/52.52, BTC 50.85/48.53 — `ladder_paper_state`), no force-reseed (would move/reset capital), 09-18 breaker trip reset 09-19 (`risk_circuit_breaker` open=0), 09-19 err log = frozen-knob warnings only (no feed hold) |
+| Re-baseline decision | RECORDED | The ≥09-18 window permanently mixes seed regimes, so no clean-cycle count can include the 09-18→09-20 span. This pass = **cycle 1 on the post-deploy basis** (both sides run keep-armed rules from here). LINK side-mix difference is permanent for the window, not divergence |
+| Cycle 1 diff (TS 49 closes / Rust 53) | 0 unexplained under (a)+(b)+(c)+(d) | BTC 6 (4MH+2S)/48.53 vs 8 (5MH+3S)/47.93; ETH 9/48.86 vs 10 (+1T)/49.08; SOL 13/48.85 vs 14 (+3T)/46.89; LINK 21 (14MH+7S)/52.52 vs 21 (6MH+9S+6T)/46.49. TS 0 target (2-candle starvation, unchanged); Rust targets = fix-inheriting (b). LINK cap gap = (b)+(c step-anchor: Short-only replay vs mixed live through the 09-23→27 rally)+(d) |
+| Demo guard finding (Gate-3 watch) | RECORDED | Demo SOL 30.27; `risk_circuit_breaker` tripped 4 straight days 09-24→27 (daily loss 6.7/9.3/6.7/5.8% vs 5% cap), reset 09-28 UTC (row `-1.03|0`). SOD row writes ~50 (BTC/ETH/LINK sleeve) so SOL's daily bleed reads ~3× understated — per-sleeve breaker with account-keyed SOD. ~2 USDT headroom 09-28; re-trip can fire this UTC day |
+
+**Next:** daily `./scripts/gate4-shadow-diff.sh`; one more consecutive clean pass makes two, then P5 Step 6 cutover prep. P4 Step 5 stays blocked-as-written. Instrument note: guard-hold iterations leave no per-symbol trace (HOLD without save) — log hold reason per symbol if Gate-4 ever needs seeded-not-touched vs held distinguished.
+
+## Progress log (2026-10-20 — dependency upgrade + Gate 4 cycle 2, `stranded armed ladder`)
+
+> Box touched read-only (sqlite/pm2/log reads) — no PM2 restart, no soak or
+> config writes. All repo work on `feat/rust-bend-strangler-p0-p5`.
+
+### Dependency upgrade (all manifests)
+
+| Surface | Result | Evidence |
+| --- | --- | --- |
+| Rust | NOTHING TO UPGRADE — verified, not skipped | Every crate in `crates/` depends only on path members; `crates/Cargo.lock` lists the 7 workspace crates and no third-party package. The one-line lock diff was the missing `nt-ladder` member entry |
+| cli-ts runtime | UPGRADED | `effect` 4.0.0-rc.108 → **4.0.5** (first stable v4), `@effect/platform-bun`/`-node` → 4.0.5, `alchemy` 2.0.0-beta.76 → beta.83, `zod` 4.5.4 → 4.6.7, `ky` 2.1.0 → 2.2.0 |
+| cli-ts tooling | UPGRADED | `@effect/tsgo` 0.41.0 → 0.54.1, `oxlint`/`@oxlint/plugins` 1.81.0 → 1.89.0, `oxlint-tsgolint` 7.0.2001 → 7.0.2004, `@types/bun` 1.4.1 → 1.4.3, `fast-check` 4.9.0 → 4.10.2 |
+| telegram-service | UPGRADED | `@sentry/bun` 10.73.0 → **11.8.0** (major), `hono` 4.13.5 → 4.13.13, `@bufbuild/protobuf` 2.14.1 → 2.16.0, `@grpc/grpc-js` 1.14.4 → 1.14.6, `effect` → 4.0.5, same tooling bumps |
+| **Breaking change 1** | FIXED (22 call sites, 5 files) | effect 4.0.5 capitalises the Config constructors: `Config.string/boolean/redacted(...)` no longer exist, `Config.String/Boolean/Redacted(...)` do (`effect/dist/Config.d.ts:1004,1244,1406`). Touched `src/services/bitget-config.ts`, `src/services/bybit-config.ts`, `index.ts`, `alchemy.run.ts`, `telegram-service/src/config.ts`. The 16 tsc errors included `Layer<X, unknown, unknown>` / `Effect<..., unknown, never>` cascades — all were symptoms of the missing constructor types, not separate breakages; they vanished with the rename |
+| **Breaking change 2** | VERIFIED AT RUNTIME | `@sentry/bun` 11 major. `sentry.ts` is unaffected, but `sentry-bun.d.ts` is a local `declare module` shim, so **tsc cannot see a v11 API break** — the guard is a runtime init with the real options (`integrations` as a filter function + `beforeSend`): `INIT_OK version=11.8.0`, `getClient().getIntegrationByName` present |
+| Gates after upgrade | GREEN | cli-ts `tsc --noEmit` 0 errors, `bun test` **1431 pass / 0 fail**; telegram `tsc` 0, `bun test` **186 pass / 0 fail**; `cargo test --workspace` 21 tests pass, `cargo clippy --offline --all-targets -D warnings` clean; CLI boots (`--help`, `scalp --help` exit 0); both services bundle (435 / 454 modules) |
+
+Note: a stale `node_modules` (`ENOENT … node_modules/zod`) made the first baseline read red — `bun install --frozen-lockfile` restored it, and the pre-upgrade baseline was green (1431 / 186). The upgrade was measured against that, not against the broken tree.
+
+### Gate 4 cycle 2 (window ≥ 2026-09-18, panels reseeded 3112 bars/symbol)
+
+| Symbol | TS (DB) closes | Rust (fresh replay) closes | TS cap | Rust cap |
+| --- | --- | --- | --- | --- |
+| BTC | 14 (12 max_hold, 2 stop) | 8 (5 MH, 3 stop) | 47.99 | 47.93 |
+| ETH | 25 (21 MH, 4 stop) | 22 (14 MH, 1 stop, 7 target) | 48.74 | 51.77 |
+| SOL | 38 (31 MH, 7 stop) | 15 (6 MH, 6 stop, 3 target) | 47.75 | 47.25 |
+| LINK | 61 (34 MH, 27 stop) | 29 (6 MH, 12 stop, 11 target) | 43.17 | 47.27 |
+| **Total** | **138** | **74** | | |
+
+**New attribution (e) — `stranded armed ladder` (PROVEN FROM GEOMETRY, not inference):**
+Rust goes silent mid-window on BTC/SOL/LINK (last closes 09-22T18:30Z,
+10-02T14:30Z, 09-28T23:30Z) while ETH keeps trading to 10-19. Cause is
+not arithmetic: after the last close both sides stay armed at levels the
+market never revisits.
+
+| Symbol | Armed long rungs vs post-close min_low | Armed short rungs vs post-close max_high | Bars silent |
+| --- | --- | --- | --- |
+| BTC | 75,431 / 74,438 vs **79,750** | 87,484 / 88,607 vs **87,282** | 2,653 (28d) |
+| SOL | 100.12 / 98.80 vs **100.32** | 122.95 / 124.53 vs **122.28** | 1,709 (18d) |
+| LINK | 11.240 / 11.092 vs **11.508** | 15.818 / 16.021 vs **15.777** | 2,057 (21d) |
+
+The seed rule re-anchors only an EMPTY side (`seed_side` tier 2 == TS
+`seedLadderSide:606-609`), so a side armed outside the later range stays
+armed forever. This is **not** a Rust port defect — TS has the identical
+early-return — and the same failure mode is visible in production: demo
+BTC and LINK have **0 fills in six weeks**. Two of the three misses are
+tiny (SOL 0.2%, LINK 0.26% past the rung), so the difference between a
+silent symbol and a trading symbol is path luck, not edge.
+
+**Gate 4 honest status:** cycle 2 is NOT a second clean pass. The 138-vs-74
+gap decomposes into (a) window origin (TS carries pre-09-18 capital/rungs),
+(b) target-gate starvation (TS 0 targets again; Rust's 21 targets inherit as
+fixes), (c) rounding / `LADDER-STEP-ANCHOR` / cross-15bp, and (e) stranded
+armed ladders above. Do not read (e) as parity-fixable: re-anchoring a
+stranded side is a **strategy change** that moves the hunt's P&L, so it is an
+owner decision, not a silent patch. Until it is decided, a same-feed
+fill/PnL diff cannot be "0 divergence" — the compare is dominated by path
+dependence.
+
+**Box snapshot (read-only, same session):** paper equity 187.65/200, 185
+lifetime closes / 6 in 24h; demo 178.85/200, 72 lifetime / **0 in 24h**
+(last close 09-28T14:00Z); demo SOL permanently blocked (`capital 28.56 is
+below minimum 30`); both soaks online 21h (host rebooted 10-19), disk 73%,
+2 research workers at 100% CPU each, breaker clean.
+
+**Next:** owner call on the re-anchor policy → then re-run the diff on a
+shared starting state (same seed bar for both sides) so (a) stops masking
+the engine comparison. Demo needs its min-capital/SOL decision before Gate 3
+can move at all. P4 Step 5 stays blocked-as-written.

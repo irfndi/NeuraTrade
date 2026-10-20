@@ -138,7 +138,7 @@ const validateAdminApiKey = (
 const fromConfigWithFallback = (
   key: string,
 ): Effect.Effect<string, Config.ConfigError> =>
-  Config.string(key).pipe(
+  Config.String(key).pipe(
     Effect.flatMap((val) =>
       val.trim() === ""
         ? invalidConfig([key], `${key} is set to an empty string`)
@@ -161,7 +161,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
       Effect.catchIf(
         () => true,
         () =>
-          Config.string("TELEGRAM_TOKEN").pipe(
+          Config.String("TELEGRAM_TOKEN").pipe(
             Effect.catchIf(
               () => true,
               () => Effect.succeed(""),
@@ -178,13 +178,13 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
       ),
     );
 
-    const nodeEnv = yield* Config.string("NODE_ENV").pipe(
+    const nodeEnv = yield* Config.String("NODE_ENV").pipe(
       Effect.catchIf(
         () => true,
         () => Effect.succeed(""),
       ),
     );
-    const sentryEnv = yield* Config.string("SENTRY_ENVIRONMENT").pipe(
+    const sentryEnv = yield* Config.String("SENTRY_ENVIRONMENT").pipe(
       Effect.catchIf(
         () => true,
         () => Effect.succeed(""),
@@ -206,7 +206,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
       ? "http://localhost:8080"
       : rawApiBaseUrl.replace(/\/$/, "");
 
-    const webhookUrlRaw = (yield* Config.string("TELEGRAM_WEBHOOK_URL").pipe(
+    const webhookUrlRaw = (yield* Config.String("TELEGRAM_WEBHOOK_URL").pipe(
       Effect.catchIf(
         () => true,
         () => Effect.succeed(""),
@@ -214,7 +214,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
     )).trim();
     const webhookUrl = webhookUrlRaw.length > 0 ? webhookUrlRaw : null;
 
-    const webhookPath = (yield* Config.string("TELEGRAM_WEBHOOK_PATH").pipe(
+    const webhookPath = (yield* Config.String("TELEGRAM_WEBHOOK_PATH").pipe(
       Effect.catchIf(
         () => true,
         () => Effect.succeed(""),
@@ -227,7 +227,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
         : "/telegram/webhook";
 
     const webhookSecret =
-      (yield* Config.string("TELEGRAM_WEBHOOK_SECRET").pipe(
+      (yield* Config.String("TELEGRAM_WEBHOOK_SECRET").pipe(
         Effect.catchIf(
           () => true,
           () => Effect.succeed(""),
@@ -262,7 +262,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
       3002,
     );
 
-    const grpcPortStr = yield* Config.string("TELEGRAM_GRPC_PORT").pipe(
+    const grpcPortStr = yield* Config.String("TELEGRAM_GRPC_PORT").pipe(
       Effect.catchIf(
         () => true,
         () => Effect.succeed(""),
@@ -271,7 +271,7 @@ export const loadConfig: Effect.Effect<TelegramConfig, Config.ConfigError> =
     const grpcPort = resolvePort(grpcPortStr || undefined, 50052);
 
     const grpcBindAddr =
-      (yield* Config.string("GRPC_BIND_ADDR").pipe(
+      (yield* Config.String("GRPC_BIND_ADDR").pipe(
         Effect.catchIf(
           () => true,
           () => Effect.succeed("127.0.0.1"),

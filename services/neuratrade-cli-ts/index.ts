@@ -92,7 +92,7 @@ if (isReadinessCommand) {
   }
 
   const envOrEmpty = (name: string) =>
-    Config.string(name).pipe(Config.withDefault(""));
+    Config.String(name).pipe(Config.withDefault(""));
 
   const program = Effect.gen(function* () {
     const serverPort = yield* envOrEmpty("SERVER_PORT");
