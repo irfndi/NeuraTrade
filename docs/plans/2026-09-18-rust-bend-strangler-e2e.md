@@ -826,3 +826,35 @@ question.
 `nt-cli` path as-is — it must point at a build that actually contains the
 ladder engine, and the install must copy the resolved file, never follow the
 symlink.
+
+## Live target-gate fix (2026-10-20, TS)
+
+> No box writes. In-repo only; not deployed (a deploy restarts the soaks).
+
+`closeLadderTargets` now measures the conservative-intrabar same-bar rule with
+`entryTimestamp` (the absolute fill clock max-hold already uses) instead of the
+window-relative `entryBar`:
+
+```ts
+enteredOnCurrentBar(rung, candle.timestamp.getTime(), ctx.barIndex)
+  = rung.entryTimestamp > 0 ? entryTimestamp >= currentBarTs : entryBar >= barIndex
+```
+
+The index rule stays only as a fallback for states persisted before
+`entryTimestamp` existed. Live fetches 2 candles, so every iteration's current
+bar is index 1 and a fill stamps `entryBar 1`: `entryBar < barIndex` is false
+forever and **target exits were structurally unreachable** on the live path
+(70 lifetime demo closes = 52 max_hold + 18 stop + 0 target). Replay keeps the
+same semantics because bars are timestamp-ordered, so `entryBar < barIndex`
+and `entryTs < barTs` agree there.
+
+**Proof the test catches the bug:** the new case
+(`live 2-candle rolling window — target exits`) fails on the old gate —
+`Expected: 1, Received: 0` closes — and passes on the new one. Suite 1431 →
+1433, all green, tsc/oxlint/oxfmt clean.
+
+**Not yet observable:** the soaks still run the pre-fix code until the box is
+synced and the champion apps restarted, so `closed-24h-*` and the `target`
+exit mix will not move until then. This is the intended baseline change —
+Gate 3's expectancy read must treat the first target closes as the corrected
+baseline, not as a strategy shift.

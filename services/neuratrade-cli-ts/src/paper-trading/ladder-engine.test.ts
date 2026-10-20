@@ -1082,3 +1082,89 @@ describe("ladder per-position max-drawdown kill", () => {
     expect(w.longRungs.filter((r) => r.filled)).toHaveLength(1);
   });
 });
+
+// The live loop fetches a 2-candle window every iteration, so the current bar
+// is ALWAYS index 1 and a fill stamps `entryBar 1`. The conservative-intrabar
+// gate must therefore measure the entry with the absolute fill clock, not the
+// window-relative index: with the index rule `entryBar < barIndex` is false
+// forever and target exits never fire (2026-09-23: 52 max_hold + 18 stop + 0
+// target over the demo's whole history).
+describe("live 2-candle rolling window — target exits", () => {
+  const gatewayOver = (windows: CandleLike[][]) => {
+    let call = 0;
+    return {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(windows[call++] as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+  };
+
+  it("closes a target on the bar after entry even though entryBar === barIndex", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    // Bar 1 dips 2% through the long rung seeded at its open (99); its own
+    // high re-touches the target (100) but the same bar must NOT close it.
+    const entryWindow = [
+      candle(100, 100.2, 99.9, 100.1, 0),
+      candle(100, 100.2, 98, 99.2, 1),
+    ];
+    // Next iteration: a fresh 2-candle window whose current bar (index 1) is
+    // the NEXT candle. Target 100 is touched again.
+    const targetWindow = [
+      candle(100, 100.2, 98, 99.2, 1),
+      candle(100, 100.5, 99.6, 100.4, 2),
+    ];
+    const gateway = gatewayOver([entryWindow, targetWindow]);
+    const opts = baseOptions({ rungs: 1, maxHoldBars: 0 });
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+        ),
+      );
+
+    const first = await run();
+    expect(first.openRungs).toBe(1);
+    expect(first.closedThisIteration).toBe(0);
+
+    const second = await run();
+    expect(second.closedThisIteration).toBe(1);
+
+    const rows = db
+      .query<{ exit_reason: string }, []>(
+        "SELECT exit_reason FROM ladder_paper_trades",
+      )
+      .all();
+    expect(rows.map((r) => r.exit_reason)).toEqual(["target"]);
+    expect(second.openRungs).toBe(0);
+  });
+
+  it("still blocks a target on the entry bar itself", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const gateway = gatewayOver([
+      [candle(100, 100.2, 99.9, 100.1, 0), candle(100, 100.5, 98, 100.4, 1)],
+    ]);
+    const opts = baseOptions({ rungs: 1, maxHoldBars: 0 });
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+      ),
+    );
+    expect(result.openRungs).toBe(1);
+    expect(result.closedThisIteration).toBe(0);
+    expect(
+      db
+        .query<{ n: number }, []>(
+          "SELECT COUNT(*) AS n FROM ladder_paper_trades",
+        )
+        .get()?.n,
+    ).toBe(0);
+  });
+});

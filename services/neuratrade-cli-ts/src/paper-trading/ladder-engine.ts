@@ -830,6 +830,30 @@ function applyLadderRiskExit(
   }
 }
 
+/**
+ * Conservative-intrabar same-bar rule: a rung may not book a target on the
+ * bar it was entered.
+ *
+ * Measures the entry with the ABSOLUTE fill clock (`entryTimestamp`, the same
+ * clock max-hold uses), not the window-relative `entryBar`. The live loop
+ * fetches a 2-candle window (`ladderRequiredCandles`), so every iteration's
+ * current bar is index 1 and a fill stamps `entryBar 1`; the index rule
+ * `entryBar < barIndex` is therefore false forever and live target exits are
+ * structurally unreachable (2026-09-23 finding: 70 lifetime demo closes = 52
+ * max_hold + 18 stop + 0 target). The index comparison stays as the fallback
+ * for states persisted before `entryTimestamp` existed (value 0), where it is
+ * still the only evidence available.
+ */
+function enteredOnCurrentBar(
+  rung: LadderPaperRungState,
+  currentBarTs: number,
+  currentBarIndex: number,
+): boolean {
+  return rung.entryTimestamp > 0
+    ? rung.entryTimestamp >= currentBarTs
+    : rung.entryBar >= currentBarIndex;
+}
+
 function closeLadderTargets(ctx: LadderBarContext, side: LadderSide): void {
   const { w, candle, opts, events } = ctx;
   const rungs = sideRungs(w, side);
@@ -848,7 +872,7 @@ function closeLadderTargets(ctx: LadderBarContext, side: LadderSide): void {
       side === "long" ? candle.high >= target : candle.low <= target;
     const canCloseOnSameBar =
       (opts.conservativeIntrabar ?? true) === false ||
-      rung.entryBar < ctx.barIndex;
+      !enteredOnCurrentBar(rung, candle.timestamp.getTime(), ctx.barIndex);
     if (targetTouched && canCloseOnSameBar) {
       closeRung(
         w,
