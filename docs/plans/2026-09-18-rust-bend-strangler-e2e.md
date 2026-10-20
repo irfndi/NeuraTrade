@@ -790,3 +790,39 @@ below minimum 30`); both soaks online 21h (host rebooted 10-19), disk 73%,
 shared starting state (same seed bar for both sides) so (a) stops masking
 the engine comparison. Demo needs its min-capital/SOL decision before Gate 3
 can move at all. P4 Step 5 stays blocked-as-written.
+
+## Provenance check — box binaries (2026-10-20)
+
+> Read-only: `sha256sum` on the box, `scp` of the three **versioned** files
+> only (never the `nt-cli` symlink — that is what corrupted `7a7b18cc` during
+> the 09-23 deploy). Local copies re-hashed and matched the box byte-for-byte.
+
+| Artifact (filename == commit prefix) | SHA-256 | `ladder-shadow` | `--maker-fee-bp` |
+| --- | --- | --- | --- |
+| `nt-cli-8440d006` | `994d1007…0bcec287` | no | no |
+| `nt-cli-7a7b18cc` **← live symlink** | `faccc0b0…02c5771d` | **no** | **no** |
+| `nt-cli-6f207dc4` | `109b30dc…220adbf8` | **yes** | **yes** |
+| `nt-search-6f207dc4` | `2ef0b124…56b7a33c` | — | — |
+| `nt-cli-a07b3dd0` | `381d267f…a413d457` | — | — |
+
+**Finding (artifact evidence, not inference):** the live `/opt/neuratrade/bin/nt-cli`
+is the **pre-`ladder-shadow`** build. Its embedded usage string is the old
+`nt-cli shadow --bars …` with no `--maker-fee-bp`; `6f207dc4` carries both
+`ladder-shadow` and the maker-fee flag. So the plan's "symlink untouched"
+note is now verified against the bytes, and anyone running `nt-cli
+ladder-shadow` from the stable path on the box gets an unknown-command, not
+a Gate-4 run. The Gate-4 driver was always invoked with the local release
+build (`NT=./crates/target/release/nt-cli`), which is why cycle 1/2 still ran.
+
+All three are **stripped** PIE x86-64 ELF, so symbol-level provenance is not
+recoverable from the artifacts themselves. REA's `inspect-binary-layout`
+provider (`pwntools-elf`) requires a **Linux x64 host** and refuses on the
+local macOS/arm64 machine (`capability_unavailable` / `unsupported_provider`).
+Deeper layout/symbol evidence would need REA run on the box or in an x64
+container; the hash + usage-string evidence above already answers the live
+question.
+
+**Consequence for P5 Step 6 (cutover):** the cutover cannot reuse the stable
+`nt-cli` path as-is — it must point at a build that actually contains the
+ladder engine, and the install must copy the resolved file, never follow the
+symlink.
