@@ -90,4 +90,9 @@ jobs:
           # Prints ALL PROOFS CHECK only when every def outside Base is a valid
           # proof that bend2 and the kernel both accept, with no @unsafe or
           # foreign code. Exits non-zero otherwise.
-          test "$(bend PROOF.bend --verdict)" = "ALL PROOFS CHECK"
+          #
+          # Capture into a variable and echo it: `test "$(...)" = ...` swallows
+          # the verdict, so a passing run used to leave no evidence in the log.
+          VERDICT="$(bend PROOF.bend --verdict)"
+          echo "verdict: $VERDICT"
+          test "$VERDICT" = "ALL PROOFS CHECK"
