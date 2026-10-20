@@ -1226,6 +1226,31 @@ function cancelUnfilledBybitOrder(
   );
 }
 
+/**
+ * Fill diagnostics (clever-cabin-85m): why did the book ignore us? Requested
+ * venuePrice/qty/side/type + tickSize vs live mark/bid/ask tells marketable vs
+ * stranded vs sizing apart. The gateway read is best-effort and never fails
+ * the path. Redacted: no keys/secrets.
+ */
+function describeUnfilledBybitOrder(
+  input: BybitFillInput,
+  request: FuturesOrderRequest,
+): Effect.Effect<string, never, never> {
+  const base =
+    `venue=${input.venuePrice ?? "?"} qty=${input.requestedQty ?? request.size.toString()} ` +
+    `side=${request.side} type=${request.type} tickSize=${input.tickSize ?? "?"}`;
+  const noVenue = `${base} mark=? bid=? ask=? vol24h=?`;
+  if (input.gateway === undefined) return Effect.succeed(noVenue);
+  return input.gateway.fetchTick("bybit-futures", request.symbol).pipe(
+    Effect.orElseSucceed(() => null),
+    Effect.map((tick) =>
+      tick === null
+        ? noVenue
+        : `${base} mark=${tick.price} bid=${tick.bid ?? "?"} ask=${tick.ask ?? "?"} vol24h=${tick.volume24h ?? "?"}`,
+    ),
+  );
+}
+
 function pollBybitOrderFill(
   input: BybitFillInput,
 ): Effect.Effect<FuturesOrderFill, ExchangeError> {
@@ -1273,23 +1298,7 @@ function pollBybitOrderFill(
         orderId,
         data.orderStatus,
       );
-      // Fill diagnostics (clever-cabin-85m): why did the book ignore us?
-      // Requested venuePrice/qty/side/type + tickSize vs live mark/bid/ask
-      // tells marketable vs stranded vs sizing apart. Gateway read is
-      // best-effort (never fails the path). Redacted: no keys/secrets.
-      let diag =
-        `venue=${input.venuePrice ?? "?"} qty=${input.requestedQty ?? request.size.toString()} ` +
-        `side=${request.side} type=${request.type} tickSize=${input.tickSize ?? "?"}`;
-      if (input.gateway !== undefined) {
-        const tick = yield* input.gateway
-          .fetchTick("bybit-futures", request.symbol)
-          .pipe(Effect.orElseSucceed(() => null));
-        if (tick !== null) {
-          diag += ` mark=${tick.price} bid=${tick.bid ?? "?"} ask=${tick.ask ?? "?"} vol24h=${tick.volume24h ?? "?"}`;
-        } else {
-          diag += " mark=? bid=? ask=? vol24h=?";
-        }
-      }
+      const diag = yield* describeUnfilledBybitOrder(input, request);
       return yield* Effect.fail(
         new ExchangeError(
           `futures order ${orderId} not filled (status=${data.orderStatus}, qty=${data.cumExecQty}, avgPrice=${data.avgPrice}; ${diag}); ${cleanup}`,

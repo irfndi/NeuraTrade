@@ -406,9 +406,7 @@ describe("makeRiskGuard", () => {
     });
     const error = await Effect.runPromise(
       guard
-        .check(
-          baseContext({ windowGrossPnl: 40, windowFeesPaid: 60 }),
-        )
+        .check(baseContext({ windowGrossPnl: 40, windowFeesPaid: 60 }))
         .pipe(Effect.flip),
     );
     expect(error.violations.some((v) => v.includes("fee share"))).toBe(true);

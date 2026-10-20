@@ -507,9 +507,10 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     const gateway = {
       fetchTick: () => Effect.fail({ reason: "n" } as never),
       fetchOHLCV: () =>
-        Effect.succeed(
-          [candle(100000, 100000, 99000, 99500, 0), candle(99000, 99500, 98500, 99000, 1)] as Candle[],
-        ),
+        Effect.succeed([
+          candle(100000, 100000, 99000, 99500, 0),
+          candle(99000, 99500, 98500, 99000, 1),
+        ] as Candle[]),
       fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
       fetchSymbols: () => Effect.fail({ reason: "n" } as never),
       fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
@@ -555,7 +556,6 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(result.action).toBe("hold");
     expect(result.note).not.toContain("notional size");
   });
-
 
   it("uses dynamic leverage that scales with account size (small acct -> low cap)", async () => {
     const db = new Database(":memory:");

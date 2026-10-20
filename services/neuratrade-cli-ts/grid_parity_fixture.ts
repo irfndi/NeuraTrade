@@ -22,8 +22,11 @@ import {
 import {
   PaperTradingRepository,
   PaperTradingRepositoryError,
+  type OpenInterestHistoryRow,
   type PaperTradingRepositoryService,
+  type WatchlistEntry,
 } from "./src/paper-trading/repository.ts";
+import type { FlowTradeState } from "./src/scalping/flow-trade.ts";
 import { runGridPaperTradingIteration } from "./src/paper-trading/grid-engine.ts";
 import {
   CircuitBreaker,
@@ -32,7 +35,7 @@ import {
 import { KillSwitch, type KillSwitchService } from "./src/risk/kill-switch.ts";
 import { RiskGuard, type RiskGuardService } from "./src/risk/guards.ts";
 import type { Candle } from "./src/market-data/types.ts";
-import type { GridPaperTrade } from "./src/paper-trading/types.ts";
+import type { GridPaperTrade, PaperTrade } from "./src/paper-trading/types.ts";
 import { money } from "./src/utils/money.ts";
 import type { GridPaperState } from "./src/paper-trading/types.ts";
 
@@ -70,6 +73,11 @@ const symbol = "BTC/USDT:USDT";
 const timeframe = "15m";
 
 const trades: GridPaperTrade[] = [];
+// The parity replay never produces a closed `PaperTrade` row: it walks the
+// grid engine only, so this surface stays empty rather than being cast.
+const recentPaperTrades: readonly PaperTrade[] = [];
+const noOpenInterest: readonly OpenInterestHistoryRow[] = [];
+const noWatchlist: readonly WatchlistEntry[] = [];
 let state: GridPaperState | null = null;
 
 const repo: PaperTradingRepositoryService = {
@@ -83,15 +91,20 @@ const repo: PaperTradingRepositoryService = {
     Effect.fail(new PaperTradingRepositoryError("replay: no close path")),
   scaleOutPosition: () =>
     Effect.fail(new PaperTradingRepositoryError("replay: no scale-out path")),
-  getPortfolio: () => Effect.succeed({ capital: money(1000), peakCapital: money(1000) }),
+  getPortfolio: () =>
+    Effect.succeed({ capital: money(1000), peakCapital: money(1000) }),
   setPortfolio: () => Effect.void,
-  listRecentTrades: () => Effect.succeed(trades),
+  listRecentTrades: () => Effect.succeed(recentPaperTrades),
   countTradesForDate: () => Effect.succeed(trades.length),
   getTodayRealizedPnl: () => Effect.succeed(money(0)),
-  getStartOfDayCapital: (_d: Date, cap: ReturnType<typeof money>) => Effect.succeed(cap),
+  getStartOfDayCapital: (_d: Date, cap: ReturnType<typeof money>) =>
+    Effect.succeed(cap),
   getGridState: (ex: string, sym: string, tf: string) =>
     Effect.succeed(
-      state && state.exchange === ex && state.symbol === sym && state.timeframe === tf
+      state &&
+        state.exchange === ex &&
+        state.symbol === sym &&
+        state.timeframe === tf
         ? state
         : null,
     ),
@@ -115,7 +128,26 @@ const repo: PaperTradingRepositoryService = {
         (t) => t.exchange === ex && t.symbol === sym && t.timeframe === tf,
       ),
     ),
-} as unknown as PaperTradingRepositoryService;
+  // Surfaces the grid replay never touches. They are typed empty stubs
+  // rather than a `as unknown as` cast so the fixture keeps the interface's
+  // evidence (anti-slop no-chained-type-assertions).
+  listAllGridTrades: (ex: string, tf: string) =>
+    Effect.succeed(
+      trades.filter((t) => t.exchange === ex && t.timeframe === tf),
+    ),
+  getFlowTradeState: () => Effect.succeed(null),
+  saveFlowTradeState: (_state: FlowTradeState) => Effect.void,
+  clearFlowTradeState: () => Effect.void,
+  getOpenInterest: () => Effect.succeed(noOpenInterest),
+  listWatchlist: () => Effect.succeed(noWatchlist),
+  upsertWatchlist: (_entries: readonly WatchlistEntry[]) => Effect.void,
+  clearWatchlist: () => Effect.void,
+  replaceWatchlist: (
+    _ex: string,
+    _tf: string,
+    _entries: readonly WatchlistEntry[],
+  ) => Effect.void,
+};
 
 const gateway: MarketDataGatewayService = {
   fetchTick: () => Effect.fail(new MarketDataError("not used in replay")),
@@ -129,7 +161,8 @@ const gateway: MarketDataGatewayService = {
       timestamp: new Date(),
     }),
   fetchSymbols: () => Effect.fail(new MarketDataError("not used in replay")),
-  fetchDemoSymbols: () => Effect.fail(new MarketDataError("not used in replay")),
+  fetchDemoSymbols: () =>
+    Effect.fail(new MarketDataError("not used in replay")),
   fetch24hrVolumes: () => Effect.succeed({}),
   fetchFundingRates: () => Effect.succeed([]),
 };
@@ -225,5 +258,11 @@ const tradeCsv = trades
     ].join(","),
   )
   .join("\n");
-writeFileSync(new URL("./grid_parity_fixture.candles.csv", import.meta.url), candleCsv + "\n");
-writeFileSync(new URL("./grid_parity_fixture.trades.csv", import.meta.url), tradeCsv + "\n");
+writeFileSync(
+  new URL("./grid_parity_fixture.candles.csv", import.meta.url),
+  candleCsv + "\n",
+);
+writeFileSync(
+  new URL("./grid_parity_fixture.trades.csv", import.meta.url),
+  tradeCsv + "\n",
+);

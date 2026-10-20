@@ -1398,21 +1398,12 @@ function executeLadderFillLive(
     // Buy at ask, sell at bid, nudged by crossBps for marketability; falls
     // back to rung x cross when the book read fails. Paper ledger keeps
     // fillPrice (theoretical) — spread-only divergence, logged per fill.
-    const crossBps = Math.max(0, options.liveEntryCrossBps ?? 0);
-    const crossFactor =
-      side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
-    let venuePrice = money(toNumber(fillPrice) * crossFactor);
-    if (gateway !== undefined) {
-      const book = yield* gateway
-        .fetchTick(options.exchange, options.symbol)
-        .pipe(Effect.orElseSucceed(() => null));
-      if (book !== null) {
-        const ref = side === "buy" ? (book.ask ?? 0) : (book.bid ?? 0);
-        if (Number.isFinite(ref) && ref > 0) {
-          venuePrice = money(ref * crossFactor);
-        }
-      }
-    }
+    const venuePrice = yield* resolveLiveEntryVenuePrice(
+      side,
+      fillPrice,
+      options,
+      gateway,
+    );
     // Market-type demo entries (opt-in, testnet-only): thin books leave even
     // crossed limits unfilled so the bar rolls back (clever-cabin-85m).
     // Price is ALWAYS passed: Bybit ignores it on Market (bybit-futures.ts
@@ -1449,19 +1440,11 @@ function executeLadderFillLive(
       );
     }
     if (adapter.setTradingStop === undefined) return;
-    const targetRatio = Math.max(0.001, options.targetRatio ?? 1);
-    const stepAbs = toNumber(fillPrice) * (options.gridStepPct / 100);
-    const takeProfit =
-      fill.side === "long"
-        ? toNumber(fillPrice) + stepAbs * targetRatio
-        : toNumber(fillPrice) - stepAbs * targetRatio;
-    const stopRatio = options.stopRatio ?? 0;
-    const stopLoss =
-      stopRatio > 0
-        ? fill.side === "long"
-          ? toNumber(fillPrice) - stepAbs * stopRatio
-          : toNumber(fillPrice) + stepAbs * stopRatio
-        : undefined;
+    const { takeProfit, stopLoss } = liveBracketPrices(
+      fill,
+      fillPrice,
+      options,
+    );
     yield* adapter
       .setTradingStop({
         symbol: options.symbol,
@@ -1899,6 +1882,82 @@ function executeLadderLiveEvents(
   });
 }
 
+/**
+ * Venue entry price for a live rung fill: buy at ask / sell at bid off the
+ * LIVE book, nudged by `liveEntryCrossBps` for marketability, falling back to
+ * rung x cross when the book read fails (2026-09-18: rung levels go stale on
+ * 15m signals — a stranded sell read 43bps off mark). Paper keeps the
+ * theoretical fill price; this only sets the venue order price.
+ */
+function resolveLiveEntryVenuePrice(
+  side: FuturesOrderSide,
+  fillPrice: ReturnType<typeof money>,
+  options: LadderPaperTradingOptions,
+  gateway?: MarketDataGatewayService,
+): Effect.Effect<ReturnType<typeof money>, never, never> {
+  const crossBps = Math.max(0, options.liveEntryCrossBps ?? 0);
+  const crossFactor =
+    side === "buy" ? 1 + crossBps / 10000 : 1 - crossBps / 10000;
+  const crossed = money(toNumber(fillPrice) * crossFactor);
+  if (gateway === undefined) return Effect.succeed(crossed);
+  return gateway.fetchTick(options.exchange, options.symbol).pipe(
+    Effect.orElseSucceed(() => null),
+    Effect.map((book) => {
+      if (book === null) return crossed;
+      const ref = side === "buy" ? (book.ask ?? 0) : (book.bid ?? 0);
+      return Number.isFinite(ref) && ref > 0
+        ? money(ref * crossFactor)
+        : crossed;
+    }),
+  );
+}
+
+/** Target/stop bracket around a live rung entry (undefined stop when disabled). */
+function liveBracketPrices(
+  fill: LadderFillEvent,
+  fillPrice: ReturnType<typeof money>,
+  options: LadderPaperTradingOptions,
+) {
+  const targetRatio = Math.max(0.001, options.targetRatio ?? 1);
+  const stepAbs = toNumber(fillPrice) * (options.gridStepPct / 100);
+  const direction = fill.side === "long" ? 1 : -1;
+  const stopRatio = options.stopRatio ?? 0;
+  return {
+    takeProfit: toNumber(fillPrice) + direction * stepAbs * targetRatio,
+    stopLoss:
+      stopRatio > 0
+        ? toNumber(fillPrice) - direction * stepAbs * stopRatio
+        : undefined,
+  };
+}
+
+/** A flat iteration: nothing opened, filled or closed on this bar. */
+function noSeedActivity(
+  openBefore: number,
+  openAfter: number,
+  iterationFills: readonly LadderFillEvent[],
+  closedThisIteration: number,
+): boolean {
+  return (
+    openBefore === 0 &&
+    openAfter === 0 &&
+    iterationFills.length === 0 &&
+    closedThisIteration === 0
+  );
+}
+
+/** The bar's ADX, but only when the chop gate is armed (0 otherwise). */
+function chopGateAdxAtLastBar(
+  candles: readonly CandleLike[],
+  options: LadderPaperTradingOptions,
+): number {
+  const threshold = options.chopGateAdxThreshold ?? 0;
+  return threshold > 0
+    ? makeCausalSymbolStats(candles, options.timeframe)(candles.length - 1)
+        .adx14
+    : 0;
+}
+
 function buildLadderIterationResult(
   state: LadderPaperState,
   w: WorkingState,
@@ -1919,25 +1978,18 @@ function buildLadderIterationResult(
         ? "opened"
         : "hold";
   const chopGateThreshold = options.chopGateAdxThreshold ?? 0;
-  const lastAdx =
-    chopGateThreshold > 0
-      ? makeCausalSymbolStats(candles, options.timeframe)(candles.length - 1)
-          .adx14
-      : 0;
+  const lastAdx = chopGateAdxAtLastBar(candles, options);
+  const flat = noSeedActivity(
+    openBefore,
+    openAfter,
+    iterationFills,
+    closedThisIteration,
+  );
   const seedsBlockedByChopGate =
-    openBefore === 0 &&
-    openAfter === 0 &&
-    iterationFills.length === 0 &&
-    closedThisIteration === 0 &&
-    chopGateThreshold > 0 &&
-    lastAdx >= chopGateThreshold;
+    flat && chopGateThreshold > 0 && lastAdx >= chopGateThreshold;
   const ddKilled = accountDrawdownBreached(w, options);
   const trendNote =
-    openBefore === 0 &&
-    openAfter === 0 &&
-    iterationFills.length === 0 &&
-    closedThisIteration === 0 &&
-    (options.onlyWithTrend ?? false)
+    flat && (options.onlyWithTrend ?? false)
       ? `; seeds need trend (onlyWithTrend, period ${options.trendFilterPeriod ?? 0})`
       : "";
   return {
