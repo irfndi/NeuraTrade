@@ -64,6 +64,7 @@ fn ctx(open: f64, high: f64, low: f64, close: f64, ts_ms: i64, bar_index: u64) -
         ms_per_bar: 15 * 60 * 1000,
         conservative_intrabar: true,
         max_drawdown_pct: 0,
+        seed_reanchor_bps: 0, // off: every existing assertion pins today's rule
     }
 }
 
@@ -274,6 +275,84 @@ fn target_exit_survives_a_sliding_window_where_the_current_bar_is_always_index_1
         "target exit reachable one tick after the fill: {ev:?}"
     );
     assert_eq!(long_closes[0].reason, CloseReason::Target);
+}
+
+#[test]
+fn stranded_side_reanchors_only_when_opted_in_and_never_under_a_position() {
+    // The measured failure: a side armed outside the market's later range stays
+    // armed forever (seed tier 2 keeps armed rungs), so the symbol goes silent.
+    // This pins the opt-in rule AND its safety boundary — a side holding a
+    // filled rung must never be re-anchored.
+
+    // --- arm 1: OFF (default) keeps today's behaviour exactly.
+    let mut off = LadderState::fresh(micros(50.0), cfg());
+    let _ = advance_bar(
+        &mut off,
+        &ctx(100.0, 100.0, 100.0, 100.0, 1_000_000, 0),
+        opts(),
+    );
+    let _ = advance_bar(
+        &mut off,
+        &ctx(103.0, 103.5, 102.8, 103.0, 2_000_000, 1),
+        opts(),
+    );
+    assert_eq!(
+        off.rungs(Side::Long)[0].level,
+        micros(98.7),
+        "flag off: the stranded ladder is kept, as shipped"
+    );
+
+    // --- arm 2: ON with a 50bp runway re-anchors at this bar's open.
+    let mut on = LadderState::fresh(micros(50.0), cfg());
+    let _ = advance_bar(
+        &mut on,
+        &ctx(100.0, 100.0, 100.0, 100.0, 1_000_000, 0),
+        opts(),
+    );
+    let mut wide = ctx(103.0, 103.5, 102.8, 103.0, 2_000_000, 1);
+    wide.seed_reanchor_bps = 50;
+    let _ = advance_bar(&mut on, &wide, opts());
+    assert_eq!(
+        on.long_base,
+        micros(103.0),
+        "long anchor follows the bar it was cleared by"
+    );
+    assert_eq!(
+        on.rungs(Side::Long)[0].level,
+        micros(103.0 * 0.987),
+        "new rung sits one step under the new anchor"
+    );
+
+    // --- arm 3: a side with a filled rung is never abandoned.
+    let mut held = LadderState::fresh(micros(50.0), cfg());
+    let _ = advance_bar(
+        &mut held,
+        &ctx(100.0, 100.0, 100.0, 100.0, 1_000_000, 0),
+        opts(),
+    );
+    let _ = advance_bar(
+        &mut held,
+        &ctx(99.0, 99.5, 98.6, 99.0, 2_000_000, 1),
+        opts(),
+    );
+    assert!(held.rungs(Side::Long)[0].filled, "long rung 1 is filled");
+    let entry_level = held.rungs(Side::Long)[0].level;
+    // Bar clears the anchor by 60bp (low 100.6 > 100 * 1.005) but stops short
+    // of the target (entry 98.8974 + 1.3 * 1.95 = 101.43), so the rung cannot
+    // close first and the assertion is about the re-anchor rule alone.
+    let mut rebound = ctx(101.0, 101.2, 100.6, 100.8, 3_000_000, 2);
+    rebound.seed_reanchor_bps = 50;
+    let _ = advance_bar(&mut held, &rebound, opts());
+    assert!(
+        held.rungs(Side::Long).iter().any(|r| r.filled),
+        "an open rung survives the re-anchor rule: {:#?}",
+        held.rungs(Side::Long)
+    );
+    assert_eq!(
+        held.rungs(Side::Long)[0].level,
+        entry_level,
+        "the ladder under a live position is untouched"
+    );
 }
 
 #[test]

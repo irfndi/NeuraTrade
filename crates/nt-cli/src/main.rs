@@ -342,7 +342,8 @@ fn ladder_shadow(args: &[String]) -> ! {
              [--resume <file>] [--ledger <file>] [--rungs N] [--step-bp N] [--target-x100 N] \
              [--stop-x100 N] [--max-grids N] [--pause-bars N] [--max-hold-bars N] \
              [--max-drawdown-pct N] [--conservative 0|1] [--fee-bp N] [--maker-fee-bp N] \
-             [--cross-bp N] [--slip-bp N] [--pos-pct N] [--leverage N]"
+             [--cross-bp N] [--slip-bp N] [--pos-pct N] [--leverage N] \
+             [--seed-reanchor-bps N]"
         );
         std::process::exit(2);
     }
@@ -366,6 +367,9 @@ fn ladder_shadow(args: &[String]) -> ! {
     let mut slip_bp: i64 = 2; // --slippage-bps 2
     let mut pos_pct: i64 = 50; // --max-position-size-pct 50
     let mut leverage: i64 = 1; // --leverage 1
+    // OFF by default: the stale-ladder re-anchor is a strategy change under
+    // measurement, not a port fix. 0 = current behaviour exactly.
+    let mut seed_reanchor_bps: i64 = 0;
     let mut i = 2;
     let mut next_i64 = |i: &mut usize| -> i64 {
         *i += 1;
@@ -401,6 +405,7 @@ fn ladder_shadow(args: &[String]) -> ! {
             "--slip-bp" => slip_bp = next_i64(&mut i),
             "--pos-pct" => pos_pct = next_i64(&mut i),
             "--leverage" => leverage = next_i64(&mut i),
+            "--seed-reanchor-bps" => seed_reanchor_bps = next_i64(&mut i),
             _ => usage_ladder(),
         }
         i += 1;
@@ -485,6 +490,7 @@ fn ladder_shadow(args: &[String]) -> ! {
             ms_per_bar: timeframe_ms,
             conservative_intrabar: conservative != 0,
             max_drawdown_pct,
+            seed_reanchor_bps,
         };
         let ev = nt_ladder::advance_bar(&mut state, &ctx, sizing);
         fills += ev.fills.len();

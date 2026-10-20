@@ -964,3 +964,77 @@ on a stale 30 would desync `pm2 save` from the file.
 **Acceptance check:** the SOL iteration line must stop carrying
 `pre-trade risk check failed: capital ... is below minimum 30` and read as a
 normal `HOLD` alongside the other three symbols.
+
+## Stranded-rung re-anchor — MEASURED, decision: keep it OFF (2026-10-20)
+
+Gate 4 finding (e) said a re-anchor rule must not be slipped in silently
+because it moves the hunt's P&L. It has now been measured instead of argued.
+
+**Instrument.** `nt-ladder` gained `BarContext::seed_reanchor_bps` (0 = off,
+the default and the only value any live path passes): a side that is armed and
+has **never filled** is cleared once the whole bar has cleared that side's
+anchor by `bps`, after which the existing tier-3 seed re-anchors at the bar's
+open. A side holding any filled rung is never touched. The third arm of the
+test pins exactly that boundary. `nt-cli ladder-shadow --seed-reanchor-bps`
+exposes it; `scripts/seed-reanchor-diff.sh` sweeps it.
+
+**Inputs.** The same 3,112-bar bybit-futures 15m panels per symbol
+(2026-09-18 → 2026-10-20), the deployed soak knobs, 50 USDT per sleeve, fresh
+resume per arm so every arm starts from the same seed bar. The off arm
+reproduces the documented Rust replay exactly (**74 closes, 75 fills**, BTC
+47.93 / ETH 51.77 / SOL 47.25 / LINK 47.27) — that is the harness check.
+
+| `bps` | capital (4 sleeves) | Δ vs off | closes | target | stop | max_hold | fills |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **0 (shipped)** | **194.21** | — | **74** | 21 | 22 | 31 | 75 |
+| 10 | 168.38 | **−25.83** | 448 | 84 | 100 | 264 | 452 |
+| 25 | 167.36 | **−26.86** | 434 | 82 | 97 | 255 | 438 |
+| 50 | 165.54 | **−28.67** | 406 | 72 | 94 | 240 | 411 |
+| 100 | 169.91 | −24.30 | 372 | 69 | 82 | 221 | 376 |
+| 200 | 180.03 | −14.18 | 317 | 63 | 60 | 194 | 319 |
+| 400 | 190.29 | −3.92 | 241 | 55 | 52 | 134 | 243 |
+| 600 | 189.67 | −4.54 | 204 | 50 | 47 | 107 | 206 |
+| 1000 | 191.26 | −2.96 | 159 | 37 | 35 | 87 | 161 |
+| 2000 | 195.77 | +1.56 | 133 | 39 | 31 | 63 | 135 |
+
+**Reading it.** Every runway that actually un-silences a symbol destroys
+value, and the tighter the trigger the worse it is: a 50bp runway turns 74
+closes into 406 for **−28.67 USDT**. The mechanism is not subtle — the win
+rate is essentially unchanged across the sweep (45.9% off → 45.7% at 200 →
+48.9% at 400 → 50.3% at 2000) while trade count multiplies up to 6×. The rule
+buys **volume at the same edge**, and at 2bp a side plus 15bp entry cross
+extra volume is negative by construction.
+
+`bps 2000` is the only arm nominally ahead (+1.56), and it is not a finding:
+BTC and ETH are **byte-identical to off** (47.93 / 51.77 — the rule never
+fires for them), SOL gains +2.03 and LINK loses −0.47. That is one symbol's
+luck over 32 days, not an edge.
+
+**LINK, the symbol the rule exists to rescue:**
+
+| arm | LINK capital | LINK closes |
+| --- | --- | --- |
+| off | 47.27 | 29 |
+| 200 | 39.03 | 128 |
+| 400 | 39.43 | 108 |
+| 1000 | 43.56 | 70 |
+| 2000 | 46.80 | 63 |
+
+The previously silent symbol does come back to life — at 200bp it trades 4.4×
+as often and ends **8.24 USDT worse**. Un-silencing is not free.
+
+**Decision: do not enable.** The silence that Gate 4 finding (e) flagged is
+not a defect to patch; it is the cost centre of a mean-reversion ladder — a
+side only earns when price returns to it — and re-centring the ladder converts
+it into a trend-chaser paying the same stop distance for a worse entry. The
+flag stays in the engine **off by default** purely as the instrument, so the
+owner can re-run the sweep on new data without rebuilding it; no live path
+passes a non-zero value, and the default arm is covered by the existing suite.
+
+**What this does not measure** (stated so it is not over-read): only the
+"follow the market" family. A *widen-rather-than-recentre* policy (leave the
+armed rungs and add one beyond them) is a different strategy that this
+instrument does not express, and would need its own sweep. The window is one
+32-day sample on four symbols with no funding, and no bootstrap interval was
+computed — the sign at tight runways is monotone and large, which is what the
+decision turns on.

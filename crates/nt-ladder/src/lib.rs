@@ -987,6 +987,11 @@ pub struct BarContext {
     /// disables the drawdown kill and the flat re-anchor, matching TS's
     /// `accountDrawdownBreached` guards.
     pub max_drawdown_pct: i64,
+    /// Opt-in stale-ladder re-anchor, in bps of distance the market must have
+    /// put between itself and the side's anchor. `0` disables it (default,
+    /// and the only value any live path uses today) — see
+    /// `reanchor_stranded_side`.
+    pub seed_reanchor_bps: i64,
 }
 
 /// Fee schedule. TS reads `feePct` (maker), `takerExitFeePct` (falls back to
@@ -1014,6 +1019,58 @@ impl FeeSchedule {
             // leaves at its requested value.
             leverage: opts.leverage.max(1),
         }
+    }
+}
+
+/// Stale-ladder re-anchor (opt-in, `BarContext::seed_reanchor_bps > 0`).
+///
+/// `seed_side` re-anchors only an EMPTY side — tier 2 deliberately keeps armed
+/// rungs — so a side armed outside the market's later range stays armed
+/// forever and the symbol goes silent with no operator path back. That is
+/// measured, not theoretical: in the 2026-10 Gate 4 replay BTC sat silent for
+/// 2,653 bars (28 days), LINK 2,057 and SOL 1,709 while ETH kept trading, and
+/// demo BTC/LINK show 0 fills in six weeks.
+///
+/// Trigger, per side, when ALL hold:
+///   1. the option is on (`bps > 0`);
+///   2. the side is armed (non-empty);
+///   3. NO rung on it has ever filled — re-anchoring under a live position
+///      would abandon it, a different and much larger change;
+///   4. the whole bar cleared the side's anchor by `bps` — for longs the bar's
+///      LOW is above the anchor (every long rung sits below untouched price),
+///      for shorts the bar's HIGH is below it.
+///
+/// `bps` is therefore the runway parameter: 0 is off, and larger values demand
+/// a bigger move before the ladder follows. Re-anchoring invents no seed — it
+/// only clears the side, so the existing tier-3 gates (drawdown, chop, trend)
+/// and this bar's open still decide the new levels.
+fn reanchor_stranded_side(state: &mut LadderState, side: Side, ctx: &BarContext) {
+    if ctx.seed_reanchor_bps <= 0 {
+        return;
+    }
+    let rungs = state.rungs(side);
+    if rungs.is_empty() || rungs.iter().any(|r| r.filled) {
+        return;
+    }
+    let anchor = match side {
+        Side::Long => state.long_base,
+        Side::Short => state.short_base,
+    };
+    if anchor.0 <= 0 {
+        return;
+    }
+    let buffer = scale(anchor.0, ctx.seed_reanchor_bps, 10_000);
+    let cleared = match side {
+        Side::Long => ctx.candle.low.0 > anchor.0.saturating_add(buffer),
+        Side::Short => ctx.candle.high.0 < anchor.0.saturating_sub(buffer),
+    };
+    if !cleared {
+        return;
+    }
+    *state.rungs_mut(side) = Vec::new();
+    match side {
+        Side::Long => state.long_base = Money::ZERO,
+        Side::Short => state.short_base = Money::ZERO,
     }
 }
 
@@ -1049,6 +1106,12 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
         state.peak_capital = state.capital;
         state.paused = state.config.grid_pause_after_loss_bars.max(0) as u64;
     }
+
+    // Opt-in stale-ladder re-anchor, BEFORE seeding: it empties a side that
+    // the market has walked away from so tier 3 re-seeds it at this bar's
+    // open. No-op unless `seed_reanchor_bps > 0`.
+    reanchor_stranded_side(state, Side::Long, ctx);
+    reanchor_stranded_side(state, Side::Short, ctx);
 
     let seed_ctx = SeedContext {
         open: ctx.candle.open,

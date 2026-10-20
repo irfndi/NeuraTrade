@@ -73,7 +73,8 @@ fn bar(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
         max_hold_bars: 0,
         ms_per_bar: 900_000,
         conservative_intrabar: true,
-        max_drawdown_pct: 0, // fixture has no maxDrawdownPct → TS default 0
+        max_drawdown_pct: 0,  // fixture has no maxDrawdownPct → TS default 0
+        seed_reanchor_bps: 0, // fixture pins the CURRENT rule: no re-anchor
     }
 }
 
@@ -81,6 +82,7 @@ fn bar(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
 fn bar_dd(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
     BarContext {
         max_drawdown_pct: 8,
+        seed_reanchor_bps: 0,
         ..bar(i, o, h, l, c)
     }
 }
