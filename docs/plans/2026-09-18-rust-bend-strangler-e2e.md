@@ -1079,6 +1079,57 @@ fitted on the **grid** engine while the live path executes the **ladder**, and
 The gate cannot see that difference. That is the main reason the first live
 sleeve should be a routing test with a small stake, not a profit proof.
 
+## The evidence gap, measured: grid candidate ≠ ladder behaviour (2026-10-20)
+
+The live-grid gate approves a config by comparing knobs, but the candidate in
+the registry was fitted on the **grid** engine while the live path executes the
+**ladder**. Same ETH panel (`/tmp/gate4/ETH-15m.csv`, 3,110 bars,
+2026-09-18 → 2026-10-20), same candidate geometry (step 75bp / target 300 /
+grids 3 / pause 24), $100, 50% position, 1x, 2bp both sides, 1bp slip:
+
+| Engine / variant | closes (T/S/MH) | capital | net |
+| --- | --- | --- | --- |
+| **Grid** (the validated engine) | 69 fills | — | **+46.27** |
+| Ladder, candidate exits (stop 1.58, hold 39) | 38 (8/17/13) | 96.44 | **−3.56** |
+| Ladder, grid-like exits (stop 2.0, no max-hold) | 28 (11/17/0) | 95.92 | **−4.08** |
+| Ladder, candidate exits, pause off | 33 (9/16/8) | 99.12 | **−0.88** |
+
+**Reading it.** Matching the grid's exits does not rescue the ladder
+(−4.08), and removing the pause does not either (−0.88). The two engines are
+trading *different strategies*: the ladder arms both sides every bar and fills
+progressively on touch, the grid holds one position per setup. So the
+candidate's evidence does not transfer to the sleeve that would run live, and
+the gate — which only compares knobs — cannot see that.
+
+**Caveats, stated rather than hidden:** the Rust ladder does not implement the
+chop gate (`chop_gate_active: false`, seed_ctx) or the trend filter, so the
+candidate's `adx 20` gate is not applied here; a gate would *reduce* entries and
+is unlikely to turn −4 into +46. The grid figure's *magnitude* also needs
+suspicion — the candidate's documented 24-month result is +18.39% compounded at
+2.79% dd, so +46% in 32 days means this window or this port's sizing basis is
+unusual. The **sign** of the gap is what the decision turns on.
+
+**Consequence for the trial-live sleeve:** it runs the ladder, so it is not
+backed by the ETH candidate's evidence. Options, in order of honesty: validate
+a **ladder** candidate and register it; or run live on the grid engine (a code
+change, since the live path is the ladder); or accept the sleeve as a
+routing-only test with a stake the owner is willing to lose.
+
+## `tsrs` typecheck (2026-10-20, bun 1.4.3)
+
+Cloudflare/VoidZero's Rust port of the TypeScript compiler, measured on this
+service (352 files) rather than taken from the blog's headline:
+
+| command | warm wall | vs tsc | injected `TS2322` |
+| --- | --- | --- | --- |
+| `bunx tsc --noEmit` | 1,442 ms | 1× | caught |
+| `bunx tsrs --noEmit` | **334 ms** | **4.3×** | caught, identical diagnostic |
+
+Adopted only as `bun run typecheck:fast` (`bunx tsrs --noEmit`); `typecheck`
+stays `tsc` and CI keeps the authoritative check. `bunx` left `bun.lock`
+untouched, so no install surface was added — tsrs is a pre-release and its
+diagnostic ordering still differs from upstream.
+
 **What this does not measure** (stated so it is not over-read): only the
 "follow the market" family. A *widen-rather-than-recentre* policy (leave the
 armed rungs and add one beyond them) is a different strategy that this
