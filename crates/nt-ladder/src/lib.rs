@@ -17,14 +17,20 @@
 //! fidelity is what this module proves, not numeric parity with TS.
 //!
 //! `entry_bar` is the WINDOW-relative index of the fill — TS `entryBar`
-//! (`types.ts:257-258`) — and the conservative gate compares it only against
-//! `BarContext::bar_index` from the same window, exactly as TS does. The
+//! (`types.ts:257-258`) — and `entry_ts_ms` is the ABSOLUTE fill time. The
+//! conservative same-bar gate measures an entry with `entry_ts_ms` and uses
+//! `entry_bar` only as the fallback for states written before that field
+//! existed, mirroring TS `enteredOnCurrentBar` (`ladder-engine.ts:851`). The
 //! earlier absolute-counter scheme (`bars_consumed`) silently drifted from
 //! TS whenever a bar was skipped (paused bars do not count) and put the
 //! gate's two operands in different coordinate systems, which would have
-//! barred target exits outright after a resume. If a caller slides the
-//! window between ticks it must re-anchor `entry_bar` — the same contract
-//! TS's own live loop carries.
+//! barred target exits outright after a resume. The index-only rule is worse
+//! in a sliding window: the live loop fetches two candles, so the current bar
+//! is always index 1, a fill stamps `entry_bar 1`, and `entry_bar < bar_index`
+//! is false forever — TS shipped exactly that starvation (0 target exits in 70
+//! lifetime closes) until the absolute clock replaced it. Measuring time, not
+//! window position, also removes the caller's obligation to re-anchor
+//! `entry_bar` when it slides the window between ticks.
 
 use nt_grid::account_scaled_leverage_cap;
 use nt_risk::Money;
@@ -72,10 +78,12 @@ pub struct Rung {
     pub filled: bool,
     /// Post-slippage entry price, micro-USDT. 0 while unfilled.
     pub entry_price: Money,
-    /// Window bar index of the fill — TS `entryBar`
-    /// (`types.ts:257-258`), compared only against `BarContext::bar_index`.
+    /// Window bar index of the fill — TS `entryBar` (`types.ts:257-258`).
+    /// Fallback only: the same-bar gate prefers `entry_ts_ms`, and reaches for
+    /// this when a resumed state predates that field.
     pub entry_bar: u64,
-    /// Absolute fill time, ms epoch — the live max-hold clock.
+    /// Absolute fill time, ms epoch — the live max-hold clock AND the
+    /// conservative same-bar gate's entry measurement.
     pub entry_ts_ms: i64,
     /// Filled quantity in base micros; 0 while unfilled.
     pub filled_qty: i64,
@@ -1267,6 +1275,25 @@ fn apply_risk_exit(
     }
 }
 
+/// TS `enteredOnCurrentBar` (`ladder-engine.ts:851`): did this rung fill on
+/// the bar currently being processed?
+///
+/// Measured with the ABSOLUTE fill clock, the same one max-hold uses — not
+/// the window-relative `entry_bar`. In a sliding window the current bar is
+/// always at the same index (the live loop fetches two candles, so it is
+/// index 1) and a fill stamps that same index, which made the index rule
+/// false forever and starved target exits (TS 2026-09-23 finding: 52
+/// max_hold + 18 stop + 0 target in 70 lifetime closes). The index
+/// comparison survives as the fallback for states persisted before
+/// `entry_ts_ms` existed, where it is the only evidence available.
+fn entered_on_current_bar(rung: &Rung, current_bar_ts_ms: i64, current_bar_index: u64) -> bool {
+    if rung.entry_ts_ms > 0 {
+        rung.entry_ts_ms >= current_bar_ts_ms
+    } else {
+        rung.entry_bar >= current_bar_index
+    }
+}
+
 /// TS `closeLadderTargets` (:833-885): per-rung take-profit, else max-hold.
 ///
 /// Target uses the rung's FROZEN `step` (seed-time), not the bar's current
@@ -1298,7 +1325,8 @@ fn close_targets(
         } else {
             ctx.candle.low <= target
         };
-        let can_close_same_bar = !ctx.conservative_intrabar || rung.entry_bar < ctx.bar_index;
+        let can_close_same_bar = !ctx.conservative_intrabar
+            || !entered_on_current_bar(&rung, ctx.candle.ts_ms, ctx.bar_index);
         if target_touched && can_close_same_bar {
             let exit = if side == Side::Long {
                 Money(scale(target.0, 10_000, 10_000 + ctx.slippage_bp))

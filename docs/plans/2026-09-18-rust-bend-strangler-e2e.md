@@ -858,3 +858,29 @@ synced and the champion apps restarted, so `closed-24h-*` and the `target`
 exit mix will not move until then. This is the intended baseline change —
 Gate 3's expectancy read must treat the first target closes as the corrected
 baseline, not as a strategy shift.
+
+## Same fix ported to `nt-ladder` (2026-10-20, Rust)
+
+Ported in the same session, because the gate is a **parity** rule: leaving Rust
+on the index comparison would have made every future Gate-4 target diff
+attributable to the fix rather than to the engines.
+
+`close_targets` (`crates/nt-ladder/src/lib.rs`) now calls
+`entered_on_current_bar(rung, ctx.candle.ts_ms, ctx.bar_index)` — the module's
+own `entry_ts_ms` was already persisted in `ladder v3` and already drove
+max-hold, so no state-format change was needed. The fallback to `entry_bar`
+keeps resume files written before `entry_ts` readable.
+
+**Evidence, not assertion:**
+
+| Check | Result |
+| --- | --- |
+| New case `target_exit_survives_a_sliding_window_where_the_current_bar_is_always_index_1` (`tests/tick.rs`) | PASS — seeds and fills at `bar_index 1`, then target-exits on the next tick, also at `bar_index 1` (the live 2-candle shape) |
+| Same case against the OLD index rule (temporarily restored, then reverted) | **FAIL** — `closes: []` where 1 expected |
+| `cargo test --offline --workspace` | 8 tick tests + all workspace suites pass |
+| `cargo clippy --offline --all-targets -D warnings`, `cargo fmt --check` | clean |
+| `cargo run --example ladder_parity` | every pin unchanged (V1 100.902126, V1b 102.718527, V1c 100.751507, boundary 94.447135 / 93.049 / 96.42, drawdown 91) — replay results are identical, as they must be, since on a monotonic panel `entry_ts < bar_ts` and `entry_bar < bar_index` agree |
+
+The Rust module docs previously told callers to re-anchor `entry_bar` when
+sliding the window; measuring the entry in time removes that obligation, so
+the note now says what it actually guarantees.

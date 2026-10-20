@@ -232,6 +232,51 @@ fn cannot_target_exit_on_the_fill_bar_unless_opting_out() {
 }
 
 #[test]
+fn target_exit_survives_a_sliding_window_where_the_current_bar_is_always_index_1() {
+    // The live shape: `ladderRequiredCandles` fetches TWO candles, so the
+    // current bar is index 1 on every tick and a fill stamps `entry_bar 1`.
+    // The index rule (`entry_bar < bar_index`) was therefore false forever and
+    // live target exits were unreachable — TS shipped that (52 max_hold + 18
+    // stop + 0 target in 70 lifetime closes) until the gate moved to the
+    // absolute fill clock. This test would pass on the old rule only in a
+    // growing window; index 1 in, index 1 out is what production does.
+    let mut state = LadderState::fresh(micros(50.0), cfg());
+    // Seed AND fill on the same tick: the ladder seeds off the open (100.0),
+    // puts long rung 1 at 98.7, and the bar's low reaches it.
+    let ev = advance_bar(
+        &mut state,
+        &ctx(100.0, 100.0, 98.6, 99.0, 1_000_000, 1),
+        opts(),
+    );
+    assert_eq!(
+        ev.fills.len(),
+        1,
+        "long rung 1 fills on the seed tick: {ev:?}"
+    );
+    assert_eq!(
+        state.rungs(Side::Long)[0].entry_bar,
+        1,
+        "window-relative index, as in live"
+    );
+    assert_eq!(state.rungs(Side::Long)[0].entry_ts_ms, 1_000_000);
+
+    // Next tick, still index 1: price reaches the target. The entry is one bar
+    // old in TIME, so the conservative rule must allow the exit.
+    let ev = advance_bar(
+        &mut state,
+        &ctx(99.0, 101.5, 98.9, 101.0, 1_900_000, 1),
+        opts(),
+    );
+    let long_closes: Vec<_> = ev.closes.iter().filter(|c| c.side == Side::Long).collect();
+    assert_eq!(
+        long_closes.len(),
+        1,
+        "target exit reachable one tick after the fill: {ev:?}"
+    );
+    assert_eq!(long_closes[0].reason, CloseReason::Target);
+}
+
+#[test]
 fn max_hold_closes_at_the_clock_not_the_price() {
     // maxHoldBars 39 x 15m = 585 min. Fire on the bar where the clock runs out.
     let mut state = LadderState::fresh(micros(50.0), cfg());
