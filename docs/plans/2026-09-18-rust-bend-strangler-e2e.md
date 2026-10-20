@@ -1039,6 +1039,14 @@ flag stays in the engine **off by default** purely as the instrument, so the
 owner can re-run the sweep on new data without rebuilding it; no live path
 passes a non-zero value, and the default arm is covered by the existing suite.
 
+**What this does not measure** (stated so it is not over-read): only the
+"follow the market" family. A *widen-rather-than-recentre* policy (leave the
+armed rungs and add one beyond them) is a different strategy that this
+instrument does not express, and would need its own sweep. The window is one
+32-day sample on four symbols with no funding, and no bootstrap interval was
+computed — the sign at tight runways is monotone and large, which is what the
+decision turns on.
+
 ## Live path — FOUR gates, and why trial-live could never start (2026-10-20)
 
 Asked "when we live, is it set?", I audited the trial-live sleeve instead of
@@ -1129,11 +1137,3 @@ Adopted only as `bun run typecheck:fast` (`bunx tsrs --noEmit`); `typecheck`
 stays `tsc` and CI keeps the authoritative check. `bunx` left `bun.lock`
 untouched, so no install surface was added — tsrs is a pre-release and its
 diagnostic ordering still differs from upstream.
-
-**What this does not measure** (stated so it is not over-read): only the
-"follow the market" family. A *widen-rather-than-recentre* policy (leave the
-armed rungs and add one beyond them) is a different strategy that this
-instrument does not express, and would need its own sweep. The window is one
-32-day sample on four symbols with no funding, and no bootstrap interval was
-computed — the sign at tight runways is monotone and large, which is what the
-decision turns on.
