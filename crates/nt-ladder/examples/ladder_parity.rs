@@ -75,6 +75,7 @@ fn bar(i: u64, o: f64, h: f64, l: f64, c: f64) -> BarContext {
         conservative_intrabar: true,
         max_drawdown_pct: 0,  // fixture has no maxDrawdownPct → TS default 0
         seed_reanchor_bps: 0, // fixture pins the CURRENT rule: no re-anchor
+        adx14: 0.0,           // cfg has chop_gate_adx 0: gate inert
     }
 }
 

@@ -35,6 +35,9 @@
 use nt_grid::account_scaled_leverage_cap;
 use nt_risk::Money;
 
+mod stats;
+pub use stats::adx14_series;
+
 /// Which ladder a rung belongs to. TS: `LadderSide = "long" | "short"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -992,6 +995,10 @@ pub struct BarContext {
     /// and the only value any live path uses today) — see
     /// `reanchor_stranded_side`.
     pub seed_reanchor_bps: i64,
+    /// This bar's causal ADX(14) — TS `ctx.chopGateActive`'s operand, taken
+    /// from `makeCausalSymbolStats(candles, tf)(i).adx14`. Only read when the
+    /// config arms the gate (`chop_gate_adx > 0`); 0.0 otherwise.
+    pub adx14: f64,
 }
 
 /// Fee schedule. TS reads `feePct` (maker), `takerExitFeePct` (falls back to
@@ -1117,9 +1124,12 @@ pub fn advance_bar(state: &mut LadderState, ctx: &BarContext, opts: SizingOption
         open: ctx.candle.open,
         close: ctx.candle.close,
         step: ctx.step,
-        trend: None,
+        trend: None, // trendFilterPeriod is 0 for every registered candidate
         only_with_trend: state.config.only_with_trend,
-        chop_gate_active: false,
+        // TS `createLadderBarContext`: threshold > 0 && adx14 >= threshold.
+        // Before the gate is armed TS still computes the stat but ignores it.
+        chop_gate_active: state.config.chop_gate_adx > 0
+            && ctx.adx14 >= state.config.chop_gate_adx as f64,
         drawdown_breached: account_drawdown_breached(
             state.peak_capital,
             state.capital,

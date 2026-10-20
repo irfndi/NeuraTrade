@@ -343,7 +343,7 @@ fn ladder_shadow(args: &[String]) -> ! {
              [--stop-x100 N] [--max-grids N] [--pause-bars N] [--max-hold-bars N] \
              [--max-drawdown-pct N] [--conservative 0|1] [--fee-bp N] [--maker-fee-bp N] \
              [--cross-bp N] [--slip-bp N] [--pos-pct N] [--leverage N] \
-             [--seed-reanchor-bps N]"
+             [--seed-reanchor-bps N] [--chop-gate-adx N]"
         );
         std::process::exit(2);
     }
@@ -370,6 +370,12 @@ fn ladder_shadow(args: &[String]) -> ! {
     // OFF by default: the stale-ladder re-anchor is a strategy change under
     // measurement, not a port fix. 0 = current behaviour exactly.
     let mut seed_reanchor_bps: i64 = 0;
+    // 0 = gate off (the live soak's knob). A registered grid candidate runs
+    // with 20 and lands on the ladder as `chopGateAdx`, so a faithful replay
+    // of that candidate MUST pass it here — the TS gate blocks a seed while
+    // ADX(14) >= threshold, and it is the difference between the validated
+    // geometry trading in trend and trading everywhere.
+    let mut chop_gate_adx: i64 = 0;
     let mut i = 2;
     let mut next_i64 = |i: &mut usize| -> i64 {
         *i += 1;
@@ -406,12 +412,30 @@ fn ladder_shadow(args: &[String]) -> ! {
             "--pos-pct" => pos_pct = next_i64(&mut i),
             "--leverage" => leverage = next_i64(&mut i),
             "--seed-reanchor-bps" => seed_reanchor_bps = next_i64(&mut i),
+            "--chop-gate-adx" => chop_gate_adx = next_i64(&mut i),
             _ => usage_ladder(),
         }
         i += 1;
     }
     let path = bars.unwrap_or_else(|| usage_ladder());
     let candles = load_panel(&path, Some(timeframe_ms));
+
+    // Causal ADX(14) for the whole panel: one pass equals TS calling
+    // `makeCausalSymbolStats(candles, tf)(i)` per bar (Wilder is a recursion
+    // over bars 0..=i). Computed even when the gate is off so the cost is in
+    // one place; the engine only reads it when `chop_gate_adx > 0`.
+    let adx14 = nt_ladder::adx14_series(
+        &candles
+            .iter()
+            .map(|c| nt_ladder::Candle {
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                ts_ms: c.open_ts_ms,
+            })
+            .collect::<Vec<_>>(),
+    );
 
     let cfg = nt_ladder::LadderConfig {
         grid_step_bp: step_bp,
@@ -420,7 +444,7 @@ fn ladder_shadow(args: &[String]) -> ! {
         rungs,
         target_ratio_x100: target_x100,
         only_with_trend: false, // soak trend-filter-period 0; no trend series here
-        chop_gate_adx: 0,       // soak chop-gate-adx 0 (fingerprint field)
+        chop_gate_adx,          // soak 0; a registered grid candidate uses 20
         max_hold_bars,
         stop_ratio_x100: stop_x100,
         conservative_intrabar: conservative != 0,
@@ -491,6 +515,7 @@ fn ladder_shadow(args: &[String]) -> ! {
             conservative_intrabar: conservative != 0,
             max_drawdown_pct,
             seed_reanchor_bps,
+            adx14: adx14.get(start + k).copied().unwrap_or(0.0),
         };
         let ev = nt_ladder::advance_bar(&mut state, &ctx, sizing);
         fills += ev.fills.len();

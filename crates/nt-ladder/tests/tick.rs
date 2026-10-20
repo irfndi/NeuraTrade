@@ -65,6 +65,7 @@ fn ctx(open: f64, high: f64, low: f64, close: f64, ts_ms: i64, bar_index: u64) -
         conservative_intrabar: true,
         max_drawdown_pct: 0,
         seed_reanchor_bps: 0, // off: every existing assertion pins today's rule
+        adx14: 0.0,           // chop gate unarmed in cfg(): adx is never read
     }
 }
 

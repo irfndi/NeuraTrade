@@ -1109,10 +1109,11 @@ progressively on touch, the grid holds one position per setup. So the
 candidate's evidence does not transfer to the sleeve that would run live, and
 the gate — which only compares knobs — cannot see that.
 
-**Caveats, stated rather than hidden:** the Rust ladder does not implement the
-chop gate (`chop_gate_active: false`, seed_ctx) or the trend filter, so the
-candidate's `adx 20` gate is not applied here; a gate would *reduce* entries and
-is unlikely to turn −4 into +46. The grid figure's *magnitude* also needs
+**Caveats, stated rather than hidden:** the Rust ladder did not implement the
+chop gate at the time of this table (`chop_gate_active: false`, seed_ctx), so
+the candidate's `adx 20` gate was **not** applied — see the next section, which
+ports it and overturns the "a gate would only reduce entries" guess below. The
+grid figure's *magnitude* also needs
 suspicion — the candidate's documented 24-month result is +18.39% compounded at
 2.79% dd, so +46% in 32 days means this window or this port's sizing basis is
 unusual. The **sign** of the gap is what the decision turns on.
@@ -1122,6 +1123,68 @@ backed by the ETH candidate's evidence. Options, in order of honesty: validate
 a **ladder** candidate and register it; or run live on the grid engine (a code
 change, since the live path is the ladder); or accept the sleeve as a
 routing-only test with a stake the owner is willing to lose.
+
+## The chop gate is not a formality: ported, then measured (2026-10-20)
+
+The table above was missing one of the candidate's own knobs, so it did not
+actually test the candidate. Fixed rather than argued about:
+
+- `crates/nt-ladder/src/stats.rs` — `adx14_series`, a verbatim port of TS
+  `fillAdxSeries` (`src/scalping/symbol-stats.ts`), including its two quirks:
+  the initial smoothing SUMS the first 14 values instead of averaging, and ADX
+  is 0 (TS `NaN`) before bar `2*period`. One pass over the panel equals the TS
+  causal provider per bar, because Wilder's recursion only reads bars `0..=i`.
+- `BarContext::adx14` + `advance_bar` now raise `chop_gate_active` from
+  `config.chop_gate_adx > 0 && adx14 >= threshold`, matching TS
+  `createLadderBarContext`, and the seed gate consumes it (the `SeedContext`
+  plumbing already existed). `nt-cli ladder-shadow --chop-gate-adx N` exposes
+  it; default 0 keeps every live/soak replay bit-identical.
+
+**Parity check (not eyeballed):** Rust vs TS `adx14` on the ETH panel at bars
+0/13/27/28/29/100/500/3110 — `diff` of the two dumps is empty, and both count
+exactly **1,931 of 3,110 bars at ADX ≥ 20**. So ~62% of this window is
+"trending" by the candidate's own threshold; this was never a small gate.
+
+Same panel, same geometry, $100 / 50% / 1x, 2bp both sides, 1bp slip — the 2×2
+that isolates the gate from the exit rule:
+
+| exits | `adx` | closes (T/S/MH) | capital | net |
+| --- | --- | --- | --- | --- |
+| candidate (stop 1.58, hold 39) | 0 | 32 (8/14/10) | 96.29 | −3.71% |
+| candidate (stop 1.58, hold 39) | **20** | 35 (6/15/14) | 93.99 | **−6.00%** |
+| grid-like (stop 2.0, no max-hold) | 0 | 28 (11/17/0) | 93.93 | −6.07% |
+| grid-like (stop 2.0, no max-hold) | **20** | 34 (21/13/0) | **108.22** | **+8.22%** |
+
+**What this changes.** The gate alone does not help the *candidate's* exits
+(−3.71 → −6.00), and the exits alone do not help (−6.07); only the
+**combination** — ADX gate plus the grid's own "no max-hold, wider stop" rule —
+flips the sign. My earlier claim that "matching the grid's exits doesn't rescue
+the ladder, so the candidate can't transfer" was measured with the gate
+missing, i.e. against an incomplete port of the candidate; with the gate in
+place the ladder and grid can at least be made to agree in direction.
+
+Cross-symbol check of the same two arms (`adx` per that symbol's candidate:
+BTC 15, SOL 28, ETH 20; LINK has no candidate, 20 used as a control):
+
+| symbol | gate off | gate on | Δ |
+| --- | --- | --- | --- |
+| BTC | −3.13% | **+3.97%** | +7.10 |
+| ETH | −6.07% | **+8.22%** | +14.29 |
+| LINK | −13.33% | **−2.04%** | +11.29 |
+| SOL | −0.88% | −4.60% | **−3.72** |
+
+3 of 4 improve, 2 of 4 end positive, one reverses: the gate is **material**
+(Δ up to 14 points on 32 days) but not **reliable**, and SOL shows the
+interaction is not even sign-stable across symbols. Also note fills *rise* with
+the gate (BTC 14 → 25, ETH 33 → 36) — blocked seeds re-arm later on cleaner
+trends, so the intuitive "a gate only removes trades" is wrong here.
+
+**Status:** this is a hypothesis generator, not evidence of edge — one 32-day
+window, n = 9–34 closes per arm, no walk-forward, no disjoint-window check, and
+the trend filter is still unimplemented (every registered candidate has
+`trendFilterPeriod 0`, so that is faithful for now). What it does establish:
+any ladder validation run from here must pass `--chop-gate-adx`, because
+without it the replay is not testing the registered candidate at all.
 
 ## `tsrs` typecheck (2026-10-20, bun 1.4.3)
 
