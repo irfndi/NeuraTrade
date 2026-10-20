@@ -1213,11 +1213,13 @@ gate cannot pass without direction, armed rungs survive a blocked bar
 and `--verdict` (Lean v4.34.0 kernel) prints `ALL PROOFS CHECK` too — installed
 and run locally 2026-10-21. Flipping one expected action to `Blocked{}` makes
 the gate exit 1, so the proofs are load-bearing rather than decorative.
-CI: the `Native` workflow's `bend` job runs the gate on every push (its path
-filter now covers root `LAWS.bend` / `PROOF.bend`, which it previously
-ignored), pin moved 2.0.21 → 2.0.37 after confirming all four kernel checksums
-reproduce; `--verdict` needs the Lean toolchain, so it runs weekly and on
-demand from `.github/workflows/bend-verdict.yml` instead of per PR.
+CI: the `Native` workflow's `bend` job runs the gate on any push/PR matching
+its path filter, which now covers root `LAWS.bend` / `PROOF.bend` (it
+previously ignored them, so a proof-only change never triggered the check);
+pin moved 2.0.21 → 2.0.37 after confirming all four kernel checksums
+reproduce. `--verdict` needs the ~1.5 GB Lean toolchain, so it lives in
+`.github/workflows/bend-verdict.yml` (weekly + on demand + on edits to that
+file) rather than in the per-PR job.
 
 ### Walk-forward on 5.4 months: the +8.22% was the window, not the edge
 
