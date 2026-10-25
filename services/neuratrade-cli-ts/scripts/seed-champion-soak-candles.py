@@ -33,6 +33,11 @@ SYMBOLS = (
 TIMEFRAMES = ("5m", "15m")
 TIMEFRAME_MINUTES = {"5m": 5, "15m": 15}
 LOOKBACK_DAYS = 120
+# Champion soaks write these DBs on the same 900s cadence. python's sqlite3
+# default busy timeout is only 5s, which is also the soak app's own tolerance
+# (src/services/sqlite.ts), so a writer mid-iteration must be waited out here
+# rather than turning into a failed sync cycle.
+BUSY_TIMEOUT_MS = 30_000
 
 
 def open_candle_cutoff_iso(timeframe: str, now: datetime | None = None) -> str:
@@ -81,18 +86,29 @@ def ensure_exchange_and_pairs(
     has_pair_ex = "exchange_id" in pair_cols
     ph = ",".join("?" for _ in SYMBOLS)
 
+    # Full-seed only: clear this exchange's rows before re-copying. The
+    # ohlcv_data DELETE is intentionally NOT here — it belongs to the write
+    # transaction in seed(), where the candle copy that follows it is atomic
+    # with it. Doing it here would run as a bare autocommit, so a crash between
+    # it and the re-insert would leave the soak DB with no candles.
+    # These pair DELETEs get their own short transaction for the same reason:
+    # the re-insert happens later, after the source scan.
     if not incremental:
-        if "exchange_id" in cols(dst, "ohlcv_data"):
-            dst.execute("DELETE FROM ohlcv_data WHERE exchange_id = ?", (src_ex_id,))
-        else:
-            dst.execute("DELETE FROM ohlcv_data")
-        if has_pair_ex:
-            dst.execute(
-                f"DELETE FROM trading_pairs WHERE exchange_id = ? AND symbol IN ({ph})",
-                (src_ex_id, *SYMBOLS),
-            )
-        else:
-            dst.execute(f"DELETE FROM trading_pairs WHERE symbol IN ({ph})", SYMBOLS)
+        dst.execute("BEGIN IMMEDIATE")
+        try:
+            if has_pair_ex:
+                dst.execute(
+                    f"DELETE FROM trading_pairs WHERE exchange_id = ? AND symbol IN ({ph})",
+                    (src_ex_id, *SYMBOLS),
+                )
+            else:
+                dst.execute(
+                    f"DELETE FROM trading_pairs WHERE symbol IN ({ph})", SYMBOLS
+                )
+        except BaseException:
+            dst.execute("ROLLBACK")
+            raise
+        dst.commit()
 
     if has_pair_ex:
         common = [c for c in pair_cols if c in src_pair_cols]
@@ -166,6 +182,12 @@ def ensure_exchange_and_pairs(
 def seed(dst_path: Path, *, incremental: bool) -> None:
     print(f"{'syncing' if incremental else 'seeding'} {dst_path}")
     dst = sqlite3.connect(dst_path)
+    # Explicit transaction control: BEGIN IMMEDIATE .. dst.commit() below.
+    # Without isolation_level = None python opens an implicit DEFERRED
+    # transaction at the first DML and holds the write lock until the very
+    # end, spanning the heavy source scan.
+    dst.isolation_level = None
+    dst.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     dst.execute("PRAGMA foreign_keys=OFF")
     dst.execute("ATTACH DATABASE ? AS src", (str(SRC),))
 
@@ -260,6 +282,11 @@ def seed(dst_path: Path, *, incremental: bool) -> None:
     cols_no_id = [c for c in ohlcv_cols if c != "id"]
     tmp_cols = {r[1] for r in dst.execute("PRAGMA table_info(_ohlcv_tmp)").fetchall()}
     use_cols = [c for c in cols_no_id if c in tmp_cols]
+
+    # Write phase. The source scan above is complete, so the dst write lock is
+    # taken only now, for the writes below — never for the scan. IMMEDIATE
+    # acquires it up front (no deferred upgrade, so no SQLITE_BUSY on upgrade).
+    dst.execute("BEGIN IMMEDIATE")
 
     if not incremental:
         dst.execute("DELETE FROM ohlcv_data WHERE exchange_id = ?", (src_ex_id,))
