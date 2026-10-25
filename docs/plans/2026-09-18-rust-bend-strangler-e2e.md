@@ -1301,3 +1301,75 @@ Adopted only as `bun run typecheck:fast` (`bunx tsrs --noEmit`); `typecheck`
 stays `tsc` and CI keeps the authoritative check. `bunx` left `bun.lock`
 untouched, so no install surface was added — tsrs is a pre-release and its
 diagnostic ordering still differs from upstream.
+
+## P6/P7/P8 paused — no edge to package yet (2026-10-25)
+
+P6 (Zig single-artifact packaging), P7 (temporary TS FFI bridge) and P8 (delete
+the Go/Bun trading path, Postgres cutover, bake-off) are **paused**, not
+cancelled. None of them started. They make a system faster and cleaner; they
+cannot produce a trading edge, and the edge is what is missing.
+
+The autoresearch scoreboard is the reason. `/opt/neuratrade/services/neuratrade-cli-ts/autoresearch/results/goals.md`
+(updated 2026-10-25T14:55Z), worker 1 of 4, trial ~1130 of 50000 after ~17h:
+
+| metric | measured | target |
+| --- | --- | --- |
+| median log-return | **−0.0107** | ≥ 0.08 |
+| win rate | **47.0%** | ≥ 55% |
+| expectancy | **−0.0005** | ≥ 0.001 |
+| throughput | 9.1 | ≥ 4 (pass) |
+| drawdown | 7.3% | ≤ 11% (pass) |
+
+Last confirm: `DISCARD_CONFIRM score=-0.0077 guardsOk=false
+reason=log_return_nonpositive,winrate_below_52,expectancy_nonpositive
+elapsedMs=125814`. `ledger.jsonl` is 514 MB of discards.
+
+**These numbers are the ladder-grid engine, not the grid.** The workers search
+ladder-grid — `services/neuratrade-cli-ts/autoresearch/prepare.ts:17,521`
+imports and calls `runLadderGridBacktest`, and
+`services/neuratrade-cli-ts/autoresearch/program.md:3` states "improve ladder
+grid expectancy". Do not import a grid verdict in either direction: this file
+calls grid "**the validated engine**" on the +46.27 32-day table (line 1100)
+while flagging that magnitude as needing suspicion — +18.39% over 24 months
+does not square with +46% in 32 days — and the only refutation on record is
+the ladder's grid-like arm over 5.4 months. The landscape spec agrees that
+"Nothing survives BOTH honesty mechanisms"
+(`docs/superpowers/specs/2026-08-09-edge-cases-and-landscape.md:9`). Cite those;
+do not re-derive.
+
+Pausing costs no in-flight evidence. P5's cutover stays gated on Gate 4 —
+Parallel live-shadow (`## Final gates (2026-09-18, owner-ordered — all must be
+green before P8)`): `nt-cli` paper `--shadow` replicating the champion-paper
+loop with 0 unexplained PnL/fill divergence. Cycle 2 was not a clean pass
+(`## Progress log (2026-10-20 — dependency upgrade + Gate 4 cycle 2,
+stranded armed ladder)`), so that gate has not fired. The pause lifts when the
+ladder-grid search shows a candidate clearing the expectancy targets above —
+not on a packaging milestone.
+
+## Candle store: Parquet, not Turso (2026-10-25)
+
+The **ledger** half of storage is already settled and is not re-opened here.
+`docs/plans/storage-cutover.md` intro, "Considered and rejected for the ledger
+role (2026-09-18)", rejected Turso for `fills` / `positions` / `kill_switch`,
+because those are real-money tables under the no-float rule and Turso's
+maintainers describe its MVCC write path as beta, "not yet SQLite-level
+reliability". That decision stands.
+
+The **candle/research** half was left open by that same paragraph ("`turso` IS
+worth a second look for the **candle/research** role … Not decided"). Now
+decided: **Parquet**, not Turso. Rationale:
+
+- `database is locked` — the sync job copies mainnet candles into two soak DBs
+  while the soaks write trade state (observed 2026-10-25T20:46:48Z). Parquet is
+  append-only files; there is no writer lock and no connection pool to operate.
+- A 9.7 GB SQLite candle store (`/root/.neuratrade/data/neuratrade.db`)
+  re-read by every scan, on a box at 79% disk. Parquet removes it from the
+  trading DB entirely, and DuckDB reads only the partitions a scan needs. This
+  is a fresh 2026-10-25 measurement, not a restatement of the 9.4 GB /
+  8.8 GB figures recorded earlier.
+
+Turso would still be a database to run; it fixes contention by adding a
+service. The candles are already slated for the Cloudflare R2 ledger
+(`backtest-data` bucket; `scripts/archive-bak-r2.sh` is the existing archive
+pattern). This is Task 5's existing decision record — OHLCV / research panels
+to Parquet — now with the open question closed.
