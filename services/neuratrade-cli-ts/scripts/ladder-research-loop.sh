@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Honest-fee ladder research loop (memory rule #2: 0.06%/side is the gate; the
+# manifest's optimistic 0.02%/1bp is invalid). db-mainnet 5m cache resampled to
+# 15m — zero gateway fetches, zero testnet wicks.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,7 +33,7 @@ exec "$bun_bin" run index.ts scalp grid-universe-scan \
   --rungs 1,2,3 \
   --stop-ratio 1.5 \
   --max-hold-bars 48 \
-  --fee 0.02 \
+  --fee 0.06 \
   --slippage-bps 2 \
   --min-fill-frequency-pct 5 \
   --output grid-whitelist-ladder.json \
