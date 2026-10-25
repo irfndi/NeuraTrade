@@ -235,6 +235,63 @@ def check_idempotent(tmp: Path) -> None:
     print(f"ok  idempotent: {total} candles, no duplicates")
 
 
+def check_full_seed_deletes_are_atomic(tmp: Path) -> None:
+    """Full-seed destructive DELETEs must each sit inside a transaction.
+
+    The cron path is --incremental, which never reaches this branch, so the
+    full-seed path is otherwise untested. A bare-autocommit DELETE there means
+    a crash between the delete and the re-insert leaves the soak DB with no
+    pairs (or no candles), which the incremental tests would never catch.
+    """
+    src, dst = build_pair(tmp)
+    mod = load_module()
+    mod.SRC = src
+
+    traced: list[str] = []
+    real_connect = mod.sqlite3.connect
+
+    def traced_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        con = real_connect(*args, **kwargs)
+        con.set_trace_callback(traced.append)
+        return con
+
+    mod.sqlite3.connect = traced_connect  # type: ignore[method-assign]
+    try:
+        mod.seed(dst, incremental=False)  # full seed
+    finally:
+        mod.sqlite3.connect = real_connect  # type: ignore[method-assign]
+
+    upper = [s.upper() for s in traced]
+    begins = [i for i, s in enumerate(upper) if s.strip().startswith("BEGIN IMMEDIATE")]
+    commits = [i for i, s in enumerate(upper) if s.strip().startswith("COMMIT")]
+
+    def bracketed(idx: int, label: str) -> None:
+        lo = max((b for b in begins if b < idx), default=None)
+        hi = min((c for c in commits if c > idx), default=None)
+        assert lo is not None and hi is not None and lo < idx < hi, (
+            f"{label} at stmt {idx} runs as a bare autocommit — a crash before"
+            f" the re-insert would leave the soak DB with rows missing"
+        )
+
+    for i, s in enumerate(upper):
+        if s.strip().startswith("DELETE FROM TRADING_PAIRS"):
+            bracketed(i, "DELETE FROM trading_pairs")
+        if s.strip().startswith("DELETE FROM OHLCV_DATA"):
+            bracketed(i, "DELETE FROM ohlcv_data")
+
+    # And the seed must still have produced a complete DB.
+    con = sqlite3.connect(dst)
+    pairs = con.execute("SELECT COUNT(*) FROM trading_pairs").fetchone()[0]
+    candles = con.execute("SELECT COUNT(*) FROM ohlcv_data").fetchone()[0]
+    con.close()
+    assert pairs == 4, f"full seed left {pairs} pairs, expected 4"
+    assert candles > 0, "full seed left no candles"
+    print(
+        f"ok  full-seed DELETEs are transactional;"
+        f" {pairs} pairs / {candles} candles after seeding"
+    )
+
+
 def main() -> int:
     import tempfile
 
@@ -244,6 +301,7 @@ def main() -> int:
         ("write lock spans only the writes", check_write_lock_spans_only_the_writes),
         ("survives a long writer", check_sync_survives_a_writer_that_outlasts_soak),
         ("idempotent re-run", check_idempotent),
+        ("full-seed deletes are atomic", check_full_seed_deletes_are_atomic),
     ):
         try:
             with tempfile.TemporaryDirectory() as tmp:
