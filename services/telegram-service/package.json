@@ -21,17 +21,18 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.16.0",
     "@grpc/grpc-js": "^1.14.6",
-    "@sentry/bun": "^11.8.0",
+    "@sentry/bun": "11.9.0",
     "effect": "4.0.5",
     "grammy": "^1.46.0",
-    "hono": "^4.13.13"
+    "hono": "4.13.14"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.54.1",
+    "@effect/tsgo": "0.57.0",
     "@oxlint/plugins": "1.89.0",
-    "@types/bun": "^1.4.3",
+    "@types/bun": "1.4.4",
     "oxlint": "1.89.0",
-    "oxlint-tsgolint": "7.0.2004",
+    "oxlint-tsgolint": "7.0.2005",
+    "tsrs": "^0.18.0-ts7.1.0-dev.20260929",
     "typescript": "^7.0.2"
   },
   "keywords": [
