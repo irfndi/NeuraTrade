@@ -14,7 +14,9 @@ export const KEEP_GUARDS = {
   minWinRatePct: 52,
   maxMedianDrawdownPct: 12,
   minTradesPerSymMonth: 4,
-  minExpectancyPct: 0, // must be strictly >
+  minExpectancyPct: 0.0002, // must be strictly >; a claim needs 0.001, so a
+  // screen/confirm that admits +0.0004 can never claim — it only burns the
+  // confirm budget on a candidate already known to fail CLAIM_BARS.
 } as const;
 
 /**
