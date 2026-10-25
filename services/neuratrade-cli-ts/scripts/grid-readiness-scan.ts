@@ -11,7 +11,7 @@
  * Usage:
  *   bun run scripts/grid-readiness-scan.ts \
  *     --exchange bitget-futures --symbol BTC/USDT:USDT --timeframe 15m \
- *     [--fee 0.02] [--slippage-bps 1] [--leverage 1] [--top 15] [--out path]
+ *     [--fee 0.06] [--slippage-bps 1] [--leverage 1] [--top 15] [--out path]
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
@@ -48,7 +48,7 @@ function parseArgs(argv: readonly string[]): Args {
     symbol: get("--symbol", "BTC/USDT:USDT"),
     timeframe: get("--timeframe", "15m"),
     capital: Number(get("--capital", "10000")),
-    fee: Number(get("--fee", "0.02")),
+    fee: Number(get("--fee", "0.06")),
     slippageBps: Number(get("--slippage-bps", "1")),
     leverage: Number(get("--leverage", "1")),
     top: Number(get("--top", "15")),
