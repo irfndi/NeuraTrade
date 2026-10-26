@@ -4,6 +4,7 @@ import type { MarketDataGatewayService } from "../../market-data/gateway.js";
 import {
   BybitApiError,
   bybitPositionIdx,
+  bybitPositionModeFromRows,
   type BybitClientImpl,
   type BybitOrderRequest,
   makeBybitFuturesAdapter,
@@ -33,6 +34,8 @@ let lastTradingStop:
   | undefined;
 let tradingStopError: string | undefined;
 
+let stubPositionMode: "one_way" | "hedge_mode" = "hedge_mode";
+
 function makeStubClient(): BybitClientImpl {
   calls = [];
   lastOrder = undefined;
@@ -43,7 +46,9 @@ function makeStubClient(): BybitClientImpl {
   openOrders = [];
   lastTradingStop = undefined;
   tradingStopError = undefined;
+  stubPositionMode = "hedge_mode";
   return {
+    getPositionMode: () => stubPositionMode,
     getContract: () =>
       Effect.succeed({
         symbol: "BTCUSDT",
@@ -678,5 +683,103 @@ describe("BybitFuturesExchangeAdapter", () => {
     }
     // No order reached the exchange.
     expect(calls.join("\n")).not.toContain("placeOrder:BTCUSDT");
+  });
+});
+
+describe("Bybit position mode sync (cyt)", () => {
+  it("infers hedge_mode from a non-zero positionIdx in venue rows", () => {
+    expect(
+      bybitPositionModeFromRows(
+        [{ positionIdx: 1 }, { positionIdx: 0 }],
+        "one_way",
+      ),
+    ).toBe("hedge_mode");
+  });
+
+  it("keeps one_way when every venue row reports positionIdx 0", () => {
+    expect(
+      bybitPositionModeFromRows(
+        [{ positionIdx: 0 }, { positionIdx: 0 }],
+        "one_way",
+      ),
+    ).toBe("one_way");
+  });
+
+  it("preserves the current mode when the venue returns no rows", () => {
+    expect(bybitPositionModeFromRows([], "hedge_mode")).toBe("hedge_mode");
+    expect(bybitPositionModeFromRows([], "one_way")).toBe("one_way");
+  });
+
+  it("sends positionIdx 0 on a one-way account", async () => {
+    stubPositionMode = "one_way";
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop !== undefined) {
+          yield* setTradingStop({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "long",
+            takeProfit: money(70000),
+          });
+        }
+      }),
+    );
+    expect(lastTradingStop?.positionIdx).toBe(0);
+  });
+
+  it("sends positionIdx 1 for a long leg on a hedge account", async () => {
+    stubPositionMode = "hedge_mode";
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        const setTradingStop = adapter.setTradingStop;
+        if (setTradingStop !== undefined) {
+          yield* setTradingStop({
+            symbol: "BTC/USDT:USDT",
+            productType: "USDT-FUTURES",
+            marginMode: "crossed",
+            side: "long",
+            takeProfit: money(70000),
+          });
+        }
+      }),
+    );
+    expect(lastTradingStop?.positionIdx).toBe(1);
+  });
+});
+
+describe("Bybit getContract fail-closed (l3r)", () => {
+  it("fails instead of fabricating a zero contract for an unlisted symbol", async () => {
+    const client = makeStubClient();
+    const missing: BybitClientImpl = {
+      ...client,
+      getContract: (symbol) =>
+        Effect.fail(
+          new BybitApiError({
+            status: 200,
+            body: `contract ${symbol} not in instruments-info list`,
+            endpoint: "/v5/market/instruments-info",
+            code: "0",
+          }),
+        ),
+    };
+    const outcome = await Effect.runPromise(
+      missing.getContract("NOSUCHUSDT").pipe(
+        Effect.map(() => ({ ok: true as const })),
+        Effect.catch((err) =>
+          Effect.succeed({
+            ok: false as const,
+            body: err._tag === "BybitApiError" ? err.body : String(err),
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.body).toContain("NOSUCHUSDT");
+    }
   });
 });

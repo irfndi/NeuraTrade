@@ -603,6 +603,9 @@ export function fetchBybit<A>(
 // ---------------------------------------------------------------------------
 
 export interface BybitClientImpl {
+  /** Current account position mode as last synced from the venue's own
+   *  position rows (or the last successful setPositionMode). */
+  readonly getPositionMode: () => "one_way" | "hedge_mode";
   readonly getContract: (
     symbol: string,
   ) => Effect.Effect<BybitContract, BybitClientError>;
@@ -668,6 +671,25 @@ export class BybitClient extends Context.Service<
 // Live client
 // ---------------------------------------------------------------------------
 
+/**
+ * Infer Bybit account position mode from venue position rows.
+ *
+ * Bybit reports positionIdx 1 (long leg) or 2 (short leg) only in hedge mode;
+ * one-way accounts report 0. An empty list carries no evidence, so the
+ * caller's current value is preserved (a fresh account keeps the one-way
+ * default). Pure so it is unit-testable without credentials.
+ */
+export function bybitPositionModeFromRows(
+  positions: ReadonlyArray<{ readonly positionIdx: number }>,
+  current: "one_way" | "hedge_mode",
+): "one_way" | "hedge_mode" {
+  if (positions.length === 0) return current;
+  for (const p of positions) {
+    if (p.positionIdx === 1 || p.positionIdx === 2) return "hedge_mode";
+  }
+  return "one_way";
+}
+
 function makeBybitClientImpl(
   credentials: BybitCredentials,
   baseUrl: string,
@@ -701,11 +723,14 @@ function makeBybitClientImpl(
       credentials,
     );
 
-  // Account position mode, kept in sync with setPositionMode so placeOrder
-  // can pick the correct hedge-mode leg (0 is only valid for one-way).
+  // Account position mode. Seeded from the venue's own positions (positionIdx
+  // 1/2 only exists in hedge mode) rather than assumed, because a hedge-mode
+  // account that never called setPositionMode would otherwise send
+  // positionIdx 0 on every order and have Bybit reject it.
   let positionMode: "one_way" | "hedge_mode" = "one_way";
 
   return {
+    getPositionMode: () => positionMode,
     getContract: (symbol) =>
       get(
         "/v5/market/instruments-info",
@@ -713,18 +738,23 @@ function makeBybitClientImpl(
         BybitContractListSchema,
         false,
       ).pipe(
-        Effect.map(
-          (result) =>
-            result.list?.[0] ?? {
-              symbol: "",
-              status: "",
-              minOrderQty: "0",
-              qtyStep: "0",
-              minOrderAmt: "0",
-              tickSize: "0",
-              maxLeverage: "1",
-            },
-        ),
+        // A symbol the venue does not list must fail, not fall back to a
+        // fabricated zero contract: sizing/tick math on zeros produces
+        // nonsense orders, and the close path sizes against this too.
+        Effect.flatMap((result) => {
+          const contract = result.list?.[0];
+          if (!contract) {
+            return Effect.fail(
+              new BybitApiError({
+                status: 200,
+                body: `contract ${symbol} not in instruments-info list`,
+                endpoint: "/v5/market/instruments-info",
+                code: "0",
+              }),
+            );
+          }
+          return Effect.succeed(contract);
+        }),
       ),
     getBalance: () =>
       get(
@@ -737,6 +767,16 @@ function makeBybitClientImpl(
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
       return get("/v5/position/list", query, BybitPositionListSchema).pipe(
+        // positionIdx in the venue's own rows is the authoritative mode
+        // signal; refresh before callers size or close against these rows.
+        Effect.tap((result) =>
+          Effect.sync(() => {
+            positionMode = bybitPositionModeFromRows(
+              result.list ?? [],
+              positionMode,
+            );
+          }),
+        ),
         Effect.map((result) => result.list ?? []),
       );
     },
@@ -1402,7 +1442,13 @@ export function makeBybitFuturesAdapter(
         ? request.size
         : available;
       if (closeSize.lessThanOrEqualTo(0)) {
-        return null;
+        // A leg with volume but zero available (in-flight fills) is a real
+        // divergence: fail instead of masking it as a benign no-op null.
+        return yield* Effect.fail(
+          new ExchangeError(
+            `nothing closable for ${request.productType}:${request.symbol} (leg ${neededSide}, available 0)`,
+          ),
+        );
       }
       // Round the close size DOWN to the contract qty step so a fractional
       // theoretical close (a rung's sized qty) is orderable — otherwise a
@@ -1415,7 +1461,13 @@ export function makeBybitFuturesAdapter(
         closeSize = closeSize.div(qtyStep).floor().times(qtyStep);
       }
       if (closeSize.lessThanOrEqualTo(0)) {
-        return null;
+        // The requested close rounded away to a non-orderable size: a real
+        // intent that cannot be served, so fail rather than no-op.
+        return yield* Effect.fail(
+          new ExchangeError(
+            `close size for ${request.productType}:${request.symbol} rounds to 0 under qtyStep ${contract.qtyStep}`,
+          ),
+        );
       }
       return yield* placeOrder({
         symbol: request.symbol,
@@ -1563,12 +1615,14 @@ export function makeBybitFuturesAdapter(
       ),
 
     setTradingStop: (request) => {
+      // One-way accounts reject any non-zero positionIdx, hedge accounts
+      // reject 0 — send what the account's current mode requires.
+      const hedgeMode = client.getPositionMode() === "hedge_mode";
       const stop: BybitTradingStopParams = {
         symbol: toBybitSymbol(request.symbol),
-        positionIdx: bybitPositionIdx(
-          request.side === "long" ? "Buy" : "Sell",
-          false,
-        ),
+        positionIdx: hedgeMode
+          ? bybitPositionIdx(request.side === "long" ? "Buy" : "Sell", false)
+          : 0,
       };
       if (request.takeProfit !== undefined) {
         stop.takeProfit = request.takeProfit.toString();
