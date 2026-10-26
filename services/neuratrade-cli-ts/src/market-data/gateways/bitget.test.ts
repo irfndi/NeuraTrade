@@ -145,12 +145,12 @@ describe("Bitget gateway", () => {
     expect(symbols).toEqual(["BTC/USDT"]);
   });
 
-  it("fetch24hrVolumes returns quote-volume map", async () => {
+  it("fetch24hrVolumes keys quote volume by normalized BASE/QUOTE symbol", async () => {
     mockFetch(tickersFixture);
 
     const volumes = await Effect.runPromise(Bitget.fetch24hrVolumes("spot"));
 
-    expect(volumes["BTCUSDT"]).toBe(78901234);
+    expect(volumes["BTC/USDT"]).toBe(78901234);
   });
 
   it("fetchDemoSymbols sends the PAPTRADING demo header", async () => {

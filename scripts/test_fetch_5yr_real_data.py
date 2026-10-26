@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sqlite3
 import unittest
 import urllib.error
@@ -16,13 +17,30 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# Drift guard target: the production schema lives in the TS market-data
+# repository's ensureTablesSQL (services/neuratrade-cli-ts).
+_REPO_ROOT = os.path.dirname(_HERE)
+_OHLCV_SCHEMA_SOURCE = os.path.join(
+    _REPO_ROOT, "services", "neuratrade-cli-ts", "src", "market-data", "repository.ts"
+)
 
 
 def _load_module():
+    """Load the target script by absolute path, with a clear failure message.
+
+    The exec happens once at import time (the target is side-effect free at
+    module scope by contract); a missing or broken target must report WHICH
+    file failed instead of an opaque collection error.
+    """
     path = os.path.join(_HERE, "fetch-5yr-real-data.py")
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"test target missing: {path} (test suite and target script must ship together)"
+        )
     spec = importlib.util.spec_from_file_location("fetch_5yr_real_data", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot create import spec for {path}")
     mod = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
@@ -30,6 +48,20 @@ def _load_module():
 f5 = _load_module()
 
 INTERVAL_MS = 300_000  # 5m candle
+# In-memory ohlcv_data columns (must mirror the production ensureTablesSQL).
+_OHLCV_COLUMNS = [
+    "id",
+    "exchange_id",
+    "trading_pair_id",
+    "timeframe",
+    "open_price",
+    "high_price",
+    "low_price",
+    "close_price",
+    "volume",
+    "timestamp",
+    "created_at",
+]
 
 
 def candle(open_ms: int, interval_ms: int = INTERVAL_MS) -> list:
@@ -51,12 +83,7 @@ class FakeResponse:
         return self._payload
 
 
-def make_conn() -> sqlite3.Connection:
-    """In-memory DB mirroring the real NeuraTrade sqlite schema (see
-    services/backend-api/database/sqlite_migrations/077_create_ohlcv_candles_compat.sql)."""
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(
-        """
+SCHEMA_SQL = """
         PRAGMA foreign_keys = ON;
         CREATE TABLE exchanges (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +114,14 @@ def make_conn() -> sqlite3.Connection:
             UNIQUE(exchange_id, trading_pair_id, timeframe, timestamp)
         );
         """
-    )
+
+
+def make_conn(path: str = ":memory:") -> sqlite3.Connection:
+    """DB mirroring the real ohlcv schema (drift-guarded by
+    SchemaDriftTests against the production ensureTablesSQL in
+    services/neuratrade-cli-ts/src/market-data/repository.ts)."""
+    conn = sqlite3.connect(path)
+    conn.executescript(SCHEMA_SQL)
     return conn
 
 
@@ -95,9 +129,26 @@ def start_dt() -> datetime:
     return datetime(2021, 6, 1, tzinfo=timezone.utc)
 
 
+def fetch_pages(pages: list, calls: list = None):
+    """Fetch stub with a clear over-fetch failure: running out of prepared
+    pages means fetch_range requested more pages than the test planned for —
+    that must surface as a descriptive assertion, not an IndexError."""
+
+    def fetch(symbol, interval, cur_ms, e_ms, limit):
+        if not pages:
+            raise AssertionError(
+                f"unexpected extra fetch at cur_ms={cur_ms}: test planned fewer pages"
+            )
+        if calls is not None:
+            calls.append(cur_ms)
+        return pages.pop(0)
+
+    return fetch
+
+
 class PaginationTests(unittest.TestCase):
     def test_normal_multi_page_pagination(self):
-        """Two pages, contiguous, terminates when the last close >= end_ms."""
+        """Two pages, contiguous, terminates once the window is covered."""
         conn = make_conn()
         self.addCleanup(conn.close)
         start = start_dt()
@@ -105,19 +156,16 @@ class PaginationTests(unittest.TestCase):
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
 
-        # Page 1: 4 candles; page 2: 2 candles (last close >= end_ms -> stop).
+        # Page 1: 4 candles; page 2: 2 candles covering the rest of the window.
         pages = [
             [candle(start_ms + i * INTERVAL_MS) for i in range(4)],
             [candle(start_ms + 4 * INTERVAL_MS), candle(start_ms + 5 * INTERVAL_MS)],
         ]
         calls = []
-
-        def fake_fetch(symbol, interval, cur_ms, e_ms, limit):
-            calls.append(cur_ms)
-            return pages.pop(0)
+        fetch = fetch_pages(pages, calls)
 
         with patch("time.sleep") as sleep:
-            total = f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fake_fetch, conn=conn)
+            total = f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fetch, conn=conn)
 
         self.assertEqual(total, 6)
         self.assertEqual(calls, [start_ms, start_ms + 4 * INTERVAL_MS])
@@ -126,14 +174,13 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(rows, 6)
 
     def test_single_page_end_of_range_termination(self):
-        """A page whose last candle reaches end_ms terminates after one request."""
+        """A page whose last candle covers the window terminates after one request."""
         conn = make_conn()
         self.addCleanup(conn.close)
         start = start_dt()
         end = start + timedelta(minutes=10)
         start_ms = int(start.timestamp() * 1000)
-        end_ms = int(end.timestamp() * 1000)
-        # Two candles; last close (start_ms + 2*300000 - 1) >= end_ms (start_ms + 600000).
+        # Two candles: last open + interval == end_ms -> whole grid covered.
         page = [candle(start_ms), candle(start_ms + INTERVAL_MS)]
 
         with patch("time.sleep"):
@@ -164,7 +211,7 @@ class PaginationTests(unittest.TestCase):
         self.assertIn("page fetch failed", str(ctx.exception))
 
     def test_non_contiguous_page_raises(self):
-        """Next page not starting at prev close + 1ms is a gap."""
+        """Next page not starting at prev open + interval is a gap."""
         conn = make_conn()
         self.addCleanup(conn.close)
         start = start_dt()
@@ -175,11 +222,8 @@ class PaginationTests(unittest.TestCase):
             [candle(start_ms + 3 * INTERVAL_MS)],  # skips open at +2*INTERVAL
         ]
 
-        def fake_fetch(*a, **k):
-            return pages.pop(0)
-
         with self.assertRaises(f5.FetchError) as ctx:
-            f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fake_fetch, conn=conn)
+            f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fetch_pages(pages), conn=conn)
         self.assertIn("data gap", str(ctx.exception))
 
     def test_no_progress_page_raises(self):
@@ -189,7 +233,7 @@ class PaginationTests(unittest.TestCase):
         start = start_dt()
         end = start + timedelta(minutes=10)
         start_ms = int(start.timestamp() * 1000)
-        # Candle's close_time < current_ms (already-inserted data returned again).
+        # Candle's next-open boundary does not move past current_ms.
         stale = [candle(start_ms - INTERVAL_MS)]
 
         with self.assertRaises(f5.FetchError) as ctx:
@@ -212,6 +256,7 @@ class RetryTests(unittest.TestCase):
     def test_429_then_success_recovers(self):
         """Two 429s then success: bounded retry with backoff, no recursion."""
         err = urllib.error.HTTPError("url", 429, "Too Many Requests", {"Retry-After": "0.5"}, None)
+        self.addCleanup(err.close)
         resp = FakeResponse(json.dumps([[0, "1", "1", "1", "1", "1", 299999, "x"]]).encode())
         with patch.object(f5.urllib.request, "urlopen", side_effect=[err, err, resp]) as urlopen, patch("time.sleep") as sleep:
             result = f5.fetch_klines("BTCUSDT", "5m", 0, 999999)
@@ -222,33 +267,32 @@ class RetryTests(unittest.TestCase):
         first_wait = sleep.call_args_list[0][0][0]
         self.assertGreaterEqual(first_wait, 0.5)
         self.assertLess(first_wait, 0.5 * 1.2 + 0.001)
-        err.close()
 
     def test_429_exhaustion_returns_none(self):
         """Persistent 429 stops after MAX_RETRIES attempts instead of recursing."""
         err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
+        self.addCleanup(err.close)
         with patch.object(f5.urllib.request, "urlopen", side_effect=err) as urlopen, patch("time.sleep"):
             result = f5.fetch_klines("BTCUSDT", "5m", 0, 999999)
         self.assertIsNone(result)
         self.assertEqual(urlopen.call_count, f5.MAX_RETRIES)
-        err.close()
 
     def test_5xx_is_retried(self):
         err = urllib.error.HTTPError("url", 503, "Service Unavailable", {}, None)
+        self.addCleanup(err.close)
         resp = FakeResponse(b"[]")
         with patch.object(f5.urllib.request, "urlopen", side_effect=[err, resp]) as urlopen, patch("time.sleep"):
             result = f5.fetch_klines("BTCUSDT", "5m", 0, 999999)
         self.assertEqual(result, [])
         self.assertEqual(urlopen.call_count, 2)
-        err.close()
 
     def test_non_retryable_4xx_fails_immediately(self):
         err = urllib.error.HTTPError("url", 400, "Bad Request", {}, None)
+        self.addCleanup(err.close)
         with patch.object(f5.urllib.request, "urlopen", side_effect=err) as urlopen, patch("time.sleep"):
             result = f5.fetch_klines("BTCUSDT", "5m", 0, 999999)
         self.assertIsNone(result)
         self.assertEqual(urlopen.call_count, 1)
-        err.close()
 
     def test_transient_network_error_retried(self):
         with patch.object(
@@ -281,6 +325,36 @@ class InsertCountTests(unittest.TestCase):
         self.addCleanup(conn.close)
         self.assertEqual(f5.insert_candles(conn, 1, 1, "5m", []), 0)
 
+    def test_insert_failure_raises_and_rolls_back(self):
+        """A row that fails to persist must abort loudly, not report success."""
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        # Locked/closed DB style failure: drop the table so executes fail.
+        candles = [candle(0), candle(INTERVAL_MS)]
+        bad_conn = sqlite3.connect(":memory:")  # schema absent -> every insert fails
+        self.addCleanup(bad_conn.close)
+        bad_conn.execute("BEGIN")  # force a transactional context too
+        with self.assertRaises(f5.FetchError) as ctx:
+            f5.insert_candles(bad_conn, 1, 1, "5m", candles)
+        self.assertIn("insert failed", str(ctx.exception))
+
+
+class SchemaDriftTests(unittest.TestCase):
+    def test_in_memory_schema_matches_production_ensure_tables_sql(self):
+        """make_conn()'s ohlcv_data must mirror the production schema source
+        (services/neuratrade-cli-ts/src/market-data/repository.ts)."""
+        if not os.path.isfile(_OHLCV_SCHEMA_SOURCE):
+            self.skipTest(f"schema source not present: {_OHLCV_SCHEMA_SOURCE}")
+        with open(_OHLCV_SCHEMA_SOURCE, "r", encoding="utf-8") as fh:
+            source = fh.read()
+        match = re.search(r"CREATE TABLE IF NOT EXISTS ohlcv_data \((.*?)\n\);", source, re.S)
+        self.assertIsNotNone(match, "production ensureTablesSQL lost its ohlcv_data table")
+        block = match.group(1)
+        prod_columns = re.findall(r"^\s{2}(\w+) ", block, re.M)
+        # The in-memory schema materializes every production column.
+        self.assertEqual(prod_columns, _OHLCV_COLUMNS)
+        self.assertIn("UNIQUE(exchange_id, trading_pair_id, timeframe, timestamp)", block)
+
 
 class QuoteAndPathTests(unittest.TestCase):
     def test_quote_derived_from_suffix(self):
@@ -306,6 +380,12 @@ class QuoteAndPathTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             f5.get_or_create_trading_pair(conn, 1, "FOOXYZ")
 
+    def test_unsupported_interval_raises(self):
+        with self.assertRaises(ValueError):
+            f5._interval_ms("7x")
+        self.assertEqual(f5._interval_ms("5m"), 300_000)
+        self.assertEqual(f5._interval_ms("1h"), 3_600_000)
+
     def test_default_db_path_uses_env_home(self):
         with patch.dict(os.environ, {}, clear=True):
             default = f5._default_db_path()
@@ -318,10 +398,62 @@ class QuoteAndPathTests(unittest.TestCase):
             self.assertNotIn("d.db", f5._default_db_path())
             self.assertEqual(os.environ.get("NEURATRADE_DB") or f5._default_db_path(), "/tmp/d.db")
 
-    def test_main_accepts_db_arg(self):
+    def test_main_accepts_db_arg_without_global_leak(self):
+        """--db must thread the path explicitly, not mutate module state."""
+        original = f5.DB_PATH
+        self.addCleanup(setattr, f5, "DB_PATH", original)
         with patch.object(f5, "fetch_range", return_value=0), patch("sys.stdout"):
             f5.main(["--db", "/tmp/custom.db", "--symbols", "BTCUSDT"])
-        self.assertEqual(f5.DB_PATH, "/tmp/custom.db")
+        self.assertEqual(f5.DB_PATH, original)
+
+    def test_two_fetches_against_two_dbs_in_one_process(self):
+        """fetch_range(db_path=...) must route each run to its own database."""
+        ex = None
+        paths = []
+        for i in range(2):
+            path = f"/tmp/f5-dual-db-{i}-{os.getpid()}.db"
+            conn = make_conn(path)
+            self.addCleanup(lambda p=path: (os.path.exists(p) and os.unlink(p)))
+            pages = [[candle(int(start_dt().timestamp() * 1000))]]
+            with patch("time.sleep"):
+                f5.fetch_range(
+                    "BTCUSDT", "5m", start_dt(), start_dt() + timedelta(minutes=5),
+                    fetch_fn=lambda *a, **k: list(pages[0]) if pages else [], conn=conn,
+                )
+            n = conn.execute("SELECT COUNT(*) FROM ohlcv_data").fetchone()[0]
+            self.assertEqual(n, 1)
+            ex = conn.execute("SELECT name FROM exchanges").fetchone()[0]
+            self.assertEqual(ex, "binance")
+            paths.append(path)
+        # Each connection wrote to its own file-backed DB.
+        self.assertNotEqual(paths[0], paths[1])
+
+    def test_db_path_creates_missing_directory(self):
+        import shutil
+
+        base = f"/tmp/f5-fresh-{os.getpid()}"
+        db = os.path.join(base, "data", "neuratrade.db")
+        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        conn = f5.get_db_connection(db)
+        self.addCleanup(conn.close)
+        self.assertTrue(os.path.isfile(db))
+
+
+class IntervalEstimateTests(unittest.TestCase):
+    def test_expected_count_uses_interval(self):
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        start = start_dt()
+        end = start + timedelta(hours=3)
+        # Three 1h candles cover the whole 3h window; the last open + 1h == end.
+        page = [
+            candle(int(start.timestamp() * 1000) + i * 3_600_000, interval_ms=3_600_000)
+            for i in range(3)
+        ]
+        out = io.StringIO()
+        with patch("time.sleep"), patch("sys.stdout", out):
+            f5.fetch_range("BTCUSDT", "1h", start, end, fetch_fn=lambda *a, **k: page, conn=conn)
+        self.assertIn("Expected candles: ~3", out.getvalue())
 
 
 if __name__ == "__main__":

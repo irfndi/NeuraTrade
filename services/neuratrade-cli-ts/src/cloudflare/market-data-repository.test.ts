@@ -140,7 +140,7 @@ describe("CloudflareMarketDataRepositoryLive", () => {
     expect(error.reason).toBe("getCandles: rate limited");
   });
 
-  it("defaults the candle limit to 500 when query.limit is undefined", async () => {
+  it("defaults the candle page size to the worker floor (200) when query.limit is undefined", async () => {
     let seenLimit: number | undefined;
     await runWith(
       Effect.gen(function* () {
@@ -159,7 +159,9 @@ describe("CloudflareMarketDataRepositoryLive", () => {
         },
       }),
     );
-    expect(seenLimit).toBe(500);
+    // The worker default page size must stay at or below every gateway's
+    // per-request cap (Bitget history-candles caps at 200/request).
+    expect(seenLimit).toBe(200);
   });
 
   it("skips failed symbols without aborting the universe scan", async () => {

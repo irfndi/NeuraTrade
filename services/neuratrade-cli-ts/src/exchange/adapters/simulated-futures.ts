@@ -16,6 +16,7 @@ import {
   type MarketDataGatewayService,
 } from "../../market-data/gateway.js";
 import { Decimal, money } from "../../utils/money.js";
+import { marginCoinForProductType } from "../../services/bitget-client.js";
 
 interface SimulatedAccountState {
   readonly balances: Readonly<Record<string, Decimal>>;
@@ -212,21 +213,32 @@ export function makeSimulatedFuturesExchangeAdapterService(
               ? request.price
               : yield* fillPrice(request.symbol, request.side);
           const notional = price.times(request.size);
-          const marginRequired = notional.div(request.leverage);
-
-          if (!request.reduceOnly && balance.lessThan(marginRequired)) {
-            return yield* Effect.fail(
-              new ExchangeError(
-                `insufficient ${marginCoin} margin: required ${marginRequired.toFixed(4)}, available ${balance.toFixed(4)}`,
-              ),
-            );
-          }
-
           const key = positionKey(request.symbol, request.productType);
           const existing = yield* getPositionInternal(
             request.symbol,
             request.productType,
           );
+
+          // An opposite-side order first CLOSES the existing position and only
+          // the remainder opens a new one. Treating the whole order as a fresh
+          // position would leave the closed leg's margin locked and silently
+          // drop the residual quantity on a flip.
+          const reducing =
+            existing !== undefined &&
+            existing.side !== sideToPosition(request.side);
+          const closedQty = reducing
+            ? Decimal.min(request.size, existing.quantity)
+            : money(0);
+          const openingQty = request.size.minus(closedQty);
+          const openingMargin = price.times(openingQty).div(request.leverage);
+
+          if (!request.reduceOnly && balance.lessThan(openingMargin)) {
+            return yield* Effect.fail(
+              new ExchangeError(
+                `insufficient ${marginCoin} margin: required ${openingMargin.toFixed(4)}, available ${balance.toFixed(4)}`,
+              ),
+            );
+          }
 
           if (request.reduceOnly) {
             if (!existing || existing.side === sideToPosition(request.side)) {
@@ -244,10 +256,27 @@ export function makeSimulatedFuturesExchangeAdapterService(
           }
 
           const fee = notional.times(0.0006);
+          // Margin is released at the leverage the position was OPENED at, not
+          // the leverage this order happens to carry.
+          const heldLeverage = (position: FuturesPosition): number =>
+            position.leverage > 0 ? position.leverage : request.leverage;
+          const closedMargin = reducing
+            ? existing.entryPrice
+                .times(closedQty)
+                .div(heldLeverage(existing))
+            : money(0);
+          const realizedPnl = reducing
+            ? price
+                .minus(existing.entryPrice)
+                .times(closedQty)
+                .times(existing.side === "long" ? 1 : -1)
+            : money(0);
           const balanceAfterFill = request.reduceOnly
             ? balance
                 .plus(
-                  existing.entryPrice.times(request.size).div(request.leverage),
+                  existing.entryPrice
+                    .times(request.size)
+                    .div(heldLeverage(existing)),
                 )
                 .plus(
                   price
@@ -256,7 +285,11 @@ export function makeSimulatedFuturesExchangeAdapterService(
                     .times(existing.side === "long" ? 1 : -1),
                 )
                 .minus(fee)
-            : balance.minus(marginRequired).minus(fee);
+            : balance
+                .plus(closedMargin)
+                .plus(realizedPnl)
+                .minus(openingMargin)
+                .minus(fee);
           yield* setBalance(marginCoin, balanceAfterFill);
 
           const fill: FuturesOrderFill = {
@@ -288,30 +321,46 @@ export function makeSimulatedFuturesExchangeAdapterService(
             return fill;
           }
 
-          if (existing) {
-            if (existing.side === sideToPosition(request.side)) {
-              const totalQty = existing.quantity.plus(request.size);
-              const newEntry = existing.entryPrice
-                .times(existing.quantity)
-                .plus(price.times(request.size))
-                .div(totalQty);
+          if (reducing) {
+            if (openingQty.greaterThan(0)) {
+              // Flipped: the closed leg is gone, the remainder is a new
+              // position on the other side, entered at this fill price.
               yield* setPosition(key, {
-                ...existing,
-                quantity: totalQty,
-                available: existing.available.plus(request.size),
-                entryPrice: newEntry,
+                symbol: request.symbol,
+                side: sideToPosition(request.side),
+                productType: request.productType,
+                marginMode: request.marginMode,
+                leverage: request.leverage,
+                quantity: openingQty,
+                available: openingQty,
+                entryPrice: price,
+                marginCoin,
               });
             } else {
-              if (request.size.greaterThanOrEqualTo(existing.quantity)) {
+              const remaining = existing.quantity.minus(closedQty);
+              const remainingAvailable = existing.available.minus(closedQty);
+              if (remaining.lessThanOrEqualTo(0)) {
                 yield* setPosition(key, undefined);
               } else {
                 yield* setPosition(key, {
                   ...existing,
-                  quantity: existing.quantity.minus(request.size),
-                  available: existing.available.minus(request.size),
+                  quantity: remaining,
+                  available: remainingAvailable,
                 });
               }
             }
+          } else if (existing) {
+            const totalQty = existing.quantity.plus(request.size);
+            const newEntry = existing.entryPrice
+              .times(existing.quantity)
+              .plus(price.times(request.size))
+              .div(totalQty);
+            yield* setPosition(key, {
+              ...existing,
+              quantity: totalQty,
+              available: existing.available.plus(request.size),
+              entryPrice: newEntry,
+            });
           } else {
             yield* setPosition(key, {
               symbol: request.symbol,
@@ -340,7 +389,14 @@ export function makeSimulatedFuturesExchangeAdapterService(
           }
           const closeSize = Decimal.min(request.size, existing.available);
           if (closeSize.lessThanOrEqualTo(0)) {
-            return null;
+            // A live position that cannot be closed (nothing available —
+            // e.g. in-flight fills) is a real anomaly; returning null here
+            // would mask an open-order/fill divergence as a silent no-op.
+            return yield* Effect.fail(
+              new ExchangeError(
+                `nothing closable for ${request.productType}:${request.symbol}: available 0 with open position`,
+              ),
+            );
           }
           const closeSide = existing.side === "long" ? "sell" : "buy";
           return yield* service.placeOrder({
@@ -434,8 +490,5 @@ function marginCoinFor(
   productType: FuturesProductType,
   symbol: string,
 ): string {
-  if (productType === "USDT-FUTURES") return "USDT";
-  if (productType === "USDC-FUTURES") return "USDC";
-  // COIN-FUTURES: crude fallback to base asset.
-  return symbol.replace(/(USDT|USDC|USD|_DMCBL)/g, "").toUpperCase() || symbol;
+  return marginCoinForProductType(productType, symbol);
 }

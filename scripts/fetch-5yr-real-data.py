@@ -38,10 +38,24 @@ class FetchError(RuntimeError):
     """Raised when a range cannot be fetched completely (error, gap, or stall)."""
 
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+def get_db_connection(db_path: Optional[str] = None):
+    # Create the parent dir for a fresh install; sqlite3 only errors on a
+    # missing directory, never a missing file.
+    target = db_path or DB_PATH
+    parent = os.path.dirname(os.path.abspath(target))
+    os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(target)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _interval_ms(interval: str) -> int:
+    """Duration of an interval string ('5m', '1h', ...) in milliseconds."""
+    multipliers = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
+    value, unit = interval[:-1], interval[-1].lower()
+    if not value.isdigit() or unit not in multipliers:
+        raise ValueError(f"unsupported interval {interval!r}")
+    return int(value) * multipliers[unit]
 
 
 def get_or_create_exchange(conn: sqlite3.Connection, name: str) -> int:
@@ -170,7 +184,7 @@ def insert_candles(
         return 0
 
     inserted = 0
-    for candle in candles:
+    for idx, candle in enumerate(candles):
         # Binance kline format: [open_time, open, high, low, close, volume, close_time, ...]
         ts_ms = candle[0]
         open_p = float(candle[1])
@@ -191,7 +205,13 @@ def insert_candles(
             if cur.rowcount > 0:
                 inserted += 1
         except Exception as e:
-            print(f"  Insert error: {e}")
+            # Never swallow a failed insert for an ingestion script whose whole
+            # purpose is completeness: roll back the partial batch and abort
+            # with the row index and reason so the caller reports INCOMPLETE.
+            conn.rollback()
+            raise FetchError(
+                f"insert failed at candle index {idx} (open_time={ts_ms}): {e}",
+            ) from e
 
     conn.commit()
     return inserted
@@ -204,32 +224,37 @@ def fetch_range(
     end_dt: datetime,
     fetch_fn: Optional[callable] = None,
     conn: Optional[sqlite3.Connection] = None,
+    db_path: Optional[str] = None,
 ) -> int:
     """Fetch all klines for a date range with pagination.
 
     Raises FetchError (instead of silently truncating) when a page cannot be
-    fetched, a page comes back empty, data is non-contiguous, or pagination
-    makes no progress — the caller reports INCOMPLETE with a non-zero exit.
-    ``fetch_fn`` and ``conn`` are injectable for tests.
+    fetched, a page comes back empty, data is non-contiguous, pagination makes
+    no progress, or a row insert fails — the caller reports INCOMPLETE with a
+    non-zero exit. ``fetch_fn``, ``conn`` and ``db_path`` are injectable for
+    tests; two fetches against different DBs can run in one process.
     """
     if fetch_fn is None:
         fetch_fn = fetch_klines
     own_conn = conn is None
     if own_conn:
-        conn = get_db_connection()
+        conn = get_db_connection(db_path or DB_PATH)
     exchange_id = get_or_create_exchange(conn, "binance")
     pair_id = get_or_create_trading_pair(conn, exchange_id, symbol)
 
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
+    interval_ms = _interval_ms(interval)
+    span_ms = end_ms - start_ms
     print(f"\nFetching {symbol} {interval} from {start_dt.isoformat()} to {end_dt.isoformat()}")
-    print(f"Expected candles: ~{((end_dt - start_dt).total_seconds() / 60 / 5):,.0f}")
+    expected = max(0, span_ms) // interval_ms
+    print(f"Expected candles: ~{expected:,}")
 
     total_inserted = 0
     total_requests = 0
     current_ms = start_ms
-    prev_close_ms = None
+    prev_open_ms = None
 
     try:
         while current_ms < end_ms:
@@ -240,22 +265,29 @@ def fetch_range(
                 raise FetchError(f"page fetch failed at {current_ms} (request {total_requests})")
             if not candles:
                 raise FetchError(f"empty page at {current_ms}: no data before end of range {end_ms}")
-            if prev_close_ms is not None and candles[0][0] != prev_close_ms + 1:
-                raise FetchError(f"data gap: expected next candle at {prev_close_ms + 1}, got {candles[0][0]}")
+            if prev_open_ms is not None and candles[0][0] != prev_open_ms + interval_ms:
+                raise FetchError(
+                    f"data gap: expected next candle at {prev_open_ms + interval_ms}, got {candles[0][0]}"
+                )
 
             inserted = insert_candles(conn, exchange_id, pair_id, interval, candles)
             total_inserted += inserted
 
-            last_ts = candles[-1][6]  # close_time
-            if last_ts >= end_ms:
+            # Termination is coverage-based: the window's candle grid starts at
+            # ``start_ms``/interval; once the last returned open time has no
+            # successor below ``end_ms`` every slot is covered. Breaking on
+            # close_time instead could strand the tail of a truncated page.
+            last_open = candles[-1][0]
+            next_open = last_open + interval_ms
+            if next_open >= end_ms:
                 break
-            if last_ts < current_ms:
+            if next_open <= current_ms:
                 raise FetchError(f"pagination made no progress at {current_ms}")
-            prev_close_ms = last_ts
-            current_ms = last_ts + 1
+            prev_open_ms = last_open
+            current_ms = next_open
 
-            if total_requests % 10 == 0:
-                progress = (current_ms - start_ms) / (end_ms - start_ms) * 100
+            if total_requests % 10 == 0 and span_ms > 0:
+                progress = (current_ms - start_ms) / span_ms * 100
                 print(f"  Progress: {progress:.1f}% | Requests: {total_requests} | Inserted: {total_inserted:,}")
 
             time.sleep(RATE_LIMIT_DELAY)
@@ -281,9 +313,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Trading pairs to fetch, e.g. BTCUSDT ETHUSDC",
     )
     args = parser.parse_args(argv)
-
-    global DB_PATH
-    DB_PATH = args.db
+    db_path = args.db  # threaded explicitly; no module-global mutation
 
     # 5-year range: 2021-06-01 to 2026-06-01
     start = datetime(2021, 6, 1, tzinfo=timezone.utc)
@@ -295,13 +325,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Range: {start.date()} to {end.date()}")
     print(f"Symbols: {args.symbols}")
     print(f"Interval: 5m")
-    print(f"DB: {DB_PATH}")
+    print(f"DB: {db_path}")
     print("=" * 60)
 
     grand_total = 0
     try:
         for symbol in args.symbols:
-            count = fetch_range(symbol, "5m", start, end)
+            count = fetch_range(symbol, "5m", start, end, db_path=db_path)
             grand_total += count
             print()
     except FetchError as e:

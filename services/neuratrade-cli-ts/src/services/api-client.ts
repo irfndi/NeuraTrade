@@ -101,7 +101,7 @@ export interface PortfolioResponse {
   readonly unrealized_pnl?: string;
   readonly open_orders?: number;
   readonly positions: ReadonlyArray<PortfolioPosition>;
-  readonly drift_detected: boolean;
+  readonly drift_detected?: boolean;
   readonly positions_source?: string;
   readonly note?: string;
   readonly updated_at?: string;
@@ -268,6 +268,44 @@ function parseJson<T>(
   });
 }
 
+/**
+ * Parse + validate the /internal/portfolio response. A 200 error page or a
+ * payload missing `total_equity` would otherwise flow downstream as
+ * `undefined` money fields and disable the drift signal, so fail closed here
+ * (same posture as bitget-client's strictParse for money-critical fields).
+ */
+function parsePortfolio(
+  response: Response,
+  endpoint: string,
+): Effect.Effect<PortfolioResponse, ApiClientError> {
+  return parseJson<PortfolioResponse>(response, endpoint).pipe(
+    // Money-critical field: a 200 error page or a payload missing
+    // `total_equity` would otherwise flow downstream as `undefined` and
+    // disable the drift signal, so fail closed here (same posture as
+    // bitget-client's strictParse).
+    Effect.tap((payload) => {
+      if (typeof payload.total_equity !== "string") {
+        return Effect.fail(
+          new JsonParseError({
+            cause: `portfolio response missing string "total_equity" (got ${typeof payload.total_equity})`,
+            endpoint,
+          }),
+        );
+      }
+      return Effect.void;
+    }),
+    // drift_detected is OPTIONAL in the response contract
+    // (telegram-service/src/api/types.ts marks it `?: boolean` and the
+    // consumers explicit-handle `!== undefined`), so absent defaults to
+    // false rather than failing the request.
+    Effect.map((payload) =>
+      payload.drift_detected === undefined
+        ? { ...payload, drift_detected: false as const }
+        : payload,
+    ),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ApiClientLive layer
 // ---------------------------------------------------------------------------
@@ -327,7 +365,7 @@ export const ApiClientLive = (
     getPortfolio: (chatId: string) => {
       const endpoint = `/api/v1/telegram/internal/portfolio?chat_id=${encodeURIComponent(chatId)}`;
       return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
-        Effect.flatMap((res) => parseJson<PortfolioResponse>(res, endpoint)),
+        Effect.flatMap((res) => parsePortfolio(res, endpoint)),
       );
     },
 
@@ -336,7 +374,7 @@ export const ApiClientLive = (
       return apiRequest(baseUrl, apiKey, "GET", endpoint, timeoutMs).pipe(
         // Same endpoint and response schema as getPortfolio; this caller
         // picks out the equity/available subset.
-        Effect.flatMap((res) => parseJson<PortfolioResponse>(res, endpoint)),
+        Effect.flatMap((res) => parsePortfolio(res, endpoint)),
         Effect.map((payload) => ({
           total_balance: payload.total_equity,
           available: payload.available_balance ?? "0",

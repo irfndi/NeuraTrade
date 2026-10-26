@@ -217,6 +217,56 @@ describe("SimulatedFuturesExchangeAdapter", () => {
     expect(position?.side).toBe("short");
   });
 
+  it("flips a position: closes the old leg, releases its margin, opens the remainder", async () => {
+    // mid = 67000 (bids 66990 / asks 67010). Buy 0.1 @ 10x, then sell 0.3:
+    // 0.1 closes the long (its margin + PnL come back) and 0.2 opens a short.
+    // Before the fix the whole 0.3 was charged as a fresh short and the long's
+    // 670.07 margin stayed locked while the position simply vanished.
+    await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+        yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "sell",
+          type: "market",
+          size: money(0.3),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+      }),
+    );
+
+    const position = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getPosition("BTC/USDT:USDT", "USDT-FUTURES");
+      }),
+    );
+    expect(position?.side).toBe("short");
+    expect(position?.quantity.toNumber()).toBeCloseTo(0.2, 6);
+
+    const balance = await run(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getBalance("USDT");
+      }),
+    );
+    // 10_000 - 670.07 (long margin) - 4.02 (open fee) + 670.07 (margin back)
+    // - 1.34 (realized) - 1_339.87 (short margin) - 12.06 (flip fee).
+    expect(balance.available.toNumber()).toBeGreaterThan(8_600);
+    expect(balance.available.toNumber()).toBeLessThan(8_700);
+  });
+
   it("releases margin on reduce-only close for random sizes", async () => {
     for (let i = 0; i < 20; i++) {
       const size = 0.01 + Math.random() * 0.09;

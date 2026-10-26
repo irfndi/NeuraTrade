@@ -304,6 +304,22 @@ function handlePaperClose(
     const fill = yield* services.adapter
       .closePosition(options.symbol)
       .pipe(Effect.provideService(MarketDataGateway, services.gateway));
+    // Live fail-closed (mirrors the futures engine): a close fill whose
+    // quantity disagrees with the tracked position size means a partial or
+    // wrong close — recording a full exit here would leave a residual
+    // exchange position the ledger no longer sees. Paper mode keeps the
+    // tolerant behavior so simulated adapters with odd fill sizes still run.
+    if (
+      options.isLive &&
+      fill !== null &&
+      Math.abs(fill.filledQty - toNumber(position.size)) > 1e-8
+    ) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `close fill quantity ${fill.filledQty} does not match position size ${toNumber(position.size)} for ${options.symbol}`,
+        ),
+      );
+    }
     const exitPrice = fill
       ? money(fill.filledPrice)
       : fallbackExitPrice(position, currentCandle, exitReason);
@@ -616,7 +632,10 @@ export function runPaperTradingIteration(
       return paperHoldResult(position, capital, "insufficient candles");
     }
 
-    if (orderBook.bids.length === 0 && orderBook.asks.length === 0) {
+    if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
+      // One-sided books fall in here too deliberately: sizing and stop/TP
+      // derivation off a single-side quote is materially wrong on a thin
+      // book, so hold instead of trusting the single price.
       return paperHoldResult(position, capital, "empty order book");
     }
     return yield* processPaperMarket(
@@ -709,18 +728,26 @@ function isEntrySignal(signal: ScalpingSignal, minConfidence: number): boolean {
 }
 
 function midPrice(orderBook: OrderBook): number {
-  if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
-    return orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0;
+  const bestBid = orderBook.bids[0]?.price;
+  const bestAsk = orderBook.asks[0]?.price;
+  if (bestBid !== undefined && bestAsk !== undefined) {
+    return (bestBid + bestAsk) / 2;
   }
-  return (orderBook.bids[0].price + orderBook.asks[0].price) / 2;
+  // Defensive only: iteration rejects one-sided/empty books before entry
+  // sizing, so this single-side branch is unreachable in practice.
+  return bestBid ?? bestAsk ?? 0;
 }
 
 /** Orderbook mid as money (Decimal), used for entry-price math. */
 function midPriceMoney(orderBook: OrderBook): Money {
-  if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
-    return money(orderBook.bids[0]?.price ?? orderBook.asks[0]?.price ?? 0);
+  const bestBid = orderBook.bids[0];
+  const bestAsk = orderBook.asks[0];
+  if (bestBid !== undefined && bestAsk !== undefined) {
+    return money(bestBid.price).plus(money(bestAsk.price)).div(2);
   }
-  return money(orderBook.bids[0].price).plus(orderBook.asks[0].price).div(2);
+  // Defensive only: iteration rejects one-sided/empty books before entry
+  // sizing, so this single-side branch is unreachable in practice.
+  return money(bestBid?.price ?? bestAsk?.price ?? 0);
 }
 
 function toOrderBookMetrics(orderBook: OrderBook) {

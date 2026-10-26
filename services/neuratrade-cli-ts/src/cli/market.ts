@@ -4,10 +4,7 @@ import { Console, Effect, Layer, Option } from "effect";
 import { Database } from "bun:sqlite";
 import { resolve } from "node:path";
 import { Path, PathLive } from "../services/path.js";
-import {
-  MarketDataGateway,
-  type MarketDataError,
-} from "../market-data/gateway.js";
+import { MarketDataGateway, MarketDataError } from "../market-data/gateway.js";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
@@ -321,6 +318,8 @@ interface FetchUniverseArgs {
   readonly noResume?: boolean;
   readonly concurrency?: number;
   readonly coverage?: boolean;
+  /** SQLite file for per-symbol repository connections (concurrency > 1). */
+  readonly dbPath?: string;
 }
 
 export const fetchUniverseCommand = Command.make(
@@ -380,6 +379,7 @@ export const fetchUniverseCommand = Command.make(
         noResume,
         concurrency,
         coverage,
+        dbPath: sqlitePath,
       }).pipe(
         Effect.provide(repoLayer),
         Effect.tap((summary) =>
@@ -469,15 +469,43 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
     );
     const volumes = yield* gateway.fetch24hrVolumes(args.exchange);
 
-    const ranked = quoteSymbols
-      .map((symbol) => ({
-        symbol,
-        volume: volumes[symbol.replace("/", "")] ?? 0,
-      }))
+    // Normalize volume keys on both sides: gateways may key by "BASE/QUOTE"
+    // (the fetchSymbols string form) or by the concatenated "BASEQUOTE".
+    // A key-convention drift otherwise ranks every symbol as volume 0 and
+    // silently fetches the wrong universe.
+    const volumeFor = (symbol: string): number | null => {
+      const [base, quote] = symbol.split("/");
+      for (const key of [symbol, `${base}${quote}`]) {
+        const vol = volumes[key];
+        if (vol !== undefined) return vol;
+      }
+      return null;
+    };
+    let matched = 0;
+    const volumeRows = quoteSymbols.map((symbol) => {
+      const volume = volumeFor(symbol);
+      if (volume !== null) matched += 1;
+      return { symbol, volume: volume ?? 0 };
+    });
+    if (matched === 0) {
+      return yield* Effect.fail(
+        new MarketDataError(
+          `no 24h volume data matched any of ${quoteSymbols.length} symbols — volume key convention mismatch on ${args.exchange} gateway`,
+        ),
+      );
+    }
+    const rankedTop = volumeRows
       .filter((s) => s.volume >= args.minVolume)
       .sort((a, b) => b.volume - a.volume)
       .slice(0, args.top)
       .map((s) => s.symbol);
+    if (rankedTop.length === 0) {
+      return yield* Effect.fail(
+        new MarketDataError(
+          `all of ${quoteSymbols.length} symbols are below the min-volume ${args.minVolume} threshold on ${args.exchange}`,
+        ),
+      );
+    }
 
     const coverage = args.coverage ?? false;
     const concurrency = args.concurrency ?? 1;
@@ -491,7 +519,7 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
       );
       const rows = yield* repo.getCoverageReport(
         args.exchange,
-        ranked,
+        rankedTop,
         args.timeframe,
         reportStart,
         reportEnd,
@@ -500,32 +528,57 @@ export function fetchUniverseProgram(args: FetchUniverseArgs) {
     }
 
     yield* Console.log(
-      `Fetching ${ranked.length} symbols: ${ranked.join(", ")}`,
+      `Fetching ${rankedTop.length} symbols: ${rankedTop.join(", ")}`,
     );
 
+    // @codebuff fix 006: bun:sqlite connections serialize writes; concurrent
+    // fibers sharing ONE repository connection interleave writes across
+    // symbols and can trip locking mid-batch. Give every fiber its own
+    // connection (+repository layer) so per-symbol batches don't contend.
+    const perSymbolRepo = (symbol: string) =>
+      args.dbPath && concurrency > 1
+        ? Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const d = new Database(args.dbPath!);
+              d.exec("PRAGMA foreign_keys = ON;");
+              return d;
+            }),
+            (db) =>
+              fetchCandlesProgram({
+                exchange: args.exchange,
+                symbol,
+                timeframe: args.timeframe,
+                days: args.days,
+                batch: args.batch,
+                start: args.start,
+                end: args.end,
+                noResume: args.noResume,
+              }).pipe(Effect.provide(MarketDataRepositorySQLiteLive(db))),
+            (db) => Effect.sync(() => db.close()),
+          )
+        : fetchCandlesProgram({
+            exchange: args.exchange,
+            symbol,
+            timeframe: args.timeframe,
+            days: args.days,
+            batch: args.batch,
+            start: args.start,
+            end: args.end,
+            noResume: args.noResume,
+          });
+
     const results = yield* Effect.all(
-      ranked.map((symbol) =>
-        fetchCandlesProgram({
-          exchange: args.exchange,
-          symbol,
-          timeframe: args.timeframe,
-          days: args.days,
-          batch: args.batch,
-          start: args.start,
-          end: args.end,
-          noResume: args.noResume,
-        }),
-      ),
+      rankedTop.map((symbol) => perSymbolRepo(symbol)),
       { concurrency },
     );
 
     let totalCandles = 0;
-    for (let i = 0; i < ranked.length; i++) {
+    for (let i = 0; i < rankedTop.length; i++) {
       totalCandles += results[i];
-      yield* Console.log(`  ${ranked[i]}: ${results[i]} candles`);
+      yield* Console.log(`  ${rankedTop[i]}: ${results[i]} candles`);
     }
 
-    return { symbols: ranked, totalCandles };
+    return { symbols: rankedTop, totalCandles };
   });
 }
 
@@ -554,12 +607,17 @@ function fetchFundingRatesProgram(args: FetchFundingRatesArgs) {
       ? args.start.getTime()
       : endTime - args.days * DAY_MS;
 
+    // Funding settles every ~8h, so a 365-day window needs ~1,095 rows. A
+    // single 1000-row request silently dropped the oldest settlements; the
+    // gateways page until `limit` is reached, so ask for the window's size.
+    const expectedRows =
+      Math.ceil((endTime - startTime) / (8 * 60 * 60 * 1000)) + 1;
     const rates = yield* gateway.fetchFundingRates(
       args.exchange,
       args.symbol,
       new Date(startTime),
       new Date(endTime),
-      1000,
+      Math.max(1000, expectedRows),
     );
 
     const saved = yield* repo.saveFundingRates(

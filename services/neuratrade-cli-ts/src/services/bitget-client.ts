@@ -381,14 +381,26 @@ export function fromBitgetSymbol(rawSymbol: string): string {
   return upper;
 }
 
-function marginCoinForProductType(
+export function marginCoinForProductType(
   productType: BitgetProductType,
   symbol: string,
 ): string {
   if (productType === "USDT-FUTURES") return "USDT";
   if (productType === "USDC-FUTURES") return "USDC";
-  // COIN-FUTURES: margin coin is the base asset (e.g. BTC).
-  return symbol.replace(/(USDT|USDC|USD|_DMCBL)/g, "").toUpperCase() || symbol;
+  // COIN-FUTURES: margin coin is the settled asset (e.g. BTC for BTCUSDT). Strip
+  // the DMCBL suffix first, then the quote suffixes; an empty result means the
+  // symbol shape was unexpected — fail loud so callers never silently query
+  // with a bogus margin coin.
+  const base = symbol
+    .replace(/_DMCBL/g, "")
+    .replace(/(USDT|USDC|USD)/g, "")
+    .toUpperCase();
+  if (symbol !== "" && base === "") {
+    throw new Error(
+      `cannot derive COIN-FUTURES margin coin from symbol "${symbol}"`,
+    );
+  }
+  return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +594,9 @@ function fetchBitget<T>(
     });
 
     if (response.status === 429) {
+      // Consume the body first so the connection can be reused; an undrained
+      // 429 body would leak the socket until GC collects it.
+      yield* Effect.promise(() => response.text().catch(() => ""));
       // Retry-After is normally delta-seconds, but may be an HTTP-date on
       // some proxies. Number() on an HTTP-date yields NaN; falling back to 0
       // would busy-loop into another 429 immediately, so default to a sane

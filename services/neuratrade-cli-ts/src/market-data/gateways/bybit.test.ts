@@ -278,12 +278,12 @@ describe("Bybit gateway", () => {
     ]);
   });
 
-  it("fetch24hrVolumes keys quote volume by raw symbol", async () => {
+  it("fetch24hrVolumes keys quote volume by normalized BASE/QUOTE symbol", async () => {
     mockFetch(tickersFixture);
 
     const volumes = await Effect.runPromise(Bybit.fetch24hrVolumes());
 
-    expect(volumes["BTCUSDT"]).toBe(67000000);
+    expect(volumes["BTC/USDT"]).toBe(67000000);
   });
 
   it("fetchFundingRates maps funding history rows", async () => {

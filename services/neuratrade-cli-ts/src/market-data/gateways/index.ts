@@ -127,6 +127,11 @@ interface CandleCacheEntry {
   readonly candles: readonly Candle[];
   readonly newestBarOpenMs: number;
   readonly filledAtMs: number;
+  /** The requested limit when this entry was fetched. A hit is only served
+   *  when it can satisfy the caller's window (entry.limit >= limit), so a
+   *  deep-history call after a shallow poll re-fetches instead of getting
+   *  50 candles when it asked for 500. */
+  readonly limit: number;
 }
 
 const CANDLE_TTL_MS = 5 * 60_000;
@@ -223,13 +228,16 @@ export const MarketDataGatewayLive = Layer.effect(
           const hit = (yield* Ref.get(cacheRef)).get(key);
           if (
             hit !== undefined &&
+            // The cache only serves windows it can actually satisfy: the
+            // entry must cover the requested limit (deeper history than the
+            // entry was never fetched) and the newest bar must still be
+            // OPEN (its close time in the future) so a mid-bar poll costs
+            // zero requests and settled bars are never served stale.
+            hit.limit >= limit &&
             nowMs - hit.filledAtMs < CANDLE_TTL_MS &&
-            // The newest bar in the cached window is still OPEN (its close
-            // time is in the future): settled bars cannot change, so serve
-            // them until the bar rolls.
             hit.newestBarOpenMs + BAR_ROLL_GRACE_MS > nowMs
           ) {
-            return hit.candles;
+            return hit.candles.slice(-limit);
           }
           const candles = yield* paced(exchange, "fetchOHLCV", () =>
             routeOHLCV(exchange, symbol, timeframe, limit),
@@ -239,8 +247,21 @@ export const MarketDataGatewayLive = Layer.effect(
               ? candles[candles.length - 1].timestamp.getTime()
               : 0;
           yield* Ref.update(cacheRef, (map) => {
-            map.set(key, { candles, newestBarOpenMs, filledAtMs: nowMs });
-            return map;
+            // Copy-on-write update + prune of expired entries: mutating the
+            // shared Map in place keeps permanently stale keys (halted
+            // venues) alive for the process lifetime and lets a returned
+            // array reference be silently replaced by a later write.
+            const next = new Map(map);
+            for (const [k, entry] of next) {
+              if (nowMs - entry.filledAtMs >= CANDLE_TTL_MS) next.delete(k);
+            }
+            next.set(key, {
+              candles,
+              newestBarOpenMs,
+              filledAtMs: nowMs,
+              limit,
+            });
+            return next;
           });
           return candles;
         }),

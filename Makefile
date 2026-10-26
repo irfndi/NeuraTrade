@@ -11,9 +11,13 @@ YELLOW=\033[1;33m
 BLUE=\033[0;34m
 NC=\033[0m
 
-.PHONY: help services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
+# Quality gates below are shipped repo content: a missing service directory is
+# a checkout error and must FAIL, not print a green "Skipping". Only a missing
+# toolchain (bun) on the machine is a legitimate, non-fatal skip.
+.PHONY: help all services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
 	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once \
-	autoresearch-loop autoresearch-parallel champion-paper champion-demo champion-soak
+	autoresearch-loop autoresearch-parallel champion-paper champion-demo champion-soak \
+	native-check native-box native-ship
 
 all: typecheck
 
@@ -25,18 +29,20 @@ help: ## Show this help message
 
 telegram-setup: ## Install Telegram service dependencies
 	@echo "$(GREEN)Installing Telegram service dependencies...$(NC)"
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		cd services/telegram-service && bun install --frozen-lockfile; \
+	@if [ ! -d "services/telegram-service" ]; then echo "$(RED)missing services/telegram-service$(NC)" >&2; exit 1; fi
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping Telegram setup - bun not found$(NC)"; \
 	else \
-		echo "$(YELLOW)Skipping Telegram setup - directory or bun not found$(NC)"; \
+		cd services/telegram-service && bun install --frozen-lockfile; \
 	fi
 
 cli-ts-setup: ## Install TypeScript CLI dependencies
 	@echo "$(GREEN)Installing TypeScript CLI dependencies...$(NC)"
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		cd services/neuratrade-cli-ts && bun install --frozen-lockfile; \
+	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping TypeScript CLI setup - bun not found$(NC)"; \
 	else \
-		echo "$(YELLOW)Skipping TypeScript CLI setup - directory or bun not found$(NC)"; \
+		cd services/neuratrade-cli-ts && bun install --frozen-lockfile; \
 	fi
 
 services-setup: telegram-setup cli-ts-setup ## Install service dependencies
@@ -45,12 +51,14 @@ services-setup: telegram-setup cli-ts-setup ## Install service dependencies
 build-ts: cli-ts-setup ## Type-check and compile the TypeScript CLI
 	@echo "$(GREEN)Building $(APP_NAME) TypeScript CLI...$(NC)"
 	@mkdir -p bin
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		cd services/neuratrade-cli-ts && bunx tsc --noEmit && bun build index.ts --compile --outfile ../../bin/neuratrade-ts; \
+	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping TypeScript CLI build - bun not found$(NC)"; \
 	else \
-		echo "$(YELLOW)Skipping TypeScript CLI build - directory or bun not found$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx tsc --noEmit && bun build index.ts --compile --outfile ../../bin/neuratrade-ts; \
 	fi
-	@echo "$(GREEN)Build complete: bin/neuratrade-ts$(NC)"
+	@if [ -x bin/neuratrade-ts ]; then echo "$(GREEN)Build complete: bin/neuratrade-ts$(NC)"; \
+	else echo "$(RED)Build did not produce bin/neuratrade-ts$(NC)" >&2; exit 1; fi
 
 fmt: ## Format TS code
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
@@ -63,60 +71,64 @@ fmt: ## Format TS code
 	fi
 
 fmt-check: ## Check if code is formatted (for CI)
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
-		cd services/telegram-service && bunx oxfmt --check .; \
+	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
+		echo "$(RED)missing service directory (fmt-check requires both)$(NC)" >&2; exit 1; \
 	fi
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx oxfmt --check .; \
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping format checks - bun not found$(NC)"; exit 0; \
 	fi
+	@echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
+		cd services/telegram-service && bunx oxfmt --check .
+	@echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx oxfmt --check .
 	@echo "$(GREEN)Format checks passed!$(NC)"
 
 lint: ## Run lints
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running Telegram lint...$(NC)"; \
-		cd services/telegram-service && bunx oxlint .; \
+	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
+		echo "$(RED)missing service directory (lint requires both)$(NC)" >&2; exit 1; \
 	fi
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running TypeScript CLI lint...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx oxlint .; \
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping lint - bun not found$(NC)"; exit 0; \
 	fi
+	@echo "$(GREEN)Running Telegram lint...$(NC)"; \
+		cd services/telegram-service && bunx oxlint .
+	@echo "$(GREEN)Running TypeScript CLI lint...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx oxlint .
 
 typecheck: ## Run TypeScript type checks
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
-		cd services/telegram-service && bunx tsc --noEmit; \
-	else \
-		echo "$(YELLOW)Skipping Telegram typecheck - telegram-service or bun missing$(NC)"; \
+	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
+		echo "$(RED)missing service directory (typecheck requires both)$(NC)" >&2; exit 1; \
 	fi
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running TypeScript CLI typecheck...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx tsc --noEmit; \
-	else \
-		echo "$(YELLOW)Skipping TypeScript CLI typecheck - directory or bun missing$(NC)"; \
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping typecheck - bun not found$(NC)"; exit 0; \
 	fi
+	@echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
+		cd services/telegram-service && bunx tsc --noEmit
+	@echo "$(GREEN)Running TypeScript CLI typecheck...$(NC)"; \
+		cd services/neuratrade-cli-ts && bunx tsc --noEmit
 
 test: test-cli-ts test-frontend ## Run default tests
 
 test-cli-ts: ## Run TypeScript CLI tests
-	@if [ -d "services/neuratrade-cli-ts" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running TypeScript CLI tests...$(NC)"; \
-		cd services/neuratrade-cli-ts && bun test; \
-	else \
-		echo "$(YELLOW)Skipping TypeScript CLI tests - directory or bun missing$(NC)"; \
+	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping TypeScript CLI tests - bun not found$(NC)"; exit 0; \
 	fi
+	@echo "$(GREEN)Running TypeScript CLI tests...$(NC)"; \
+		cd services/neuratrade-cli-ts && bun test
 
 test-frontend: ## Run Telegram service tests
-	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
-		echo "$(GREEN)Running Telegram tests...$(NC)"; \
-		cd services/telegram-service && bun test; \
-	else \
-		echo "$(YELLOW)Skipping frontend tests - telegram-service or bun missing$(NC)"; \
+	@if [ ! -d "services/telegram-service" ]; then echo "$(RED)missing services/telegram-service$(NC)" >&2; exit 1; fi
+	@if ! command -v bun >/dev/null 2>&1; then \
+		echo "$(YELLOW)Skipping frontend tests - bun not found$(NC)"; exit 0; \
 	fi
+	@echo "$(GREEN)Running Telegram tests...$(NC)"; \
+		cd services/telegram-service && bun test
 
 logs-ts: ## Show TS gateway logs from NEURATRADE_HOME
-	@tail -f $${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log
+	@log="$${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log"; \
+		[ -f "$$log" ] || { echo "no gateway log at $$log" >&2; exit 1; }; \
+		tail -f "$$log"
 
 autoresearch-test: ## Unit tests for autoresearch keep/discard + guards
 	@cd services/neuratrade-cli-ts && bun test autoresearch/
@@ -138,8 +150,6 @@ champion-demo: ## Bybit testnet soak of claimed champion knobs
 
 champion-soak: ## Paper + Bybit testnet champion soaks
 	@cd services/neuratrade-cli-ts && pm2 start ecosystem.champion-soak.config.cjs
-
-.PHONY: native-check native-box native-ship
 
 native-check: ## Rust fmt + clippy (zero warnings) + all 8 example checks
 	@cd crates && cargo fmt --check

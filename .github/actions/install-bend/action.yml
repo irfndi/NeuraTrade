@@ -1,0 +1,60 @@
+name: Install Bend
+description: >
+  Install the PINNED Bend release asset from an immutable release URL and
+  verify the installed version. Deliberately avoids upstream's mutable
+  install.sh: it tracks whatever upstream published today, so piping it lets
+  the installed version drift off the pin and executes third-party code with
+  workflow privileges.
+
+inputs:
+  bend-version:
+    description: Exact Bend release version to install (e.g. "2.0.37")
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download + install pinned release asset
+      env:
+        BEND_NO_TELEMETRY: "1"
+      shell: bash
+      run: |
+        # -e: every failed command is fatal (mkdir, tar on a truncated
+        # download, ...); without it those failures only surfaced at the
+        # version check at best, or never at worst.
+        set -euo pipefail
+        VER="${{ inputs.bend-version }}"
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
+          Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
+          Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
+          Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
+          *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+        esac
+        url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
+        for attempt in 1 2 3; do
+          if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
+          echo "bend download attempt $attempt failed: $url" >&2
+          # As an explicit `if`, not `[ ... ] && exit 1`: the short form makes
+          # the loop body's exit status depend on which line is last, and any
+          # inserted line silently turns `set -e` into the loop's undoing.
+          if [ "$attempt" = 3 ]; then
+            echo "giving up after 3 attempts: $url" >&2
+            exit 1
+          fi
+          sleep $((attempt * 10))
+        done
+        mkdir -p "$HOME/.bend"
+        tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
+        echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
+        # GITHUB_PATH applies to NEXT steps only: export in-step so the pin
+        # check below (and later steps in the caller) resolve bend.
+        export PATH="$HOME/.bend/bend/bin:$PATH"
+        # Echo the captured version on mismatch: `test "$(cmd)" = ...`
+        # swallows what the command actually printed, turning the gate into
+        # an inscrutable failure.
+        got="$(bend version || true)"
+        if [ "$got" != "bend ${VER}" ]; then
+          echo "bend version mismatch: got '${got}', want 'bend ${VER}'" >&2
+          exit 1
+        fi

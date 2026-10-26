@@ -74,5 +74,66 @@ export interface MarketDataGatewayService {
   ) => Effect.Effect<readonly FundingRate[], MarketDataError, never>;
 }
 
+/**
+ * Reject a candle page that carries a non-finite or non-positive OHLC price.
+ *
+ * Wire drift (an empty string field, a renamed key) coerces to 0 or NaN via
+ * `Number(...)`, and a 0-priced candle flows straight into mid-price and
+ * position sizing (`positionValue / 0`). Fail at the boundary instead.
+ */
+export function validateCandlePrices(
+  venue: string,
+  candles: readonly Candle[],
+): Effect.Effect<void, MarketDataError, never> {
+  for (let i = 0; i < candles.length; i += 1) {
+    const c = candles[i];
+    const prices: ReadonlyArray<readonly [string, number]> = [
+      ["open", c.open],
+      ["high", c.high],
+      ["low", c.low],
+      ["close", c.close],
+    ];
+    for (const [field, value] of prices) {
+      if (!Number.isFinite(value) || value <= 0) {
+        return Effect.fail(
+          new MarketDataError(
+            `${venue} candle ${i} (${c.timestamp.toISOString()}) has invalid ${field}=${value}`,
+          ),
+        );
+      }
+    }
+  }
+  return Effect.void;
+}
+
+/**
+ * Reject order-book levels whose price/volume did not parse (0 or NaN), so an
+ * empty-string field cannot become a 0-priced best bid/ask (mid = 0).
+ */
+export function validateDepthLevels(
+  venue: string,
+  side: "bids" | "asks",
+  levels: readonly { readonly price: number; readonly volume: number }[],
+): Effect.Effect<void, MarketDataError, never> {
+  for (let i = 0; i < levels.length; i += 1) {
+    const level = levels[i];
+    if (!Number.isFinite(level.price) || level.price <= 0) {
+      return Effect.fail(
+        new MarketDataError(
+          `${venue} ${side}[${i}] has invalid price=${level.price}`,
+        ),
+      );
+    }
+    if (!Number.isFinite(level.volume) || level.volume < 0) {
+      return Effect.fail(
+        new MarketDataError(
+          `${venue} ${side}[${i}] has invalid volume=${level.volume}`,
+        ),
+      );
+    }
+  }
+  return Effect.void;
+}
+
 export const MarketDataGateway =
   Context.Service<MarketDataGatewayService>("MarketDataGateway");

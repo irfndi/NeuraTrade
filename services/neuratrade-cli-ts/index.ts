@@ -1,8 +1,15 @@
 export {};
 
 const argv = process.argv.slice(2);
-const isReadinessCommand =
-  argv[0] === "scalp" && argv[1] === "real-money-readiness";
+// The readiness command bypasses the gateway boot path so it can run on a
+// worker/box without the full service graph. Match its subcommand wherever it
+// sits after `scalp` (e.g. `scalp --json real-money-readiness`) instead of
+// only at argv[1]: any argv deviation used to fall through to the full
+// gateway boot with no signal.
+const READINESS_SUBCOMMAND = "real-money-readiness";
+const readinessIndex =
+  argv[0] === "scalp" ? argv.indexOf(READINESS_SUBCOMMAND) : -1;
+const isReadinessCommand = readinessIndex > 0;
 
 if (isReadinessCommand) {
   const {
@@ -11,7 +18,12 @@ if (isReadinessCommand) {
     serializeReadinessResult,
     versionText,
   } = await import("./src/cli/real-money-readiness.ts");
-  const commandArgs = argv.slice(2);
+  // Flags before the subcommand belong to the same command; keep them.
+  const commandArgs = [
+    ...argv.slice(1, readinessIndex),
+    ...argv.slice(readinessIndex + 1),
+  ];
+  
   if (commandArgs.includes("--help") || commandArgs.includes("-h")) {
     console.log(helpText());
   } else if (commandArgs.includes("--version")) {
@@ -24,7 +36,7 @@ if (isReadinessCommand) {
 } else {
   const { BunFileSystem, BunRuntime, BunServices } =
     await import("@effect/platform-bun");
-  const { Config, Effect, Layer } = await import("effect");
+  const { Config, Console, Effect, Layer } = await import("effect");
   const { rootCommand } = await import("./src/cli/index.ts");
   const { runEffect } = await import("./src/cli/kit/kit.ts");
   const { PathLive } = await import("./src/services/path.ts");
@@ -96,16 +108,29 @@ if (isReadinessCommand) {
 
   const program = Effect.gen(function* () {
     const serverPort = yield* envOrEmpty("SERVER_PORT");
-    const portEnv = yield* envOrEmpty("PORT");
     const apiBaseUrlEnv = yield* envOrEmpty("NEURATRADE_API_BASE_URL");
     const apiKeyEnv = yield* envOrEmpty("NEURATRADE_API_KEY");
     const adminApiKeyEnv = yield* envOrEmpty("ADMIN_API_KEY");
     const homeEnv = yield* envOrEmpty("NEURATRADE_HOME");
 
-    const port = serverPort || portEnv || "8080";
+    // @codebuff fix 175: only SERVER_PORT is read for the backend port.
+    // The generic PORT env var is set by dev servers / CI / container
+    // runtimes for unrelated reasons; falling back to it silently pointed
+    // the ApiClient at an unrelated port while the backend listens on
+    // SERVER_PORT's value (default 8080).
+    const port = serverPort || "8080";
     const baseUrl = apiBaseUrlEnv || `http://localhost:${port}`;
     const apiKey = apiKeyEnv || adminApiKeyEnv || "";
     const home = homeEnv || undefined;
+
+    // @codebuff fix 165: an empty API key is legitimate (the backend
+    // disables guarded endpoints when ADMIN_API_KEY is unset) but it must
+    // not surface later as opaque 401/403s on the first guarded call.
+    if (apiKey === "") {
+      yield* Console.error(
+        "warning: no NEURATRADE_API_KEY / ADMIN_API_KEY set — authenticated API calls will fail until the client key is configured",
+      );
+    }
 
     const rootLayer = buildRootLayer({
       home,

@@ -20,8 +20,24 @@ import {
   positionSizeOption,
   riskBasedMaxPositionSizeOption,
   riskPerTradeOption,
-} from "./scalp-options.js";
+} from "./scalp-options/index.js";
+import { Effect, Layer, Option } from "effect";
+import { BunServices } from "@effect/platform-bun";
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { PathLive } from "../services/path.js";
 import {
+  MarketDataRepository,
+  MarketDataRepositorySQLite,
+  MarketDataRepositorySQLiteLive,
+} from "../market-data/repository.js";
+import { BacktestEngine } from "../scalping/services.js";
+import type { Candle } from "../market-data/types.js";
+import type { BacktestOptions } from "../scalping/backtest.js";
+import {
+  backtestProgram,
+  buildBacktestComposerConfig,
   buildCandidate,
   buildPaperTradeComposerConfig,
   buildStrategyProfileFromOptimizeResult,
@@ -71,21 +87,6 @@ import {
   type SelectWatchlistEntry,
   type ValidationRow,
 } from "./scalp.js";
-import { Effect, Layer, Option } from "effect";
-import { BunServices } from "@effect/platform-bun";
-import { PathLive } from "../services/path.js";
-import { Database } from "bun:sqlite";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import {
-  MarketDataRepository,
-  MarketDataRepositorySQLite,
-  MarketDataRepositorySQLiteLive,
-} from "../market-data/repository.js";
-import { BacktestEngine } from "../scalping/services.js";
-import type { Candle } from "../market-data/types.js";
-import type { BacktestOptions } from "../scalping/backtest.js";
-import { backtestProgram, buildBacktestComposerConfig } from "./scalp.js";
 
 describe("scalp CLI option surface", () => {
   it("pins the load-bearing defaults on the option builders", () => {

@@ -199,7 +199,12 @@ function makeClient(db: Database): SqliteClientImpl {
         db
           .query<T, Array<SQLQueryBindings>>(sql)
           .get(...(params as Array<SQLQueryBindings>)) as T | null,
-      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+      catch: (cause) =>
+        new SqliteError({
+          message: `Query failed for SQL \`${sql.slice(0, 120)}\`: ${String(cause)}`,
+          sql,
+          cause,
+        }),
     });
 
   const queryAll = <T>(
@@ -211,7 +216,12 @@ function makeClient(db: Database): SqliteClientImpl {
         db
           .query<T, Array<SQLQueryBindings>>(sql)
           .all(...(params as Array<SQLQueryBindings>)) as ReadonlyArray<T>,
-      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+      catch: (cause) =>
+        new SqliteError({
+          message: `Query failed for SQL \`${sql.slice(0, 120)}\`: ${String(cause)}`,
+          sql,
+          cause,
+        }),
     });
 
   const execute = (
@@ -223,7 +233,12 @@ function makeClient(db: Database): SqliteClientImpl {
   > =>
     Effect.try({
       try: () => runSql(db, sql, params),
-      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+      catch: (cause) =>
+        new SqliteError({
+          message: `Query failed for SQL \`${sql.slice(0, 120)}\`: ${String(cause)}`,
+          sql,
+          cause,
+        }),
     });
 
   const exec = (sql: string): Effect.Effect<void, SqliteError> =>
@@ -231,7 +246,12 @@ function makeClient(db: Database): SqliteClientImpl {
       try: () => {
         db.run(sql);
       },
-      catch: (cause) => new SqliteError({ message: String(cause), sql, cause }),
+      catch: (cause) =>
+        new SqliteError({
+          message: `Query failed for SQL \`${sql.slice(0, 120)}\`: ${String(cause)}`,
+          sql,
+          cause,
+        }),
     });
 
   const close = Effect.sync(() => db.close());

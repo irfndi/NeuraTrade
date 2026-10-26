@@ -1,7 +1,12 @@
 import { Effect } from "effect";
 import type { Candle, FundingRate, OrderBook, Tick } from "../types.js";
-import { MarketDataError } from "../gateway.js";
 import {
+  MarketDataError,
+  validateCandlePrices,
+  validateDepthLevels,
+} from "../gateway.js";
+import {
+  fromBitgetSymbol,
   toBitgetSymbol,
   toBitgetFuturesSymbol,
   type BitgetProductType,
@@ -113,6 +118,13 @@ function asNumber(value: string | number | undefined): number {
   return Number(value);
 }
 
+/** URL-encode a value interpolated into a hand-built query string. Symbols
+ *  come from config/CLI input; a raw `${symbol}` would let a reserved
+ *  character (&, #, space) inject extra query parameters. */
+function q(value: string): string {
+  return encodeURIComponent(value);
+}
+
 interface BitgetTicker {
   readonly symbol: string;
   readonly lastPr?: string;
@@ -135,8 +147,8 @@ export function fetchTick(
   const { symbol: bSymbol, productType } = bitgetSymbol(symbol, marketType);
   const path =
     marketType === "spot"
-      ? `/api/v2/spot/market/tickers?symbol=${bSymbol}`
-      : `/api/v2/mix/market/tickers?productType=${productType}&symbol=${bSymbol}`;
+      ? `/api/v2/spot/market/tickers?symbol=${q(bSymbol)}`
+      : `/api/v2/mix/market/tickers?productType=${q(productType ?? "USDT-FUTURES")}&symbol=${q(bSymbol)}`;
 
   return Effect.gen(function* () {
     const data = yield* getJSON<readonly BitgetTicker[]>(path);
@@ -198,11 +210,11 @@ export function fetchOHLCV(
 
   const path =
     marketType === "spot"
-      ? `/api/v2/spot/market/candles?symbol=${bSymbol}&granularity=${granularity}&limit=${effectiveLimit}${startParam}`
+      ? `/api/v2/spot/market/candles?symbol=${q(bSymbol)}&granularity=${q(granularity)}&limit=${effectiveLimit}${startParam}`
       : // Futures /candles only serves recent data (older startTimes return an
         // empty page with code 00000); /history-candles serves both old and
         // recent windows, which deep backfills rely on.
-        `/api/v2/mix/market/history-candles?symbol=${bSymbol}&productType=${productType}&granularity=${granularity}&limit=${effectiveLimit}${startParam}`;
+        `/api/v2/mix/market/history-candles?symbol=${q(bSymbol)}&productType=${q(productType ?? "USDT-FUTURES")}&granularity=${q(granularity)}&limit=${effectiveLimit}${startParam}`;
 
   return Effect.gen(function* () {
     const data =
@@ -221,7 +233,7 @@ export function fetchOHLCV(
         >
       >(path);
 
-    return data.map((c): Candle => ({
+    const candles = data.map((c): Candle => ({
       exchange: bitgetExchange(marketType),
       symbol,
       timeframe,
@@ -232,6 +244,8 @@ export function fetchOHLCV(
       volume: asNumber(c[5]),
       timestamp: new Date(Number(c[0])),
     }));
+    yield* validateCandlePrices("Bitget", candles);
+    return candles;
   });
 }
 
@@ -249,23 +263,27 @@ export function fetchOrderBook(
   const { symbol: bSymbol, productType } = bitgetSymbol(symbol, marketType);
   const path =
     marketType === "spot"
-      ? `/api/v2/spot/market/orderbook?symbol=${bSymbol}&type=step0&limit=${limit}`
-      : `/api/v2/mix/market/orderbook?symbol=${bSymbol}&productType=${productType}&limit=${limit}`;
+      ? `/api/v2/spot/market/orderbook?symbol=${q(bSymbol)}&type=step0&limit=${limit}`
+      : `/api/v2/mix/market/orderbook?symbol=${q(bSymbol)}&productType=${q(productType ?? "USDT-FUTURES")}&limit=${limit}`;
 
   return Effect.gen(function* () {
     const data = yield* getJSON<BitgetOrderBook>(path);
 
+    const bids = data.bids.map(([price, volume]) => ({
+      price: asNumber(price),
+      volume: asNumber(volume),
+    }));
+    const asks = data.asks.map(([price, volume]) => ({
+      price: asNumber(price),
+      volume: asNumber(volume),
+    }));
+    yield* validateDepthLevels("Bitget", "bids", bids);
+    yield* validateDepthLevels("Bitget", "asks", asks);
     return {
       exchange: bitgetExchange(marketType),
       symbol,
-      bids: data.bids.map(([price, volume]) => ({
-        price: asNumber(price),
-        volume: asNumber(volume),
-      })),
-      asks: data.asks.map(([price, volume]) => ({
-        price: asNumber(price),
-        volume: asNumber(volume),
-      })),
+      bids,
+      asks,
       timestamp: data.ts ? new Date(Number(data.ts)) : new Date(),
     };
   });
@@ -336,8 +354,12 @@ export function fetch24hrVolumes(
 
     const volumes: Record<string, number> = {};
     for (const ticker of data) {
-      const normalized = `${ticker.symbol}`;
-      volumes[normalized] = asNumber(ticker.quoteVol ?? ticker.quoteVolume);
+      // Key by the same BASE/QUOTE normalization fetchSymbols emits (the
+      // canonical quote-suffix list lives in bitget-client); raw wire
+      // symbols make every join with the symbol list miss.
+      volumes[fromBitgetSymbol(ticker.symbol)] = asNumber(
+        ticker.quoteVol ?? ticker.quoteVolume,
+      );
     }
     return volumes;
   });
@@ -375,8 +397,8 @@ export function fetchFundingRates(
     const results: FundingRate[] = [];
     for (let pageNo = 1; pageNo <= FUNDING_MAX_PAGES; pageNo++) {
       const path =
-        `/api/v2/mix/market/history-fund-rate?symbol=${bSymbol}` +
-        `&productType=${productType}&pageSize=${FUNDING_PAGE_SIZE}&pageNo=${pageNo}`;
+        `/api/v2/mix/market/history-fund-rate?symbol=${q(bSymbol)}` +
+        `&productType=${q(productType ?? "USDT-FUTURES")}&pageSize=${FUNDING_PAGE_SIZE}&pageNo=${pageNo}`;
       const batch = yield* getJSON<readonly BitgetFundingRate[]>(path);
       if (!batch || batch.length === 0) break;
 
@@ -397,7 +419,10 @@ export function fetchFundingRates(
       if (results.length >= limit) break;
       if (startMs !== undefined && oldestOnPage < startMs) break;
     }
-    return results;
+    // The loop only stops AFTER a page pushes past `limit` (the check runs
+    // between pages) or hits MAX_PAGES of 5000 rows; trim to exactly the
+    // requested window (rows are newest-first here).
+    return results.slice(0, limit);
   });
 }
 

@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Ref } from "effect";
 import { randomUUID } from "node:crypto";
 import {
   ExchangeAdapter,
@@ -23,10 +23,12 @@ interface SimulatedState {
 export function makeSimulatedExchangeAdapter(
   initialBalances: Record<string, number> = {},
 ): ExchangeAdapterService {
-  const state: SimulatedState = {
-    balances: { USDT: 10_000, ...initialBalances },
-    positions: {},
-  };
+  const stateRef = Effect.runSync(
+    Ref.make<SimulatedState>({
+      balances: { USDT: 10_000, ...initialBalances },
+      positions: {},
+    }),
+  );
 
   const adapter: ExchangeAdapterService = {
     placeOrder: (request) =>
@@ -49,55 +51,91 @@ export function makeSimulatedExchangeAdapter(
               (request.side === "buy" ? ob.asks[0].price : ob.bids[0].price));
 
         const fee = filledPrice * request.quantity * 0.001;
-        const fillId = randomUUID();
-
         // Update balances (simplified: assume quote asset is USDT).
         const quoteDelta =
           request.side === "buy"
             ? -(filledPrice * request.quantity) - fee
             : filledPrice * request.quantity - fee;
-        state.balances.USDT = (state.balances.USDT ?? 0) + quoteDelta;
 
-        // Update position.
-        const existing = state.positions[request.symbol];
-        if (existing) {
-          if (existing.side === (request.side === "buy" ? "long" : "short")) {
-            const totalQty = existing.quantity + request.quantity;
-            const avgEntry =
-              (existing.entryPrice * existing.quantity +
-                filledPrice * request.quantity) /
-              totalQty;
-            state.positions[request.symbol] = {
-              ...existing,
-              quantity: totalQty,
-              entryPrice: avgEntry,
-            };
-          } else if (request.quantity >= existing.quantity) {
-            delete state.positions[request.symbol];
+        // The balance/position bookkeeping is ONE atomic state transition:
+        // a read-modify-write that straddled the awaited order-book fetch
+        // would lose updates when two orders are placed concurrently.
+        const fill = yield* Ref.modify(stateRef, (state): [
+          {
+            orderId: string;
+            symbol: string;
+            side: "buy" | "sell";
+            filledQty: number;
+            filledPrice: number;
+            fee: number;
+            timestamp: Date;
+          },
+          SimulatedState,
+        ] => {
+          const balances = { ...state.balances };
+          const positions = { ...state.positions };
+          balances.USDT = (balances.USDT ?? 0) + quoteDelta;
+
+          const existing = positions[request.symbol];
+          if (existing) {
+            if (
+              existing.side === (request.side === "buy" ? "long" : "short")
+            ) {
+              const totalQty = existing.quantity + request.quantity;
+              const avgEntry =
+                (existing.entryPrice * existing.quantity +
+                  filledPrice * request.quantity) /
+                totalQty;
+              positions[request.symbol] = {
+                ...existing,
+                quantity: totalQty,
+                entryPrice: avgEntry,
+              };
+            } else {
+              // Opposite side: the order closes the existing position and any
+              // excess opens a new one on the other side (a flip). Dropping
+              // the excess silently loses quantity the fill reported as
+              // traded, so the residual keeps its own position instead.
+              const residual = request.quantity - existing.quantity;
+              if (residual > 0) {
+                positions[request.symbol] = {
+                  symbol: request.symbol,
+                  side: request.side === "buy" ? "long" : "short",
+                  quantity: residual,
+                  entryPrice: filledPrice,
+                };
+              } else if (residual < 0) {
+                positions[request.symbol] = {
+                  ...existing,
+                  quantity: -residual,
+                };
+              } else {
+                delete positions[request.symbol];
+              }
+            }
           } else {
-            state.positions[request.symbol] = {
-              ...existing,
-              quantity: existing.quantity - request.quantity,
+            positions[request.symbol] = {
+              symbol: request.symbol,
+              side: request.side === "buy" ? "long" : "short",
+              quantity: request.quantity,
+              entryPrice: filledPrice,
             };
           }
-        } else {
-          state.positions[request.symbol] = {
-            symbol: request.symbol,
-            side: request.side === "buy" ? "long" : "short",
-            quantity: request.quantity,
-            entryPrice: filledPrice,
-          };
-        }
 
-        return {
-          orderId: fillId,
-          symbol: request.symbol,
-          side: request.side,
-          filledQty: request.quantity,
-          filledPrice,
-          fee,
-          timestamp: new Date(),
-        };
+          return [
+            {
+              orderId: randomUUID(),
+              symbol: request.symbol,
+              side: request.side,
+              filledQty: request.quantity,
+              filledPrice,
+              fee,
+              timestamp: new Date(),
+            },
+            { balances, positions },
+          ];
+        });
+        return fill;
       }).pipe(
         Effect.catch((err) =>
           Effect.fail(
@@ -112,28 +150,31 @@ export function makeSimulatedExchangeAdapter(
       ),
 
     getBalance: (asset) =>
-      Effect.succeed({
-        asset,
-        free: state.balances[asset] ?? 0,
-        locked: 0,
-      }),
+      Effect.map(
+        Ref.get(stateRef),
+        (state) => ({
+          asset,
+          free: state.balances[asset] ?? 0,
+          locked: 0,
+        }),
+      ),
 
-    getPosition: (symbol) => Effect.succeed(state.positions[symbol] ?? null),
+    getPosition: (symbol) =>
+      Effect.map(Ref.get(stateRef), (state) => state.positions[symbol] ?? null),
 
     closePosition: (symbol) =>
       Effect.gen(function* () {
-        const position = state.positions[symbol];
+        const position = (yield* Ref.get(stateRef)).positions[symbol];
         if (!position) return null;
 
-        const fill = yield* adapter.placeOrder({
+        // placeOrder's opposite-side branching already reduces or removes
+        // the position; deleting here again would wipe a flipped residual.
+        return yield* adapter.placeOrder({
           symbol,
           side: position.side === "long" ? "sell" : "buy",
           type: "market",
           quantity: position.quantity,
         });
-
-        delete state.positions[symbol];
-        return fill;
       }),
   };
 

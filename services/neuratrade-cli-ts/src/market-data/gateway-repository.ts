@@ -7,6 +7,24 @@ function toMarketDataError(err: { readonly reason: string }): MarketDataError {
   return new MarketDataError(err.reason);
 }
 
+/** Timeframe used when no fetchOHLCV for that exchange|symbol has been seen
+ *  in this gateway instance. */
+const DEFAULT_TIMEFRAME = "1h";
+
+/** Read the per-symbol last-seen timeframe; independent per symbol, so a
+ *  concurrent fetchOHLCV on another symbol/timeframe cannot skew these
+ *  reads. */
+function findLastTimeframe(
+  ref: Ref.Ref<Map<string, string>>,
+  exchange: string,
+  symbol: string,
+): Effect.Effect<string> {
+  return Effect.map(
+    Ref.get(ref),
+    (map) => map.get(`${exchange}|${symbol}`) ?? DEFAULT_TIMEFRAME,
+  );
+}
+
 /**
  * Repository-backed market-data gateway for offline / simulated trading.
  *
@@ -19,7 +37,11 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
   MarketDataGateway,
   Effect.gen(function* () {
     const repo = yield* MarketDataRepository;
-    const lastTimeframeRef = yield* Ref.make<string>("1h");
+    // Last timeframe seen per exchange|symbol (NOT a single global): a
+    // global mutable timeframe made concurrent tick/orderbook reads for one
+    // symbol resolve against whatever timeframe another symbol's fetchOHLCV
+    // had just written.
+    const lastTimeframesRef = yield* Ref.make(new Map<string, string>());
 
     const latestCandle = (
       exchange: string,
@@ -50,7 +72,7 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       symbol: string,
     ): Effect.Effect<Tick, MarketDataError, never> =>
       Effect.gen(function* () {
-        const timeframe = yield* Ref.get(lastTimeframeRef);
+        const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
         const candle = yield* latestCandle(exchange, symbol, timeframe);
         return {
           exchange,
@@ -83,7 +105,9 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
             ),
           );
         }
-        yield* Ref.set(lastTimeframeRef, timeframe);
+        yield* Ref.update(lastTimeframesRef, (map) =>
+          new Map(map).set(`${exchange}|${symbol}`, timeframe),
+        );
         return candles;
       });
 
@@ -93,7 +117,7 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       limit: number,
     ): Effect.Effect<OrderBook, MarketDataError, never> =>
       Effect.gen(function* () {
-        const timeframe = yield* Ref.get(lastTimeframeRef);
+        const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
         const candle = yield* latestCandle(exchange, symbol, timeframe);
         const spread = candle.high - candle.low;
         const mid = candle.close;
@@ -139,13 +163,15 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
     > =>
       Effect.gen(function* () {
         // Sum base-volume of stored candles over the last 24h per symbol.
-        const timeframe = yield* Ref.get(lastTimeframeRef);
+        // Each symbol is read at its own last-seen timeframe (falling back to
+        // the default), never a shared mutable one.
         const symbols = yield* repo
-          .listSymbols(exchange, timeframe, 1)
+          .listSymbols(exchange, DEFAULT_TIMEFRAME, 1)
           .pipe(Effect.mapError(toMarketDataError));
         const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const volumes: Record<string, number> = {};
         for (const symbol of symbols) {
+          const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
           const candles = yield* repo
             .getCandles({ exchange, symbol, timeframe, from: since })
             .pipe(Effect.mapError(toMarketDataError));

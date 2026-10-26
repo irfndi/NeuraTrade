@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import type { Candle, FundingRate, OrderBook, Tick } from "../types.js";
-import { MarketDataError } from "../gateway.js";
+import {
+  MarketDataError,
+  validateCandlePrices,
+  validateDepthLevels,
+} from "../gateway.js";
 
 const BASE_URL = "https://api.binance.com";
 const FUTURES_BASE_URL = "https://fapi.binance.com";
@@ -8,6 +12,25 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 function binanceSymbol(symbol: string): string {
   return symbol.replace("/", "").toUpperCase();
+}
+
+/** URL-encode a value interpolated into a hand-built query string. Symbols
+ *  come from config/CLI input; a raw `${symbol}` would let a reserved
+ *  character (&, #, space) inject extra query parameters. */
+function q(value: string): string {
+  return encodeURIComponent(value);
+}
+
+/** Normalize a wire ticker symbol (BTCUSDT) to the BASE/QUOTE form other
+ *  gateway methods return, so consumers can join volumes with fetchSymbols
+ *  by the same keys. Unrecognized quotes stay raw rather than mis-split. */
+function normalizeWireSymbol(wire: string): string {
+  for (const suffix of ["USDT", "USDC", "USD"] as const) {
+    if (wire.endsWith(suffix) && wire.length > suffix.length) {
+      return `${wire.slice(0, -suffix.length)}/${suffix}`;
+    }
+  }
+  return wire;
 }
 
 /** Parse the Retry-After header (seconds or HTTP-date) into ms; undefined if
@@ -81,7 +104,7 @@ export function fetchTick(
       quoteVolume: string;
       openTime: number;
       closeTime: number;
-    }>(`/api/v3/ticker/24hr?symbol=${bSymbol}`);
+    }>(`/api/v3/ticker/24hr?symbol=${q(bSymbol)}`);
 
     const price = Number(data.lastPrice);
     if (!Number.isFinite(price) || price <= 0) {
@@ -136,7 +159,7 @@ export function fetchOHLCV(
       `/api/v3/klines?symbol=${bSymbol}&interval=${interval}&limit=${limit}${startParam}`,
     );
 
-    return data.map((c): Candle => ({
+    const candles = data.map((c): Candle => ({
       exchange: "binance",
       symbol,
       timeframe,
@@ -147,6 +170,8 @@ export function fetchOHLCV(
       volume: Number(c[5]),
       timestamp: new Date(c[0]),
     }));
+    yield* validateCandlePrices("Binance", candles);
+    return candles;
   });
 }
 
@@ -162,17 +187,21 @@ export function fetchOrderBook(
       asks: Array<[string, string]>;
     }>(`/api/v3/depth?symbol=${bSymbol}&limit=${limit}`);
 
+    const bids = data.bids.map(([price, volume]) => ({
+      price: Number(price),
+      volume: Number(volume),
+    }));
+    const asks = data.asks.map(([price, volume]) => ({
+      price: Number(price),
+      volume: Number(volume),
+    }));
+    yield* validateDepthLevels("Binance", "bids", bids);
+    yield* validateDepthLevels("Binance", "asks", asks);
     return {
       exchange: "binance",
       symbol,
-      bids: data.bids.map(([price, volume]) => ({
-        price: Number(price),
-        volume: Number(volume),
-      })),
-      asks: data.asks.map(([price, volume]) => ({
-        price: Number(price),
-        volume: Number(volume),
-      })),
+      bids,
+      asks,
       timestamp: new Date(),
     };
   });
@@ -211,7 +240,7 @@ export function fetch24hrVolumes(): Effect.Effect<
 
     const volumes: Record<string, number> = {};
     for (const ticker of data) {
-      volumes[ticker.symbol] = Number(ticker.quoteVolume);
+      volumes[normalizeWireSymbol(ticker.symbol)] = Number(ticker.quoteVolume);
     }
     return volumes;
   });
@@ -254,7 +283,7 @@ export function fetchFundingRates(
     const results: FundingRate[] = [];
     while (currentStart < effectiveEndTime) {
       const path =
-        `/fapi/v1/fundingRate?symbol=${bSymbol}&limit=${limit}` +
+        `/fapi/v1/fundingRate?symbol=${q(bSymbol)}&limit=${limit}` +
         `&startTime=${currentStart}`;
       const batch = yield* getJSON<
         Array<{ symbol: string; fundingRate: string; fundingTime: number }>
@@ -262,9 +291,14 @@ export function fetchFundingRates(
 
       if (batch.length === 0) break;
 
+      let lastInWindow: number | undefined;
       for (const r of batch) {
         const time = r.fundingTime;
         if (time > effectiveEndTime) continue;
+        // Advance the cursor from the last row actually IN the window, not
+        // the raw batch tail — otherwise a batch straddling endTime makes the
+        // next window overshoot the rows that were skipped just now.
+        lastInWindow = time;
         results.push({
           exchange: "binance",
           symbol,
@@ -272,11 +306,12 @@ export function fetchFundingRates(
           timestamp: new Date(time),
         });
       }
+      if (results.length >= limit) break;
 
-      const lastTime = batch[batch.length - 1]?.fundingTime;
+      const lastTime = lastInWindow ?? batch[batch.length - 1]?.fundingTime;
       if (!lastTime || lastTime <= currentStart) break;
       currentStart = lastTime + 1;
     }
-    return results;
+    return results.slice(0, limit);
   });
 }

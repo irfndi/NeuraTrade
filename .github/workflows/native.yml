@@ -12,6 +12,10 @@ on:
       - "scripts/zig/**"
       - ".zig-version"
       - ".github/workflows/native.yml"
+  # Fork PRs run repo scripts from the PR head. That is a deliberate choice:
+  # `pull_request` (never `pull_request_target`) means no secrets reach fork
+  # code and the default token is read-only, but every step below must be
+  # treated as executing untrusted code.
   pull_request:
     paths:
       - "crates/**"
@@ -27,8 +31,10 @@ permissions:
   contents: read
   actions: read
 
+# Event names must not collapse into one group: a push (bump the pin) on the
+# same ref as an in-flight PR run would otherwise cancel it.
 concurrency:
-  group: native-${{ github.workflow }}-${{ github.ref }}
+  group: native-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -45,13 +51,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (pinned 1.99.1)
+        # `@stable` silently rolls daily, making fmt/clippy results
+        # nondeterministic. Pin the action to a master-history SHA (required
+        # by upstream for SHA pins) + the exact toolchain verified locally.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: "1.99.1"
           components: clippy, rustfmt
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Check formatting
         run: cd crates && cargo fmt --check
@@ -95,39 +105,13 @@ jobs:
           bun-version: "1.4.2"
 
       - name: Install Bend (pinned ${{ env.BEND_VERSION }} from an immutable release asset)
-        env:
-          BEND_NO_TELEMETRY: "1"
-        run: |
-          # Download the PINNED version's release asset, NOT the mutable
-          # install.sh. Upstream ships new Bend releases roughly daily
-          # (2.0.20 -> 2.0.21 -> 2.0.22 -> 2.0.23 within two days), so piping
-          # install.sh lets the installed version drift off the pin and the
-          # version assertion fails on a release nobody asked for. The asset
-          # URL is immutable per version, which also removes the `curl | sh`
-          # supply-chain exposure.
-          set -o pipefail
-          VER="${{ env.BEND_VERSION }}"
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
-            Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
-            Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
-            Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
-            *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
-          for attempt in 1 2 3; do
-            if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
-            echo "bend download attempt $attempt failed: $url" >&2
-            [ "$attempt" = 3 ] && exit 1
-            sleep $((attempt * 10))
-          done
-          mkdir -p "$HOME/.bend"
-          tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
-          echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
-          # GITHUB_PATH applies to NEXT steps only: export in-step so the
-          # pin check below resolves bend in THIS step.
-          export PATH="$HOME/.bend/bend/bin:$PATH"
-          test "$(bend version)" = "bend ${VER}"
+        # Shared composite action: performs the pinned-asset install + version
+        # assertion that was formerly duplicated (verbatim, and drifting) in
+        # each job. .github/workflows is intentionally untouched so any future
+        # bend install change happens in exactly one place.
+        uses: ./.github/actions/install-bend
+        with:
+          bend-version: ${{ env.BEND_VERSION }}
       - name: Prove LAWS.bend (`bend PROOF.bend` is the gate)
         run: |
           # Exits non-zero and prints SOME PROOFS FAIL while any law is open or
@@ -139,29 +123,54 @@ jobs:
           # needs Lean v4.34.0 (~1.5 GB toolchain). It is the local/periodic
           # check: `bend PROOF.bend --verdict` prints ALL PROOFS CHECK only when
           # the proof is mathematically valid.
-          test "$(bend PROOF.bend)" = "laws hold"
+          out="$(bend PROOF.bend)"
+          if [ "$out" != "laws hold" ]; then
+            echo "bend PROOF.bend rejected: got '$out', want 'laws hold'" >&2
+            exit 1
+          fi
 
       - name: Run grid kernel (parity checksum 663097394)
         run: |
-          test "$(bend bend/grid.bend)" = "663097394"
+          out="$(bend bend/grid.bend)"
+          if [ "$out" != "663097394" ]; then
+            echo "grid kernel mismatch: got '$out', want '663097394'" >&2
+            exit 1
+          fi
 
       - name: Compile + run guards kernel (expects 2065)
         run: |
           bend bend/guards.bend -o /tmp/guards
-          test "$(/tmp/guards)" = "2065"
+          out="$(/tmp/guards)"
+          if [ "$out" != "2065" ]; then
+            echo "guards kernel mismatch: got '$out', want '2065'" >&2
+            exit 1
+          fi
 
       - name: Compile + run search kernel (expects 11)
         run: |
           bend bend/search.bend -o /tmp/search
-          test "$(/tmp/search)" = "11"
+          out="$(/tmp/search)"
+          if [ "$out" != "11" ]; then
+            echo "search kernel mismatch: got '$out', want '11'" >&2
+            exit 1
+          fi
 
       - name: Compile + run sleeves kernel (expects 13)
         run: |
           bend bend/sleeves.bend -o /tmp/sleeves
-          test "$(/tmp/sleeves)" = "13"
+          out="$(/tmp/sleeves)"
+          if [ "$out" != "13" ]; then
+            echo "sleeves kernel mismatch: got '$out', want '13'" >&2
+            exit 1
+          fi
 
       - name: Verify Bend pin
-        run: test "$(bend version)" = "bend ${{ env.BEND_VERSION }}"
+        run: |
+          got="$(bend version)"
+          if [ "$got" != "bend ${{ env.BEND_VERSION }}" ]; then
+            echo "bend version mismatch: got '$got', want 'bend ${{ env.BEND_VERSION }}'" >&2
+            exit 1
+          fi
 
   zig:
     name: Zig cross-build (box artifact)
@@ -170,47 +179,35 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (pinned 1.99.1)
+        # Same pin as the rust job; see that step's comment for the rationale.
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: "1.99.1"
           targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install Bend (pinned ${{ env.BEND_VERSION }} from an immutable release asset)
-        env:
-          BEND_NO_TELEMETRY: "1"
-        run: |
-          # Same pinned-asset install as the bend job: upstream ships daily
-          # releases, so a mutable install.sh drifts off the pin. See that
-          # step's comment for the full rationale.
-          set -o pipefail
-          VER="${{ env.BEND_VERSION }}"
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
-            Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
-            Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
-            Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
-            *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
-          for attempt in 1 2 3; do
-            if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
-            echo "bend download attempt $attempt failed: $url" >&2
-            [ "$attempt" = 3 ] && exit 1
-            sleep $((attempt * 10))
-          done
-          mkdir -p "$HOME/.bend"
-          tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
-          echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.bend/bend/bin:$PATH"
-          test "$(bend version)" = "bend ${VER}"
+        # Same composite action as the bend job (single install script shared
+        # across all jobs that need bend, no per-job copies to keep in sync).
+        uses: ./.github/actions/install-bend
+        with:
+          bend-version: ${{ env.BEND_VERSION }}
 
       - name: Install Zig + cargo-zigbuild
         run: |
+          set -euo pipefail
           pipx install cargo-zigbuild 2>/dev/null || cargo install cargo-zigbuild
-          ZIG_WANT=$(cat .zig-version)
+          ZIG_WANT="$(cat .zig-version)"
+          # .zig-version comes from the PR; validate it before it lands in a
+          # download URL, where anything but a bare x.y.z turns into a
+          # malformed (or attacker-shaped) fetch.
+          if ! echo "$ZIG_WANT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo ".zig-version must contain a bare x.y.z version; got '$ZIG_WANT'" >&2
+            exit 1
+          fi
           echo "want zig $ZIG_WANT"
           # Canonical name: zig-x86_64-linux-<ver> (zig-linux-x86_64 404s).
           curl -fsSL "https://ziglang.org/download/${ZIG_WANT}/zig-x86_64-linux-${ZIG_WANT}.tar.xz" -o /tmp/zig.tar.xz
@@ -229,7 +226,7 @@ jobs:
           sha256sum crates/target/x86_64-unknown-linux-gnu/release/nt-cli crates/target/x86_64-unknown-linux-gnu/release/nt-search | tee nt-cli.sha256
           test "$(crates/target/x86_64-unknown-linux-gnu/release/nt-search)" = "11"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nt-cli-linux-x64
           path: |

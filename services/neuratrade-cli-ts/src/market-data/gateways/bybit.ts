@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import type { Candle, FundingRate, OrderBook, Tick } from "../types.js";
-import { MarketDataError } from "../gateway.js";
+import {
+  MarketDataError,
+  validateCandlePrices,
+  validateDepthLevels,
+} from "../gateway.js";
 
 export const BYBIT_TESTNET_BASE_URL = "https://api-testnet.bybit.com";
 export const BYBIT_MAINNET_BASE_URL = "https://api.bybit.com";
@@ -147,6 +151,25 @@ function asNumber(value: string | number | undefined): number {
   return Number(value);
 }
 
+/** URL-encode a value interpolated into a hand-built query string. Symbols
+ *  come from config/CLI input; a raw `${symbol}` would let a reserved
+ *  character (&, #, space) inject extra query parameters. */
+function q(value: string): string {
+  return encodeURIComponent(value);
+}
+
+/** Normalize a wire ticker symbol (BTCUSDT) to the BASE/QUOTE form other
+ *  gateway methods return, so consumers can join volumes with fetchSymbols
+ *  by the same keys. Unrecognized quotes stay raw rather than mis-split. */
+function normalizeWireSymbol(wire: string): string {
+  for (const suffix of ["USDT", "USDC", "USD"] as const) {
+    if (wire.endsWith(suffix) && wire.length > suffix.length) {
+      return `${wire.slice(0, -suffix.length)}/${suffix}`;
+    }
+  }
+  return wire;
+}
+
 interface BybitTicker {
   readonly symbol: string;
   readonly lastPrice?: string;
@@ -167,7 +190,7 @@ export function fetchTick(
   const bSymbol = toBybitSymbol(symbol);
   return Effect.gen(function* () {
     const data = yield* getJSON<{ readonly list: readonly BybitTicker[] }>(
-      `/v5/market/tickers?category=linear&symbol=${bSymbol}`,
+      `/v5/market/tickers?category=linear&symbol=${q(bSymbol)}`,
       baseUrl,
     );
     const ticker = data.list[0];
@@ -224,14 +247,14 @@ export function fetchOHLCV(
         readonly [string, string, string, string, string, string, string]
       >;
     }>(
-      `/v5/market/kline?category=linear&symbol=${bSymbol}&interval=${interval}&limit=${limit}${endParam}`,
+      `/v5/market/kline?category=linear&symbol=${q(bSymbol)}&interval=${q(interval)}&limit=${limit}${endParam}`,
       baseUrl,
     );
 
     // Bybit returns klines newest-first.  Every consumer advances candles in
     // chronological order; leaving the wire order intact makes last-candle
     // state move backwards and reprocess the same bar forever.
-    return data.list
+    const candles = data.list
       .map((c): Candle => ({
         exchange: EXCHANGE,
         symbol,
@@ -244,6 +267,8 @@ export function fetchOHLCV(
         timestamp: new Date(Number(c[0])),
       }))
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    yield* validateCandlePrices("Bybit", candles);
+    return candles;
   });
 }
 
@@ -261,21 +286,25 @@ export function fetchOrderBook(
   const bSymbol = toBybitSymbol(symbol);
   return Effect.gen(function* () {
     const data = yield* getJSON<BybitOrderBook>(
-      `/v5/market/orderbook?category=linear&symbol=${bSymbol}&limit=${limit}`,
+      `/v5/market/orderbook?category=linear&symbol=${q(bSymbol)}&limit=${limit}`,
       baseUrl,
     );
 
+    const bids = data.b.map(([price, volume]) => ({
+      price: asNumber(price),
+      volume: asNumber(volume),
+    }));
+    const asks = data.a.map(([price, volume]) => ({
+      price: asNumber(price),
+      volume: asNumber(volume),
+    }));
+    yield* validateDepthLevels("Bybit", "bids", bids);
+    yield* validateDepthLevels("Bybit", "asks", asks);
     return {
       exchange: EXCHANGE,
       symbol,
-      bids: data.b.map(([price, volume]) => ({
-        price: asNumber(price),
-        volume: asNumber(volume),
-      })),
-      asks: data.a.map(([price, volume]) => ({
-        price: asNumber(price),
-        volume: asNumber(volume),
-      })),
+      bids,
+      asks,
       timestamp: data.ts ? new Date(Number(data.ts)) : new Date(),
     };
   });
@@ -344,7 +373,7 @@ export function fetch24hrVolumes(
 
     const volumes: Record<string, number> = {};
     for (const ticker of data.list) {
-      volumes[ticker.symbol] = asNumber(
+      volumes[normalizeWireSymbol(ticker.symbol)] = asNumber(
         ticker.quoteVol ?? ticker.quoteVolume ?? ticker.turnover24h,
       );
     }
@@ -423,7 +452,7 @@ export function fetchFundingRates(
         readonly list: readonly BybitFundingRate[];
         readonly nextPageCursor?: string;
       }>(
-        `/v5/market/funding/history?category=linear&symbol=${bSymbol}&limit=${FUNDING_PAGE_SIZE}${fundingHistoryParams(startMs, endMs, cursor)}`,
+        `/v5/market/funding/history?category=linear&symbol=${q(bSymbol)}&limit=${FUNDING_PAGE_SIZE}${fundingHistoryParams(startMs, endMs, cursor)}`,
         baseUrl,
       );
       if (data.list.length === 0) break;
@@ -449,7 +478,9 @@ export function fetchFundingRates(
       }
       cursor = next;
     }
-    return results;
+    // The stop check runs only AFTER a page pushed results past `limit`;
+    // trim to exactly the requested window (rows here are newest-first).
+    return results.slice(0, limit);
   });
 }
 
@@ -460,7 +491,9 @@ function fundingHistoryParams(
 ): string {
   const startParam = startMs !== undefined ? `&startTime=${startMs}` : "";
   const endParam = endMs !== undefined ? `&endTime=${endMs}` : "";
-  const cursorParam = cursor ? `&cursor=${cursor}` : "";
+  // The cursor is opaque base64 (embedded JSON) — encode it like any other
+  // interpolated query value.
+  const cursorParam = cursor ? `&cursor=${q(cursor)}` : "";
   return `${startParam}${endParam}${cursorParam}`;
 }
 

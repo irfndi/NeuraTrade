@@ -80,6 +80,7 @@ export class PaperTradingRepositoryError extends Error {
 }
 
 const SQLITE_BUSY_PATTERN = /database is locked|SQLITE_BUSY|busy/i;
+const SQLITE_BUSY_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 
 type SqlValue = string | number | null;
 
@@ -97,7 +98,26 @@ function nullableMoneyValues(value: Money | undefined): readonly SqlValue[] {
 }
 
 function isSqliteBusy(err: PaperTradingRepositoryError): boolean {
-  return SQLITE_BUSY_PATTERN.test(err.reason);
+  if (SQLITE_BUSY_PATTERN.test(err.reason)) return true;
+  // Classify structurally as well: a wrapped/reframed busy error may lose
+  // the message text on `reason` but still carry the driver code on `cause`
+  // (bun:sqlite sets e.g. `code: "SQLITE_BUSY"`). Retry those too.
+  const cause = err.cause as { code?: unknown; message?: unknown } | undefined;
+  if (cause !== undefined && cause !== null) {
+    if (
+      typeof cause.code === "string" &&
+      SQLITE_BUSY_CODES.has(cause.code)
+    ) {
+      return true;
+    }
+    if (
+      typeof cause.message === "string" &&
+      SQLITE_BUSY_PATTERN.test(cause.message)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function gridStateSqlValues(state: GridPaperState): readonly SqlValue[] {
@@ -746,18 +766,25 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_scope
   ON watchlist(exchange, timeframe);
 
 -- Open-position uniqueness: (exchange, symbol) is the logical key for an
--- open position (the engine reads by exchange+symbol). Dedupe any legacy
--- duplicates (keep the latest row per key) before enforcing the invariant
--- in the schema; the unique index then makes saveOpenPosition an upsert
--- and getOpenPosition unambiguous.
+-- open position (the engine reads by exchange+symbol). The dedupe of legacy
+-- duplicates plus the unique index that enforces the invariant are applied
+-- by ensureTables() as a ONE-TIME migration guarded on index presence —
+-- keeping a destructive DELETE in this idempotent DDL would silently drop
+-- non-latest open positions every time any process initializes the DB.
+${flowTablesSQL}
+`;
+
+/** One-shot dedupe migration, executed only when the unique index is absent. */
+const dedupePaperPositionsSQL = `
 DELETE FROM paper_positions
 WHERE rowid NOT IN (
   SELECT MAX(rowid) FROM paper_positions GROUP BY exchange, symbol
 );
+`;
 
+const createPaperPositionsUniqueIndexSQL = `
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_positions_exchange_symbol
   ON paper_positions(exchange, symbol);
-${flowTablesSQL}
 `;
 
 /**
@@ -816,6 +843,24 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         this.db.exec("PRAGMA busy_timeout = 5000;");
 
         this.db.exec(ensureTablesSQL);
+
+        // One-time dedupe migration for (exchange, symbol) open-position
+        // uniqueness (see the DDL comment): only when the unique index is
+        // absent. Keeps legacy duplicates from being deleted on every init;
+        // after the index exists this branch is skipped entirely.
+        // bun:sqlite returns null (not undefined) when no row matches, so
+        // compare explicitly against null/undefined — `!== undefined` alone
+        // would treat "missing index" as "present" and skip the migration.
+        const indexRow = this.db
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_paper_positions_exchange_symbol' LIMIT 1",
+          )
+          .get();
+        const hasPositionsUniqueIndex = indexRow !== null && indexRow !== undefined;
+        if (!hasPositionsUniqueIndex) {
+          this.db.exec(dedupePaperPositionsSQL);
+          this.db.exec(createPaperPositionsUniqueIndexSQL);
+        }
 
         // Idempotent column migrations for older DB files.
         const addColumn = (sql: string) => {
@@ -2772,6 +2817,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   ensureFlowTables(): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
+        // Same per-connection pragmas as ensureTables: this path can run on a
+        // flow-only consumer that never calls ensureTables.
+        this.db.exec("PRAGMA busy_timeout = 5000;");
         this.db.exec(flowTablesSQL);
       },
       catch: (err) =>

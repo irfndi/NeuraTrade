@@ -39,12 +39,30 @@ jobs:
             cd services/telegram-service && bun install
           fi
 
+      - name: Install shfmt (pinned release asset)
+        env:
+          SHFMT_VERSION: "3.14.1"
+          SHFMT_SHA256: "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf"
+        run: |
+          # The format step used to call shfmt that nothing installed, so it
+          # silently no-opped on every run. Pin the binary and verify it.
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/mvdan/sh/releases/download/v${SHFMT_VERSION}/shfmt_v${SHFMT_VERSION}_linux_amd64" \
+            -o /tmp/shfmt
+          echo "${SHFMT_SHA256}  /tmp/shfmt" | sha256sum -c -
+          install -m 0755 /tmp/shfmt "$HOME/.local/bin/shfmt"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run TypeScript/JS formatters
         run: |
           if [ -d "services/telegram-service" ]; then
             cd services/telegram-service
-            bunx oxfmt@0.62.0 || echo "::warning::oxfmt exited non-zero (non-fatal)"
-            bunx oxlint --fix . || echo "::warning::oxlint --fix reported findings (non-fatal)"
+            # oxfmt failing is a broken formatter, not a finding: fail the job.
+            bunx oxfmt@0.62.0
+            # Pinned to match package.json's oxlint version; `|| echo` stays
+            # because unfixable findings are noise for a format job, not a
+            # reason to fail it.
+            bunx oxlint@1.89.0 --fix . || echo "::warning::oxlint --fix reported findings (non-fatal)"
           fi
 
       - name: Format shell scripts
@@ -52,11 +70,12 @@ jobs:
           # Scope matches the git-auto-commit file_pattern (services/**, scripts/**,
           # docs/**) so formatted files are actually committed.
           # Exclude .github/workflows to avoid permission issues.
+          # A non-zero shfmt means a script failed to parse: fail, don't shrug.
           find services scripts docs -name "*.sh" \
             -not -path "*/node_modules/*" \
             -not -path "*/bin/*" \
             -not -path "*/build/*" \
-            -exec shfmt -w -i 2 -ci -bn {} + || echo "::warning::shfmt exited non-zero (non-fatal)"
+            -exec shfmt -w -i 2 -ci -bn {} +
 
       - name: Restore workflow files
         run: |

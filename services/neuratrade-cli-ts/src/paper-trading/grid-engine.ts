@@ -156,6 +156,14 @@ function makeId(): string {
  * fields as a normal live entry so readiness-fingerprint checks and exit
  * rules keep working. entryFillSource "adopted" is accepted by the
  * reconciliation as a live-bound state.
+ *
+ * entryOrderId stays the "adopted" placeholder deliberately: the Bitget and
+ * Bybit futures position endpoints do not expose the opening order's id on
+ * the position record, so no real exchange order id exists for an adopted
+ * position (FuturesPosition carries none). Provenance is auditable via
+ * entryFillSource "adopted" + entryOpenedAt + strategyConfigFingerprint;
+ * do NOT fabricate a pseudo-order id here — validators keying on
+ * non-empty entryOrderId are knowingly satisfied by the placeholder.
  */
 function adoptedGridState(
   state: GridPaperState,
@@ -618,6 +626,33 @@ function resolveGridMarket(
       earlyResult: gridHoldResult(state, "no new replay candle"),
     };
   }
+  // Replay gap guard: if the fetched window starts past the bar IMMEDIATELY
+  // following the persisted cursor, bars between the cursor and this window
+  // slid out of the fetch window and were silently skipped by the single-
+  // candle resolve. Grid decisions are per-bar, so skipping bars diverges
+  // from the validated backtest — hold here (lastTimestamp is unchanged, so
+  // a refetch covering the gap resumes cleanly) rather than skip.
+  if (
+    replayBars > 0 &&
+    state.lastTimestamp !== null &&
+    index === 0 &&
+    candles.length >= 2
+  ) {
+    const spacing =
+      candles[1].timestamp.getTime() - candles[0].timestamp.getTime();
+    const cursor = state.lastTimestamp.getTime();
+    if (
+      spacing > 0 &&
+      candles[0].timestamp.getTime() - cursor > spacing * 1.5
+    ) {
+      return {
+        earlyResult: gridHoldResult(
+          state,
+          `replay gap detected: window starts ${candles[0].timestamp.toISOString()} after cursor ${state.lastTimestamp.toISOString()}; skipped bars would diverge from backtest`,
+        ),
+      };
+    }
+  }
   const trend =
     options.trendFilterPeriod >= 1
       ? sma(candles, index, options.trendFilterPeriod)
@@ -656,7 +691,23 @@ function saveGridStateWithRetry(
 ): Effect.Effect<boolean, KillSwitchError> {
   return Effect.gen(function* () {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const saved = yield* repo.saveGridState(state).pipe(Effect.result);
+      // catchDefect folds a die (e.g. a JSON serialization bug inside the
+      // repository) into the typed-failure channel so it is retried and, on
+      // exhaustion, still engages the kill switch — a defect must never
+      // bypass the persistence safety net.
+      const saved = yield* repo
+        .saveGridState(state)
+        .pipe(
+          Effect.catchDefect((defect) =>
+            Effect.fail(
+              new PaperTradingRepositoryError(
+                `saveGridState defect: ${defect instanceof Error ? defect.message : String(defect)}`,
+                defect,
+              ),
+            ),
+          ),
+          Effect.result,
+        );
       if (saved._tag === "Success") return true;
       if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
     }

@@ -477,6 +477,23 @@ function handleFuturesClose(
         ),
       );
     }
+    // Live fail-closed: a fill whose quantity disagrees with the tracked
+    // position size is a partial or wrong close — recording a full exit
+    // here would strand a residual exchange position the ledger no longer
+    // sees. Paper mode keeps the tolerant behavior for simulated adapters.
+    if (
+      options.isLive &&
+      fill !== null &&
+      Decimal.max(fill.filledQty, position.size)
+        .minus(Decimal.min(fill.filledQty, position.size))
+        .greaterThan(money("0.00000001"))
+    ) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `close fill quantity ${fill.filledQty.toString()} does not match position size ${position.size.toString()} for ${options.symbol}`,
+        ),
+      );
+    }
 
     const exitPrice = fill
       ? money(fill.filledPrice)
@@ -861,7 +878,10 @@ export function runFuturesPaperTradingIteration(
     if (candles.length < 30) {
       return futuresHoldResult(position, capital, "insufficient candles");
     }
-    if (orderBook.bids.length === 0 && orderBook.asks.length === 0) {
+    if (orderBook.bids.length === 0 || orderBook.asks.length === 0) {
+      // One-sided books fall in here too deliberately: sizing and stop/TP
+      // derivation off a single-side quote is materially wrong on a thin
+      // book, so hold instead of trusting the single price.
       return futuresHoldResult(position, capital, "empty order book");
     }
     return yield* processFuturesMarket(

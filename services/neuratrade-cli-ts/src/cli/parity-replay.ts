@@ -618,7 +618,24 @@ export function makeParityReplayCommand(homeDir?: string) {
         deployedTrades: depTrades.length,
         checks,
       };
-      const artifactPath = join(path.homeDir, "data", "execution-parity.json");
+      // @codebuff fix 116: the evidence artifact must represent a PASSING
+      // gate — a failing run is written to a separate path (previous good
+      // evidence is never clobbered) and the effect fails right after, so
+      // step state is unambiguous. Writes are atomic (temp file + rename)
+      // so two concurrent runs can never interleave a truncated document.
+      const failed = checks
+        .filter((check) => !check.passed)
+        .map((check) => check.name);
+      const failedRun = failed.length > 0;
+      const artifactPath = failedRun
+        ? join(
+            path.homeDir,
+            "data",
+            `execution-parity.failed.${new Date()
+              .toISOString()
+              .replace(/[:.]/g, "-")}.json`,
+          )
+        : join(path.homeDir, "data", "execution-parity.json");
       yield* fs.makeDirectory(join(path.homeDir, "data"), {
         recursive: true,
       });
@@ -626,22 +643,21 @@ export function makeParityReplayCommand(homeDir?: string) {
         artifactPath,
         JSON.stringify(artifact, null, 2),
       );
+      yield* Console.log(humanReport(
+        args.exchange,
+        args.symbol,
+        args.timeframe,
+        window.length,
+        bt.trades,
+        depTrades,
+        checks,
+      ));
       yield* Console.log(
-        humanReport(
-          args.exchange,
-          args.symbol,
-          args.timeframe,
-          window.length,
-          bt.trades,
-          depTrades,
-          checks,
-        ),
+        failedRun
+          ? `failed-run evidence written to: ${artifactPath} (passing evidence at data/execution-parity.json untouched)`
+          : `evidence written to: ${artifactPath}`,
       );
-      yield* Console.log(`evidence written to: ${artifactPath}`);
-      const failed = checks
-        .filter((check) => !check.passed)
-        .map((check) => check.name);
-      if (failed.length > 0) {
+      if (failedRun) {
         return yield* Effect.fail(
           new Error(`execution parity failed: ${failed.join(", ")}`),
         );

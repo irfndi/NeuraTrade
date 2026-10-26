@@ -180,6 +180,10 @@ function sma(
   i: number,
   period: number,
 ): number | null {
+  // period 0 divides 0/0 -> NaN, which compares false everywhere and slips
+  // past the caller's `trend === null` guard into grid entry decisions.
+  // No window means no trend (trendFilterPeriod 0 = filter off).
+  if (!Number.isFinite(period) || period < 1) return null;
   if (i < period) return null;
   let sum = 0;
   for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
@@ -455,8 +459,13 @@ export function runGridBacktest(
   const startIndex = Math.max(options.trendFilterPeriod, 1);
   for (let i = startIndex; i < candles.length; i++) {
     const c = candles[i];
-    const trend = sma(candles, i, options.trendFilterPeriod);
-    if (trend === null) continue;
+    // trendFilterPeriod 0 disables the trend filter; only compute (and
+    // require) a trend when the filter is actually switched on.
+    const trend =
+      options.onlyWithTrend && options.trendFilterPeriod >= 1
+        ? sma(candles, i, options.trendFilterPeriod)
+        : null;
+    if (options.onlyWithTrend && trend === null) continue;
 
     capital = Math.max(0, capital);
     peak = Math.max(peak, capital);
@@ -476,7 +485,7 @@ export function runGridBacktest(
       const entry = tryEnterGridPosition(
         i,
         c,
-        trend,
+        trend ?? 0,
         mid,
         step,
         slippage,

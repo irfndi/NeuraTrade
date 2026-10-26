@@ -77,6 +77,40 @@ describe("Binance gateway", () => {
     expect(candles[0].volume).toBe(100);
   });
 
+  it("fetchOHLCV rejects a kline whose price field did not parse", async () => {
+    // An empty-string field coerces to 0; a 0-priced candle would flow into
+    // mid-price and position sizing, so the boundary must fail instead.
+    mockFetch([
+      [1704067200000, "66000", "68000", "65000", "", "100", 0, "0"],
+    ]);
+
+    const exit = await Effect.runPromiseExit(
+      Binance.fetchOHLCV("BTC/USDT", "1m", 1),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("invalid close=0");
+    }
+  });
+
+  it("fetchOrderBook rejects a level whose price did not parse", async () => {
+    mockFetch({
+      lastUpdateId: 1,
+      bids: [["", "1.5"]],
+      asks: [["67010", "0.5"]],
+    });
+
+    const exit = await Effect.runPromiseExit(
+      Binance.fetchOrderBook("BTC/USDT", 5),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("bids[0] has invalid price");
+    }
+  });
+
   it("fetchOrderBook parses depth", async () => {
     mockFetch({
       lastUpdateId: 1,

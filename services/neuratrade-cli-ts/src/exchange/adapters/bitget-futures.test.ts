@@ -296,6 +296,79 @@ describe("BitgetFuturesExchangeAdapter", () => {
     expect(balance.equity.toNumber()).toBe(6000);
   });
 
+  it("fails instead of reporting a zero balance for an absent margin coin", async () => {
+    // The stub account only reports USDT. Returning an all-zero USDC balance
+    // would let the engine size orders against a fabricated account state.
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.getBalance("USDC", "USDC-FUTURES");
+      }).pipe(Effect.provide(testLayer)),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("no USDC balance");
+    }
+  });
+
+  it("cancels an unfilled limit order before failing (no resting duplicate)", async () => {
+    // A limit order the venue accepted but did not fill keeps resting; if the
+    // adapter just fails, a retry places a duplicate and the resting order can
+    // still fill behind the engine's back.
+    const cancelled: string[] = [];
+    const client: BitgetClientImpl = {
+      ...makeStubClient(),
+      getFuturesOrder: () =>
+        Effect.succeed({
+          orderId: "fut-1",
+          clientOid: "",
+          symbol: "BTCUSDT",
+          productType: "USDT-FUTURES",
+          side: "buy",
+          orderType: "limit",
+          status: "live",
+          size: "0.1",
+          price: "65000",
+          priceAvg: "0",
+          filledSize: "0",
+          filledAmount: "0",
+          fee: "0",
+          marginMode: "crossed",
+        }),
+      cancelFuturesOrder: (args) =>
+        Effect.sync(() => {
+          cancelled.push(args.orderId ?? "");
+        }),
+    };
+    const adapterLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(client),
+    );
+
+    const exit = await Effect.runPromiseExit(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "limit",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+          price: money(65000),
+        });
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    expect(cancelled).toEqual(["fut-1"]);
+    if (exit._tag === "Failure") {
+      expect(exit.cause.toString()).toContain("order cancelled");
+    }
+  });
+
   it("closes a position with a reduce-only order", async () => {
     const fill = await run(
       Effect.gen(function* () {

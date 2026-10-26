@@ -19,7 +19,9 @@ permissions:
   security-events: write
 
 concurrency:
-  group: validation-${{ github.workflow }}-${{ github.ref }}
+  # Event names must not collapse into one group: back-to-back pushes to the
+  # same branch would otherwise cancel the first push's in-flight run.
+  group: validation-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -51,7 +53,9 @@ jobs:
         run: cd services/telegram-service && bun install --frozen-lockfile
 
       - name: Check Telegram formatting
-        run: cd services/telegram-service && bunx oxfmt --check .
+        # Pinned (matches autofix's oxfmt@0.62.0): an unpinned formatter track
+        # reformats churn across PRs as the tool updates.
+        run: cd services/telegram-service && bunx oxfmt@0.62.0 --check .
 
       - name: Run Telegram lint
         run: cd services/telegram-service && bunx oxlint .
@@ -73,7 +77,9 @@ jobs:
         run: cd services/neuratrade-cli-ts && bun install --frozen-lockfile
 
       - name: Check TypeScript CLI formatting
-        run: cd services/neuratrade-cli-ts && bunx oxfmt --check .
+        # Pinned (matches autofix's oxfmt@0.62.0): an unpinned formatter track
+        # reformats churn across PRs as the tool updates.
+        run: cd services/neuratrade-cli-ts && bunx oxfmt@0.62.0 --check .
 
       - name: Run TypeScript CLI lint
         run: cd services/neuratrade-cli-ts && bunx oxlint .
@@ -194,5 +200,58 @@ jobs:
 
       - name: Gate CLI audit on high/critical
         run: |
-          cd services/neuratrade-cli-ts && bun audit --json > /tmp/cli-audit.json
-          python3 -c "import json,sys; data=json.load(open('/tmp/cli-audit.json')); bad=[(p,a.get('severity'),a.get('url')) for p,v in data.items() for a in (v if isinstance(v,list) else [v]) if a.get('severity') in ('high','critical')]; print('high/critical findings:', bad if bad else 'none'); sys.exit(1 if bad else 0)"
+          # Preserve bun's exit status: an audit crash (network error, bun
+          # bug) must not fall through to an empty report that reads as a
+          # passing gate.
+          cd services/neuratrade-cli-ts
+          if ! bun audit --json > /tmp/cli-audit.json; then
+            echo "bun audit --json failed (exit $?); reports must not be assumed empty" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, sys
+
+          UNKNOWN_SHAPE = 2  # distinct from findings (1) so shape drift stands out
+
+          try:
+              data = json.load(open("/tmp/cli-audit.json"))
+          except (json.JSONDecodeError, OSError) as err:
+              print(f"audit JSON unreadable: {err}", file=sys.stderr)
+              sys.exit(UNKNOWN_SHAPE)
+
+          def advisory_pairs(obj):
+              """Return [(package, advisory)] for known bun audit shapes, else None."""
+              if isinstance(obj, dict) and isinstance(obj.get("vulnerabilities"), dict):
+                  obj = obj["vulnerabilities"]
+              if not isinstance(obj, dict) or not obj:
+                  return None
+              out = []
+              for pkg, val in obj.items():
+                  if not isinstance(val, (dict, list)):
+                      return None
+                  for adv in val if isinstance(val, list) else [val]:
+                      if not isinstance(adv, dict) or "severity" not in adv:
+                          return None
+                      out.append((pkg, adv))
+              return out
+
+          pairs = advisory_pairs(data)
+          if pairs is None:
+              print(
+                  "unexpected bun audit --json shape: expected a map of "
+                  "package -> advisory (or list of advisories, or wrapped in "
+                  "{'vulnerabilities': {...}}), each advisory with a "
+                  "'severity' key; got " + type(data).__name__ + ". Update this "
+                  "gate for the new shape before trusting its result.",
+                  file=sys.stderr,
+              )
+              sys.exit(UNKNOWN_SHAPE)
+
+          bad = [
+              (pkg, a["severity"], a.get("url"))
+              for pkg, a in pairs
+              if a["severity"] in ("high", "critical")
+          ]
+          print("high/critical findings:", bad if bad else "none")
+          sys.exit(1 if bad else 0)
+          PY

@@ -25,7 +25,10 @@ function resolveHome(explicitHome?: string): string {
     raw = "~/.neuratrade";
   }
 
-  if (raw.startsWith("~")) {
+  // Only expand `~` / `~/...` — a bare `~foo` means the user for `foo` and
+  // must be left for the OS to resolve (or fail loudly), not joined onto
+  // the current user's home directory.
+  if (raw === "~" || raw.startsWith("~/")) {
     return nodePath.join(os.homedir(), raw.slice(1));
   }
   return raw;

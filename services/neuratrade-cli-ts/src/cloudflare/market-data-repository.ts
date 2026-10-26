@@ -1,4 +1,5 @@
 import { Effect, Layer, Option } from "effect";
+import { Console } from "effect";
 import { MarketDataError, MarketDataGateway } from "../market-data/gateway.js";
 import {
   MarketDataRepository,
@@ -43,13 +44,19 @@ export const CloudflareMarketDataRepositoryLive = (
           }`,
         );
 
+      // getCandles' `limit` is a PAGE SIZE (candles per fetch), while
+      // listSymbolsByCandleCount's `limit` is a MINIMUM CANDLE COUNT. The
+      // page default must stay at or below every gateway's per-request cap
+      // (Bitget history-candles caps at 200/request; others accept more).
+      const DEFAULT_CANDLE_PAGE = 200;
+
       const getCandles = (query: CandleQuery) =>
         gateway
           .fetchOHLCV(
             query.exchange,
             query.symbol,
             query.timeframe,
-            query.limit ?? 500,
+            query.limit ?? DEFAULT_CANDLE_PAGE,
             query.from,
           )
           .pipe(Effect.mapError((err) => toRepoError(err, "getCandles")));
@@ -66,7 +73,14 @@ export const CloudflareMarketDataRepositoryLive = (
                 Effect.map((candles) => ({ symbol, count: candles.length })),
                 // Per-symbol tolerance: a delisted pair or a rate limit
                 // must not abort the whole universe scan — failed symbols
-                // are skipped and the rest still count.
+                // are skipped and the rest still count, but every skip is
+                // LOGGED so a systemic outage (rate limit, 5xx) is visible
+                // as a shrinking universe instead of silent zero counts.
+                Effect.tapError((err) =>
+                  Console.warn(
+                    `[listSymbolsByCandleCount] ${symbol} skipped: ${err.reason}`,
+                  ),
+                ),
                 Effect.option,
               ),
             { concurrency: 4 },

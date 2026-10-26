@@ -14,6 +14,7 @@ import {
   type BitgetClientImpl,
   type BitgetFuturesOrderRequest,
   type BitgetProductType,
+  marginCoinForProductType,
   toBitgetFuturesSymbol,
 } from "../../services/bitget-client.js";
 import { validateFuturesOrder } from "../../services/bitget-futures-guards.js";
@@ -186,9 +187,28 @@ export function makeBitgetFuturesAdapter(
       const filledQty = money(data.filledSize);
       const filledPrice = money(data.priceAvg);
       if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
+        // The venue ACCEPTED the order: an unfilled limit order is still
+        // resting and can fill behind the engine's back, and a retry would
+        // place a duplicate. Cancel first, then report the failure. A market
+        // order that did not fill has nothing resting; the venue rejects that
+        // cancel, which is expected and must not mask the real error.
+        const cancelFailure = yield* withError(
+          client.cancelFuturesOrder({
+            symbol: finalOrder.symbol,
+            productType: finalOrder.productType,
+            orderId: data.orderId,
+            clientOid: data.clientOid || undefined,
+          }),
+        ).pipe(
+          Effect.map((): string | undefined => undefined),
+          Effect.catch((err) => Effect.succeed<string | undefined>(err.reason)),
+        );
         return yield* Effect.fail(
           new ExchangeError(
-            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty.toString()}, filledPrice=${filledPrice.toString()})`,
+            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty.toString()}, filledPrice=${filledPrice.toString()})` +
+              (cancelFailure === undefined
+                ? "; order cancelled"
+                : `; CANCEL FAILED (${cancelFailure}) — the order may still rest on the exchange`),
           ),
         );
       }
@@ -231,7 +251,13 @@ export function makeBitgetFuturesAdapter(
         ? request.size
         : available;
       if (closeSize.lessThanOrEqualTo(0)) {
-        return null;
+        // A leg with volume but zero available (in-flight fills) is a real
+        // divergence: fail instead of masking it as a benign no-op null.
+        return yield* Effect.fail(
+          new ExchangeError(
+            `nothing closable for ${request.productType}:${request.symbol} (${neededSide} leg, available 0)`,
+          ),
+        );
       }
       return yield* placeOrder({
         symbol: request.symbol,
@@ -301,12 +327,23 @@ export function makeBitgetFuturesAdapter(
         const match = balances.find(
           (b) => b.marginCoin.toUpperCase() === marginCoin.toUpperCase(),
         );
+        if (match === undefined) {
+          // Returning an all-zero balance here reads as "no funds" and lets
+          // the engine size orders against a fabricated account state.
+          return yield* Effect.fail(
+            new ExchangeError(
+              `no ${marginCoin} balance in ${inferredProductType} (returned: ${
+                balances.map((b) => b.marginCoin).join(", ") || "none"
+              })`,
+            ),
+          );
+        }
         const balance: FuturesBalance = {
           marginCoin,
-          available: money(match?.available ?? 0),
-          locked: money(match?.locked ?? 0),
-          equity: money(match?.equity ?? 0),
-          usdtEquity: money(match?.usdtEquity ?? 0),
+          available: money(match.available),
+          locked: money(match.locked),
+          equity: money(match.equity),
+          usdtEquity: money(match.usdtEquity),
         };
         return balance;
       }),
@@ -360,14 +397,10 @@ export function makeBitgetFuturesAdapter(
   };
 }
 
-function bitgetMarginCoin(
-  productType: BitgetProductType,
-  symbol: string,
-): string {
-  if (productType === "USDT-FUTURES") return "USDT";
-  if (productType === "USDC-FUTURES") return "USDC";
-  return symbol.replace(/(USDT|USDC|USD|_DMCBL)/g, "").toUpperCase() || symbol;
-}
+// One canonical margin-coin derivation (failing loud on unexpected COIN-FUTURES
+// symbol shapes) shared with the signing client; a per-file regex drift meant
+// the adapter could disagree with the endpoint URLs the client signs.
+const bitgetMarginCoin = marginCoinForProductType;
 
 export const BitgetFuturesExchangeAdapterLive: Layer.Layer<
   FuturesExchangeAdapterService,

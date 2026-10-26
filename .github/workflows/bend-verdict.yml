@@ -22,14 +22,23 @@ on:
 permissions:
   contents: read
 
+# Event name is part of the group: a push to a feature branch (the only way to
+# test edits to this file) must never cancel the Monday schedule run.
 concurrency:
-  group: bend-verdict-${{ github.ref }}
+  group: bend-verdict-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   BEND_VERSION: "2.0.37"
   # The kernel BendTT builds against; must match what `bend --verdict` expects.
   LEAN_VERSION: "leanprover/lean4:v4.34.0"
+  # Pinned elan installer. The elan cache key below MUST include this: the
+  # cache stores ~/.elan as an opaque blob (lean present ⇒ installer body
+  # skipped), so without the version in the key a bumper elan release is
+  # silently invisible and the recheck runs against stale tooling.
+  ELAN_VERSION: "4.2.4"
+  # sha256 of elan-x86_64-unknown-linux-gnu.tar.gz in that release.
+  ELAN_SHA256: "42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63"
 
 jobs:
   verdict:
@@ -39,45 +48,35 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
 
       - name: Install Bend (pinned ${{ env.BEND_VERSION }} release asset)
-        env:
-          BEND_NO_TELEMETRY: "1"
-        run: |
-          # Same pinned-asset rule as native.yml: never pipe install.sh, which
-          # tracks whatever upstream published today.
-          set -o pipefail
-          VER="${{ env.BEND_VERSION }}"
-          case "$(uname -s)-$(uname -m)" in
-            Linux-x86_64) asset="bend-${VER}-linux-x64.tar.gz" ;;
-            Linux-arm64|Linux-aarch64) asset="bend-${VER}-linux-arm64.tar.gz" ;;
-            Darwin-arm64) asset="bend-${VER}-darwin-arm64.tar.gz" ;;
-            Darwin-x86_64) asset="bend-${VER}-darwin-x64.tar.gz" ;;
-            *) echo "unsupported runner arch $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          url="https://github.com/bendlang/bend/releases/download/v${VER}/${asset}"
-          for attempt in 1 2 3; do
-            if curl -fsSL --retry 3 "$url" -o "/tmp/${asset}"; then break; fi
-            echo "bend download attempt $attempt failed: $url" >&2
-            [ "$attempt" = 3 ] && exit 1
-            sleep $((attempt * 10))
-          done
-          mkdir -p "$HOME/.bend"
-          tar -xzf "/tmp/${asset}" -C "$HOME/.bend"
-          echo "$HOME/.bend/bend/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.bend/bend/bin:$PATH"
-          test "$(bend version)" = "bend ${VER}"
+        # Shared composite action, same one native.yml uses, so the pinned
+        # install logic exists exactly once across the repo instead of a
+        # third duplicated (and drifting) copy here.
+        uses: ./.github/actions/install-bend
+        with:
+          bend-version: ${{ env.BEND_VERSION }}
 
       - name: Cache Lean toolchain
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
           path: ~/.elan
-          key: ${{ runner.os }}-elan-${{ env.LEAN_VERSION }}
+          key: ${{ runner.os }}-elan-${{ env.ELAN_VERSION }}-${{ env.LEAN_VERSION }}
 
       - name: Install elan + Lean (${{ env.LEAN_VERSION }})
         run: |
+          # Pinned release asset with a checksum, not `curl .../master | sh`:
+          # the master branch is mutable, and piping it to a shell executes
+          # whatever it holds that day. The tarball ships the elan-init binary.
           if [ ! -x "$HOME/.elan/bin/lean" ]; then
-            curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-              -o /tmp/elan-init.sh
-            sh /tmp/elan-init.sh -y --default-toolchain "${{ env.LEAN_VERSION }}"
+            case "$(uname -m)" in
+              x86_64) ;;
+              *) echo "pinned elan asset is x86_64-only (runner is $(uname -m))" >&2; exit 1 ;;
+            esac
+            asset="elan-x86_64-unknown-linux-gnu.tar.gz"
+            curl -fsSL "https://github.com/leanprover/elan/releases/download/v${ELAN_VERSION}/${asset}" \
+              -o "/tmp/${asset}"
+            echo "${ELAN_SHA256}  /tmp/${asset}" | sha256sum -c -
+            tar -xzf "/tmp/${asset}" -C /tmp
+            /tmp/elan-init -y --default-toolchain "${{ env.LEAN_VERSION }}"
           fi
           export PATH="$HOME/.elan/bin:$PATH"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
@@ -93,6 +92,11 @@ jobs:
           #
           # Capture into a variable and echo it: `test "$(...)" = ...` swallows
           # the verdict, so a passing run used to leave no evidence in the log.
-          VERDICT="$(bend PROOF.bend --verdict)"
+          # Exit status and verdict are separate signals: a crash must not be
+          # reported as a wrong verdict, and the output is printed either way.
+          if ! VERDICT="$(bend PROOF.bend --verdict)"; then
+            echo "::error::bend PROOF.bend --verdict exited non-zero (stderr above)" >&2
+            exit 1
+          fi
           echo "verdict: $VERDICT"
           test "$VERDICT" = "ALL PROOFS CHECK"
