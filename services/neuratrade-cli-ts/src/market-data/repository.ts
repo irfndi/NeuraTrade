@@ -57,10 +57,20 @@ export interface MarketDataRepositoryService {
     minCandles?: number,
   ) => Effect.Effect<readonly string[], MarketDataRepositoryError, never>;
 
+  /**
+   * Each symbol's candle count for one exchange/timeframe.
+   *
+   * `minCandles` is a COUNT TARGET, not a page size: implementations must
+   * count at least `minCandles` candles per symbol (paging through the source
+   * when a single page cannot hold that many), so a symbol is never
+   * under-counted just because the source caps one read. Callers filter
+   * `count >= minCandles` themselves; symbols below the target may still be
+   * returned with their lower count.
+   */
   readonly listSymbolsByCandleCount: (
     exchange: string,
     timeframe: string,
-    limit: number,
+    minCandles: number,
   ) => Effect.Effect<
     readonly { symbol: string; count: number }[],
     MarketDataRepositoryError,
@@ -673,7 +683,7 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
   listSymbolsByCandleCount(
     exchange: string,
     timeframe: string,
-    limit: number,
+    _minCandles: number,
   ): Effect.Effect<
     readonly { symbol: string; count: number }[],
     MarketDataRepositoryError,
@@ -693,10 +703,9 @@ export class MarketDataRepositorySQLite implements MarketDataRepositoryService {
                JOIN trading_pairs tp ON o.trading_pair_id = tp.id
                WHERE o.exchange_id = ? AND o.timeframe = ?
                GROUP BY tp.symbol
-               ORDER BY candle_count DESC
-               LIMIT ?`,
+               ORDER BY candle_count DESC`,
             )
-            .all(exchangeId, timeframe, limit) as Array<{
+            .all(exchangeId, timeframe) as Array<{
             symbol: string;
             candle_count: number;
           }>;

@@ -308,18 +308,20 @@ export const backtestCommand = Command.make(
           )
         : args;
 
+      // Log AND rethrow: a failed backtest must exit non-zero. Swallowing the
+      // failure into a zeroed result made "the backtest never ran" and "the
+      // strategy found no trades" indistinguishable to scripts/CI (6d4).
       const result = yield* backtestProgram(programArgs).pipe(
         Effect.provide(repoLayer),
         Effect.tap((r) => printBacktestResult(r)),
-        Effect.catch((err) =>
-          Effect.gen(function* () {
-            const msg =
+        Effect.tapError((err) =>
+          Console.error(
+            `backtest failed: ${
               err instanceof Error
                 ? err.message
-                : String((err as { readonly reason?: unknown }).reason ?? err);
-            yield* Console.error(`backtest failed: ${msg}`);
-            return emptyResult(args.symbol);
-          }),
+                : String((err as { readonly reason?: unknown }).reason ?? err)
+            }`,
+          ),
         ),
       );
 
@@ -1036,36 +1038,6 @@ function gridResultToBacktestResult(
     totalFundingCost: 0,
     benchmarkReturnPct: 0,
     metrics,
-    robustnessScore: 0,
-  };
-}
-
-function emptyResult(
-  symbol: string,
-): import("../../scalping/backtest.js").BacktestResult {
-  return {
-    symbol,
-    totalTrades: 0,
-    winningTrades: 0,
-    losingTrades: 0,
-    winRate: 0,
-    totalReturnPct: 0,
-    maxDrawdownPct: 0,
-    sharpeRatio: 0,
-    trades: [],
-    totalFeesPaid: 0,
-    totalFundingCost: 0,
-    benchmarkReturnPct: 0,
-    metrics: {
-      profitFactor: 0,
-      expectancy: 0,
-      averageRMultiple: 0,
-      sortinoRatio: 0,
-      calmarRatio: 0,
-      maxConsecutiveLosses: 0,
-      averageTradeDurationHours: 0,
-      timeInMarketPct: 0,
-    },
     robustnessScore: 0,
   };
 }

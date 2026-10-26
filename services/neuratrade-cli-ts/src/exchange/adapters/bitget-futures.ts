@@ -12,6 +12,7 @@ import {
   BitgetClient,
   type BitgetClientError,
   type BitgetClientImpl,
+  type BitgetFuturesOrder,
   type BitgetFuturesOrderRequest,
   type BitgetProductType,
   marginCoinForProductType,
@@ -50,6 +51,35 @@ function toBitgetProductType(
   productType: FuturesOrderRequest["productType"],
 ): BitgetProductType {
   return productType === "USDT-FUTURES" ? "USDT-FUTURES" : productType;
+}
+
+/**
+ * Venue statuses in which a Bitget futures order is still working and can
+ * fill later. Anything else (filled, canceled, rejected) is terminal.
+ */
+const BITGET_RESTING_STATUSES = [
+  "live",
+  "new",
+  "partially_filled",
+  "partially-filled",
+  "not_triggered",
+  "untriggered",
+];
+
+function bitgetOrderStatusCanStillFill(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  // Empty = not indexed by the venue yet, NOT terminally unfilled. Keep
+  // polling; concluding "unfilled" here would cancel a real fill (the same
+  // production incident the Bybit adapter documents in pollBybitOrderFill).
+  if (normalized === "") return true;
+  return BITGET_RESTING_STATUSES.includes(normalized);
+}
+
+function bitgetOrderHasFill(order: BitgetFuturesOrder): boolean {
+  return (
+    money(order.filledSize).greaterThan(0) &&
+    money(order.priceAvg).greaterThan(0)
+  );
 }
 
 export function makeBitgetFuturesAdapter(
@@ -174,48 +204,101 @@ export function makeBitgetFuturesAdapter(
 
       // Bitget's place-order response is an acknowledgement. Query the order
       // detail endpoint to obtain the actual filled size, price and fee before
-      // the trading engine records the position.
-      const data = yield* withError(
-        client.getFuturesOrder({
-          symbol: finalOrder.symbol,
-          productType: finalOrder.productType,
-          orderId: ack.orderId || undefined,
-          clientOid: ack.clientOid || undefined,
-        }),
-      );
+      // the trading engine records the position. The detail endpoint lags
+      // submit by a short window (status=""/qty=0 right after a market fill),
+      // so a single read would report a real fill as unfilled, cancel it and
+      // leave a live position the engine never recorded. Poll a bounded
+      // window, like the Bybit adapter's pollBybitOrderFill.
+      const orderRef = {
+        symbol: finalOrder.symbol,
+        productType: finalOrder.productType,
+        orderId: ack.orderId || undefined,
+        clientOid: ack.clientOid || undefined,
+      };
+      const readOrder = () => withError(client.getFuturesOrder(orderRef));
+      // Market orders must be confirmed (indexing lag is the whole risk).
+      // Limit/reduce-only orders are expected to rest, so they get a shorter
+      // grace period for an immediate touch-fill and are then cancelled.
+      const pollAttempts =
+        finalOrder.orderType === "market" && finalOrder.reduceOnly !== true
+          ? 10
+          : 3;
+      let data = yield* readOrder();
+      for (let attempt = 1; attempt < pollAttempts; attempt += 1) {
+        if (
+          bitgetOrderHasFill(data) ||
+          !bitgetOrderStatusCanStillFill(data.status)
+        ) {
+          break;
+        }
+        yield* Effect.sleep("250 millis");
+        data = yield* readOrder();
+      }
+
+      if (!bitgetOrderHasFill(data)) {
+        const orderId = data.orderId || ack.orderId;
+        const status = String(data.status ?? "");
+        const resting = BITGET_RESTING_STATUSES.includes(
+          status.trim().toLowerCase(),
+        );
+        if (resting) {
+          // The venue ACCEPTED the order: it is still working and can fill
+          // behind the engine's back, and a retry would place a duplicate.
+          // Cancel first, then report the failure.
+          const cancelFailure = yield* withError(
+            client.cancelFuturesOrder({
+              symbol: finalOrder.symbol,
+              productType: finalOrder.productType,
+              orderId,
+              clientOid: data.clientOid || undefined,
+            }),
+          ).pipe(
+            Effect.map((): string | undefined => undefined),
+            Effect.catch((err) =>
+              Effect.succeed<string | undefined>(err.reason),
+            ),
+          );
+          if (cancelFailure !== undefined) {
+            // A cancel is rejected when the order filled between the last
+            // read and the cancel request (or was already gone). A fill is a
+            // success, not a failure — re-read once before reporting.
+            const recheck = yield* readOrder().pipe(
+              Effect.orElseSucceed(() => null),
+            );
+            if (recheck !== null && bitgetOrderHasFill(recheck)) {
+              data = recheck;
+            } else {
+              return yield* Effect.fail(
+                new ExchangeError(
+                  `futures order ${orderId} not filled (status=${status}, filledQty=${data.filledSize}, filledPrice=${data.priceAvg}); CANCEL FAILED (${cancelFailure}) — the order may still rest on the exchange`,
+                ),
+              );
+            }
+          } else {
+            return yield* Effect.fail(
+              new ExchangeError(
+                `futures order ${orderId} not filled (status=${status}, filledQty=${data.filledSize}, filledPrice=${data.priceAvg}); order cancelled`,
+              ),
+            );
+          }
+        } else {
+          // Terminal-unfilled or not-yet-indexed (`""`): nothing to cancel —
+          // cancelling an unindexed order is rejected anyway, and the text
+          // must not claim the order may still rest when the venue reports a
+          // final state.
+          return yield* Effect.fail(
+            new ExchangeError(
+              `futures order ${orderId} not filled (status=${status}, filledQty=${data.filledSize}, filledPrice=${data.priceAvg})`,
+            ),
+          );
+        }
+      }
 
       const filledQty = money(data.filledSize);
       const filledPrice = money(data.priceAvg);
-      if (filledQty.lessThanOrEqualTo(0) || filledPrice.lessThanOrEqualTo(0)) {
-        // The venue ACCEPTED the order: an unfilled limit order is still
-        // resting and can fill behind the engine's back, and a retry would
-        // place a duplicate. Cancel first, then report the failure. A market
-        // order that did not fill has nothing resting; the venue rejects that
-        // cancel, which is expected and must not mask the real error.
-        const cancelFailure = yield* withError(
-          client.cancelFuturesOrder({
-            symbol: finalOrder.symbol,
-            productType: finalOrder.productType,
-            orderId: data.orderId,
-            clientOid: data.clientOid || undefined,
-          }),
-        ).pipe(
-          Effect.map((): string | undefined => undefined),
-          Effect.catch((err) => Effect.succeed<string | undefined>(err.reason)),
-        );
-        return yield* Effect.fail(
-          new ExchangeError(
-            `futures order ${data.orderId} not filled (status=${data.status}, filledQty=${filledQty.toString()}, filledPrice=${filledPrice.toString()})` +
-              (cancelFailure === undefined
-                ? "; order cancelled"
-                : `; CANCEL FAILED (${cancelFailure}) — the order may still rest on the exchange`),
-          ),
-        );
-      }
-
       const fill: FuturesOrderFill = {
-        orderId: data.orderId,
-        clientOid: data.clientOid,
+        orderId: data.orderId || ack.orderId,
+        clientOid: data.clientOid || ack.clientOid,
         symbol: request.symbol,
         side: data.side,
         productType: data.productType,

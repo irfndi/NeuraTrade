@@ -51,10 +51,18 @@ ON CONFLICT(id) DO NOTHING;
  * synchronously BEFORE the DB write so a failed persist still blocks
  * this process; disengage only clears the mirror after a confirmed DB
  * write, so a failed disengage stays engaged.
+ *
+ * A failed engage write leaves `persistFailed` set: isEngaged() then fails
+ * closed WITHOUT reading the DB, because the persisted row still says
+ * disengaged and syncing the mirror from it would silently undo the
+ * requested stop. The flag clears only after a confirmed engage persist
+ * or a confirmed disengage (both verify their affected-row count).
  */
 class KillSwitchSQLite implements KillSwitchService {
   /** Last known engaged state; null until first confirmed read/write. */
   private mirror: boolean | null = null;
+  /** True while an engage() write is known to have failed to persist. */
+  private persistFailed = false;
 
   constructor(private readonly db: Database) {
     this.db.exec(ensureTableSQL);
@@ -66,35 +74,52 @@ class KillSwitchSQLite implements KillSwitchService {
       try: () => {
         // Fail closed: reflect the intent in-process before touching the DB.
         this.mirror = true;
-        this.db
+        const result = this.db
           .query(
             `UPDATE risk_kill_switch
              SET engaged = 1, reason = ?, updated_at = datetime('now')
              WHERE id = 1`,
           )
           .run(reason);
+        if (result.changes === 0) {
+          throw new Error(
+            "kill switch row missing; engagement was not persisted",
+          );
+        }
+        this.persistFailed = false;
       },
-      catch: (err) =>
-        new KillSwitchError(
+      catch: (err) => {
+        // The intent did not reach disk: stay engaged until a write lands.
+        this.persistFailed = true;
+        return new KillSwitchError(
           `Failed to engage kill switch: ${err instanceof Error ? err.message : String(err)}`,
           err,
-        ),
+        );
+      },
     });
   }
 
   disengage(): Effect.Effect<void, KillSwitchError, never> {
     return Effect.try({
       try: () => {
-        this.db
+        const result = this.db
           .query(
             `UPDATE risk_kill_switch
              SET engaged = 0, reason = '', updated_at = datetime('now')
              WHERE id = 1`,
           )
           .run();
+        if (result.changes === 0) {
+          // A 0-row UPDATE is a silent no-op: reporting success here would
+          // claim a disengage that never happened.
+          throw new Error(
+            "kill switch row missing; disengage was not persisted",
+          );
+        }
         // Only clear the mirror after the write succeeds; a failed disengage
         // must leave the switch engaged (fail closed).
         this.mirror = false;
+        this.persistFailed = false;
       },
       catch: (err) =>
         new KillSwitchError(
@@ -106,6 +131,16 @@ class KillSwitchSQLite implements KillSwitchService {
 
   isEngaged(): Effect.Effect<boolean, KillSwitchError, never> {
     return Effect.suspend(() => {
+      // An engage() whose write failed is still an engaged kill switch for
+      // this process: never let a subsequent DB read of the stale
+      // disengaged row clear it.
+      if (this.persistFailed) {
+        return Effect.fail(
+          new KillSwitchError(
+            "kill switch engage was not persisted to disk; treating as engaged",
+          ),
+        );
+      }
       try {
         const row = this.db
           .query("SELECT engaged FROM risk_kill_switch WHERE id = 1")

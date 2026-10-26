@@ -57,7 +57,7 @@ describe("CircuitBreaker property invariants", () => {
     );
   });
 
-  it("reset() always results in isOpen false and currentDailyLossPct 0", () => {
+  it("reset() clears the latch and never hands back the day's loss budget", () => {
     fc.assert(
       fc.property(
         fc.float({ min: 100, max: 100_000, noNaN: true }),
@@ -71,10 +71,12 @@ describe("CircuitBreaker property invariants", () => {
           for (const pnl of pnls) {
             Effect.runSync(cb.recordTradeResult(pnl, capital));
           }
-          Effect.runSync(cb.reset());
+          Effect.runSync(cb.reset({ authorized: true }));
           const open = Effect.runSync(cb.isOpen());
           const loss = Effect.runSync(cb.currentDailyLossPct());
-          return open === false && loss === 0;
+          const totalPct = (pnls.reduce((a, b) => a + b, 0) / capital) * 100;
+          const expected = Math.abs(Math.min(totalPct, 0));
+          return open === false && Math.abs(loss - expected) <= 1e-6;
         },
       ),
       { numRuns: 80 },

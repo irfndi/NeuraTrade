@@ -58,6 +58,19 @@ def _interval_ms(interval: str) -> int:
     return int(value) * multipliers[unit]
 
 
+def _parse_boundary(raw: str) -> datetime:
+    """Parse an ISO date/datetime for --start/--end; naive values are UTC."""
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {raw!r}: expected an ISO date or datetime"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def get_or_create_exchange(conn: sqlite3.Connection, name: str) -> int:
     cur = conn.execute("SELECT id FROM exchanges WHERE LOWER(name) = LOWER(?)", (name,))
     row = cur.fetchone()
@@ -217,6 +230,22 @@ def insert_candles(
     return inserted
 
 
+def _check_page_contiguous(candles: List[List], interval_ms: int, page_start_ms: int) -> None:
+    """Every candle inside a page must be one interval after the previous one.
+
+    The across-page check only inspects the first candle of a page, so a page
+    truncated or stitched mid-way would otherwise land in the DB as a silent
+    hole (clever-cabin-237f).
+    """
+    for idx in range(1, len(candles)):
+        expected_open = candles[idx - 1][0] + interval_ms
+        if candles[idx][0] != expected_open:
+            raise FetchError(
+                f"data gap inside page starting at {page_start_ms}: candle {idx} "
+                f"open {candles[idx][0]}, expected {expected_open}"
+            )
+
+
 def fetch_range(
     symbol: str,
     interval: str,
@@ -242,33 +271,59 @@ def fetch_range(
     exchange_id = get_or_create_exchange(conn, "binance")
     pair_id = get_or_create_trading_pair(conn, exchange_id, symbol)
 
-    start_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(end_dt.timestamp() * 1000)
-
     interval_ms = _interval_ms(interval)
+    # Candle open times sit on a fixed grid. Align both bounds DOWN to it so
+    # the expected count is exact and every grid slot is requested, whatever
+    # wall-clock timestamps the caller passed.
+    start_ms = int(start_dt.timestamp() * 1000)
+    start_ms -= start_ms % interval_ms
+    end_ms = int(end_dt.timestamp() * 1000)
+    end_ms -= end_ms % interval_ms
     span_ms = end_ms - start_ms
-    print(f"\nFetching {symbol} {interval} from {start_dt.isoformat()} to {end_dt.isoformat()}")
-    expected = max(0, span_ms) // interval_ms
+    if span_ms <= 0:
+        raise FetchError(
+            f"empty range: start {start_dt.isoformat()} is not before end {end_dt.isoformat()}"
+        )
+    grid_start = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+    grid_end = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+    print(f"\nFetching {symbol} {interval} from {grid_start.isoformat()} to {grid_end.isoformat()}")
+    expected = span_ms // interval_ms
     print(f"Expected candles: ~{expected:,}")
 
     total_inserted = 0
     total_requests = 0
     current_ms = start_ms
     prev_open_ms = None
+    # Every open time fetched in this run. INSERT OR IGNORE hides duplicates
+    # from a previous run, so coverage is verified against what was FETCHED
+    # (the grid), not against total_inserted.
+    seen: set = set()
 
     try:
         while current_ms < end_ms:
-            candles = fetch_fn(symbol.replace("/", ""), interval, current_ms, end_ms, 1000)
+            raw = fetch_fn(symbol.replace("/", ""), interval, current_ms, end_ms, 1000)
             total_requests += 1
 
-            if candles is None:
+            if raw is None:
                 raise FetchError(f"page fetch failed at {current_ms} (request {total_requests})")
+            # end_ms is exclusive: Binance may return the candle forming at the
+            # boundary, which belongs to the NEXT range.
+            candles = [c for c in raw if c[0] < end_ms]
             if not candles:
                 raise FetchError(f"empty page at {current_ms}: no data before end of range {end_ms}")
+            if prev_open_ms is None and candles[0][0] != start_ms:
+                # History that begins after the requested start (a pair listed
+                # later, or a truncated first page): the count alone would
+                # still look complete if enough later candles came back.
+                raise FetchError(
+                    f"history starts at {candles[0][0]}, expected the range grid to begin at {start_ms}"
+                )
             if prev_open_ms is not None and candles[0][0] != prev_open_ms + interval_ms:
                 raise FetchError(
                     f"data gap: expected next candle at {prev_open_ms + interval_ms}, got {candles[0][0]}"
                 )
+            _check_page_contiguous(candles, interval_ms, current_ms)
+            seen.update(c[0] for c in candles)
 
             inserted = insert_candles(conn, exchange_id, pair_id, interval, candles)
             total_inserted += inserted
@@ -281,8 +336,9 @@ def fetch_range(
             next_open = last_open + interval_ms
             if next_open >= end_ms:
                 break
-            if next_open <= current_ms:
-                raise FetchError(f"pagination made no progress at {current_ms}")
+            # Progress is guaranteed: the first page starts at start_ms and
+            # every later page must start at prev+interval, so next_open is
+            # always strictly greater than current_ms.
             prev_open_ms = last_open
             current_ms = next_open
 
@@ -291,6 +347,18 @@ def fetch_range(
                 print(f"  Progress: {progress:.1f}% | Requests: {total_requests} | Inserted: {total_inserted:,}")
 
             time.sleep(RATE_LIMIT_DELAY)
+
+        # Completeness gate: a truncated page, an early stop or a hole that
+        # slipped past the per-page checks would otherwise look exactly like a
+        # complete 5-year series. Fail loudly instead (clever-cabin-237f).
+        if len(seen) != expected:
+            first = min(seen) if seen else None
+            last = max(seen) if seen else None
+            raise FetchError(
+                f"incomplete range for {symbol} {interval}: fetched {len(seen):,} candles, "
+                f"expected {expected:,} ({grid_start.isoformat()}..{grid_end.isoformat()}; "
+                f"first open={first}, last open={last})"
+            )
     finally:
         if own_conn:
             conn.close()
@@ -312,12 +380,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"],
         help="Trading pairs to fetch, e.g. BTCUSDT ETHUSDC",
     )
+    parser.add_argument(
+        "--start",
+        type=_parse_boundary,
+        default="2021-06-01",
+        help="Range start (ISO date/datetime, UTC when naive; default: 2021-06-01)",
+    )
+    parser.add_argument(
+        "--end",
+        type=_parse_boundary,
+        default=None,
+        help="Range end (ISO date/datetime, UTC when naive; default: now, clamped to now)",
+    )
     args = parser.parse_args(argv)
     db_path = args.db  # threaded explicitly; no module-global mutation
 
-    # 5-year range: 2021-06-01 to 2026-06-01
-    start = datetime(2021, 6, 1, tzinfo=timezone.utc)
-    end = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    start = args.start
+    # Never request candles that do not exist yet: a fixed future end makes the
+    # strict empty-page rule abort every run before that date, and a fixed past
+    # end silently stops short of the present (clever-cabin-46da).
+    end = args.end if args.end is not None else now
+    if end > now:
+        print(f"End {end.date()} is in the future; clamping to now ({now.date()})")
+        end = now
+    if end <= start:
+        print(f"Invalid range: start {start.date()} is not before end {end.date()}", file=sys.stderr)
+        return 2
 
     print("=" * 60)
     print("BINANCE 5-YEAR HISTORICAL DATA FETCHER")

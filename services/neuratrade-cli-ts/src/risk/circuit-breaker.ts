@@ -21,7 +21,22 @@ export interface CircuitBreakerService {
     CircuitBreakerError,
     never
   >;
-  readonly reset: () => Effect.Effect<void, CircuitBreakerError, never>;
+  /** Clear the open latch for the current UTC day.
+   *
+   *  Refuses (fails) while the breaker is open unless `authorized` is set.
+   *  A reset never deletes today's row: the accumulated daily PnL is kept
+   *  (so the same daily limit cannot be spent twice), and the halt (reason,
+   *  PnL, time, operator) is archived to `risk_circuit_breaker_resets`. */
+  readonly reset: (
+    options?: CircuitBreakerResetOptions,
+  ) => Effect.Effect<void, CircuitBreakerError, never>;
+}
+
+export interface CircuitBreakerResetOptions {
+  /** Explicit operator authorization for a mid-day reset. */
+  readonly authorized?: boolean;
+  /** Free-form operator/process identity recorded in the audit row. */
+  readonly by?: string;
 }
 
 export const CircuitBreaker =
@@ -48,14 +63,32 @@ function todayKey(): string {
 }
 
 /**
- * Fail-closed contract: a read error surfaces as `CircuitBreakerError` and
- * callers must treat any such error as "trading halted" (kill-switch
- * posture). A missing row for today means "no trades recorded today" — not
- * open — but if this process has already observed a row for today and it
- * subsequently vanishes (another process deleting it, or a clock/wall-day
- * anomaly), the state is unknown and read paths FAIL CLOSED with an error
- * instead of reporting open=false.
+ * Fail-closed contract (documented on CircuitBreakerService): a read error
+ * surfaces as `CircuitBreakerError` and callers must treat any such error as
+ * "trading halted" (kill-switch posture). The constructor seeds today's row,
+ * so a missing row for the day this instance was created is unknown state
+ * (external deletion / tampering) and every read path FAILS CLOSED with an
+ * error instead of reporting open=false. A row missing for a *new* day (the
+ * UTC day rolled over after construction) is a legitimate fresh day: no
+ * trades are recorded yet, so open=false and 0% loss are correct.
  */
+
+const ensureResetTableSQL = `
+CREATE TABLE IF NOT EXISTS risk_circuit_breaker_resets (
+  date TEXT NOT NULL,
+  daily_pnl REAL NOT NULL,
+  was_open BOOLEAN NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  cleared_at DATETIME NOT NULL,
+  cleared_by TEXT NOT NULL DEFAULT ''
+);
+`;
+
+const ensureTodayRowSQL = `
+INSERT INTO risk_circuit_breaker (date, daily_pnl, open, reason, updated_at)
+VALUES (?, 0, 0, '', datetime('now'))
+ON CONFLICT(date) DO NOTHING;
+`;
 interface DailyBreakerRow {
   dailyPnl: number;
   open: boolean;
@@ -68,6 +101,11 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
     private readonly maxDailyLossPct: number,
   ) {
     this.db.exec(ensureTableSQL);
+    this.db.exec(ensureResetTableSQL);
+    // Anchor today's row so a missing row is genuine unknown state (see the
+    // fail-closed contract above), not an ambiguity about the day boundary.
+    this.db.query(ensureTodayRowSQL).run(todayKey());
+    this.observedRowDate = todayKey();
   }
 
   /** Date key whose row was last present in this process. A missing row on a
@@ -122,6 +160,7 @@ ON CONFLICT(date) DO UPDATE SET
            updated_at = excluded.updated_at`,
       )
       .run(todayKey(), reason);
+    this.observedRowDate = todayKey();
   }
 
   private readRow(): DailyBreakerRow | null {
@@ -167,6 +206,9 @@ ON CONFLICT(date) DO UPDATE SET
         this.db
           .query(this.accumulateSQL)
           .run(todayKey(), pnlPct, this.maxDailyLossPct);
+        // The UPSERT guarantees today's row exists; remember that so a later
+        // disappearance is detected as vanished state by the read paths.
+        this.observedRowDate = todayKey();
       },
       catch: (err) =>
         new CircuitBreakerError(
@@ -233,21 +275,57 @@ ON CONFLICT(date) DO UPDATE SET
     });
   }
 
-  reset(): Effect.Effect<void, CircuitBreakerError, never> {
+  reset(
+    options?: CircuitBreakerResetOptions,
+  ): Effect.Effect<void, CircuitBreakerError, never> {
     return Effect.try({
       try: () => {
+        const existing = this.readRow();
+        if (existing === null) {
+          // Today's row is anchored at construction; a missing row here is
+          // unknown state, not a fresh day.
+          throw new Error(
+            "today's circuit-breaker row is missing; refusing to reset unknown state",
+          );
+        }
+        if (existing.open && options?.authorized !== true) {
+          throw new Error(
+            "breaker is open; a mid-day reset requires authorized: true so the halt stays auditable",
+          );
+        }
+        if (!existing.open && existing.dailyPnl === 0) {
+          return; // Nothing accumulated today; leave no audit noise.
+        }
+        // Archive the halt before clearing the latch: the daily PnL, reason
+        // and operator survive the reset for audit.
+        this.db
+          .query(
+            `INSERT INTO risk_circuit_breaker_resets
+               (date, daily_pnl, was_open, reason, cleared_at, cleared_by)
+             VALUES (?, ?, ?, ?, datetime('now'), ?)`,
+          )
+          .run(
+            todayKey(),
+            existing.dailyPnl,
+            existing.open ? 1 : 0,
+            existing.reason,
+            options?.by ?? "",
+          );
+        // Clear the latch but KEEP daily_pnl: resetting must not hand back a
+        // fresh loss budget inside the same UTC day.
+        this.db
+          .query(
+            `UPDATE risk_circuit_breaker
+             SET open = 0, reason = '', updated_at = datetime('now')
+             WHERE date = ?`,
+          )
+          .run(todayKey());
+        this.observedRowDate = todayKey();
         // Audit trail: a reset re-enables trading, so it must be visible in
         // logs even though the breaker itself has no logger dependency.
         console.warn(
-          `[risk] circuit breaker RESET for ${todayKey()} (daily_pnl cleared, trading re-enabled)`,
+          `[risk] circuit breaker RESET for ${todayKey()} (daily PnL ${existing.dailyPnl.toFixed(2)}% retained, trading re-enabled)`,
         );
-        this.db
-          .query("DELETE FROM risk_circuit_breaker WHERE date = ?")
-          .run(todayKey());
-        // Allow the next read to seed a fresh-day view (the row we just
-        // deleted must not be treated as vanished state). See the
-        // fail-closed contract comment above for the reset semantics.
-        this.observedRowDate = null;
       },
       catch: (err) =>
         new CircuitBreakerError(

@@ -60,15 +60,72 @@ describe("CircuitBreakerService", () => {
     expect(open).toBe(true);
   });
 
-  it("reset clears today state", async () => {
+  it("reset clears the latch but keeps today's accumulated loss", async () => {
     const db = freshDb();
     const cb = makeCircuitBreakerService(db, 2);
     await Effect.runPromise(cb.recordTradeResult(-3, 100));
-    await Effect.runPromise(cb.reset());
+    await Effect.runPromise(cb.reset({ authorized: true }));
     const open = await Effect.runPromise(cb.isOpen());
     const loss = await Effect.runPromise(cb.currentDailyLossPct());
     expect(open).toBe(false);
-    expect(loss).toBe(0);
+    // The daily loss budget is not handed back: the same 3% stays consumed.
+    expect(loss).toBe(3);
+  });
+
+  it("reset archives the halt and re-opens on the very next trade", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-3, 100));
+    await Effect.runPromise(
+      cb.reset({ authorized: true, by: "operator@test" }),
+    );
+    const archived = db
+      .query(
+        "SELECT date, daily_pnl, was_open, reason, cleared_by FROM risk_circuit_breaker_resets",
+      )
+      .all() as Array<{
+      date: string;
+      daily_pnl: number;
+      was_open: number;
+      reason: string;
+      cleared_by: string;
+    }>;
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.daily_pnl).toBe(-3);
+    expect(archived[0]?.was_open).toBe(1);
+    expect(archived[0]?.reason).toContain("threshold");
+    expect(archived[0]?.cleared_by).toBe("operator@test");
+    // Still over the limit for the day, so the next result re-opens it.
+    await Effect.runPromise(cb.recordTradeResult(-0.01, 100));
+    expect(await Effect.runPromise(cb.isOpen())).toBe(true);
+  });
+
+  it("refuses to clear an open breaker without authorization", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-3, 100));
+    const outcome = await Effect.runPromise(cb.reset()).then(
+      (value) => ({ tag: "Right" as const, value }),
+      (error) => ({ tag: "Left" as const, error }),
+    );
+    expect(outcome.tag).toBe("Left");
+    expect(await Effect.runPromise(cb.isOpen())).toBe(true);
+    const archived = db
+      .query("SELECT COUNT(*) AS n FROM risk_circuit_breaker_resets")
+      .get() as { n: number };
+    expect(archived.n).toBe(0);
+  });
+
+  it("fails closed when today's row vanishes after a recorded loss", async () => {
+    const db = freshDb();
+    const cb = makeCircuitBreakerService(db, 2);
+    await Effect.runPromise(cb.recordTradeResult(-3, 100));
+    db.query("DELETE FROM risk_circuit_breaker").run();
+    const outcome = await Effect.runPromise(cb.isOpen()).then(
+      (value) => ({ tag: "Right" as const, value }),
+      (error) => ({ tag: "Left" as const, error }),
+    );
+    expect(outcome.tag).toBe("Left");
   });
 
   it("new day starts fresh (previous day data ignored)", async () => {

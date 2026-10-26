@@ -460,11 +460,13 @@ describe("MarketDataRepositorySQLite", () => {
     expect(ranked[1].symbol).toBe("ETH/USDT");
     expect(ranked[1].count).toBe(5);
 
-    const topOne = await Effect.runPromise(
+    // `minCandles` is a count target, not a row cap: every symbol keeps its
+    // exact count and the caller decides what passes (clever-cabin-q2e).
+    const all = await Effect.runPromise(
       repo.listSymbolsByCandleCount("binance", "1h", 1),
     );
-    expect(topOne).toHaveLength(1);
-    expect(topOne[0].symbol).toBe("BTC/USDT");
+    expect(all.map((r) => r.symbol)).toEqual(["BTC/USDT", "ETH/USDT"]);
+    expect(all.map((r) => r.count)).toEqual([10, 5]);
   });
 
   it("returns a coverage report across symbols", async () => {

@@ -477,22 +477,37 @@ function handleFuturesClose(
         ),
       );
     }
-    // Live fail-closed: a fill whose quantity disagrees with the tracked
-    // position size is a partial or wrong close — recording a full exit
-    // here would strand a residual exchange position the ledger no longer
-    // sees. Paper mode keeps the tolerant behavior for simulated adapters.
-    if (
-      options.isLive &&
-      fill !== null &&
-      Decimal.max(fill.filledQty, position.size)
+    const closeSide: "buy" | "sell" = position.side === "long" ? "sell" : "buy";
+    // Live fail-closed: a fill whose quantity or side disagrees with the
+    // tracked position is a partial, wrong-leg or bogus close — recording a
+    // full exit here would strand a residual exchange position the ledger no
+    // longer sees. Paper mode keeps the tolerant behavior for simulated
+    // adapters.
+    if (options.isLive && fill !== null) {
+      const qtyMismatch = Decimal.max(fill.filledQty, position.size)
         .minus(Decimal.min(fill.filledQty, position.size))
-        .greaterThan(money("0.00000001"))
-    ) {
-      return yield* Effect.fail(
-        new ExchangeError(
-          `close fill quantity ${fill.filledQty.toString()} does not match position size ${position.size.toString()} for ${options.symbol}`,
-        ),
-      );
+        .greaterThan(money("0.00000001"));
+      if (qtyMismatch) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `close fill quantity ${fill.filledQty.toString()} does not match position size ${position.size.toString()} for ${options.symbol}`,
+          ),
+        );
+      }
+      if (fill.side !== closeSide) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `close fill side ${fill.side} is not the reducing side ${closeSide} for ${options.symbol}`,
+          ),
+        );
+      }
+      if (fill.filledPrice.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `close fill for ${options.symbol} reported a non-positive price ${fill.filledPrice.toString()}`,
+          ),
+        );
+      }
     }
 
     const exitPrice = fill
@@ -652,6 +667,35 @@ function executeFuturesEntry(
       leverage: plan.sizing.leverage,
       price: money(currentCandle.close),
     });
+    // Live fail-closed on unusable entry evidence. The position is persisted
+    // from the venue-confirmed fill (never the requested size), so a partial
+    // fill still yields a ledger that matches what the exchange holds; a
+    // zero-qty / non-positive-price / wrong-side "fill" means the exchange
+    // state is unknown and recording a position from it would be a lie.
+    if (options.isLive) {
+      const requestedSide = signal.direction as "buy" | "sell";
+      if (fill.filledQty.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `live futures entry for ${options.symbol} reported a zero-quantity fill; no position recorded`,
+          ),
+        );
+      }
+      if (fill.filledPrice.lessThanOrEqualTo(0)) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `live futures entry for ${options.symbol} reported a non-positive price ${fill.filledPrice.toString()}; no position recorded`,
+          ),
+        );
+      }
+      if (fill.side !== requestedSide) {
+        return yield* Effect.fail(
+          new ExchangeError(
+            `live futures entry for ${options.symbol} filled on side ${fill.side} but ${requestedSide} was requested; no position recorded`,
+          ),
+        );
+      }
+    }
     const capital = state.capital.minus(money(fill.fee));
     const stopMult = options.atrStopMultiplier;
     const tpMult = options.atrTakeProfitMultiplier;

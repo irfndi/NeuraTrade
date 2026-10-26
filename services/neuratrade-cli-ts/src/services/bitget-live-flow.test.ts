@@ -54,7 +54,7 @@ const testCreds = {
 
 function provideClient(baseUrl: string) {
   return Layer.provide(
-    BitgetClientLive({ credentials: testCreds, baseUrl }),
+    BitgetClientLive({ credentials: testCreds, baseUrl, isDemo: false }),
     RateLimiterLive({ perSecond: 1000, perMinute: 60_000 }),
   );
 }

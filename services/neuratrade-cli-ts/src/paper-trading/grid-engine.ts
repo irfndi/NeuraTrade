@@ -1200,10 +1200,34 @@ function closeGridPosition(
             new ExchangeError(`live ${exitReason} close returned no fill`),
           );
         }
-        if (fill.filledQty.lessThan(closeSize)) {
+        // Fail closed on any fill that does not describe a complete close of
+        // the tracked size on the reducing side. Recording a full exit from a
+        // partial/over/wrong-side fill would clear the local position while
+        // the exchange still holds (or holds more of) the contract — the same
+        // guard futures handleFuturesClose applies (clever-cabin-b28).
+        const closeSide = side === "long" ? "sell" : "buy";
+        if (
+          Decimal.max(fill.filledQty, closeSize)
+            .minus(Decimal.min(fill.filledQty, closeSize))
+            .greaterThan(money("0.00000001"))
+        ) {
           return yield* Effect.fail(
             new ExchangeError(
-              `live ${exitReason} close was partially filled (${fill.filledQty.toString()}/${closeSize.toString()})`,
+              `live ${exitReason} close fill quantity ${fill.filledQty.toString()} does not match tracked size ${closeSize.toString()}`,
+            ),
+          );
+        }
+        if (fill.side !== closeSide) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              `live ${exitReason} close fill side ${fill.side} is not the reducing side ${closeSide}`,
+            ),
+          );
+        }
+        if (fill.filledPrice.lessThanOrEqualTo(0)) {
+          return yield* Effect.fail(
+            new ExchangeError(
+              `live ${exitReason} close fill reported a non-positive price ${fill.filledPrice.toString()}`,
             ),
           );
         }

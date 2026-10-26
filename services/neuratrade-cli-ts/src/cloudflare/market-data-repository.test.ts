@@ -44,6 +44,42 @@ const baseGateway: MarketDataGatewayService = {
 
 const fakeGateway = Layer.succeed(MarketDataGateway, baseGateway);
 
+const HISTORY_BASE_MS = 1_700_000_000_000;
+const FIFTEEN_MIN_MS = 15 * 60_000;
+
+/**
+ * A gateway backed by `history` 15m candles that honors the `startTime`
+ * cursor, so backward paging reaches older candles (the base fake returns the
+ * same page forever). Used to prove candle counts are not capped at the
+ * 200-candle gateway page.
+ */
+function pagedHistoryGateway(history: number): MarketDataGatewayService {
+  return {
+    ...baseGateway,
+    fetchOHLCV: (_exchange, _symbol, _tf, limit, startTime) => {
+      const pageSize = Math.min(limit, 200);
+      const startIndex =
+        startTime === undefined
+          ? Math.max(0, history - pageSize)
+          : Math.max(
+              0,
+              Math.floor(
+                (startTime.getTime() - HISTORY_BASE_MS) / FIFTEEN_MIN_MS,
+              ),
+            );
+      const endIndex = Math.min(history, startIndex + pageSize);
+      return Effect.succeed(
+        Array.from({ length: Math.max(0, endIndex - startIndex) }, (_, i) => ({
+          ...candle(0),
+          timestamp: new Date(
+            HISTORY_BASE_MS + (startIndex + i) * FIFTEEN_MIN_MS,
+          ),
+        })),
+      );
+    },
+  };
+}
+
 describe("CloudflareMarketDataRepositoryLive", () => {
   const runWith = <A, E>(
     effect: Effect.Effect<A, E, MarketDataRepositoryService>,
@@ -60,6 +96,8 @@ describe("CloudflareMarketDataRepositoryLive", () => {
     );
 
   it("counts candles per seed symbol via the gateway", async () => {
+    // 500 > the 200-candle gateway page: one read would report 200 for every
+    // symbol and let the caller's `count >= minCandles` filter drop them.
     const counts = await runWith(
       Effect.gen(function* () {
         const repo = yield* MarketDataRepository;
@@ -69,10 +107,29 @@ describe("CloudflareMarketDataRepositoryLive", () => {
           500,
         );
       }),
+      Layer.succeed(MarketDataGateway, pagedHistoryGateway(5_000)),
     );
     expect(counts).toEqual([
       { symbol: "BTC/USDT", count: 500 },
       { symbol: "ETH/USDT", count: 500 },
+    ]);
+  });
+
+  it("reports the available count when history is shorter than the target", async () => {
+    const counts = await runWith(
+      Effect.gen(function* () {
+        const repo = yield* MarketDataRepository;
+        return yield* repo.listSymbolsByCandleCount(
+          "bitget-futures",
+          "15m",
+          500,
+        );
+      }),
+      Layer.succeed(MarketDataGateway, pagedHistoryGateway(150)),
+    );
+    expect(counts).toEqual([
+      { symbol: "BTC/USDT", count: 150 },
+      { symbol: "ETH/USDT", count: 150 },
     ]);
   });
 
@@ -175,13 +232,17 @@ describe("CloudflareMarketDataRepositoryLive", () => {
         );
       }),
       Layer.succeed(MarketDataGateway, {
-        ...baseGateway,
-        fetchOHLCV: (_exchange, symbol, _tf, limit) =>
+        ...pagedHistoryGateway(5_000),
+        fetchOHLCV: (exchange, symbol, timeframe, limit, startTime) =>
           symbol === "BTC/USDT"
             ? Effect.fail(new MarketDataError("delisted"))
-            : Effect.succeed(
-                Array.from({ length: limit }, (_, i) => candle(i)),
-              ),
+            : (pagedHistoryGateway(5_000).fetchOHLCV(
+                exchange,
+                symbol,
+                timeframe,
+                limit,
+                startTime,
+              ) as Effect.Effect<readonly Candle[], MarketDataError>),
       }),
     );
     expect(counts).toEqual([{ symbol: "ETH/USDT", count: 500 }]);

@@ -1014,12 +1014,13 @@ export interface BitgetClientConfig {
   readonly credentials: BitgetCredentials;
   readonly baseUrl?: string;
   /**
-   * Demo mode. REQUIRED to be `true` for sandbox: Bitget demo trading shares
-   * the production host and is routed only by the PAPTRADING header, so
-   * omitting this flag (or passing false) sends requests to the LIVE matching
-   * engine. Set it explicitly whenever the client talks to demo credentials.
+   * Demo mode. REQUIRED (no default): Bitget demo trading shares the
+   * production host and is routed only by the PAPTRADING header, so a missing
+   * or false flag sends requests to the LIVE matching engine. Every wiring
+   * site must decide the mode explicitly — a demo client that forgets the flag
+   * must not compile rather than silently trade real money.
    */
-  readonly isDemo?: boolean;
+  readonly isDemo: boolean;
 }
 
 function makeBitgetClientImpl(
@@ -1561,12 +1562,13 @@ export const BitgetClientLive = (
     Effect.gen(function* () {
       const rateLimiter = yield* RateLimiter;
       const baseUrl = config.baseUrl ?? BITGET_BASE_URL;
-      // This is the single demo-routing decision point. `isDemo` is threaded
-      // explicitly (authHeaders and makeBitgetClientImpl take no default) so a
-      // caller cannot silently drop the PAPTRADING flag mid-path. Bitget demo
-      // trading shares the production host, so the PAPTRADING header IS the
-      // routing: a demo request without it would hit the live matching engine.
-      const isDemo = config.isDemo === true;
+      // This is the single demo-routing decision point. `isDemo` is required
+      // on the config and threaded explicitly (authHeaders and
+      // makeBitgetClientImpl take no default) so a caller cannot silently drop
+      // the PAPTRADING flag mid-path. Bitget demo trading shares the production
+      // host, so the PAPTRADING header IS the routing: a demo request without
+      // it would hit the live matching engine.
+      const isDemo = config.isDemo;
       return makeBitgetClientImpl(
         config.credentials,
         baseUrl,

@@ -369,6 +369,127 @@ describe("BitgetFuturesExchangeAdapter", () => {
     }
   });
 
+  it("polls through an un-indexed order detail instead of cancelling a real fill", async () => {
+    // The detail endpoint returns status=""/qty=0 for a short window right
+    // after submit. A single read would treat a filled market order as
+    // "not filled", cancel it (rejected: already filled) and roll the engine
+    // back while the exchange holds a live position.
+    const cancelled: string[] = [];
+    let reads = 0;
+    const client: BitgetClientImpl = {
+      ...makeStubClient(),
+      getFuturesOrder: () =>
+        Effect.sync(() => {
+          reads += 1;
+          const indexed = reads > 1;
+          return {
+            orderId: indexed ? "fut-1" : "",
+            clientOid: "",
+            symbol: "BTCUSDT",
+            productType: "USDT-FUTURES",
+            side: "buy",
+            orderType: "market",
+            status: indexed ? "filled" : "",
+            size: "0.1",
+            price: "70000",
+            priceAvg: indexed ? "70000" : "0",
+            filledSize: indexed ? "0.1" : "0",
+            filledAmount: indexed ? "7000" : "0",
+            fee: indexed ? "1" : "0",
+            marginMode: "crossed",
+          };
+        }),
+      cancelFuturesOrder: (args) =>
+        Effect.sync(() => {
+          cancelled.push(args.orderId ?? "");
+        }),
+    };
+    const adapterLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(client),
+    );
+
+    const fill = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "market",
+          size: money(0.1),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(reads).toBeGreaterThan(1);
+    expect(cancelled).toEqual([]);
+    expect(fill.filledQty.toNumber()).toBe(0.1);
+    expect(fill.orderId).toBe("fut-1");
+  });
+
+  it("returns the fill when the cancel is rejected because the order already filled", async () => {
+    let reads = 0;
+    const client: BitgetClientImpl = {
+      ...makeStubClient(),
+      getFuturesOrder: () =>
+        Effect.sync(() => {
+          reads += 1;
+          // Resting on the polled read, filled by the time cancel runs; the
+          // re-read after the rejected cancel sees the fill.
+          const filled = reads > 3;
+          return {
+            orderId: "fut-1",
+            clientOid: "",
+            symbol: "BTCUSDT",
+            productType: "USDT-FUTURES",
+            side: "buy",
+            orderType: "limit",
+            status: filled ? "filled" : "live",
+            size: "0.1",
+            price: "70000",
+            priceAvg: filled ? "70000" : "0",
+            filledSize: filled ? "0.1" : "0",
+            filledAmount: filled ? "7000" : "0",
+            fee: filled ? "1" : "0",
+            marginMode: "crossed",
+          };
+        }),
+      cancelFuturesOrder: () =>
+        Effect.fail(
+          new BitgetApiError({
+            status: 400,
+            body: '{"code":"40035","msg":"order already filled"}',
+            endpoint: "/api/v2/mix/order/cancel-order",
+          }),
+        ),
+    };
+    const adapterLayer = Layer.succeed(
+      FuturesExchangeAdapter,
+      makeBitgetFuturesAdapter(client),
+    );
+
+    const fill = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* FuturesExchangeAdapter;
+        return yield* adapter.placeOrder({
+          symbol: "BTC/USDT:USDT",
+          side: "buy",
+          type: "limit",
+          size: money(0.1),
+          price: money(70000),
+          productType: "USDT-FUTURES",
+          marginMode: "crossed",
+          leverage: 10,
+        });
+      }).pipe(Effect.provide(adapterLayer)),
+    );
+
+    expect(fill.filledQty.toNumber()).toBe(0.1);
+  });
+
   it("closes a position with a reduce-only order", async () => {
     const fill = await run(
       Effect.gen(function* () {

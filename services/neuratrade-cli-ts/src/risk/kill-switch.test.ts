@@ -95,6 +95,52 @@ describe("KillSwitchService", () => {
     expect(engaged).toBe(true);
   });
 
+  it("stays engaged when the engage write fails and the row still reads disengaged", async () => {
+    const db = freshDb();
+    // Stub only the engage UPDATE: reads still hit the real row, which says
+    // engaged = 0 (the write never landed).
+    const failingWrite = {
+      exec: (sql: string) => db.exec(sql),
+      query: (sql: string) => {
+        if (sql.includes("UPDATE")) {
+          return {
+            run: () => {
+              throw new Error("disk I/O error");
+            },
+          };
+        }
+        return db.query(sql);
+      },
+    } as unknown as Database;
+    const ks = makeKillSwitchService(failingWrite);
+    const engageOutcome = await Effect.runPromise(ks.engage("emergency")).then(
+      () => "ok" as const,
+      () => "failed" as const,
+    );
+    expect(engageOutcome).toBe("failed");
+    // The persisted row says disengaged, but the stop was requested and the
+    // persist failed: reads must fail closed instead of resuming trading.
+    const readOutcome = await Effect.runPromise(ks.isEngaged()).then(
+      (value) => ({ tag: "Right" as const, value }),
+      (error) => ({ tag: "Left" as const, error }),
+    );
+    expect(readOutcome.tag).toBe("Left");
+    if (readOutcome.tag === "Left") {
+      expect(readOutcome.error).toBeInstanceOf(KillSwitchError);
+    }
+  });
+
+  it("reports a disengage that hit no row as a failure", async () => {
+    const db = freshDb();
+    const ks = makeKillSwitchService(db);
+    db.query("DELETE FROM risk_kill_switch WHERE id = 1").run();
+    const outcome = await Effect.runPromise(ks.disengage()).then(
+      () => "ok" as const,
+      () => "failed" as const,
+    );
+    expect(outcome).toBe("failed");
+  });
+
   it("sees a stop engaged by another instance on the same db", async () => {
     const db = freshDb();
     const reader = makeKillSwitchService(db);

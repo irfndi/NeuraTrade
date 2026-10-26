@@ -12,8 +12,12 @@ BLUE=\033[0;34m
 NC=\033[0m
 
 # Quality gates below are shipped repo content: a missing service directory is
-# a checkout error and must FAIL, not print a green "Skipping". Only a missing
-# toolchain (bun) on the machine is a legitimate, non-fatal skip.
+# a checkout error and must FAIL, not print a green "Skipping". A missing
+# toolchain (bun) is a legitimate skip for LOCAL convenience only: in CI (CI
+# set) a missing bun is a hard failure unless ALLOW_SKIP=1 is passed
+# explicitly, so a broken runner cannot report green with nothing checked
+# (clever-cabin-8xv). Each bun decision sits inside a single if/else recipe
+# line — an `exit 0` in one recipe line does NOT stop the following lines.
 .PHONY: help all services-setup telegram-setup cli-ts-setup fmt fmt-check lint typecheck \
 	test test-cli-ts test-frontend build-ts logs-ts autoresearch-test autoresearch-once \
 	autoresearch-loop autoresearch-parallel champion-paper champion-demo champion-soak \
@@ -53,12 +57,15 @@ build-ts: cli-ts-setup ## Type-check and compile the TypeScript CLI
 	@mkdir -p bin
 	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi
 	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping TypeScript CLI build - bun not found$(NC)"; \
+		if [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+			echo "$(RED)bun not found: build-ts cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+		fi; \
+		echo "$(YELLOW)Skipping TypeScript CLI build - bun not found (no build performed)$(NC)"; \
 	else \
-		cd services/neuratrade-cli-ts && bunx tsc --noEmit && bun build index.ts --compile --outfile ../../bin/neuratrade-ts; \
+		cd services/neuratrade-cli-ts && bunx tsc --noEmit && bun build index.ts --compile --outfile ../../bin/neuratrade-ts || exit $$?; \
+		if [ -x ../../bin/neuratrade-ts ]; then echo "$(GREEN)Build complete: bin/neuratrade-ts$(NC)"; \
+		else echo "$(RED)Build did not produce bin/neuratrade-ts$(NC)" >&2; exit 1; fi; \
 	fi
-	@if [ -x bin/neuratrade-ts ]; then echo "$(GREEN)Build complete: bin/neuratrade-ts$(NC)"; \
-	else echo "$(RED)Build did not produce bin/neuratrade-ts$(NC)" >&2; exit 1; fi
 
 fmt: ## Format TS code
 	@if [ -d "services/telegram-service" ] && command -v bun >/dev/null 2>&1; then \
@@ -73,57 +80,72 @@ fmt: ## Format TS code
 fmt-check: ## Check if code is formatted (for CI)
 	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
 		echo "$(RED)missing service directory (fmt-check requires both)$(NC)" >&2; exit 1; \
+	fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
+		(cd services/telegram-service && bunx oxfmt --check .) || exit $$?; \
+		echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
+		(cd services/neuratrade-cli-ts && bunx oxfmt --check .) || exit $$?; \
+		echo "$(GREEN)Format checks passed!$(NC)"; \
+	elif [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+		echo "$(RED)bun not found: fmt-check cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+	else \
+		echo "$(YELLOW)Skipping format checks - bun not found (local skip; CI fails)$(NC)"; \
 	fi
-	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping format checks - bun not found$(NC)"; exit 0; \
-	fi
-	@echo "$(GREEN)Checking Telegram formatting...$(NC)"; \
-		cd services/telegram-service && bunx oxfmt --check .
-	@echo "$(GREEN)Checking TypeScript CLI formatting...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx oxfmt --check .
-	@echo "$(GREEN)Format checks passed!$(NC)"
 
 lint: ## Run lints
 	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
 		echo "$(RED)missing service directory (lint requires both)$(NC)" >&2; exit 1; \
+	fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram lint...$(NC)"; \
+		(cd services/telegram-service && bunx oxlint .) || exit $$?; \
+		echo "$(GREEN)Running TypeScript CLI lint...$(NC)"; \
+		(cd services/neuratrade-cli-ts && bunx oxlint .) || exit $$?; \
+	elif [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+		echo "$(RED)bun not found: lint cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+	else \
+		echo "$(YELLOW)Skipping lint - bun not found (local skip; CI fails)$(NC)"; \
 	fi
-	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping lint - bun not found$(NC)"; exit 0; \
-	fi
-	@echo "$(GREEN)Running Telegram lint...$(NC)"; \
-		cd services/telegram-service && bunx oxlint .
-	@echo "$(GREEN)Running TypeScript CLI lint...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx oxlint .
 
 typecheck: ## Run TypeScript type checks
 	@if [ ! -d "services/telegram-service" ] || [ ! -d "services/neuratrade-cli-ts" ]; then \
 		echo "$(RED)missing service directory (typecheck requires both)$(NC)" >&2; exit 1; \
+	fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
+		(cd services/telegram-service && bunx tsc --noEmit) || exit $$?; \
+		echo "$(GREEN)Running TypeScript CLI typecheck...$(NC)"; \
+		(cd services/neuratrade-cli-ts && bunx tsc --noEmit) || exit $$?; \
+	elif [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+		echo "$(RED)bun not found: typecheck cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+	else \
+		echo "$(YELLOW)Skipping typecheck - bun not found (local skip; CI fails)$(NC)"; \
 	fi
-	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping typecheck - bun not found$(NC)"; exit 0; \
-	fi
-	@echo "$(GREEN)Running Telegram typecheck...$(NC)"; \
-		cd services/telegram-service && bunx tsc --noEmit
-	@echo "$(GREEN)Running TypeScript CLI typecheck...$(NC)"; \
-		cd services/neuratrade-cli-ts && bunx tsc --noEmit
 
 test: test-cli-ts test-frontend ## Run default tests
 
 test-cli-ts: ## Run TypeScript CLI tests
-	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi
-	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping TypeScript CLI tests - bun not found$(NC)"; exit 0; \
+	@if [ ! -d "services/neuratrade-cli-ts" ]; then echo "$(RED)missing services/neuratrade-cli-ts$(NC)" >&2; exit 1; fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running TypeScript CLI tests...$(NC)"; \
+		(cd services/neuratrade-cli-ts && bun test) || exit $$?; \
+	elif [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+		echo "$(RED)bun not found: test-cli-ts cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+	else \
+		echo "$(YELLOW)Skipping TypeScript CLI tests - bun not found (local skip; CI fails)$(NC)"; \
 	fi
-	@echo "$(GREEN)Running TypeScript CLI tests...$(NC)"; \
-		cd services/neuratrade-cli-ts && bun test
 
 test-frontend: ## Run Telegram service tests
-	@if [ ! -d "services/telegram-service" ]; then echo "$(RED)missing services/telegram-service$(NC)" >&2; exit 1; fi
-	@if ! command -v bun >/dev/null 2>&1; then \
-		echo "$(YELLOW)Skipping frontend tests - bun not found$(NC)"; exit 0; \
+	@if [ ! -d "services/telegram-service" ]; then echo "$(RED)missing services/telegram-service$(NC)" >&2; exit 1; fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		echo "$(GREEN)Running Telegram tests...$(NC)"; \
+		(cd services/telegram-service && bun test) || exit $$?; \
+	elif [ -n "$$CI" ] && [ "$$ALLOW_SKIP" != "1" ]; then \
+		echo "$(RED)bun not found: test-frontend cannot run, refusing a false green (ALLOW_SKIP=1 to skip)$(NC)" >&2; exit 1; \
+	else \
+		echo "$(YELLOW)Skipping frontend tests - bun not found (local skip; CI fails)$(NC)"; \
 	fi
-	@echo "$(GREEN)Running Telegram tests...$(NC)"; \
-		cd services/telegram-service && bun test
 
 logs-ts: ## Show TS gateway logs from NEURATRADE_HOME
 	@log="$${NEURATRADE_HOME:-$$HOME/.neuratrade}/logs/gateway.log"; \

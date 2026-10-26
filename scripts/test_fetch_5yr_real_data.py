@@ -156,7 +156,9 @@ class PaginationTests(unittest.TestCase):
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
 
-        # Page 1: 4 candles; page 2: 2 candles covering the rest of the window.
+        # Page 1: 4 candles; page 2: 2 candles. The last one opens exactly at
+        # end_ms, which is EXCLUSIVE (it belongs to the next range), so it is
+        # fetched but neither counted nor inserted.
         pages = [
             [candle(start_ms + i * INTERVAL_MS) for i in range(4)],
             [candle(start_ms + 4 * INTERVAL_MS), candle(start_ms + 5 * INTERVAL_MS)],
@@ -167,11 +169,11 @@ class PaginationTests(unittest.TestCase):
         with patch("time.sleep") as sleep:
             total = f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fetch, conn=conn)
 
-        self.assertEqual(total, 6)
+        self.assertEqual(total, 5)
         self.assertEqual(calls, [start_ms, start_ms + 4 * INTERVAL_MS])
         self.assertEqual(sleep.call_count, 1)  # one inter-page delay
         rows = conn.execute("SELECT COUNT(*) FROM ohlcv_data").fetchone()[0]
-        self.assertEqual(rows, 6)
+        self.assertEqual(rows, 5)
 
     def test_single_page_end_of_range_termination(self):
         """A page whose last candle covers the window terminates after one request."""
@@ -210,6 +212,39 @@ class PaginationTests(unittest.TestCase):
             f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=lambda *a, **k: None, conn=conn)
         self.assertIn("page fetch failed", str(ctx.exception))
 
+    def test_intra_page_gap_raises(self):
+        """A hole INSIDE a page (not at its first candle) must not be stored."""
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        start = start_dt()
+        end = start + timedelta(minutes=20)
+        start_ms = int(start.timestamp() * 1000)
+        # Page skips the candle at +1*INTERVAL in the middle of the page.
+        page = [
+            candle(start_ms),
+            candle(start_ms + 2 * INTERVAL_MS),
+            candle(start_ms + 3 * INTERVAL_MS),
+        ]
+
+        with self.assertRaises(f5.FetchError) as ctx:
+            f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=lambda *a, **k: page, conn=conn)
+        self.assertIn("data gap inside page", str(ctx.exception))
+
+    def test_late_history_start_raises(self):
+        """A first page that begins after the range start is an incomplete range."""
+        conn = make_conn()
+        self.addCleanup(conn.close)
+        start = start_dt()
+        end = start + timedelta(minutes=10)
+        start_ms = int(start.timestamp() * 1000)
+        # Exactly `expected` candles, shifted one slot late: a count-only check
+        # would call this complete.
+        page = [candle(start_ms + INTERVAL_MS), candle(start_ms + 2 * INTERVAL_MS)]
+
+        with self.assertRaises(f5.FetchError) as ctx:
+            f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=lambda *a, **k: page, conn=conn)
+        self.assertIn("history starts at", str(ctx.exception))
+
     def test_non_contiguous_page_raises(self):
         """Next page not starting at prev open + interval is a gap."""
         conn = make_conn()
@@ -226,20 +261,6 @@ class PaginationTests(unittest.TestCase):
             f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=fetch_pages(pages), conn=conn)
         self.assertIn("data gap", str(ctx.exception))
 
-    def test_no_progress_page_raises(self):
-        """A page that does not advance current_ms must not loop forever."""
-        conn = make_conn()
-        self.addCleanup(conn.close)
-        start = start_dt()
-        end = start + timedelta(minutes=10)
-        start_ms = int(start.timestamp() * 1000)
-        # Candle's next-open boundary does not move past current_ms.
-        stale = [candle(start_ms - INTERVAL_MS)]
-
-        with self.assertRaises(f5.FetchError) as ctx:
-            f5.fetch_range("BTCUSDT", "5m", start, end, fetch_fn=lambda *a, **k: stale, conn=conn)
-        self.assertIn("no progress", str(ctx.exception))
-
     def test_main_incomplete_returns_nonzero(self):
         """main() exits 1 and reports INCOMPLETE when a range fails."""
         with patch.object(f5, "fetch_range", side_effect=f5.FetchError("boom")), patch("sys.stdout"):
@@ -250,6 +271,46 @@ class PaginationTests(unittest.TestCase):
         with patch.object(f5, "fetch_range", return_value=42), patch("sys.stdout"):
             rc = f5.main(["--db", ":memory:", "--symbols", "BTCUSDT"])
         self.assertEqual(rc, 0)
+
+    def test_main_defaults_end_to_now(self):
+        """No hardcoded future end: the default range reaches the present."""
+        captured = {}
+
+        def fake_range(symbol, interval, start, end, **kwargs):
+            captured["start"] = start
+            captured["end"] = end
+            return 0
+
+        before = datetime.now(timezone.utc)
+        with patch.object(f5, "fetch_range", side_effect=fake_range), patch("sys.stdout"):
+            rc = f5.main(["--db", ":memory:", "--symbols", "BTCUSDT"])
+        after = datetime.now(timezone.utc)
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(captured["end"], before)
+        self.assertLessEqual(captured["end"], after)
+        self.assertEqual(captured["start"], datetime(2021, 6, 1, tzinfo=timezone.utc))
+
+    def test_main_clamps_a_future_end(self):
+        captured = {}
+
+        def fake_range(symbol, interval, start, end, **kwargs):
+            captured["end"] = end
+            return 0
+
+        with patch.object(f5, "fetch_range", side_effect=fake_range), patch("sys.stdout"):
+            rc = f5.main(["--db", ":memory:", "--symbols", "BTCUSDT", "--end", "2999-01-01"])
+        self.assertEqual(rc, 0)
+        self.assertLessEqual(captured["end"], datetime.now(timezone.utc))
+
+    def test_main_rejects_an_inverted_range(self):
+        with patch.object(f5, "fetch_range", return_value=0) as fetch, patch("sys.stdout"), patch(
+            "sys.stderr"
+        ):
+            rc = f5.main(
+                ["--db", ":memory:", "--symbols", "BTCUSDT", "--start", "2030-01-01", "--end", "2029-01-01"]
+            )
+        self.assertEqual(rc, 2)
+        fetch.assert_not_called()
 
 
 class RetryTests(unittest.TestCase):

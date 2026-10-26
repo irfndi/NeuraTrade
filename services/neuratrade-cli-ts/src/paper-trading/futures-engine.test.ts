@@ -6,7 +6,10 @@ import {
 } from "../market-data/gateway.js";
 import type { Candle, OrderBook } from "../market-data/types.js";
 import { FuturesExchangeAdapter } from "../exchange/futures-adapter.js";
-import type { FuturesExchangeAdapterService } from "../exchange/futures-adapter.js";
+import type {
+  FuturesExchangeAdapterService,
+  FuturesOrderFill,
+} from "../exchange/futures-adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import { ExchangeError } from "../exchange/adapter.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
@@ -408,6 +411,21 @@ function makeOptions(
   };
 }
 
+function makeFill(overrides: Partial<FuturesOrderFill> = {}): FuturesOrderFill {
+  return {
+    orderId: "fill-1",
+    symbol: "BTC/USDT:USDT",
+    side: "sell",
+    productType: "USDT-FUTURES",
+    marginMode: "isolated",
+    filledQty: money(1),
+    filledPrice: money(100),
+    fee: money(0),
+    timestamp: new Date(),
+    ...overrides,
+  };
+}
+
 function makeOpenPosition(
   overrides: Partial<PaperPosition> = {},
 ): PaperPosition {
@@ -749,6 +767,98 @@ describe("runFuturesPaperTradingIteration", () => {
       Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
     ).toEqual(position);
     expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("fails closed when a live close fill comes back on the wrong side", async () => {
+    const repo = new InMemoryPaperRepository();
+    const position = makeOpenPosition();
+    Effect.runSync(repo.saveOpenPosition(position));
+    const adapter = {
+      ...makeFuturesAdapter(),
+      closePosition: () => Effect.succeed(makeFill({ side: "buy" })),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, adapter),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect((failure as ExchangeError).reason).toContain(
+      "is not the reducing side",
+    );
+    expect(
+      Effect.runSync(repo.getOpenPosition(position.exchange, position.symbol)),
+    ).toEqual(position);
+    expect(Effect.runSync(repo.listRecentTrades(10))).toHaveLength(0);
+  });
+
+  it("fails closed when a live entry fill reports zero quantity", async () => {
+    const repo = new InMemoryPaperRepository();
+    const adapter = {
+      ...makeFuturesAdapter(),
+      placeOrder: () =>
+        Effect.succeed(
+          makeFill({ side: "buy", filledQty: money(0), filledPrice: money(0) }),
+        ),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: Number.MAX_SAFE_INTEGER,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+    });
+
+    let failure: unknown;
+    try {
+      await Effect.runPromise(
+        runFuturesPaperTradingIteration({
+          ...makeOptions(),
+          isLive: true,
+        }).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, makeGateway(100)),
+          Effect.provideService(FuturesExchangeAdapter, adapter),
+          Effect.provideService(RiskGuard, riskGuard),
+          Effect.provideService(KillSwitch, new InMemoryKillSwitch()),
+          Effect.provideService(CircuitBreaker, new InMemoryCircuitBreaker()),
+          Effect.provide(scalpingServiceLayers),
+        ) as Effect.Effect<FuturesPaperTradingIterationResult, never>,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(ExchangeError);
+    expect((failure as ExchangeError).reason).toContain("zero-quantity fill");
+    expect(
+      Effect.runSync(repo.getOpenPosition("bitget-futures", "BTC/USDT:USDT")),
+    ).toBeNull();
   });
 
   it("rejects live scale-out until it has exchange-fill reconciliation", async () => {

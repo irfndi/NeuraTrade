@@ -1490,6 +1490,52 @@ describe("grid paper engine", () => {
     ).toHaveLength(0);
   });
 
+  it("does not clear a live position when the close fill is on the wrong side", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter(true);
+    const wrongSideAdapter: FuturesExchangeAdapterService = {
+      ...adapter,
+      closePosition: (req) =>
+        Effect.succeed({
+          orderId: "close-bogus",
+          symbol: req.symbol,
+          // The opening side, not the reducing side: recording this as the
+          // exit would clear the ledger while the exchange keeps the position.
+          side: req.side === "sell" ? "buy" : "sell",
+          productType: req.productType,
+          marginMode: req.marginMode,
+          filledQty: req.size,
+          filledPrice: money(1000),
+          fee: money(0),
+          timestamp: new Date(),
+        }),
+    };
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    await runWithRepo(opts, repo, candles, wrongSideAdapter);
+    let caught: ExchangeError | null = null;
+    for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
+      try {
+        await runWithRepo(opts, repo, candles, wrongSideAdapter);
+      } catch (error) {
+        if (error instanceof ExchangeError) caught = error;
+      }
+    }
+
+    expect(caught instanceof ExchangeError).toBe(true);
+    expect(caught?.reason).toContain("is not the reducing side");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBe("long");
+    expect(
+      await Effect.runPromise(
+        repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+      ),
+    ).toHaveLength(0);
+  });
+
   it("closes a live position at liquidation before killing local state", async () => {
     const repo = new InMemoryPaperRepository();
     const { adapter, closes } = makeTrackingFuturesAdapter(true, {
