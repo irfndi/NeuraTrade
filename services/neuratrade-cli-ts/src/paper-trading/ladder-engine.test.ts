@@ -5,6 +5,10 @@ import { MarketDataGateway } from "../market-data/gateway.js";
 import type { Candle } from "../market-data/types.js";
 import { RiskGuard, makeRiskGuard } from "../risk/guards.js";
 import {
+  CircuitBreaker,
+  type CircuitBreakerService,
+} from "../risk/circuit-breaker.js";
+import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../exchange/futures-adapter.js";
@@ -62,6 +66,21 @@ function baseOptions(
     leverage: 1,
     ...overrides,
   };
+}
+
+// One-sided (long-only) series: a dip below the base fills the long ladder,
+// then a retrace to the per-rung target closes it WITHOUT touching a short
+// rung (base + 1%). Live closes are reconciled against venue fills, and the
+// simulated adapter nets opposing orders into one position, so a window that
+// fills both ladder sides cannot be reconciled at all — that shape only works
+// on hedge-mode legs (Bybit positionIdx / Bitget holdSide). The live tests use
+// this netting-safe shape so they exercise the confirmed-fill path.
+function oneSidedLongSeries(): CandleLike[] {
+  return [
+    candle(100, 100, 100, 100, 0),
+    candle(100, 100, 98.5, 99.0, 1),
+    candle(99, 100.2, 99, 100.0, 2),
+  ];
 }
 
 // Beautifully oscillating series: dips fill the long ladder, rallies take
@@ -391,7 +410,7 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     };
     const gateway = {
       fetchTick: () => Effect.fail({ reason: "n" } as never),
-      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOHLCV: () => Effect.succeed(oneSidedLongSeries() as Candle[]),
       fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
       fetchSymbols: () => Effect.fail({ reason: "n" } as never),
       fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
@@ -425,12 +444,334 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
         Effect.provideService(FuturesExchangeAdapter, adapter),
       ),
     );
-    // The oscillator fills the ladder and takes profit in the same window;
-    // the LIVE path must place limit entries and market closes without error.
+    // The dip fills the long ladder and the retrace takes profit; the LIVE
+    // path must place limit entries and market closes without error.
     expect(result.action).toBe("closed");
     expect(result.closedThisIteration).toBeGreaterThan(0);
     expect(result.note).toContain("[LIVE]");
     expect(result.capital).not.toBe(100);
+  });
+
+  it("reconciles the live ledger to confirmed venue prices and fees", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oneSidedLongSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    // Venue slippage and fees the paper model never sees: the entry fills 0.5
+    // above the rung, the exit 0.5 below the target, and each leg is charged
+    // a flat fee. The ledger must carry THESE numbers, not the model's.
+    const venued: FuturesExchangeAdapterService = {
+      ...base,
+      placeOrder: (req) =>
+        Effect.map(base.placeOrder(req), (fill) => ({
+          ...fill,
+          filledPrice: fill.filledPrice.plus(0.5),
+          fee: money("0.5"),
+        })),
+      closePosition: (req) =>
+        Effect.map(base.closePosition(req), (fill) =>
+          fill === null
+            ? null
+            : {
+                ...fill,
+                filledPrice: fill.filledPrice.minus(0.5),
+                fee: money("0.25"),
+              },
+        ),
+    };
+
+    // The breaker is fed the realized PnL of the close: it must see the
+    // confirmed delta, not the theoretical one.
+    const breakerRecords: number[] = [];
+    const breaker: CircuitBreakerService = {
+      recordTradeResult: (pnl) => {
+        breakerRecords.push(pnl);
+        return Effect.void;
+      },
+      isOpen: () => Effect.succeed(false),
+      getReason: () => Effect.succeed(""),
+      currentDailyLossPct: () => Effect.succeed(0),
+      reset: () => Effect.void,
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, venued),
+        Effect.provideService(CircuitBreaker, breaker),
+      ),
+    );
+
+    expect(result.action).toBe("closed");
+    expect(breakerRecords).toHaveLength(1);
+    expect(breakerRecords[0]).toBeCloseTo(-0.75, 10);
+    const trades = db
+      .query(
+        `SELECT entry_price, exit_price, pnl, capital_after, fill_source,
+                entry_order_id, exit_order_id, entry_fee, exit_fee,
+                entry_filled_qty, entry_filled_qty_decimal
+         FROM ladder_paper_trades`,
+      )
+      .all() as Array<{
+      entry_price: number;
+      exit_price: number;
+      pnl: number;
+      capital_after: number;
+      fill_source: string | null;
+      entry_order_id: string | null;
+      exit_order_id: string | null;
+      entry_fee: number | null;
+      exit_fee: number | null;
+      entry_filled_qty: number | null;
+      entry_filled_qty_decimal: string | null;
+    }>;
+    expect(trades).toHaveLength(1);
+    const trade = trades[0]!;
+    // Rung 99 filled at 99.5, target 100 exited at 99.5: the price legs cancel
+    // and only the confirmed fees remain.
+    expect(trade.entry_price).toBeCloseTo(99.5, 10);
+    expect(trade.exit_price).toBeCloseTo(99.5, 10);
+    expect(trade.pnl).toBeCloseTo(-0.75, 10);
+    expect(trade.capital_after).toBeCloseTo(99.25, 10);
+    expect(result.capital).toBeCloseTo(99.25, 10);
+    expect(trade.fill_source).toBe("live");
+    expect(trade.entry_order_id).toBeTruthy();
+    expect(trade.exit_order_id).toBeTruthy();
+    expect(trade.entry_fee).toBeCloseTo(0.5, 10);
+    expect(trade.exit_fee).toBeCloseTo(0.25, 10);
+    // Venue quantities persist at 8 decimals (toNumber), the precision the
+    // order was actually placed with.
+    expect(trade.entry_filled_qty).toBeCloseTo(0.25252525, 10);
+    expect(trade.entry_filled_qty_decimal).toBe("0.25252525");
+  });
+
+  it("rolls the bar back when the venue does not confirm a close fill", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oneSidedLongSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const silentClose: FuturesExchangeAdapterService = {
+      ...base,
+      closePosition: () => Effect.succeed(null),
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, silentClose),
+      ),
+    );
+
+    // An unconfirmed close must never be booked as a realized close: the bar
+    // rolls back so the ledger keeps the rung open (the venue may still hold
+    // it) instead of reporting a PnL the exchange never paid.
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("close not confirmed");
+    expect(result.capital).toBe(100);
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM ladder_paper_trades").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("rolls the bar back on a partial close fill instead of faking a flat book", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oneSidedLongSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const halfClose: FuturesExchangeAdapterService = {
+      ...base,
+      closePosition: (req) =>
+        Effect.map(base.closePosition(req), (fill) =>
+          fill === null ? null : { ...fill, filledQty: fill.filledQty.div(2) },
+        ),
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, halfClose),
+      ),
+    );
+
+    expect(result.action).toBe("hold");
+    expect(result.note).toContain("close partial");
+    expect(result.capital).toBe(100);
+    expect(
+      db.query("SELECT COUNT(*) AS n FROM ladder_paper_trades").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("persists confirmed entry evidence so a restart anchors on the venue fill", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    // Dip only: the long rung fills and stays open.
+    const series = [
+      candle(100, 100, 100, 100, 0),
+      candle(100, 100, 98.5, 99.0, 1),
+    ];
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(series as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const venued: FuturesExchangeAdapterService = {
+      ...base,
+      placeOrder: (req) =>
+        Effect.map(base.placeOrder(req), (fill) => ({
+          ...fill,
+          filledPrice: fill.filledPrice.plus(0.5),
+          fee: money("0.5"),
+        })),
+    };
+
+    await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, venued),
+      ),
+    );
+
+    // A fresh repository over the same DB is what a process restart sees.
+    const restarted = new PaperTradingRepositorySQLite(db);
+    const state = await Effect.runPromise(
+      restarted.getLadderState("bybit", "TEST", "15m"),
+    );
+    const rung = state?.longRungs.find((r) => r.filled);
+    expect(rung).toBeDefined();
+    expect(rung?.entryPrice).toBeCloseTo(99.5, 10);
+    expect(rung?.entryFillSource).toBe("live");
+    expect(rung?.entryFee?.toNumber()).toBeCloseTo(0.5, 10);
+    expect(rung?.entryOrderId).toBeTruthy();
+    expect(rung?.filledQty).toBeCloseTo(0.25252525, 10);
   });
 
   it("sizes each live rung from the position cap (regression: 50% cap -> 0.01 fraction)", async () => {
@@ -575,7 +916,7 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     };
     const gateway = {
       fetchTick: () => Effect.fail({ reason: "n" } as never),
-      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOHLCV: () => Effect.succeed(oneSidedLongSeries() as Candle[]),
       fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
       fetchSymbols: () => Effect.fail({ reason: "n" } as never),
       fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),

@@ -23,6 +23,7 @@ import {
   type FuturesExchangeAdapterService,
   type FuturesProductType,
   type FuturesMarginMode,
+  type FuturesOrderFill,
   type FuturesOrderSide,
 } from "../exchange/futures-adapter.js";
 import { ExchangeError } from "../exchange/adapter.js";
@@ -221,6 +222,18 @@ export interface LadderCloseEvent {
   readonly closedTimestamp: number;
   /** The rung's persisted filledQty — the exact size the close must send. */
   readonly qty?: number;
+  /**
+   * Confirmed venue evidence for a LIVE rung. `entryFee`/`entryOrderId` are
+   * carried from the rung (set when its entry fill was confirmed) so the
+   * reconciliation can charge the fee the exchange actually took; the exit
+   * fields are filled in by the live executor after the close confirms.
+   */
+  readonly entryFee?: Money;
+  readonly entryOrderId?: string;
+  readonly exitOrderId?: string;
+  readonly exitFee?: Money;
+  readonly exitFilledQty?: number;
+  readonly fillSource?: "live";
 }
 
 export interface LadderBarEvents {
@@ -279,6 +292,23 @@ export function freshWorkingState(initialCapital: number): WorkingState {
   };
 }
 
+/** Model fee rates (as fractions of notional) for one ladder round trip. */
+function ladderFeeRates(opts: LadderPaperTradingOptions): {
+  readonly makerFee: number;
+  readonly takerFee: number;
+  readonly crossFee: number;
+} {
+  return {
+    makerFee: (opts.feePct ?? 0) / 100,
+    takerFee: (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100,
+    // Live-entry cross accounting: demo venue orders cross the touch by
+    // liveEntryCrossBps, so the paper fee line carries the same cross cost —
+    // but ONLY when explicitly set. Default undefined = 0 (no divergence from
+    // the validated backtest; parity tests opt in per symbol).
+    crossFee: Math.max(0, opts.liveEntryCrossBps ?? 0) / 10000,
+  };
+}
+
 /** Close one rung at `exitPrice`, updating working capital (mirrors the
  *  backtest's closeRung, with Decimal money accounting) and recording the
  *  close event for the live executor. */
@@ -298,13 +328,7 @@ function closeRung(
   );
   const N = Math.max(1, Math.floor(opts.rungs ?? 1));
   const sizePerRung = positionFraction / N;
-  const makerFee = (opts.feePct ?? 0) / 100;
-  const takerFee = (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100;
-  // Live-entry cross accounting: demo venue orders cross the touch by
-  // liveEntryCrossBps, so the paper fee line carries the same cross cost —
-  // but ONLY when explicitly set. Default undefined = 0 (no divergence from
-  // the validated backtest; parity tests opt in per symbol).
-  const crossFee = Math.max(0, opts.liveEntryCrossBps ?? 0) / 10000;
+  const { makerFee, takerFee, crossFee } = ladderFeeRates(opts);
   const targetFee = makerFee * 2 + crossFee;
   const stopFee = makerFee + takerFee + crossFee;
   const isLiquidation = reason === "liquidation";
@@ -349,6 +373,8 @@ function closeRung(
     closedTimestamp: closedAt.getTime(),
     // The rung's persisted entry size — the live close must send exactly it.
     qty: r.filledQty,
+    entryFee: r.entryFee,
+    entryOrderId: r.entryOrderId,
   });
 }
 
@@ -385,6 +411,16 @@ function ladderTradeFromClose(
     exitReason: close.reason,
     openedAt,
     closedAt,
+    fillSource: close.fillSource,
+    entryOrderId: close.entryOrderId,
+    exitOrderId: close.exitOrderId,
+    entryFilledQty: close.qty === undefined ? undefined : money(close.qty),
+    exitFilledQty:
+      close.exitFilledQty === undefined
+        ? undefined
+        : money(close.exitFilledQty),
+    entryFee: close.entryFee,
+    exitFee: close.exitFee,
     strategyConfigFingerprint: ladderProvenance.fingerprint,
     cohortId: ladderProvenance.cohortId,
     candidateLockAt: ladderProvenance.lockedAt,
@@ -1356,11 +1392,33 @@ function ladderRungQty(
   return { qty, leverage } satisfies LadderRungQtyResult;
 }
 
+/** A confirmed venue fill for one rung entry placed by the live executor. */
+interface LadderLiveEntry {
+  readonly side: LadderSide;
+  readonly rungIndex: number;
+  readonly fill: FuturesOrderFill;
+}
+
+/** Confirmed venue fills for one bar: entries plus index-aligned exits. */
+interface LadderLiveBarFills {
+  readonly entries: readonly LadderLiveEntry[];
+  /**
+   * Confirmed exit fills, index-aligned with the bar's close events. `null`
+   * means the close was deliberately skipped (nothing orderable to send) and
+   * the paper model stands for that rung.
+   */
+  readonly exits: readonly (FuturesOrderFill | null)[];
+}
+
 /**
  * Execute one bar's fill/close events on the exchange. Fills place limit
  * entries at the rung level (the bar already touched it, so they fill
  * immediately); closes market-close the rung's size. Any failure fails the
  * effect so the caller rolls the paper ledger back and retries next bar.
+ *
+ * Every path returns the venue's CONFIRMED fill so the caller can reconcile
+ * the paper ledger to what actually traded instead of keeping the bar's
+ * theoretical prices/fees (clever-cabin-u83).
  */
 function executeLadderFillLive(
   fill: LadderFillEvent,
@@ -1373,22 +1431,31 @@ function executeLadderFillLive(
   marginMode: FuturesMarginMode,
   gateway?: MarketDataGatewayService,
 ): Effect.Effect<
-  void,
+  FuturesOrderFill,
   ExchangeError | RiskError | PaperTradingRepositoryError,
   never
 > {
   return Effect.gen(function* () {
     const side: FuturesOrderSide = fill.side === "long" ? "buy" : "sell";
     const fillPrice = money(fill.fillPrice);
-    const sized = ladderRungQty(w.capital, options, fillPrice);
-    if (sized.qty.lessThanOrEqualTo(0)) {
+    // Place the size the rung was SIZED AT during the bar (fill.qty), not a
+    // fresh derivation from the current working capital: the bar loop applies
+    // every close before the live executor runs, so recomputing here sized the
+    // entry off post-close capital (venue 0.005 vs ledger 0.2525) and every
+    // close then came back partial. The rung persisted this qty, and the close
+    // sends it back verbatim.
+    const orderQty = money(fill.qty);
+    if (orderQty.lessThanOrEqualTo(0)) {
       return yield* Effect.fail(
         new ExchangeError(
-          `ladder rung size unavailable: ${sized.skipReason ?? "zero qty"}`,
+          `ladder rung size unavailable: ${orderQty.toString()} (zero qty)`,
         ),
       );
     }
-    const leverage = Math.max(1, sized.leverage);
+    const leverage = Math.max(
+      1,
+      ladderRungQty(w.capital, options, fillPrice).leverage,
+    );
     const tradesTodayCount = yield* repo.countTradesForDate(new Date());
     const todayPnl = yield* repo
       .getTodayRealizedPnl()
@@ -1405,7 +1472,7 @@ function executeLadderFillLive(
       positionValue: toNumber(
         w.capital.times((options.maxPositionPct ?? 100) / 100).times(0.9999),
       ),
-      notionalValue: toNumber(sized.qty.times(fillPrice)),
+      notionalValue: toNumber(orderQty.times(fillPrice)),
       symbol: options.symbol,
       side,
       leverage,
@@ -1443,45 +1510,60 @@ function executeLadderFillLive(
         productType,
         marginMode,
         leverage,
-        size: sized.qty,
+        size: orderQty,
         price: venuePrice,
         reduceOnly: false,
       })
       .pipe(Effect.result);
-    if (
-      placed._tag === "Failure" ||
-      placed.success.filledQty === null ||
-      placed.success.filledQty.lessThan(sized.qty)
-    ) {
+    if (placed._tag === "Failure" || placed.success.filledQty === null) {
       const detail =
         placed._tag === "Failure"
           ? (placed.failure.reason ?? String(placed.failure))
-          : `partial fill ${placed.success.filledQty?.toString() ?? "0"}/${sized.qty.toString()}`;
+          : "fill quantity not reported";
       return yield* Effect.fail(
         new ExchangeError(
           `ladder rung fill not confirmed (${detail}) — rolling the bar back`,
         ),
       );
     }
-    if (adapter.setTradingStop === undefined) return;
-    const { takeProfit, stopLoss } = liveBracketPrices(
-      fill,
-      fillPrice,
-      options,
-    );
-    yield* adapter
-      .setTradingStop({
-        symbol: options.symbol,
-        productType,
-        marginMode,
-        side: fill.side,
-        takeProfit: money(takeProfit),
-        stopLoss: stopLoss === undefined ? undefined : money(stopLoss),
-      })
-      .pipe(Effect.result);
+    const confirmed = placed.success;
+    if (!confirmed.filledQty.greaterThan(0)) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `ladder rung fill confirmed empty (0/${orderQty.toString()}) — rolling the bar back`,
+        ),
+      );
+    }
+    if (adapter.setTradingStop !== undefined) {
+      const { takeProfit, stopLoss } = liveBracketPrices(
+        fill,
+        fillPrice,
+        options,
+      );
+      yield* adapter
+        .setTradingStop({
+          symbol: options.symbol,
+          productType,
+          marginMode,
+          side: fill.side,
+          takeProfit: money(takeProfit),
+          stopLoss: stopLoss === undefined ? undefined : money(stopLoss),
+        })
+        .pipe(Effect.result);
+    }
+    return confirmed;
   });
 }
 
+/**
+ * Market-close one rung and require the venue to confirm it.
+ *
+ * A null or partial close fill used to be discarded, so the ledger booked a
+ * close (and its PnL) while the exchange still held the position. Both now
+ * fail the bar, which rolls the ledger back to "rung still open" — the
+ * direction that matches the venue instead of hiding a live position
+ * (clever-cabin-u83).
+ */
 function executeLadderCloseLive(
   close: LadderCloseEvent,
   w: WorkingState,
@@ -1491,7 +1573,7 @@ function executeLadderCloseLive(
   marginMode: FuturesMarginMode,
   leverage: number,
 ): Effect.Effect<
-  void,
+  FuturesOrderFill | null,
   ExchangeError | RiskError | PaperTradingRepositoryError,
   never
 > {
@@ -1502,16 +1584,36 @@ function executeLadderCloseLive(
       close.qty !== undefined && close.qty > 0
         ? money(close.qty)
         : ladderRungQty(w.capital, options, exitPrice).qty;
-    if (closeQty.lessThanOrEqualTo(0)) return;
-    yield* adapter.closePosition({
-      symbol: options.symbol,
-      side,
-      productType,
-      marginMode,
-      leverage,
-      size: closeQty,
-      price: exitPrice,
-    });
+    // Nothing orderable to send: keep the paper model for this rung.
+    if (closeQty.lessThanOrEqualTo(0)) return null;
+    const result = yield* adapter
+      .closePosition({
+        symbol: options.symbol,
+        side,
+        productType,
+        marginMode,
+        leverage,
+        size: closeQty,
+        price: exitPrice,
+      })
+      .pipe(Effect.result);
+    if (result._tag === "Failure") return yield* Effect.fail(result.failure);
+    const fill = result.success;
+    if (fill === null || !fill.filledQty.greaterThan(0)) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `ladder close not confirmed for ${close.side} rung ${close.rungIndex}: venue returned no fill for ${closeQty.toString()} — position may still be open, rolling the bar back`,
+        ),
+      );
+    }
+    if (fill.filledQty.lessThan(closeQty)) {
+      return yield* Effect.fail(
+        new ExchangeError(
+          `ladder close partial for ${close.side} rung ${close.rungIndex}: filled ${fill.filledQty.toString()} of ${closeQty.toString()} — rolling the bar back so the ledger keeps the rung open`,
+        ),
+      );
+    }
+    return fill;
   });
 }
 function executeLadderBarLive(
@@ -1524,7 +1626,7 @@ function executeLadderBarLive(
   repo: PaperTradingRepositoryService,
   gateway?: MarketDataGatewayService,
 ): Effect.Effect<
-  void,
+  LadderLiveBarFills,
   ExchangeError | RiskError | PaperTradingRepositoryError,
   never
 > {
@@ -1535,8 +1637,9 @@ function executeLadderBarLive(
     // Floor-unorderable rungs (qty 0 skip from ladderRungQty) are a clean
     // HOLD: never send them to the venue, so no guard trip, no bar rollback.
     const orderableFills = fills.filter((fill) => fill.qty > 0);
+    const entries: LadderLiveEntry[] = [];
     for (const fill of orderableFills) {
-      yield* executeLadderFillLive(
+      const confirmed = yield* executeLadderFillLive(
         fill,
         w,
         options,
@@ -1547,9 +1650,15 @@ function executeLadderBarLive(
         marginMode,
         gateway,
       );
+      entries.push({
+        side: fill.side,
+        rungIndex: fill.rungIndex,
+        fill: confirmed,
+      });
     }
+    const exits: (FuturesOrderFill | null)[] = [];
     for (const close of closes) {
-      yield* executeLadderCloseLive(
+      const confirmed = yield* executeLadderCloseLive(
         close,
         w,
         options,
@@ -1558,7 +1667,9 @@ function executeLadderBarLive(
         marginMode,
         leverage,
       );
+      exits.push(confirmed);
     }
+    return { entries, exits };
   });
 }
 
@@ -1808,16 +1919,37 @@ function guardLadderIteration(
           Number(realPosition.success.quantity) > 0 &&
           openRungCount(w) === 0
         ) {
-          yield* services.adapter.value
+          const position = realPosition.success;
+          const closed = yield* services.adapter.value
             .closePosition({
               symbol: options.symbol,
-              side: realPosition.success.side === "long" ? "sell" : "buy",
+              side: position.side === "long" ? "sell" : "buy",
               productType,
               marginMode: options.marginMode ?? "isolated",
               leverage: Math.max(1, options.leverage ?? 1),
-              size: realPosition.success.quantity,
+              size: position.quantity,
             })
             .pipe(Effect.result);
+          // An orphan the venue did not confirm closed is still live exposure:
+          // hold with the reason instead of trading on top of it.
+          const closeFailure =
+            closed._tag === "Failure"
+              ? closed.failure.reason
+              : closed.success === null ||
+                  !closed.success.filledQty.greaterThan(0)
+                ? `no confirmed fill for ${position.quantity.toString()}`
+                : !closed.success.filledQty.greaterThanOrEqualTo(
+                      position.quantity,
+                    )
+                  ? `partial close ${closed.success.filledQty.toString()} of ${position.quantity.toString()}`
+                  : undefined;
+          if (closeFailure !== undefined) {
+            return ladderHoldResult(
+              state,
+              `orphan position close not confirmed: ${closeFailure}`,
+              w,
+            );
+          }
         }
       }
     }
@@ -1847,13 +1979,187 @@ function ladderLiveFailureReason(
   return `${failure.reason}${violations.length > 0 ? `: ${violations.join("; ")}` : ""}`;
 }
 
+/** Model close component (quote currency) for one rung at theoretical prices. */
+function modelCloseComponent(
+  close: LadderCloseEvent,
+  options: LadderPaperTradingOptions,
+): Decimal {
+  const leverage = Math.max(1, options.leverage ?? 1);
+  const positionFraction = Math.max(
+    0,
+    Math.min(1, (options.maxPositionPct ?? 100) / 100),
+  );
+  const sizePerRung =
+    positionFraction / Math.max(1, Math.floor(options.rungs ?? 1));
+  const { makerFee, takerFee, crossFee } = ladderFeeRates(options);
+  const fee =
+    close.reason === "target"
+      ? makerFee * 2 + crossFee
+      : makerFee + takerFee + crossFee;
+  const pricePnl =
+    close.entryPrice > 0
+      ? close.side === "long"
+        ? (close.exitPrice - close.entryPrice) / close.entryPrice
+        : (close.entryPrice - close.exitPrice) / close.entryPrice
+      : 0;
+  return money(close.capitalBefore)
+    .times(sizePerRung)
+    .times(leverage)
+    .times(pricePnl - fee);
+}
+
+/**
+ * Rewrite the bar's paper ledger to the venue's CONFIRMED fills.
+ *
+ * The bar state machine books theoretical fill/exit prices and a modelled fee
+ * rate; the demo/live ledger must instead carry what the exchange reported —
+ * the executed quantity, the real entry/exit price (with venue slippage), and
+ * the real fees. Every close is restated against its confirmed exit fill
+ * (`priceDelta x matchedQty - entryFee - exitFee`), the rung prices are
+ * replaced by the confirmed entry fill so later targets/stops anchor on what
+ * actually traded, and peak capital is recomputed from the confirmed closes
+ * rather than the theoretical ones so an overstated paper close cannot inflate
+ * the drawdown baseline. Rungs with no confirmed evidence (simulated fills,
+ * legacy rows) keep the paper model untouched.
+ */
+function reconcileLiveLadderAccounting(
+  options: LadderPaperTradingOptions,
+  w: WorkingState,
+  closes: LadderCloseEvent[],
+  live: LadderLiveBarFills,
+  peakBefore: Decimal,
+): void {
+  const confirmedEntries = new Map<string, LadderLiveEntry>();
+  for (const entry of live.entries) {
+    const key = `${entry.side}:${entry.rungIndex}`;
+    confirmedEntries.set(key, entry);
+    const rungs = entry.side === "long" ? w.longRungs : w.shortRungs;
+    const index = rungs.findIndex(
+      (rung) => rung.rungIndex === entry.rungIndex && rung.filled,
+    );
+    if (index === -1) continue;
+    const rung = rungs[index];
+    rungs[index] = {
+      ...rung,
+      entryPrice: toNumber(entry.fill.filledPrice),
+      filledQty: toNumber(entry.fill.filledQty),
+      entryOrderId: entry.fill.orderId,
+      entryFee: entry.fill.fee,
+      entryFillSource: "live",
+    };
+  }
+  const confirmedCloses: Decimal[] = [];
+  // Closes that keep the paper model (no venue fill to reconcile against)
+  // still contribute their model capital to the peak floor below.
+  const modelKeptCloses: Decimal[] = [];
+  let cumulative = money(0);
+  for (let index = 0; index < closes.length; index++) {
+    const close = closes[index];
+    const exit = live.exits[index] ?? null;
+    if (exit === null) {
+      modelKeptCloses.push(money(close.capitalAfter));
+      continue;
+    }
+    const entry = confirmedEntries.get(`${close.side}:${close.rungIndex}`);
+    const entryPrice = entry ? entry.fill.filledPrice : money(close.entryPrice);
+    const entryFee = entry ? entry.fill.fee : (close.entryFee ?? money(0));
+    const entryQty = entry
+      ? entry.fill.filledQty
+      : close.qty === undefined
+        ? money(0)
+        : money(close.qty);
+    if (
+      !entryPrice.greaterThan(0) ||
+      !entryQty.greaterThan(0) ||
+      !exit.filledQty.greaterThan(0)
+    ) {
+      modelKeptCloses.push(money(close.capitalAfter));
+      continue;
+    }
+    const matchedQty = Decimal.min(entryQty, exit.filledQty);
+    const priceDelta =
+      close.side === "long"
+        ? exit.filledPrice.minus(entryPrice)
+        : entryPrice.minus(exit.filledPrice);
+    const confirmedComponent = priceDelta
+      .times(matchedQty)
+      .minus(entryFee)
+      .minus(exit.fee);
+    const capitalBeforeModel = money(close.capitalBefore);
+    const capitalAfterModel = money(close.capitalAfter);
+    const capitalBeforeConfirmed = capitalBeforeModel.plus(cumulative);
+    const capitalAfterConfirmed = Decimal.max(
+      0,
+      capitalBeforeConfirmed.plus(
+        capitalAfterModel
+          .minus(capitalBeforeModel)
+          .plus(confirmedComponent.minus(modelCloseComponent(close, options))),
+      ),
+    );
+    cumulative = capitalAfterConfirmed.minus(capitalAfterModel);
+    confirmedCloses.push(capitalAfterConfirmed);
+    const pnl = capitalAfterConfirmed.minus(capitalBeforeConfirmed);
+    // Re-classify the win/loss against the confirmed fill so expectancy
+    // counts what the venue paid, not the theoretical close.
+    const modelPricePnl =
+      close.entryPrice > 0
+        ? close.side === "long"
+          ? (close.exitPrice - close.entryPrice) / close.entryPrice
+          : (close.entryPrice - close.exitPrice) / close.entryPrice
+        : 0;
+    const { makerFee, takerFee, crossFee } = ladderFeeRates(options);
+    const modelFee =
+      close.reason === "target"
+        ? makerFee * 2 + crossFee
+        : makerFee + takerFee + crossFee;
+    const modelLoss =
+      close.reason === "liquidation" || modelPricePnl - modelFee < 0;
+    const confirmedLoss = confirmedComponent.lessThan(0);
+    if (modelLoss !== confirmedLoss) {
+      if (confirmedLoss) {
+        w.totalWins = Math.max(0, w.totalWins - 1);
+        w.totalLosses += 1;
+      } else {
+        w.totalLosses = Math.max(0, w.totalLosses - 1);
+        w.totalWins += 1;
+      }
+    }
+    closes[index] = {
+      ...close,
+      entryPrice: toNumber(entryPrice),
+      exitPrice: toNumber(exit.filledPrice),
+      capitalBefore: capitalBeforeConfirmed.toString(),
+      capitalAfter: capitalAfterConfirmed.toString(),
+      pnl: pnl.toString(),
+      pnlPct: capitalBeforeConfirmed.isZero()
+        ? "0"
+        : pnl.div(capitalBeforeConfirmed).times(100).toString(),
+      qty: toNumber(matchedQty),
+      entryFee,
+      entryOrderId: entry?.fill.orderId ?? close.entryOrderId,
+      exitOrderId: exit.orderId,
+      exitFee: exit.fee,
+      exitFilledQty: toNumber(exit.filledQty),
+      fillSource: "live",
+    };
+  }
+  if (confirmedCloses.length === 0) return;
+  w.capital = Decimal.max(0, w.capital.plus(cumulative));
+  w.peak = Decimal.max(
+    peakBefore,
+    w.capital,
+    ...confirmedCloses,
+    ...modelKeptCloses,
+  );
+}
+
 function executeLadderLiveEvents(
   options: LadderPaperTradingOptions,
   state: LadderPaperState,
   w: WorkingState,
   snapshot: WorkingState,
   fills: readonly LadderFillEvent[],
-  closes: readonly LadderCloseEvent[],
+  closes: LadderCloseEvent[],
   last: CandleLike,
   repo: PaperTradingRepositoryService,
   services: LadderOptionalServices,
@@ -1884,7 +2190,16 @@ function executeLadderLiveEvents(
       repo,
       Option.isSome(services.gateway) ? services.gateway.value : undefined,
     ).pipe(Effect.result);
-    if (outcome._tag === "Success") return null;
+    if (outcome._tag === "Success") {
+      reconcileLiveLadderAccounting(
+        options,
+        w,
+        closes,
+        outcome.success,
+        snapshot.peak,
+      );
+      return null;
+    }
     const failureReason = ladderLiveFailureReason(outcome.failure);
     if (/11012[356]/.test(failureReason)) {
       agreementBlockedUntil.set(

@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schedule } from "effect";
 import { Database } from "bun:sqlite";
-import { Decimal, toNumber, type Money } from "../utils/money.js";
+import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import type {
   GridPaperState,
   GridPaperTrade,
@@ -24,6 +24,10 @@ interface LadderRungJson {
   readonly entryBar: number;
   readonly entryTimestamp: number;
   readonly filledQty?: number;
+  readonly entryFillSource?: "live";
+  readonly entryOrderId?: string;
+  /** Confirmed venue fee, persisted as a decimal string. */
+  readonly entryFee?: string;
 }
 
 /**
@@ -104,10 +108,7 @@ function isSqliteBusy(err: PaperTradingRepositoryError): boolean {
   // (bun:sqlite sets e.g. `code: "SQLITE_BUSY"`). Retry those too.
   const cause = err.cause as { code?: unknown; message?: unknown } | undefined;
   if (cause !== undefined && cause !== null) {
-    if (
-      typeof cause.code === "string" &&
-      SQLITE_BUSY_CODES.has(cause.code)
-    ) {
+    if (typeof cause.code === "string" && SQLITE_BUSY_CODES.has(cause.code)) {
       return true;
     }
     if (
@@ -662,7 +663,18 @@ CREATE TABLE IF NOT EXISTS ladder_paper_trades (
   candidate_lock_at DATETIME,
   dataset_cutoff_at DATETIME,
   entry_opened_at DATETIME,
-  execution_environment TEXT
+  execution_environment TEXT,
+  fill_source TEXT,
+  entry_order_id TEXT,
+  exit_order_id TEXT,
+  entry_filled_qty REAL,
+  entry_filled_qty_decimal TEXT,
+  exit_filled_qty REAL,
+  exit_filled_qty_decimal TEXT,
+  entry_fee REAL,
+  entry_fee_decimal TEXT,
+  exit_fee REAL,
+  exit_fee_decimal TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ladder_paper_trades_symbol
@@ -856,7 +868,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_paper_positions_exchange_symbol' LIMIT 1",
           )
           .get();
-        const hasPositionsUniqueIndex = indexRow !== null && indexRow !== undefined;
+        const hasPositionsUniqueIndex =
+          indexRow !== null && indexRow !== undefined;
         if (!hasPositionsUniqueIndex) {
           this.db.exec(dedupePaperPositionsSQL);
           this.db.exec(createPaperPositionsUniqueIndexSQL);
@@ -926,6 +939,17 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           "ladder_paper_trades dataset_cutoff_at DATETIME",
           "ladder_paper_trades entry_opened_at DATETIME",
           "ladder_paper_trades execution_environment TEXT",
+          "ladder_paper_trades fill_source TEXT",
+          "ladder_paper_trades entry_order_id TEXT",
+          "ladder_paper_trades exit_order_id TEXT",
+          "ladder_paper_trades entry_filled_qty REAL",
+          "ladder_paper_trades entry_filled_qty_decimal TEXT",
+          "ladder_paper_trades exit_filled_qty REAL",
+          "ladder_paper_trades exit_filled_qty_decimal TEXT",
+          "ladder_paper_trades entry_fee REAL",
+          "ladder_paper_trades entry_fee_decimal TEXT",
+          "ladder_paper_trades exit_fee REAL",
+          "ladder_paper_trades exit_fee_decimal TEXT",
         ]) {
           const [table, column, type] = tableColumn.split(" ");
           addColumn(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
@@ -1814,6 +1838,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             entryBar: r.entryBar,
             entryTimestamp: r.entryTimestamp,
             filledQty: r.filledQty,
+            entryFillSource: r.entryFillSource,
+            entryOrderId: r.entryOrderId,
+            entryFee: r.entryFee === undefined ? undefined : money(r.entryFee),
           })),
           shortRungs: parsed.shortRungs.map((r) => ({
             rungIndex: r.rungIndex,
@@ -1825,6 +1852,9 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             entryBar: r.entryBar,
             entryTimestamp: r.entryTimestamp,
             filledQty: r.filledQty,
+            entryFillSource: r.entryFillSource,
+            entryOrderId: r.entryOrderId,
+            entryFee: r.entryFee === undefined ? undefined : money(r.entryFee),
           })),
           longBase: parsed.longBase,
           shortBase: parsed.shortBase,
@@ -2130,8 +2160,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
             capital_after_decimal, pnl_decimal, pnl_pct_decimal,
             exit_reason, opened_at, closed_at,
             strategy_config_fingerprint, cohort_id, candidate_lock_at,
-            dataset_cutoff_at, entry_opened_at, execution_environment)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            dataset_cutoff_at, entry_opened_at, execution_environment,
+            fill_source, entry_order_id, exit_order_id,
+            entry_filled_qty, entry_filled_qty_decimal,
+            exit_filled_qty, exit_filled_qty_decimal,
+            entry_fee, entry_fee_decimal, exit_fee, exit_fee_decimal)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         this.db.transaction(() => {
           for (const trade of trades) {
@@ -2163,6 +2197,21 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
               trade.datasetCutoffAt?.toISOString() ?? null,
               trade.entryOpenedAt?.toISOString() ?? null,
               trade.executionEnvironment ?? null,
+              trade.fillSource ?? null,
+              trade.entryOrderId ?? null,
+              trade.exitOrderId ?? null,
+              trade.entryFilledQty === undefined
+                ? null
+                : toNumber(trade.entryFilledQty),
+              trade.entryFilledQty?.toString() ?? null,
+              trade.exitFilledQty === undefined
+                ? null
+                : toNumber(trade.exitFilledQty),
+              trade.exitFilledQty?.toString() ?? null,
+              trade.entryFee === undefined ? null : toNumber(trade.entryFee),
+              trade.entryFee?.toString() ?? null,
+              trade.exitFee === undefined ? null : toNumber(trade.exitFee),
+              trade.exitFee?.toString() ?? null,
             );
           }
         })();

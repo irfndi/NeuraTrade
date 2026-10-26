@@ -949,6 +949,52 @@ describe("grid paper engine", () => {
     expect(result.trade.realizedPnlPct?.toNumber()).toBeCloseTo(0.6, 10);
   });
 
+  it("records a confirmed loss below the allocation floor instead of clamping it away", () => {
+    const result = buildGridCloseTrade({
+      options: makeOptions({ isLive: true }),
+      state: {
+        entryFillSource: "live",
+        entryOrderId: "entry",
+        entryFilledQty: money("0.5"),
+        entryFee: money("0.1"),
+      } as GridPaperState,
+      side: "long",
+      entryPrice: money(100),
+      exitPrice: money(20),
+      exitReason: "stop",
+      stateCapital: money(50),
+      peakCapital: money(50),
+      // 50% traded: the old confirmed-fill path clamped capital at the 25 USDT
+      // untraded-allocation floor, so a -40 USDT loss showed up as -25.
+      maxPositionPct: 50,
+      leverage: 10,
+      openedAt: new Date("2026-01-01T00:00:00.000Z"),
+      entryEvidence: {
+        orderId: "entry",
+        filledQty: money("0.5"),
+        fee: money("0.1"),
+      },
+      exitFill: {
+        orderId: "exit",
+        symbol: "ETH/USDT",
+        side: "sell",
+        productType: "USDT-FUTURES",
+        marginMode: "isolated",
+        filledQty: money("0.5"),
+        filledPrice: money(20),
+        fee: money("0.1"),
+        timestamp: new Date("2026-01-01T00:15:00.000Z"),
+      },
+      fee: 0.2,
+      stopFee: 0.4,
+      fundingCost: money(0),
+    });
+
+    // (20 - 100) x 0.5 - 0.2 fees = -40.2 USDT on 50 USDT of capital.
+    expect(result.capitalAfter.toNumber()).toBeCloseTo(9.8, 10);
+    expect(result.trade.pnlPct.toNumber()).toBeCloseTo(-80.4, 10);
+  });
+
   it("applies the daily trade-count risk gate to live grid entries", async () => {
     const repo = new InMemoryPaperRepository();
     await Effect.runPromise(

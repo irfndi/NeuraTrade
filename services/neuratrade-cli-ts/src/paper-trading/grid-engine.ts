@@ -695,19 +695,17 @@ function saveGridStateWithRetry(
       // repository) into the typed-failure channel so it is retried and, on
       // exhaustion, still engages the kill switch — a defect must never
       // bypass the persistence safety net.
-      const saved = yield* repo
-        .saveGridState(state)
-        .pipe(
-          Effect.catchDefect((defect) =>
-            Effect.fail(
-              new PaperTradingRepositoryError(
-                `saveGridState defect: ${defect instanceof Error ? defect.message : String(defect)}`,
-                defect,
-              ),
+      const saved = yield* repo.saveGridState(state).pipe(
+        Effect.catchDefect((defect) =>
+          Effect.fail(
+            new PaperTradingRepositoryError(
+              `saveGridState defect: ${defect instanceof Error ? defect.message : String(defect)}`,
+              defect,
             ),
           ),
-          Effect.result,
-        );
+        ),
+        Effect.result,
+      );
       if (saved._tag === "Success") return true;
       if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
     }
@@ -941,7 +939,7 @@ function gridPriceDelta(
 function liveGridCloseAccounting(
   input: GridCloseTradeInput,
 ): GridCloseAccounting | null {
-  const { side, entryPrice, exitPrice, stateCapital, maxPositionPct } = input;
+  const { side, entryPrice, exitPrice, stateCapital } = input;
   const { entryEvidence, exitFill, fundingCost } = input;
   if (
     entryEvidence === null ||
@@ -955,9 +953,12 @@ function liveGridCloseAccounting(
   const fillPnl = gridPriceDelta(side, entryPrice, exitPrice)
     .times(matchedQty)
     .minus(entryEvidence.fee.plus(exitFill.fee));
-  const allocationFloor = stateCapital.times(1 - maxPositionPct / 100);
+  // Confirmed-fill bookkeeping is the ledger of record: no allocation-floor
+  // clamp. The floor made a real loss beyond the traded allocation vanish
+  // (ETH ledger +96.73 vs +8.70 on fills), so a confirmed loss must be able
+  // to push capital below it — down to zero, which is honest (clever-cabin-mph).
   const capitalAfter = Decimal.max(
-    allocationFloor,
+    0,
     stateCapital.plus(fillPnl).plus(fundingCost),
   );
   const pnlPct = stateCapital.greaterThan(0)

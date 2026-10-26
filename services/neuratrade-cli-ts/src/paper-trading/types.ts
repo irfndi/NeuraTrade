@@ -199,6 +199,17 @@ export interface LadderPaperTrade {
   readonly exitReason: "target" | "stop" | "liquidation" | "max_hold";
   readonly openedAt: Date;
   readonly closedAt: Date;
+  /**
+   * Exchange fill evidence for a LIVE rung (mirrors GridPaperTrade). Undefined
+   * for simulated paper fills — those have no venue order behind them.
+   */
+  readonly fillSource?: "simulated" | "live";
+  readonly entryOrderId?: string;
+  readonly exitOrderId?: string;
+  readonly entryFilledQty?: Money;
+  readonly exitFilledQty?: Money;
+  readonly entryFee?: Money;
+  readonly exitFee?: Money;
   /** Readiness provenance (mirrors GridPaperTrade); undefined on legacy rows. */
   readonly strategyConfigFingerprint?: string;
   readonly cohortId?: string;
@@ -265,6 +276,14 @@ export interface LadderPaperRungState {
    * (over/under-closing corrupts the position and the ledger).
    */
   readonly filledQty?: number;
+  /**
+   * Venue evidence for a LIVE fill: `entryPrice`/`filledQty` above carry the
+   * CONFIRMED values from this order, and the absolute quote-currency fee it
+   * charged. Absent for simulated fills (no venue order exists).
+   */
+  readonly entryFillSource?: "live";
+  readonly entryOrderId?: string;
+  readonly entryFee?: Money;
 }
 
 /**
