@@ -47,6 +47,21 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/**
+ * Fail-closed contract: a read error surfaces as `CircuitBreakerError` and
+ * callers must treat any such error as "trading halted" (kill-switch
+ * posture). A missing row for today means "no trades recorded today" — not
+ * open — but if this process has already observed a row for today and it
+ * subsequently vanishes (another process deleting it, or a clock/wall-day
+ * anomaly), the state is unknown and read paths FAIL CLOSED with an error
+ * instead of reporting open=false.
+ */
+interface DailyBreakerRow {
+  dailyPnl: number;
+  open: boolean;
+  reason: string;
+}
+
 class CircuitBreakerSQLite implements CircuitBreakerService {
   constructor(
     private readonly db: Database,
@@ -54,6 +69,11 @@ class CircuitBreakerSQLite implements CircuitBreakerService {
   ) {
     this.db.exec(ensureTableSQL);
   }
+
+  /** Date key whose row was last present in this process. A missing row on a
+   *  different (or never-observed) date is a legitimate fresh day; a missing
+   *  row on the observed date is vanished state and reads fail closed. */
+  private observedRowDate: string | null = null;
 
   /** Single-statement UPSERT: accumulates daily_pnl and re-evaluates the
    *  open latch atomically inside SQLite's ON CONFLICT clause, so
@@ -104,11 +124,7 @@ ON CONFLICT(date) DO UPDATE SET
       .run(todayKey(), reason);
   }
 
-  private readRow(): {
-    dailyPnl: number;
-    open: boolean;
-    reason: string;
-  } | null {
+  private readRow(): DailyBreakerRow | null {
     const row = this.db
       .query(
         "SELECT daily_pnl, open, reason FROM risk_circuit_breaker WHERE date = ?",
@@ -119,11 +135,17 @@ ON CONFLICT(date) DO UPDATE SET
       reason: string;
     } | null;
     if (!row) return null;
+    this.observedRowDate = todayKey();
     return {
       dailyPnl: row.daily_pnl,
       open: row.open === 1,
       reason: row.reason,
     };
+  }
+
+  /** True when today's row existed in this process and has since vanished. */
+  private rowVanished(): boolean {
+    return this.observedRowDate === todayKey();
   }
 
   recordTradeResult(
@@ -158,6 +180,11 @@ ON CONFLICT(date) DO UPDATE SET
     return Effect.try({
       try: () => {
         const existing = this.readRow();
+        if (existing === null && this.rowVanished()) {
+          throw new Error(
+            "today's circuit-breaker row was observed earlier and has vanished; failing closed",
+          );
+        }
         return existing?.open ?? false;
       },
       catch: (err) =>
@@ -172,6 +199,11 @@ ON CONFLICT(date) DO UPDATE SET
     return Effect.try({
       try: () => {
         const existing = this.readRow();
+        if (existing === null && this.rowVanished()) {
+          throw new Error(
+            "today's circuit-breaker row was observed earlier and has vanished; failing closed",
+          );
+        }
         return existing?.reason ?? "";
       },
       catch: (err) =>
@@ -186,6 +218,11 @@ ON CONFLICT(date) DO UPDATE SET
     return Effect.try({
       try: () => {
         const existing = this.readRow();
+        if (existing === null && this.rowVanished()) {
+          throw new Error(
+            "today's circuit-breaker row was observed earlier and has vanished; failing closed",
+          );
+        }
         return Math.abs(Math.min(existing?.dailyPnl ?? 0, 0));
       },
       catch: (err) =>
@@ -199,9 +236,18 @@ ON CONFLICT(date) DO UPDATE SET
   reset(): Effect.Effect<void, CircuitBreakerError, never> {
     return Effect.try({
       try: () => {
+        // Audit trail: a reset re-enables trading, so it must be visible in
+        // logs even though the breaker itself has no logger dependency.
+        console.warn(
+          `[risk] circuit breaker RESET for ${todayKey()} (daily_pnl cleared, trading re-enabled)`,
+        );
         this.db
           .query("DELETE FROM risk_circuit_breaker WHERE date = ?")
           .run(todayKey());
+        // Allow the next read to seed a fresh-day view (the row we just
+        // deleted must not be treated as vanished state). See the
+        // fail-closed contract comment above for the reset semantics.
+        this.observedRowDate = null;
       },
       catch: (err) =>
         new CircuitBreakerError(

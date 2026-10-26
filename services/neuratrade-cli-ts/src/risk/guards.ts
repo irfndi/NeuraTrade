@@ -221,6 +221,10 @@ function throughputRiskViolations(
     fees !== undefined
   ) {
     const activity = Math.abs(gross) + fees;
+    // Zero-activity windows bypass the fee-share gate by design: there were
+    // no fills, hence no drag to compare. Any activity > 0 makes the ratio a
+    // well-defined mixed fraction; an inflated share from float noise still
+    // fails closed via the `>` comparison below.
     if (activity > 0) {
       const shareBp = Math.floor((fees * 10_000) / activity);
       if (shareBp > limits.maxWindowFeeShareBp) {
