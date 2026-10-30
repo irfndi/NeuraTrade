@@ -80,9 +80,7 @@ describe("Binance gateway", () => {
   it("fetchOHLCV rejects a kline whose price field did not parse", async () => {
     // An empty-string field coerces to 0; a 0-priced candle would flow into
     // mid-price and position sizing, so the boundary must fail instead.
-    mockFetch([
-      [1704067200000, "66000", "68000", "65000", "", "100", 0, "0"],
-    ]);
+    mockFetch([[1704067200000, "66000", "68000", "65000", "", "100", 0, "0"]]);
 
     const exit = await Effect.runPromiseExit(
       Binance.fetchOHLCV("BTC/USDT", "1m", 1),

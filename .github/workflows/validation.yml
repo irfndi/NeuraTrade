@@ -223,8 +223,13 @@ jobs:
               """Return [(package, advisory)] for known bun audit shapes, else None."""
               if isinstance(obj, dict) and isinstance(obj.get("vulnerabilities"), dict):
                   obj = obj["vulnerabilities"]
-              if not isinstance(obj, dict) or not obj:
+              if not isinstance(obj, dict):
                   return None
+              # An EMPTY dict is a clean report, not shape drift: `bun audit
+              # --json` prints `{}` when there are no advisories. Treating it
+              # as unknown made a clean audit fail the gate.
+              if not obj:
+                  return []
               out = []
               for pkg, val in obj.items():
                   if not isinstance(val, (dict, list)):

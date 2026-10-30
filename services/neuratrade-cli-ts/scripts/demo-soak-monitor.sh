@@ -55,12 +55,12 @@ log() { printf '[%s] %s\n' "$(now)" "$1" | tee -a "$LOG_FILE"; }
 
 alert() {
   printf '[%s] ALERT: %s\n' "$(now)" "$1" >&2
-  printf '[%s] ALERT: %s\n' "$(now)" "$1" >> "$LOG_FILE"
+  printf '[%s] ALERT: %s\n' "$(now)" "$1" >>"$LOG_FILE"
 }
 
 warn() {
   printf '[%s] WARN: %s\n' "$(now)" "$1" >&2
-  printf '[%s] WARN: %s\n' "$(now)" "$1" >> "$LOG_FILE"
+  printf '[%s] WARN: %s\n' "$(now)" "$1" >>"$LOG_FILE"
 }
 
 fail() {
@@ -98,10 +98,10 @@ fi
 # 2. Risk kill switch.
 KS=$(sqlite3 "$DB_PATH" "SELECT engaged FROM risk_kill_switch WHERE id=1;" 2>/dev/null || echo unknown)
 case "$KS" in
-  1) fail "RISK KILL SWITCH ENGAGED";;
-  unknown) fail "kill switch state unknown (query failed)";;
-  0) log "kill switch: disengaged";;
-  *) fail "kill switch state unexpected: $KS";;
+  1) fail "RISK KILL SWITCH ENGAGED" ;;
+  unknown) fail "kill switch state unknown (query failed)" ;;
+  0) log "kill switch: disengaged" ;;
+  *) fail "kill switch state unexpected: $KS" ;;
 esac
 
 # 3. Funnel gate-eligible count — last matching line in the universe-watch log.
@@ -115,7 +115,7 @@ fi
 # 4. Fills in the last 24h.
 F24=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM grid_paper_trades WHERE closed_at >= datetime('now','-1 day');" 2>/dev/null || echo unknown)
 case "$F24" in
-  unknown) fail "24h fill count query failed";;
+  unknown) fail "24h fill count query failed" ;;
   *)
     if [ "$F24" -eq 0 ] && [ "$MIN_FILLS_24H" -gt 0 ]; then
       fail "0 fills in last 24h (MIN_FILLS_24H=$MIN_FILLS_24H)"
@@ -130,25 +130,25 @@ esac
 # 5. First-fill detection: cumulative total vs fills-since.txt.
 TOTAL_FILLS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM grid_paper_trades;" 2>/dev/null || echo unknown)
 case "$TOTAL_FILLS" in
-  unknown) fail "fill total query failed";;
+  unknown) fail "fill total query failed" ;;
   *)
     if [ -f "$STATE_FILE" ]; then
       PREV=$(cat "$STATE_FILE" 2>/dev/null | tr -d '[:space:]' || true)
       case "$PREV" in
-        *[!0-9]*|'') PREV="";;
+        *[!0-9]* | '') PREV="" ;;
       esac
     else
       PREV=""
     fi
     if [ -z "$PREV" ]; then
-      printf '%s\n' "$TOTAL_FILLS" > "$STATE_FILE"
+      printf '%s\n' "$TOTAL_FILLS" >"$STATE_FILE"
       log "fills-since baseline: $TOTAL_FILLS"
     elif [ "$TOTAL_FILLS" -gt "$PREV" ]; then
       NEWFILLS=1
-      printf '%s\n' "$TOTAL_FILLS" > "$STATE_FILE"
+      printf '%s\n' "$TOTAL_FILLS" >"$STATE_FILE"
       alert "NEW FILLS detected: total $TOTAL_FILLS (was $PREV) — first-fill alert"
     elif [ "$TOTAL_FILLS" -lt "$PREV" ]; then
-      printf '%s\n' "$TOTAL_FILLS" > "$STATE_FILE"
+      printf '%s\n' "$TOTAL_FILLS" >"$STATE_FILE"
       warn "fill total DECREASED $PREV -> $TOTAL_FILLS (DB reset?); baseline reset"
     else
       log "fills unchanged: $TOTAL_FILLS"

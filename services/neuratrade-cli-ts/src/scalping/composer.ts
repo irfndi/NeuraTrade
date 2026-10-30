@@ -27,6 +27,12 @@ import {
   passesDirectionalMarketFilter,
   passesMarketFilters,
 } from "./market-filter.js";
+import {
+  defaultRuleRegistry,
+  type RuleCategory,
+  type RuleEvaluationInput,
+  type RuleRegistry,
+} from "../rules/registry.js";
 
 const defaultWeights: ComposerWeights = {
   spread: 0.18,
@@ -288,116 +294,91 @@ function isComponentEnabled(
   return config.enabled?.[name] !== false;
 }
 
-function addComponent(
-  components: SignalComponent[],
-  component: SignalComponent | null,
-): void {
-  if (component) components.push(component);
+// --- registry-driven dispatch -------------------------------------------------
+
+let cachedRegistry: RuleRegistry | null = null;
+
+/**
+ * The module rule registry. Lazy so the registry/composer circular import
+ * resolves correctly regardless of which module loads first; registration of
+ * custom rules via `registerComposerRule` flows into every subsequent
+ * evaluation.
+ */
+export function getComposerRuleRegistry(): RuleRegistry {
+  if (cachedRegistry === null) cachedRegistry = defaultRuleRegistry();
+  return cachedRegistry;
 }
 
-function addDirectionalComponent(
-  components: SignalComponent[],
-  component: SignalComponent | null,
-  directionalOnly: boolean,
-  passesFilter: (component: SignalComponent) => boolean,
-): boolean {
-  if (!component) return true;
-  if (directionalOnly && !passesFilter(component)) return false;
-  components.push(component);
-  return true;
+/** Register a custom signal rule globally (also visible to backtests). */
+export function registerComposerRule(
+  rule: Parameters<RuleRegistry["register"]>[0],
+): void {
+  getComposerRuleRegistry().register(rule);
+}
+
+/**
+ * Evaluate every enabled rule of `category` through the registry, in
+ * registration order — the dispatch that replaced the hardcoded composer
+ * component chain, with identical semantics:
+ *   - disabled rules are skipped,
+ *   - gated rules (e.g. funding under useFunding) only run when open,
+ *   - under directionalOnly, a component failing the rule's directional
+ *     filter aborts the whole evaluation (null).
+ */
+function buildRuleGroupComponents(
+  input: RuleEvaluationInput,
+  category: RuleCategory,
+  registry: RuleRegistry,
+): readonly SignalComponent[] | null {
+  const { config, thresholds } = input;
+  const directionalOnly = thresholds.directionalOnly ?? false;
+  const components: SignalComponent[] = [];
+  for (const rule of registry.list()) {
+    if (rule.category !== category) continue;
+    if (!isComponentEnabled(config, rule.id as keyof ComposerWeights)) continue;
+    if (rule.gate && !rule.gate(thresholds, config)) continue;
+    const component = rule.evaluate(input);
+    if (component === null) continue;
+    if (
+      rule.directionalFilter &&
+      directionalOnly &&
+      !rule.directionalFilter(component, thresholds)
+    ) {
+      return null;
+    }
+    components.push(component);
+  }
+  return components;
 }
 
 function buildMarketComponents(
   candles: readonly CandleLike[],
   obMetrics: OrderBookMetricsInput,
+  ohlcv: OHLCVInput,
   config: ComposerConfig,
-): SignalComponent[] | null {
-  const { weights, thresholds } = config;
-  const components: SignalComponent[] = [];
-  if (isComponentEnabled(config, "spread")) {
-    addComponent(
-      components,
-      buildSpreadComponent(obMetrics, weights.spread, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "imbalance")) {
-    addComponent(
-      components,
-      buildImbalanceComponent(obMetrics, weights.imbalance, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "volatility")) {
-    const volatility = buildVolatilityComponent(
-      candles,
-      weights.volatility,
-      thresholds,
-    );
-    if (
-      !addDirectionalComponent(
-        components,
-        volatility,
-        thresholds.directionalOnly ?? false,
-        (component) => passesVolatilityFilter(component, thresholds),
-      )
-    )
-      return null;
-  }
-  if (isComponentEnabled(config, "trend")) {
-    addComponent(
-      components,
-      buildTrendComponent(candles, weights.trend, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "liquidity")) {
-    const liquidity = buildLiquidityComponent(
-      obMetrics,
-      weights.liquidity,
-      thresholds,
-    );
-    if (
-      !addDirectionalComponent(
-        components,
-        liquidity,
-        thresholds.directionalOnly ?? false,
-        (component) => passesLiquidityFilter(component, thresholds),
-      )
-    )
-      return null;
-  }
-  return components;
+  registry: RuleRegistry,
+): readonly SignalComponent[] | null {
+  return buildRuleGroupComponents(
+    { candles, obMetrics, ohlcv, config, thresholds: config.thresholds },
+    "market",
+    registry,
+  );
 }
 
 function buildOscillatorComponents(
   candles: readonly CandleLike[],
+  obMetrics: OrderBookMetricsInput,
+  ohlcv: OHLCVInput,
   config: ComposerConfig,
-): SignalComponent[] {
-  const { weights, thresholds } = config;
-  const components: SignalComponent[] = [];
-  if (isComponentEnabled(config, "rsi")) {
-    addComponent(
-      components,
-      buildRsiComponent(candles, weights.rsi, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "connorsRsi2")) {
-    addComponent(
-      components,
-      buildConnorsRsi2Component(candles, weights.connorsRsi2, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "rsiPullback")) {
-    addComponent(
-      components,
-      buildRsiPullbackComponent(candles, weights.rsiPullback ?? 0, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "emaPullback")) {
-    addComponent(
-      components,
-      buildEmaPullbackComponent(candles, weights.emaPullback ?? 0, thresholds),
-    );
-  }
-  return components;
+  registry: RuleRegistry,
+): readonly SignalComponent[] {
+  return (
+    buildRuleGroupComponents(
+      { candles, obMetrics, ohlcv, config, thresholds: config.thresholds },
+      "oscillator",
+      registry,
+    ) ?? []
+  );
 }
 
 function buildContextComponents(
@@ -405,28 +386,15 @@ function buildContextComponents(
   obMetrics: OrderBookMetricsInput,
   ohlcv: OHLCVInput,
   config: ComposerConfig,
-): SignalComponent[] {
-  const { weights, thresholds } = config;
-  const components: SignalComponent[] = [];
-  if (isComponentEnabled(config, "regime")) {
-    addComponent(
-      components,
-      buildRegimeComponent(candles, obMetrics, weights.regime, thresholds),
-    );
-  }
-  if (isComponentEnabled(config, "funding") && thresholds.useFunding) {
-    addComponent(
-      components,
-      buildFundingComponent(
-        candles,
-        obMetrics,
-        weights.funding,
-        thresholds,
-        ohlcv.fundingRates,
-      ),
-    );
-  }
-  return components;
+  registry: RuleRegistry,
+): readonly SignalComponent[] {
+  return (
+    buildRuleGroupComponents(
+      { candles, obMetrics, ohlcv, config, thresholds: config.thresholds },
+      "context",
+      registry,
+    ) ?? []
+  );
 }
 interface ValidatedSignalComponents {
   readonly directionalComponents: readonly SignalComponent[];
@@ -503,6 +471,7 @@ export function composeSignal(
   ohlcv: OHLCVInput,
   obMetrics: OrderBookMetricsInput,
   config: ComposerConfig = defaultComposerConfig,
+  registry?: RuleRegistry,
 ): ScalpingSignal | null {
   const enabledConfig = applyEnabledWeights(config);
   const effectiveConfig = isSyntheticInput(ohlcv, obMetrics)
@@ -521,16 +490,31 @@ export function composeSignal(
     return null;
   }
 
+  const ruleRegistry = registry ?? getComposerRuleRegistry();
   const marketComponents = buildMarketComponents(
     candles,
     obMetrics,
+    ohlcv,
     effectiveConfig,
+    ruleRegistry,
   );
   if (marketComponents === null) return null;
   const components = [
     ...marketComponents,
-    ...buildOscillatorComponents(candles, effectiveConfig),
-    ...buildContextComponents(candles, obMetrics, ohlcv, effectiveConfig),
+    ...buildOscillatorComponents(
+      candles,
+      obMetrics,
+      ohlcv,
+      effectiveConfig,
+      ruleRegistry,
+    ),
+    ...buildContextComponents(
+      candles,
+      obMetrics,
+      ohlcv,
+      effectiveConfig,
+      ruleRegistry,
+    ),
   ];
 
   const validated = validateSignalComponents(candles, components, thresholds);
@@ -567,7 +551,7 @@ export function composeSignal(
   };
 }
 
-function buildSpreadComponent(
+export function buildSpreadComponent(
   ob: OrderBookMetricsInput,
   weight: number,
   thresholds: ComposerThresholds,
@@ -600,7 +584,7 @@ function buildSpreadComponent(
   };
 }
 
-function buildImbalanceComponent(
+export function buildImbalanceComponent(
   ob: OrderBookMetricsInput,
   weight: number,
   thresholds: ComposerThresholds,
@@ -633,7 +617,7 @@ function buildImbalanceComponent(
   };
 }
 
-function buildVolatilityComponent(
+export function buildVolatilityComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -668,7 +652,7 @@ function buildVolatilityComponent(
   };
 }
 
-function passesVolatilityFilter(
+export function passesVolatilityFilter(
   component: SignalComponent,
   thresholds: ComposerThresholds,
 ): boolean {
@@ -679,7 +663,7 @@ function passesVolatilityFilter(
   );
 }
 
-function buildTrendComponent(
+export function buildTrendComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -750,7 +734,7 @@ function buildTrendComponent(
   };
 }
 
-function buildLiquidityComponent(
+export function buildLiquidityComponent(
   ob: OrderBookMetricsInput,
   weight: number,
   thresholds: ComposerThresholds,
@@ -777,14 +761,14 @@ function buildLiquidityComponent(
   };
 }
 
-function passesLiquidityFilter(
+export function passesLiquidityFilter(
   component: SignalComponent,
   thresholds: ComposerThresholds,
 ): boolean {
   return component.value >= thresholds.liquidityMedium;
 }
 
-function buildRsiComponent(
+export function buildRsiComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -853,7 +837,7 @@ function buildRsiComponent(
   };
 }
 
-function buildConnorsRsi2Component(
+export function buildConnorsRsi2Component(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -900,7 +884,7 @@ function buildConnorsRsi2Component(
   };
 }
 
-function buildRsiPullbackComponent(
+export function buildRsiPullbackComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -954,7 +938,7 @@ function buildRsiPullbackComponent(
   };
 }
 
-function buildEmaPullbackComponent(
+export function buildEmaPullbackComponent(
   candles: readonly CandleLike[],
   weight: number,
   thresholds: ComposerThresholds,
@@ -1153,7 +1137,7 @@ function completeRegimeInputs(regime: RegimeAnalysis): {
     bb: regime.bollinger,
   };
 }
-function buildRegimeComponent(
+export function buildRegimeComponent(
   candles: readonly CandleLike[],
   ob: OrderBookMetricsInput,
   weight: number,
@@ -1237,7 +1221,7 @@ function buildRegimeComponent(
   };
 }
 
-function buildFundingComponent(
+export function buildFundingComponent(
   candles: readonly CandleLike[],
   _ob: OrderBookMetricsInput,
   weight: number,

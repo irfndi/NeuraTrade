@@ -643,15 +643,17 @@ export function makeParityReplayCommand(homeDir?: string) {
         artifactPath,
         JSON.stringify(artifact, null, 2),
       );
-      yield* Console.log(humanReport(
-        args.exchange,
-        args.symbol,
-        args.timeframe,
-        window.length,
-        bt.trades,
-        depTrades,
-        checks,
-      ));
+      yield* Console.log(
+        humanReport(
+          args.exchange,
+          args.symbol,
+          args.timeframe,
+          window.length,
+          bt.trades,
+          depTrades,
+          checks,
+        ),
+      );
       yield* Console.log(
         failedRun
           ? `failed-run evidence written to: ${artifactPath} (passing evidence at data/execution-parity.json untouched)`

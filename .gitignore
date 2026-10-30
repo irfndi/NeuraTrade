@@ -236,3 +236,10 @@ crates/grid_parity_fixture.*.csv
 # TS/Rust grid parity generated fixtures
 services/neuratrade-cli-ts/grid_parity_fixture.*.csv
 services/neuratrade-cli-ts/grid_parity_fixture.json
+
+# Python bytecode from research scripts
+__pycache__/
+*.pyc
+
+# oh-my-plumb local session telemetry
+.oh-my-plumb/

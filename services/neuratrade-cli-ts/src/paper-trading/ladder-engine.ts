@@ -17,7 +17,7 @@
  * source of truth and the bar is rolled back if any live order fails.
  */
 
-import { Effect, Option } from "effect";
+import { Effect, Option, Result } from "effect";
 import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
@@ -293,11 +293,13 @@ export function freshWorkingState(initialCapital: number): WorkingState {
 }
 
 /** Model fee rates (as fractions of notional) for one ladder round trip. */
-function ladderFeeRates(opts: LadderPaperTradingOptions): {
+interface LadderFeeRates {
   readonly makerFee: number;
   readonly takerFee: number;
   readonly crossFee: number;
-} {
+}
+
+function ladderFeeRates(opts: LadderPaperTradingOptions): LadderFeeRates {
   return {
     makerFee: (opts.feePct ?? 0) / 100,
     takerFee: (opts.takerExitFeePct ?? opts.feePct ?? 0) / 100,
@@ -1876,6 +1878,64 @@ function loadLadderOptionalServices(): Effect.Effect<LadderOptionalServices> {
   });
 }
 
+/**
+ * Live-only safety guard: an orphaned venue position with no open rung is
+ * closed, and any unconfirmed close holds the iteration instead of trading on
+ * top of live exposure. Returns a hold result when the iteration must stop.
+ */
+function guardOrphanPosition(
+  options: LadderPaperTradingOptions,
+  state: LadderPaperState,
+  w: WorkingState,
+  services: LadderOptionalServices,
+): Effect.Effect<LadderPaperIterationResult | null, never> {
+  return Effect.gen(function* () {
+    if (options.isLive !== true || Option.isNone(services.adapter)) return null;
+    const productType = options.productType ?? "USDT-FUTURES";
+    const realPosition = yield* services.adapter.value
+      .getPosition(options.symbol, productType)
+      .pipe(Effect.result);
+    if (realPosition._tag === "Failure") return null;
+    const position = realPosition.success;
+    if (position === null || !(Number(position.quantity) > 0)) return null;
+    if (openRungCount(w) !== 0) return null;
+
+    const closed = yield* services.adapter.value
+      .closePosition({
+        symbol: options.symbol,
+        side: position.side === "long" ? "sell" : "buy",
+        productType,
+        marginMode: options.marginMode ?? "isolated",
+        leverage: Math.max(1, options.leverage ?? 1),
+        size: position.quantity,
+      })
+      .pipe(Effect.result);
+    const closeFailure = describeCloseFailure(closed, position.quantity);
+    if (closeFailure === undefined) return null;
+    return ladderHoldResult(
+      state,
+      `orphan position close not confirmed: ${closeFailure}`,
+      w,
+    );
+  });
+}
+
+/** Why an orphan close is not confirmed, or undefined when it fully filled. */
+function describeCloseFailure(
+  closed: Result.Result<FuturesOrderFill | null, ExchangeError>,
+  quantity: Decimal,
+): string | undefined {
+  if (Result.isFailure(closed)) return closed.failure.reason;
+  if (closed.success === null) return "close returned no fill";
+  if (!closed.success.filledQty.greaterThan(0)) {
+    return `no confirmed fill for ${quantity.toString()}`;
+  }
+  if (!closed.success.filledQty.greaterThanOrEqualTo(quantity)) {
+    return `partial close ${closed.success.filledQty.toString()} of ${quantity.toString()}`;
+  }
+  return undefined;
+}
+
 function guardLadderIteration(
   options: LadderPaperTradingOptions,
   state: LadderPaperState,
@@ -1908,52 +1968,8 @@ function guardLadderIteration(
           w,
         );
       }
-      if (Option.isSome(services.adapter)) {
-        const productType = options.productType ?? "USDT-FUTURES";
-        const realPosition = yield* services.adapter.value
-          .getPosition(options.symbol, productType)
-          .pipe(Effect.result);
-        if (
-          realPosition._tag === "Success" &&
-          realPosition.success !== null &&
-          Number(realPosition.success.quantity) > 0 &&
-          openRungCount(w) === 0
-        ) {
-          const position = realPosition.success;
-          const closed = yield* services.adapter.value
-            .closePosition({
-              symbol: options.symbol,
-              side: position.side === "long" ? "sell" : "buy",
-              productType,
-              marginMode: options.marginMode ?? "isolated",
-              leverage: Math.max(1, options.leverage ?? 1),
-              size: position.quantity,
-            })
-            .pipe(Effect.result);
-          // An orphan the venue did not confirm closed is still live exposure:
-          // hold with the reason instead of trading on top of it.
-          const closeFailure =
-            closed._tag === "Failure"
-              ? closed.failure.reason
-              : closed.success === null ||
-                  !closed.success.filledQty.greaterThan(0)
-                ? `no confirmed fill for ${position.quantity.toString()}`
-                : !closed.success.filledQty.greaterThanOrEqualTo(
-                      position.quantity,
-                    )
-                  ? `partial close ${closed.success.filledQty.toString()} of ${position.quantity.toString()}`
-                  : undefined;
-          if (closeFailure !== undefined) {
-            return ladderHoldResult(
-              state,
-              `orphan position close not confirmed: ${closeFailure}`,
-              w,
-            );
-          }
-        }
-      }
     }
-    return null;
+    return yield* guardOrphanPosition(options, state, w, services);
   });
 }
 
@@ -2022,13 +2038,14 @@ function modelCloseComponent(
  * the drawdown baseline. Rungs with no confirmed evidence (simulated fills,
  * legacy rows) keep the paper model untouched.
  */
-function reconcileLiveLadderAccounting(
-  options: LadderPaperTradingOptions,
+/**
+ * Overlay venue-confirmed entry fills onto the paper rungs, keyed by
+ * side:rungIndex, and return the entries by that same key for close matching.
+ */
+function applyConfirmedEntries(
   w: WorkingState,
-  closes: LadderCloseEvent[],
   live: LadderLiveBarFills,
-  peakBefore: Decimal,
-): void {
+): Map<string, LadderLiveEntry> {
   const confirmedEntries = new Map<string, LadderLiveEntry>();
   for (const entry of live.entries) {
     const key = `${entry.side}:${entry.rungIndex}`;
@@ -2048,6 +2065,51 @@ function reconcileLiveLadderAccounting(
       entryFillSource: "live",
     };
   }
+  return confirmedEntries;
+}
+
+/**
+ * Re-classify a close's win/loss against the CONFIRMED fill so expectancy
+ * counts what the venue actually paid, not the theoretical close.
+ */
+function reclassifyConfirmedOutcome(
+  w: WorkingState,
+  close: LadderCloseEvent,
+  options: LadderPaperTradingOptions,
+  confirmedComponent: Decimal,
+): void {
+  const modelPricePnl =
+    close.entryPrice > 0
+      ? close.side === "long"
+        ? (close.exitPrice - close.entryPrice) / close.entryPrice
+        : (close.entryPrice - close.exitPrice) / close.entryPrice
+      : 0;
+  const { makerFee, takerFee, crossFee } = ladderFeeRates(options);
+  const modelFee =
+    close.reason === "target"
+      ? makerFee * 2 + crossFee
+      : makerFee + takerFee + crossFee;
+  const modelLoss =
+    close.reason === "liquidation" || modelPricePnl - modelFee < 0;
+  const confirmedLoss = confirmedComponent.lessThan(0);
+  if (modelLoss === confirmedLoss) return;
+  if (confirmedLoss) {
+    w.totalWins = Math.max(0, w.totalWins - 1);
+    w.totalLosses += 1;
+  } else {
+    w.totalLosses = Math.max(0, w.totalLosses - 1);
+    w.totalWins += 1;
+  }
+}
+
+function reconcileLiveLadderAccounting(
+  options: LadderPaperTradingOptions,
+  w: WorkingState,
+  closes: LadderCloseEvent[],
+  live: LadderLiveBarFills,
+  peakBefore: Decimal,
+): void {
+  const confirmedEntries = applyConfirmedEntries(w, live);
   const confirmedCloses: Decimal[] = [];
   // Closes that keep the paper model (no venue fill to reconcile against)
   // still contribute their model capital to the peak floor below.
@@ -2099,31 +2161,7 @@ function reconcileLiveLadderAccounting(
     cumulative = capitalAfterConfirmed.minus(capitalAfterModel);
     confirmedCloses.push(capitalAfterConfirmed);
     const pnl = capitalAfterConfirmed.minus(capitalBeforeConfirmed);
-    // Re-classify the win/loss against the confirmed fill so expectancy
-    // counts what the venue paid, not the theoretical close.
-    const modelPricePnl =
-      close.entryPrice > 0
-        ? close.side === "long"
-          ? (close.exitPrice - close.entryPrice) / close.entryPrice
-          : (close.entryPrice - close.exitPrice) / close.entryPrice
-        : 0;
-    const { makerFee, takerFee, crossFee } = ladderFeeRates(options);
-    const modelFee =
-      close.reason === "target"
-        ? makerFee * 2 + crossFee
-        : makerFee + takerFee + crossFee;
-    const modelLoss =
-      close.reason === "liquidation" || modelPricePnl - modelFee < 0;
-    const confirmedLoss = confirmedComponent.lessThan(0);
-    if (modelLoss !== confirmedLoss) {
-      if (confirmedLoss) {
-        w.totalWins = Math.max(0, w.totalWins - 1);
-        w.totalLosses += 1;
-      } else {
-        w.totalLosses = Math.max(0, w.totalLosses - 1);
-        w.totalWins += 1;
-      }
-    }
+    reclassifyConfirmedOutcome(w, close, options, confirmedComponent);
     closes[index] = {
       ...close,
       entryPrice: toNumber(entryPrice),

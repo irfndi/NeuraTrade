@@ -240,8 +240,7 @@ function tolerantMember<A, I>(
   );
 }
 
-const tolerantString = (fallback: string) =>
-  tolerantMember(S.String, fallback);
+const tolerantString = (fallback: string) => tolerantMember(S.String, fallback);
 
 const bybitSideSchema = S.Union([S.Literal("Buy"), S.Literal("Sell")]);
 
@@ -259,10 +258,9 @@ const BybitContractWireSchema = S.Struct({
     qtyStep: "0",
     minOrderAmt: "0",
   }),
-  priceFilter: tolerantMember(
-    S.Struct({ tickSize: tolerantString("0") }),
-    { tickSize: "0" },
-  ),
+  priceFilter: tolerantMember(S.Struct({ tickSize: tolerantString("0") }), {
+    tickSize: "0",
+  }),
   leverageFilter: tolerantMember(
     S.Struct({ maxLeverage: tolerantString("1") }),
     { maxLeverage: "1" },
@@ -692,8 +690,7 @@ export function fetchBybit<A>(
     }
 
     const decoded: A = yield* Effect.try({
-      try: () =>
-        S.decodeUnknownSync(resultSchema)(envelope.result) as A,
+      try: () => S.decodeUnknownSync(resultSchema)(envelope.result) as A,
       catch: (error): BybitClientError =>
         new BybitApiError({
           status: response.status,
@@ -869,19 +866,15 @@ function makeBybitClientImpl(
         { accountType: "UNIFIED" },
         BybitWalletBalanceWireSchema,
       ).pipe(
-        Effect.map(
-          (result) => (result.list?.[0]?.coin ?? []).map(toBybitWalletCoin),
+        Effect.map((result) =>
+          (result.list?.[0]?.coin ?? []).map(toBybitWalletCoin),
         ),
       ),
     getPositions: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
-      return get(
-        "/v5/position/list",
-        query,
-        BybitPositionListWireSchema,
-      ).pipe(
+      return get("/v5/position/list", query, BybitPositionListWireSchema).pipe(
         // positionIdx in the venue's own rows is the authoritative mode
         // signal; refresh before callers size or close against these rows.
         Effect.tap((result) =>
@@ -909,11 +902,7 @@ function makeBybitClientImpl(
         "/v5/position/closed-pnl",
         query,
         BybitClosedPnlListWireSchema,
-      ).pipe(
-        Effect.map(
-          (result) => (result.list ?? []).map(toBybitClosedPnl),
-        ),
-      );
+      ).pipe(Effect.map((result) => (result.list ?? []).map(toBybitClosedPnl)));
     },
     placeOrder: (order) => {
       const body: BybitRequestPayload = {
@@ -929,11 +918,8 @@ function makeBybitClientImpl(
       };
       if (order.orderType === "Limit") body.timeInForce = "GTC";
       if (order.price !== undefined) body.price = order.price;
-      if (order.reduceOnly === true) body.reduceOnly = true;      return post(
-        "/v5/order/create",
-        body,
-        BybitOrderAckWireSchema,
-      ).pipe(
+      if (order.reduceOnly === true) body.reduceOnly = true;
+      return post("/v5/order/create", body, BybitOrderAckWireSchema).pipe(
         Effect.map((ack) => ({
           orderId: ack.orderId ?? "",
           clientOrderId: ack.orderLinkId ?? "",
@@ -946,21 +932,22 @@ function makeBybitClientImpl(
         { category: "linear", symbol, orderId },
         BybitOrderListWireSchema,
       ).pipe(
-        Effect.map(
-          (result) =>
-            result.list?.[0] === undefined ? {
-              orderId: "",
-              clientOrderId: "",
-              symbol: "",
-              side: "Buy",
-              orderType: "",
-              orderStatus: "",
-              qty: "0",
-              price: "0",
-              avgPrice: "0",
-              cumExecQty: "0",
-              cumExecFee: "0",
-            } : toBybitOrder(result.list[0]),
+        Effect.map((result) =>
+          result.list?.[0] === undefined
+            ? {
+                orderId: "",
+                clientOrderId: "",
+                symbol: "",
+                side: "Buy",
+                orderType: "",
+                orderStatus: "",
+                qty: "0",
+                price: "0",
+                avgPrice: "0",
+                cumExecQty: "0",
+                cumExecFee: "0",
+              }
+            : toBybitOrder(result.list[0]),
         ),
       ),
     // History holds what realtime drops: filled, cancelled, rejected.
@@ -971,9 +958,11 @@ function makeBybitClientImpl(
         "/v5/order/history",
         { category: "linear", symbol, orderId },
         BybitOrderListWireSchema,
-      ).pipe(Effect.map((result) =>
-        result.list?.[0] === undefined ? null : toBybitOrder(result.list[0]),
-      )),
+      ).pipe(
+        Effect.map((result) =>
+          result.list?.[0] === undefined ? null : toBybitOrder(result.list[0]),
+        ),
+      ),
     getOpenOrders: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;

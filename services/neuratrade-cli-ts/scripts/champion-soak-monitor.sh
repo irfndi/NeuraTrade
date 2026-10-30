@@ -90,13 +90,13 @@ log() { printf '[%s] %s\n' "$(now)" "$1" | tee -a "$LOG_FILE"; }
 
 alert() {
   printf '[%s] ALERT: %s\n' "$(now)" "$1" >&2
-  printf '[%s] ALERT: %s\n' "$(now)" "$1" >> "$LOG_FILE"
+  printf '[%s] ALERT: %s\n' "$(now)" "$1" >>"$LOG_FILE"
   ALERTS=$((ALERTS + 1))
 }
 
 warn() {
   printf '[%s] WARN: %s\n' "$(now)" "$1" >&2
-  printf '[%s] WARN: %s\n' "$(now)" "$1" >> "$LOG_FILE"
+  printf '[%s] WARN: %s\n' "$(now)" "$1" >>"$LOG_FILE"
 }
 
 fail() {
@@ -157,7 +157,7 @@ if [ -f "$CLAIMED_FILE" ]; then
     PREV=""
     [ -f "$SEEN_FILE" ] && PREV=$(cat "$SEEN_FILE" 2>/dev/null | tr -d '[:space:]' || true)
     if [ "$HASH" != "$PREV" ]; then
-      printf '%s\n' "$HASH" > "$SEEN_FILE"
+      printf '%s\n' "$HASH" >"$SEEN_FILE"
       alert "GOALS CLAIMED: $CLAIMED_FILE is new/changed (hash $HASH)"
     else
       log "claim: already seen (hash $HASH)"
@@ -202,13 +202,13 @@ check_home() {
         PREV=""
       fi
       if [ -z "$PREV" ]; then
-        printf '%s\n' "$TOTAL" > "$TOTAL_FILE"
+        printf '%s\n' "$TOTAL" >"$TOTAL_FILE"
         log "$home_name: ladder fills baseline: $TOTAL"
       elif [ "$TOTAL" -gt "$PREV" ]; then
-        printf '%s\n' "$TOTAL" > "$TOTAL_FILE"
+        printf '%s\n' "$TOTAL" >"$TOTAL_FILE"
         alert "$home_name: NEW LADDER FILLS: total $TOTAL (was $PREV)"
       elif [ "$TOTAL" -lt "$PREV" ]; then
-        printf '%s\n' "$TOTAL" > "$TOTAL_FILE"
+        printf '%s\n' "$TOTAL" >"$TOTAL_FILE"
         warn "$home_name: ladder total DECREASED $PREV -> $TOTAL (DB reset?); baseline reset"
       else
         log "$home_name: ladder fills unchanged: $TOTAL"
@@ -264,13 +264,13 @@ check_home() {
     PREV_C=""
   fi
   if [ -z "$PREV_C" ]; then
-    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    printf '%s\n' "$CLOSES" >"$CLOSES_FILE"
     log "$home_name: 24h ladder closes baseline: $CLOSES (lifetime total: $FTOT)"
   elif [ "$CLOSES" -gt "$PREV_C" ]; then
-    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    printf '%s\n' "$CLOSES" >"$CLOSES_FILE"
     alert "$home_name: NEW LADDER CLOSES: 24h count $CLOSES (was $PREV_C; lifetime total $FTOT)"
   elif [ "$CLOSES" -lt "$PREV_C" ]; then
-    printf '%s\n' "$CLOSES" > "$CLOSES_FILE"
+    printf '%s\n' "$CLOSES" >"$CLOSES_FILE"
     warn "$home_name: 24h close count DECREASED $PREV_C -> $CLOSES (window aged out, or DB reset); baseline reset"
   else
     log "$home_name: 24h ladder closes unchanged: $CLOSES (lifetime total: $FTOT)"
@@ -306,7 +306,7 @@ else
       else
         PREV_B=0
       fi
-      printf '%s\n' "$BREACHED" > "$BREACH_FILE"
+      printf '%s\n' "$BREACHED" >"$BREACH_FILE"
       if [ "$BREACHED" = "1" ] && [ "$PREV_B" != "1" ]; then
         alert "disk: newly breached threshold (state transition)"
       elif [ "$BREACHED" = "0" ] && [ "$PREV_B" = "1" ]; then

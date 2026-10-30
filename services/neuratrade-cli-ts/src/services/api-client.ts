@@ -5,6 +5,7 @@
  * Uses Effect-TS for typed errors and dependency injection.
  */
 import { Context, Data, Effect, Layer } from "effect";
+import * as S from "effect/Schema";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -268,6 +269,13 @@ function parseJson<T>(
   });
 }
 
+/** Human-readable type tag for error messages (never throws). */
+function describeValue(value: number | string | null | undefined): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  return S.is(S.Number)(value) ? "number" : "string";
+}
+
 /**
  * Parse + validate the /internal/portfolio response. A 200 error page or a
  * payload missing `total_equity` would otherwise flow downstream as
@@ -284,10 +292,12 @@ function parsePortfolio(
     // disable the drift signal, so fail closed here (same posture as
     // bitget-client's strictParse).
     Effect.tap((payload) => {
-      if (typeof payload.total_equity !== "string") {
+      // Decode the money-critical field instead of probing it: a non-string
+      // (number, null, absent) must fail closed, not flow on as undefined.
+      if (!S.is(S.String)(payload.total_equity)) {
         return Effect.fail(
           new JsonParseError({
-            cause: `portfolio response missing string "total_equity" (got ${typeof payload.total_equity})`,
+            cause: `portfolio response missing string "total_equity" (got ${describeValue(payload.total_equity)})`,
             endpoint,
           }),
         );

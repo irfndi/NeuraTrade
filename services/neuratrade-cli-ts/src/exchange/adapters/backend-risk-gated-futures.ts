@@ -34,10 +34,9 @@ const decimalText = S.String.check(
 );
 
 const isoTimestamp = S.String.check(
-  S.makeFilter<string>(
-    (value) => !Number.isNaN(Date.parse(value)),
-    { message: "must be an ISO timestamp" },
-  ),
+  S.makeFilter<string>((value) => !Number.isNaN(Date.parse(value)), {
+    message: "must be an ISO timestamp",
+  }),
 );
 
 const nonEmpty = S.String.check(S.isMinLength(1));
@@ -143,7 +142,10 @@ function makeAdapter(
               portfolio_value: price.times(request.size).toString(),
               current_position: "0",
             }),
-            signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+            signal:
+              timeoutMs === undefined
+                ? undefined
+                : AbortSignal.timeout(timeoutMs),
           }),
         catch: (error) =>
           new ExchangeError(
@@ -245,7 +247,10 @@ function makeAdapter(
             `${baseUrl}/api/v1/execution/futures/positions?${query.toString()}`,
             {
               headers: { "X-API-Key": config.apiKey },
-              signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+              signal:
+                timeoutMs === undefined
+                  ? undefined
+                  : AbortSignal.timeout(timeoutMs),
             },
           ),
         catch: (error) =>
@@ -270,7 +275,9 @@ function makeAdapter(
       const payload: PositionsResponse = yield* Effect.tryPromise({
         try: async () => {
           const body: unknown = await response.json();
-          return S.decodeUnknownSync(positionsResponseSchema)(body) as PositionsResponse;
+          return S.decodeUnknownSync(positionsResponseSchema)(
+            body,
+          ) as PositionsResponse;
         },
         catch: (error) =>
           new ExchangeError(

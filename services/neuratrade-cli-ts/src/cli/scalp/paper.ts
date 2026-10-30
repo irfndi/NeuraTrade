@@ -446,9 +446,7 @@ function resolveSoakArgs(
 }
 
 type MutableFuturesPaperTradingOptions = {
-  -readonly [
-    K in keyof FuturesPaperTradingOptions
-  ]?: FuturesPaperTradingOptions[K];
+  -readonly [K in keyof FuturesPaperTradingOptions]?: FuturesPaperTradingOptions[K];
 };
 
 type MutableGridPaperTradingOptions = {

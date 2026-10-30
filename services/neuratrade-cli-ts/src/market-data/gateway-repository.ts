@@ -72,7 +72,11 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       symbol: string,
     ): Effect.Effect<Tick, MarketDataError, never> =>
       Effect.gen(function* () {
-        const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
+        const timeframe = yield* findLastTimeframe(
+          lastTimeframesRef,
+          exchange,
+          symbol,
+        );
         const candle = yield* latestCandle(exchange, symbol, timeframe);
         return {
           exchange,
@@ -117,7 +121,11 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
       limit: number,
     ): Effect.Effect<OrderBook, MarketDataError, never> =>
       Effect.gen(function* () {
-        const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
+        const timeframe = yield* findLastTimeframe(
+          lastTimeframesRef,
+          exchange,
+          symbol,
+        );
         const candle = yield* latestCandle(exchange, symbol, timeframe);
         const spread = candle.high - candle.low;
         const mid = candle.close;
@@ -171,7 +179,11 @@ export const MarketDataGatewayRepositoryLive = Layer.effect(
         const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const volumes: Record<string, number> = {};
         for (const symbol of symbols) {
-          const timeframe = yield* findLastTimeframe(lastTimeframesRef, exchange, symbol);
+          const timeframe = yield* findLastTimeframe(
+            lastTimeframesRef,
+            exchange,
+            symbol,
+          );
           const candles = yield* repo
             .getCandles({ exchange, symbol, timeframe, from: since })
             .pipe(Effect.mapError(toMarketDataError));

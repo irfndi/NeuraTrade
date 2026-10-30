@@ -9,10 +9,7 @@ import liveOrderFilledFixture from "../../../tests/fixtures/backend/live-order-f
 const originalFetch = globalThis.fetch;
 
 /** Captured request body for the backend execution gate. */
-const requestBodySchema = S.Record(
-  S.String,
-  S.Union([S.String, S.Boolean]),
-);
+const requestBodySchema = S.Record(S.String, S.Union([S.String, S.Boolean]));
 
 afterEach(() => {
   globalThis.fetch = originalFetch;

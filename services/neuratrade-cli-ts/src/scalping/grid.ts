@@ -456,6 +456,29 @@ export function runGridBacktest(
   const statsProvider =
     runtime.chopGateAdxThreshold > 0 ? cachedStatsProvider(candles) : null;
 
+  /** Peak/drawdown bookkeeping against the current capital. */
+  const trackDrawdown = (): void => {
+    peak = Math.max(peak, capital);
+    const dd = peak > 0 ? (peak - capital) / peak : 0;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+  };
+
+  /** Book one settled trade: capital, win/loss accumulators, trade log. */
+  const applySettlement = (
+    settled: ReturnType<typeof settleGridTrade>,
+    trade: GridTrade,
+  ): void => {
+    capital = settled.capital;
+    if (settled.isLoss) {
+      totalLosses++;
+      grossLoss += settled.lossMagnitude;
+    } else {
+      totalWins++;
+      grossProfit += settled.profitMagnitude;
+    }
+    trades.push(trade);
+  };
+
   const startIndex = Math.max(options.trendFilterPeriod, 1);
   for (let i = startIndex; i < candles.length; i++) {
     const c = candles[i];
@@ -468,9 +491,7 @@ export function runGridBacktest(
     if (options.onlyWithTrend && trend === null) continue;
 
     capital = Math.max(0, capital);
-    peak = Math.max(peak, capital);
-    const dd = peak > 0 ? (peak - capital) / peak : 0;
-    if (dd > maxDrawdown) maxDrawdown = dd;
+    trackDrawdown();
 
     if (paused > 0) {
       paused--;
@@ -518,15 +539,7 @@ export function runGridBacktest(
         runtime.leverage,
         runtime.positionFraction,
       );
-      capital = settled.capital;
-      if (settled.isLoss) {
-        totalLosses++;
-        grossLoss += settled.lossMagnitude;
-      } else {
-        totalWins++;
-        grossProfit += settled.profitMagnitude;
-      }
-      trades.push({
+      applySettlement(settled, {
         side: exitSide,
         entryBar,
         exitBar: i,
@@ -578,17 +591,8 @@ export function runGridBacktest(
       runtime.positionFraction,
     );
     capital = settled.capital;
-    peak = Math.max(peak, capital);
-    const dd = peak > 0 ? (peak - capital) / peak : 0;
-    if (dd > maxDrawdown) maxDrawdown = dd;
-    if (settled.isLoss) {
-      totalLosses++;
-      grossLoss += settled.lossMagnitude;
-    } else {
-      totalWins++;
-      grossProfit += settled.profitMagnitude;
-    }
-    trades.push({
+    trackDrawdown();
+    applySettlement(settled, {
       side: exitSide,
       entryBar,
       exitBar: candles.length - 1,
