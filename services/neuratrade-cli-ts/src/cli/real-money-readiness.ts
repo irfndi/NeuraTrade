@@ -206,7 +206,10 @@ const executionParityArtifactSchema = S.Struct({
   checks: S.optional(S.Array(S.Unknown)),
 });
 
-function tryDecode<A>(schema: { readonly "Type": A }, value: unknown): A | undefined {
+function tryDecode<A>(
+  schema: { readonly Type: A },
+  value: unknown,
+): A | undefined {
   try {
     return S.decodeUnknownSync(schema as never)(value) as A;
   } catch {

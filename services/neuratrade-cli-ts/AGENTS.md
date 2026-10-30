@@ -19,6 +19,7 @@ services/neuratrade-cli-ts/
 │   ├── schemas/             # Schema definitions for config/state JSON
 │   ├── market-data/         # Exchange gateways (binance, bitget spot+futures) and SQLite repository
 │   ├── scalping/            # Signal composer, backtest engine, grid, walk-forward, readiness gates
+│   ├── rules/               # Rule registry + declarative strategy specs (spec/registry/runtime/attribution)
 │   ├── exchange/            # Exchange adapter port (simulated + live Binance/Bitget futures)
 │   ├── paper-trading/       # Real-time paper/live trading engines (spot, futures, grid)
 │   ├── risk/                # Pre-trade guards, kill switch, circuit breaker
@@ -41,6 +42,7 @@ services/neuratrade-cli-ts/
 | Bitget futures client     | `src/services/bitget-client.ts`                              | HMAC REST, USDT/COIN futures, PAPTRADING demo mode (`BITGET_USE_SANDBOX`)        |
 | Market data persistence   | `src/market-data/repository.ts`                              | Schema-adaptive (slim CLI schema AND shared Go schema with display_name/ccxt_id) |
 | Scalping engines          | `src/scalping/{composer,backtest,grid,exit-engine}.ts`       | Pure cores; Effect wrappers in `src/scalping/services.ts`                        |
+| Rule registry + specs     | `src/rules/{registry,spec,runtime,attribution}.ts`            | `neuratrade rules list/validate/run`; composer dispatches through registry      |
 | Readiness gates           | `src/scalping/readiness.ts`                                  | `evaluateReadiness` G1–G4 (frequency/economics/robustness/hold time)             |
 | Strategy profiles         | `src/scalping/strategy-profile.ts`                           | `findSymbolOverride` matches `BTC/USDT` ↔ `BTC/USDT:USDT` keys both ways         |
 | Exchange adapter port     | `src/exchange/adapter.ts`, `src/exchange/adapters/`          | Simulated + live adapters                                                        |
@@ -111,7 +113,7 @@ Thresholds live in `src/scalping/readiness.ts` (`defaultReadinessThresholds`). T
 - Schema defaults: `X.pipe(S.withDecodingDefault(Effect.succeed(v)))` — no `S.optional` wrapper.
 - **Wire-tolerant parsing (zod `.catch` replacement)**: zod is gone. For boundary
   parsing with `.catch(fallback)` semantics use `S.optional(schema.pipe(S.catchDecoding(()
-  => Effect.succeed(Option.some(fallback)))))` — see `tolerantMember` in
+=> Effect.succeed(Option.some(fallback)))))` — see `tolerantMember` in
   `src/exchange/adapters/bybit-futures.ts`. A bare filter (type-only check, no
   fallback) is `S.String.check(S.makeFilter<string>(pred, { message: "..." }))`. Do
   not hand-write `S.refine(...)` curried calls: their inference collapses to
@@ -141,6 +143,14 @@ Thresholds live in `src/scalping/readiness.ts` (`defaultReadinessThresholds`). T
 - `scalp paper-trade --strategy <name>` applies a template's composer config and execution overrides to the paper loop.
 - `--max-bars-in-trade` forces a time-stop exit after N candles — essential for scalping hold-time discipline.
 - New strategy templates go in `src/scalping/strategy-library.ts` with tests in `src/scalping/strategy-library.test.ts`.
+
+## RULE REGISTRY + STRATEGY SPECS
+
+- The composer no longer hardcodes its component chain: `buildRuleGroupComponents` dispatches over a `RuleRegistry` in registration order, grouped by `category` (`market`, `oscillator`, `context`). `defaultRuleRegistry()` wraps the eleven built-in builders, so composer output is unchanged.
+- `RuleDefinition` (`src/rules/rule.ts`) carries `id` (doubles as the `ComposerWeights` key and the `ComposerEnabled` switch), `gate` (extra activation condition, e.g. `funding` needs `useFunding`), `directionalFilter` (fails the whole evaluation under `directionalOnly`) and `evaluate`.
+- A `StrategySpec` (`src/rules/spec.ts`, Effect Schema) declares rule activations with weights plus `when` condition gates over causal bar context (ADX/ATR/Bollinger/regime/hour). `compileStrategySpec` projects it into a `ComposerConfig`; `buildSpecRegistry` returns a per-spec registry whose rules carry those gates.
+- `neuratrade rules list` prints the registry. `rules validate --file <json>` decodes + compiles without running. `rules run --specs <dir>` runs specs in parallel with ledger-simulated paper fills, per-spec risk protocol, restart-resumable state, and per-rule attribution (`attribution.ts`) that `autoReweight` specs fold into their next compile.
+- Custom rules: export `RuleDefinition`/`RuleDefinition[]` from a module and pass `--rule-module <path>` (repeatable). Modules are operator-supplied local code, so exports are typed rather than schema-decoded.
 
 ## FUNDING-RATE BIAS SIGNAL
 
