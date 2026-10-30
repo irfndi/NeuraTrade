@@ -99,9 +99,13 @@ describe("KillSwitchService", () => {
     const db = freshDb();
     // Stub only the engage UPDATE: reads still hit the real row, which says
     // engaged = 0 (the write never landed).
-    const failingWrite = {
+    // Only the two members the service touches are stubbed, so the partial
+    // object is declared as that narrow contract and widened once at the
+    // seam instead of asserting through `unknown`.
+    type DatabaseStub = Pick<Database, "exec" | "query">;
+    const failingWrite: DatabaseStub = {
       exec: (sql: string) => db.exec(sql),
-      query: (sql: string) => {
+      query: ((sql: string) => {
         if (sql.includes("UPDATE")) {
           return {
             run: () => {
@@ -110,9 +114,9 @@ describe("KillSwitchService", () => {
           };
         }
         return db.query(sql);
-      },
-    } as unknown as Database;
-    const ks = makeKillSwitchService(failingWrite);
+      }) as DatabaseStub["query"],
+    };
+    const ks = makeKillSwitchService(failingWrite as Database);
     const engageOutcome = await Effect.runPromise(ks.engage("emergency")).then(
       () => "ok" as const,
       () => "failed" as const,

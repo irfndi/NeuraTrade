@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Schedule } from "effect";
+import * as S from "effect/Schema";
 import { Database } from "bun:sqlite";
 import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import type {
@@ -86,6 +87,15 @@ export class PaperTradingRepositoryError extends Error {
 const SQLITE_BUSY_PATTERN = /database is locked|SQLITE_BUSY|busy/i;
 const SQLITE_BUSY_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 
+/**
+ * Driver error shape as bun:sqlite actually attaches it to `cause`. Decoded
+ * rather than probed so a reframed error still classifies as busy.
+ */
+const DriverCauseSchema = S.Struct({
+  code: S.optional(S.String),
+  message: S.optional(S.String),
+});
+
 type SqlValue = string | number | null;
 
 function nullableString(value: string | undefined): string | null {
@@ -106,19 +116,71 @@ function isSqliteBusy(err: PaperTradingRepositoryError): boolean {
   // Classify structurally as well: a wrapped/reframed busy error may lose
   // the message text on `reason` but still carry the driver code on `cause`
   // (bun:sqlite sets e.g. `code: "SQLITE_BUSY"`). Retry those too.
-  const cause = err.cause as { code?: unknown; message?: unknown } | undefined;
-  if (cause !== undefined && cause !== null) {
-    if (typeof cause.code === "string" && SQLITE_BUSY_CODES.has(cause.code)) {
-      return true;
-    }
-    if (
-      typeof cause.message === "string" &&
-      SQLITE_BUSY_PATTERN.test(cause.message)
-    ) {
-      return true;
-    }
+  const cause = S.decodeUnknownOption(DriverCauseSchema)(err.cause);
+  if (cause._tag === "None") return false;
+  if (
+    cause.value.code !== undefined &&
+    SQLITE_BUSY_CODES.has(cause.value.code)
+  ) {
+    return true;
   }
-  return false;
+  return (
+    cause.value.message !== undefined &&
+    SQLITE_BUSY_PATTERN.test(cause.value.message)
+  );
+}
+
+/**
+ * One `ladder_paper_trades` row in strict column order. Kept out of the
+ * insert so the 38-column binding stays readable; the decimal columns keep
+ * exact money strings next to the REAL columns existing queries read.
+ */
+function ladderTradeRow(trade: LadderPaperTrade): readonly SqlValue[] {
+  return [
+    trade.id,
+    trade.exchange,
+    trade.symbol,
+    trade.timeframe,
+    trade.side,
+    trade.rungIndex,
+    toNumber(trade.entryPrice),
+    toNumber(trade.exitPrice),
+    toNumber(trade.capitalBefore),
+    toNumber(trade.capitalAfter),
+    toNumber(trade.pnl),
+    toNumber(trade.pnlPct),
+    trade.entryPrice.toString(),
+    trade.exitPrice.toString(),
+    trade.capitalBefore.toString(),
+    trade.capitalAfter.toString(),
+    trade.pnl.toString(),
+    trade.pnlPct.toString(),
+    trade.exitReason,
+    trade.openedAt.toISOString(),
+    trade.closedAt.toISOString(),
+    nullableString(trade.strategyConfigFingerprint),
+    nullableString(trade.cohortId),
+    nullableString(trade.candidateLockAt?.toISOString()),
+    nullableString(trade.datasetCutoffAt?.toISOString()),
+    nullableString(trade.entryOpenedAt?.toISOString()),
+    nullableString(trade.executionEnvironment),
+    nullableString(trade.fillSource),
+    nullableString(trade.entryOrderId),
+    nullableString(trade.exitOrderId),
+    optionalMoneyReal(trade.entryFilledQty),
+    nullableString(trade.entryFilledQty?.toString()),
+    optionalMoneyReal(trade.exitFilledQty),
+    nullableString(trade.exitFilledQty?.toString()),
+    optionalMoneyReal(trade.entryFee),
+    nullableString(trade.entryFee?.toString()),
+    optionalMoneyReal(trade.exitFee),
+    nullableString(trade.exitFee?.toString()),
+  ];
+}
+
+/** REAL column for an optional money field (null when absent). */
+function optionalMoneyReal(value: Money | undefined): SqlValue {
+  return value === undefined ? null : toNumber(value);
 }
 
 function gridStateSqlValues(state: GridPaperState): readonly SqlValue[] {
@@ -2168,52 +2230,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         this.db.transaction(() => {
-          for (const trade of trades) {
-            insert.run(
-              trade.id,
-              trade.exchange,
-              trade.symbol,
-              trade.timeframe,
-              trade.side,
-              trade.rungIndex,
-              toNumber(trade.entryPrice),
-              toNumber(trade.exitPrice),
-              toNumber(trade.capitalBefore),
-              toNumber(trade.capitalAfter),
-              toNumber(trade.pnl),
-              toNumber(trade.pnlPct),
-              trade.entryPrice.toString(),
-              trade.exitPrice.toString(),
-              trade.capitalBefore.toString(),
-              trade.capitalAfter.toString(),
-              trade.pnl.toString(),
-              trade.pnlPct.toString(),
-              trade.exitReason,
-              trade.openedAt.toISOString(),
-              trade.closedAt.toISOString(),
-              trade.strategyConfigFingerprint ?? null,
-              trade.cohortId ?? null,
-              trade.candidateLockAt?.toISOString() ?? null,
-              trade.datasetCutoffAt?.toISOString() ?? null,
-              trade.entryOpenedAt?.toISOString() ?? null,
-              trade.executionEnvironment ?? null,
-              trade.fillSource ?? null,
-              trade.entryOrderId ?? null,
-              trade.exitOrderId ?? null,
-              trade.entryFilledQty === undefined
-                ? null
-                : toNumber(trade.entryFilledQty),
-              trade.entryFilledQty?.toString() ?? null,
-              trade.exitFilledQty === undefined
-                ? null
-                : toNumber(trade.exitFilledQty),
-              trade.exitFilledQty?.toString() ?? null,
-              trade.entryFee === undefined ? null : toNumber(trade.entryFee),
-              trade.entryFee?.toString() ?? null,
-              trade.exitFee === undefined ? null : toNumber(trade.exitFee),
-              trade.exitFee?.toString() ?? null,
-            );
-          }
+          for (const trade of trades) insert.run(...ladderTradeRow(trade));
         })();
       },
       catch: (err) =>

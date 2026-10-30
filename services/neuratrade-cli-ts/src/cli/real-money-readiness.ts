@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as S from "effect/Schema";
+import { Option } from "effect";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -206,16 +207,8 @@ const executionParityArtifactSchema = S.Struct({
   checks: S.optional(S.Array(S.Unknown)),
 });
 
-function tryDecode<A>(
-  schema: { readonly Type: A },
-  value: unknown,
-): A | undefined {
-  try {
-    return S.decodeUnknownSync(schema as never)(value) as A;
-  } catch {
-    return undefined;
-  }
-}
+/** Decode at the boundary; absent/undecodable evidence stays undefined. */
+const asOptional = S.decodeUnknownOption;
 
 function absentExecutionParity(): ExecutionParityEvidence {
   return { passed: false, protocolVersion: "execution-parity/v1", checks: [] };
@@ -243,11 +236,15 @@ function readExecutionParityFile(home: string): ExecutionParityEvidence {
   try {
     if (!existsSync(filePath)) return absentExecutionParity();
     const raw = JSON.parse(readFileSync(filePath, "utf8"));
-    const artifact = tryDecode(executionParityArtifactSchema, raw);
+    const artifact = Option.getOrUndefined(
+      asOptional(executionParityArtifactSchema)(raw),
+    );
     if (artifact === undefined) return absentExecutionParity();
     const checks: ExecutionParityCheck[] = (artifact.checks ?? []).flatMap(
       (check) => {
-        const decoded = tryDecode(executionParityCheckSchema, check);
+        const decoded = Option.getOrUndefined(
+          asOptional(executionParityCheckSchema)(check),
+        );
         return decoded === undefined ? [] : [decoded];
       },
     );

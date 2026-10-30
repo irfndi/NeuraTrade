@@ -33,6 +33,63 @@ export interface SimulatedTradingStop {
   readonly stopLoss?: Decimal;
 }
 
+/** Validate a reduce-only order against the position it is meant to shrink. */
+function checkReduceOnly(
+  request: FuturesOrderRequest,
+  existing: FuturesPosition | undefined,
+): ExchangeError | undefined {
+  if (!request.reduceOnly) return undefined;
+  if (
+    existing === undefined ||
+    existing.side === sideToPosition(request.side)
+  ) {
+    return new ExchangeError("reduce-only order has no opposing position");
+  }
+  if (request.size.greaterThan(existing.available)) {
+    return new ExchangeError("reduce-only size exceeds available position");
+  }
+  return undefined;
+}
+
+/**
+ * Balance after this fill. Reduce-only returns the position's margin plus
+ * realized PnL; otherwise the closed leg's margin is released and the opening
+ * margin is locked. Both pay the fee.
+ */
+function nextBalance(input: {
+  readonly request: FuturesOrderRequest;
+  readonly balance: Decimal;
+  readonly fee: Decimal;
+  readonly price: Decimal;
+  readonly existing: FuturesPosition;
+  readonly closedMargin: Decimal;
+  readonly realizedPnl: Decimal;
+  readonly openingMargin: Decimal;
+  readonly heldLeverage: (position: FuturesPosition) => number;
+}): Decimal {
+  const { request, balance, fee, price, existing } = input;
+  if (request.reduceOnly) {
+    return balance
+      .plus(
+        existing.entryPrice
+          .times(request.size)
+          .div(input.heldLeverage(existing)),
+      )
+      .plus(
+        price
+          .minus(existing.entryPrice)
+          .times(request.size)
+          .times(existing.side === "long" ? 1 : -1),
+      )
+      .minus(fee);
+  }
+  return balance
+    .plus(input.closedMargin)
+    .plus(input.realizedPnl)
+    .minus(input.openingMargin)
+    .minus(fee);
+}
+
 function positionKey(symbol: string, productType: FuturesProductType): string {
   return `${productType}:${symbol}`;
 }
@@ -241,17 +298,9 @@ export function makeSimulatedFuturesExchangeAdapterService(
           }
 
           if (request.reduceOnly) {
-            if (!existing || existing.side === sideToPosition(request.side)) {
-              return yield* Effect.fail(
-                new ExchangeError("reduce-only order has no opposing position"),
-              );
-            }
-            if (request.size.greaterThan(existing.available)) {
-              return yield* Effect.fail(
-                new ExchangeError(
-                  "reduce-only size exceeds available position",
-                ),
-              );
+            const reduceOnlyError = checkReduceOnly(request, existing);
+            if (reduceOnlyError !== undefined) {
+              return yield* Effect.fail(reduceOnlyError);
             }
           }
 
@@ -269,25 +318,17 @@ export function makeSimulatedFuturesExchangeAdapterService(
                 .times(closedQty)
                 .times(existing.side === "long" ? 1 : -1)
             : money(0);
-          const balanceAfterFill = request.reduceOnly
-            ? balance
-                .plus(
-                  existing.entryPrice
-                    .times(request.size)
-                    .div(heldLeverage(existing)),
-                )
-                .plus(
-                  price
-                    .minus(existing.entryPrice)
-                    .times(request.size)
-                    .times(existing.side === "long" ? 1 : -1),
-                )
-                .minus(fee)
-            : balance
-                .plus(closedMargin)
-                .plus(realizedPnl)
-                .minus(openingMargin)
-                .minus(fee);
+          const balanceAfterFill = nextBalance({
+            request,
+            balance,
+            fee,
+            price,
+            existing,
+            closedMargin,
+            realizedPnl,
+            openingMargin,
+            heldLeverage,
+          });
           yield* setBalance(marginCoin, balanceAfterFill);
 
           const fill: FuturesOrderFill = {
