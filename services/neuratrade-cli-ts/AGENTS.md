@@ -42,7 +42,7 @@ services/neuratrade-cli-ts/
 | Bitget futures client     | `src/services/bitget-client.ts`                              | HMAC REST, USDT/COIN futures, PAPTRADING demo mode (`BITGET_USE_SANDBOX`)        |
 | Market data persistence   | `src/market-data/repository.ts`                              | Schema-adaptive (slim CLI schema AND shared Go schema with display_name/ccxt_id) |
 | Scalping engines          | `src/scalping/{composer,backtest,grid,exit-engine}.ts`       | Pure cores; Effect wrappers in `src/scalping/services.ts`                        |
-| Rule registry + specs     | `src/rules/{registry,spec,runtime,attribution}.ts`            | `neuratrade rules list/validate/run`; composer dispatches through registry      |
+| Rule registry + specs     | `src/rules/{registry,spec,runtime,attribution}.ts`           | `neuratrade rules list/validate/run`; composer dispatches through registry       |
 | Readiness gates           | `src/scalping/readiness.ts`                                  | `evaluateReadiness` G1–G4 (frequency/economics/robustness/hold time)             |
 | Strategy profiles         | `src/scalping/strategy-profile.ts`                           | `findSymbolOverride` matches `BTC/USDT` ↔ `BTC/USDT:USDT` keys both ways         |
 | Exchange adapter port     | `src/exchange/adapter.ts`, `src/exchange/adapters/`          | Simulated + live adapters                                                        |

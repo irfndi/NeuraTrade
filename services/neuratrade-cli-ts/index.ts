@@ -23,7 +23,7 @@ if (isReadinessCommand) {
     ...argv.slice(1, readinessIndex),
     ...argv.slice(readinessIndex + 1),
   ];
-  
+
   if (commandArgs.includes("--help") || commandArgs.includes("-h")) {
     console.log(helpText());
   } else if (commandArgs.includes("--version")) {

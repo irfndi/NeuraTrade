@@ -261,9 +261,7 @@ export function makeSimulatedFuturesExchangeAdapterService(
           const heldLeverage = (position: FuturesPosition): number =>
             position.leverage > 0 ? position.leverage : request.leverage;
           const closedMargin = reducing
-            ? existing.entryPrice
-                .times(closedQty)
-                .div(heldLeverage(existing))
+            ? existing.entryPrice.times(closedQty).div(heldLeverage(existing))
             : money(0);
           const realizedPnl = reducing
             ? price

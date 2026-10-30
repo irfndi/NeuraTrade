@@ -64,7 +64,5 @@ export function parseProductType(value: string): BitgetProductType {
 }
 
 export type MutablePartialRiskLimits = {
-  -readonly [
-    K in keyof import("../../risk/guards.js").RiskLimits
-  ]?: import("../../risk/guards.js").RiskLimits[K];
+  -readonly [K in keyof import("../../risk/guards.js").RiskLimits]?: import("../../risk/guards.js").RiskLimits[K];
 };

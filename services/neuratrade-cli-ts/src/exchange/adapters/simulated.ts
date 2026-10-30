@@ -60,81 +60,86 @@ export function makeSimulatedExchangeAdapter(
         // The balance/position bookkeeping is ONE atomic state transition:
         // a read-modify-write that straddled the awaited order-book fetch
         // would lose updates when two orders are placed concurrently.
-        const fill = yield* Ref.modify(stateRef, (state): [
-          {
-            orderId: string;
-            symbol: string;
-            side: "buy" | "sell";
-            filledQty: number;
-            filledPrice: number;
-            fee: number;
-            timestamp: Date;
-          },
-          SimulatedState,
-        ] => {
-          const balances = { ...state.balances };
-          const positions = { ...state.positions };
-          balances.USDT = (balances.USDT ?? 0) + quoteDelta;
+        const fill = yield* Ref.modify(
+          stateRef,
+          (
+            state,
+          ): [
+            {
+              orderId: string;
+              symbol: string;
+              side: "buy" | "sell";
+              filledQty: number;
+              filledPrice: number;
+              fee: number;
+              timestamp: Date;
+            },
+            SimulatedState,
+          ] => {
+            const balances = { ...state.balances };
+            const positions = { ...state.positions };
+            balances.USDT = (balances.USDT ?? 0) + quoteDelta;
 
-          const existing = positions[request.symbol];
-          if (existing) {
-            if (
-              existing.side === (request.side === "buy" ? "long" : "short")
-            ) {
-              const totalQty = existing.quantity + request.quantity;
-              const avgEntry =
-                (existing.entryPrice * existing.quantity +
-                  filledPrice * request.quantity) /
-                totalQty;
-              positions[request.symbol] = {
-                ...existing,
-                quantity: totalQty,
-                entryPrice: avgEntry,
-              };
-            } else {
-              // Opposite side: the order closes the existing position and any
-              // excess opens a new one on the other side (a flip). Dropping
-              // the excess silently loses quantity the fill reported as
-              // traded, so the residual keeps its own position instead.
-              const residual = request.quantity - existing.quantity;
-              if (residual > 0) {
-                positions[request.symbol] = {
-                  symbol: request.symbol,
-                  side: request.side === "buy" ? "long" : "short",
-                  quantity: residual,
-                  entryPrice: filledPrice,
-                };
-              } else if (residual < 0) {
+            const existing = positions[request.symbol];
+            if (existing) {
+              if (
+                existing.side === (request.side === "buy" ? "long" : "short")
+              ) {
+                const totalQty = existing.quantity + request.quantity;
+                const avgEntry =
+                  (existing.entryPrice * existing.quantity +
+                    filledPrice * request.quantity) /
+                  totalQty;
                 positions[request.symbol] = {
                   ...existing,
-                  quantity: -residual,
+                  quantity: totalQty,
+                  entryPrice: avgEntry,
                 };
               } else {
-                delete positions[request.symbol];
+                // Opposite side: the order closes the existing position and any
+                // excess opens a new one on the other side (a flip). Dropping
+                // the excess silently loses quantity the fill reported as
+                // traded, so the residual keeps its own position instead.
+                const residual = request.quantity - existing.quantity;
+                if (residual > 0) {
+                  positions[request.symbol] = {
+                    symbol: request.symbol,
+                    side: request.side === "buy" ? "long" : "short",
+                    quantity: residual,
+                    entryPrice: filledPrice,
+                  };
+                } else if (residual < 0) {
+                  positions[request.symbol] = {
+                    ...existing,
+                    quantity: -residual,
+                  };
+                } else {
+                  delete positions[request.symbol];
+                }
               }
+            } else {
+              positions[request.symbol] = {
+                symbol: request.symbol,
+                side: request.side === "buy" ? "long" : "short",
+                quantity: request.quantity,
+                entryPrice: filledPrice,
+              };
             }
-          } else {
-            positions[request.symbol] = {
-              symbol: request.symbol,
-              side: request.side === "buy" ? "long" : "short",
-              quantity: request.quantity,
-              entryPrice: filledPrice,
-            };
-          }
 
-          return [
-            {
-              orderId: randomUUID(),
-              symbol: request.symbol,
-              side: request.side,
-              filledQty: request.quantity,
-              filledPrice,
-              fee,
-              timestamp: new Date(),
-            },
-            { balances, positions },
-          ];
-        });
+            return [
+              {
+                orderId: randomUUID(),
+                symbol: request.symbol,
+                side: request.side,
+                filledQty: request.quantity,
+                filledPrice,
+                fee,
+                timestamp: new Date(),
+              },
+              { balances, positions },
+            ];
+          },
+        );
         return fill;
       }).pipe(
         Effect.catch((err) =>
@@ -150,14 +155,11 @@ export function makeSimulatedExchangeAdapter(
       ),
 
     getBalance: (asset) =>
-      Effect.map(
-        Ref.get(stateRef),
-        (state) => ({
-          asset,
-          free: state.balances[asset] ?? 0,
-          locked: 0,
-        }),
-      ),
+      Effect.map(Ref.get(stateRef), (state) => ({
+        asset,
+        free: state.balances[asset] ?? 0,
+        locked: 0,
+      })),
 
     getPosition: (symbol) =>
       Effect.map(Ref.get(stateRef), (state) => state.positions[symbol] ?? null),
