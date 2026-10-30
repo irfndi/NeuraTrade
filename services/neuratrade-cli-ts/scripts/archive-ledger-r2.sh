@@ -6,7 +6,10 @@
 # scoped to backtest-data read/write in Cloudflare dashboard).
 set -euo pipefail
 ENV=/root/.neuratrade-r2.env
-[ -f "$ENV" ] || { echo "r2 env missing, skip"; exit 0; }
+[ -f "$ENV" ] || {
+  echo "r2 env missing, skip"
+  exit 0
+}
 set -a
 # shellcheck disable=SC1090
 . "$ENV"
@@ -23,7 +26,10 @@ TS=$(date -u +%Y%m%dT%H%M%SZ)
 TMP=/tmp/ledger-$TS.jsonl
 cp "$LEDGER" "$TMP"
 python3 "$CLI/scripts/r2-put.py" backtest-data "neuratrade/ledger/ledger-$TS.jsonl" "$TMP" --gzip
-{ grep -E '"decision":"(KEEP|SEED|CLAIMED)"' "$TMP" || true; tail -n 30000 "$TMP"; } | awk '!seen[$0]++' > "$LEDGER.new"
+{
+  grep -E '"decision":"(KEEP|SEED|CLAIMED)"' "$TMP" || true
+  tail -n 30000 "$TMP"
+} | awk '!seen[$0]++' >"$LEDGER.new"
 mv "$LEDGER.new" "$LEDGER"
 rm -f "$TMP"
 echo "archived neuratrade/ledger/ledger-$TS.jsonl, pruned local ledger"

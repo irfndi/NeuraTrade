@@ -27,8 +27,14 @@ DB_PATH="${DB_PATH:-$NEURATRADE_HOME/data/neuratrade.db}"
 BACKUP_DIR="${BACKUP_DIR:-$NEURATRADE_HOME/data/backups}"
 KEEP="${KEEP:-7}"
 
-command -v sqlite3 >/dev/null 2>&1 || { echo "backup-db: sqlite3 not found" >&2; exit 1; }
-[ -f "$DB_PATH" ] || { echo "backup-db: database not found: $DB_PATH" >&2; exit 1; }
+command -v sqlite3 >/dev/null 2>&1 || {
+  echo "backup-db: sqlite3 not found" >&2
+  exit 1
+}
+[ -f "$DB_PATH" ] || {
+  echo "backup-db: database not found: $DB_PATH" >&2
+  exit 1
+}
 mkdir -p "$BACKUP_DIR"
 
 TS=$(date +%Y%m%d-%H%M%S)
@@ -38,7 +44,7 @@ TMP="$DEST.tmp"
 # .backup is the online backup API: consistent even while writers are active.
 sqlite3 "$DB_PATH" ".backup '$TMP'"
 mv -f "$TMP" "$DEST"
-SIZE=$(wc -c < "$DEST" | tr -d ' ')
+SIZE=$(wc -c <"$DEST" | tr -d ' ')
 echo "backup-db: wrote $DEST ($SIZE bytes)"
 
 # Retention: keep the KEEP newest by mtime, prune the rest.

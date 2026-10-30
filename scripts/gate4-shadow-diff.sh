@@ -34,13 +34,19 @@ for S in $SYMS; do
     exit 1
   fi
   case "$S" in
-    '' | *[!A-Z0-9]*) echo "bad symbol '$S' (expected A-Z0-9 only)" >&2; exit 1 ;;
+    '' | *[!A-Z0-9]*)
+      echo "bad symbol '$S' (expected A-Z0-9 only)" >&2
+      exit 1
+      ;;
   esac
   LAST_MS=$(tail -1 "$CSV" | cut -d, -f1)
   # A corrupt tail (sqlite error text, short row) must never become a SQL
   # comparison that silently returns nothing.
   case "$LAST_MS" in
-    '' | *[!0-9]*) echo "corrupt cursor in $CSV ('$LAST_MS'), refusing to append" >&2; exit 1 ;;
+    '' | *[!0-9]*)
+      echo "corrupt cursor in $CSV ('$LAST_MS'), refusing to append" >&2
+      exit 1
+      ;;
   esac
   SQL="$GATE/$S-append.sql"
   TMP="$GATE/$S-append.tmp"
@@ -101,12 +107,18 @@ echo "== Gate 4 ladder diff | window >= $SINCE | TS (DB) vs Rust (ledger) =="
 # Producers must both have emitted output: silence here would print '-' and
 # read as a clean diff. Empty-but-present CSVs are legitimate (0 closes).
 for f in "$GATE/ts-closes.csv"; do
-  [ -f "$f" ] || { echo "produced file missing: $f" >&2; exit 1; }
+  [ -f "$f" ] || {
+    echo "produced file missing: $f" >&2
+    exit 1
+  }
 done
 printf '%-5s | %-46s | %s\n' "SYM" "TS closes by reason / cap_after" "Rust closes by reason / cap_after"
 for S in $SYMS; do
   TSYM="$S/USDT:USDT"
-  [ -f "$GATE/$S-rust.csv" ] || { echo "rust ledger missing: $GATE/$S-rust.csv" >&2; exit 1; }
+  [ -f "$GATE/$S-rust.csv" ] || {
+    echo "rust ledger missing: $GATE/$S-rust.csv" >&2
+    exit 1
+  }
   # Column positions below are contractual, not incidental: column 9 is
   # capital_after_micros per append_ladder_ledger's header.
   if [ "$(head -1 "$GATE/$S-rust.csv")" != "closed_ts_ms,rung_index,side,reason,entry_micros,exit_micros,pnl_micros,qty_base_micros,capital_after_micros" ]; then

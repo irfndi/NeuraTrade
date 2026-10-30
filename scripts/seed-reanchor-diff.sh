@@ -23,16 +23,28 @@ CAP=${CAP:-50}
 
 # Pre-flight BEFORE any cleanup: a failed rerun must not wipe the previous
 # run's ledgers (they are the only evidence of what it measured).
-[ -x "$NT" ] || { echo "nt-cli not found/executable: $NT" >&2; exit 1; }
+[ -x "$NT" ] || {
+  echo "nt-cli not found/executable: $NT" >&2
+  exit 1
+}
 for S in $SYMS; do
-  [ -s "$PANELS/$S-15m.csv" ] || { echo "missing panel $PANELS/$S-15m.csv" >&2; exit 1; }
+  [ -s "$PANELS/$S-15m.csv" ] || {
+    echo "missing panel $PANELS/$S-15m.csv" >&2
+    exit 1
+  }
 done
 mkdir -p "$OUT"
 # Refuse to wipe a $OUT we don't own (predictable /tmp default path).
-[ -O "$OUT" ] || { echo "$OUT is not owned by $(id -u): refusing to clean it" >&2; exit 1; }
+[ -O "$OUT" ] || {
+  echo "$OUT is not owned by $(id -u): refusing to clean it" >&2
+  exit 1
+}
 read -ra SYM_ARR <<<"$SYMS"
 NSYM=${#SYM_ARR[@]}
-[ "$NSYM" -gt 0 ] || { echo "no symbols in SYMS ('$SYMS')" >&2; exit 1; }
+[ "$NSYM" -gt 0 ] || {
+  echo "no symbols in SYMS ('$SYMS')" >&2
+  exit 1
+}
 # One clean sweep dir: stale per-arm summaries/ledgers left by an earlier run
 # (different ARMS or SYMS) would otherwise be summed into this run's totals.
 rm -f "$OUT"/*.summary "$OUT"/*.csv "$OUT"/*-resume.txt
@@ -43,7 +55,10 @@ rm -f "$OUT"/*.summary "$OUT"/*.csv "$OUT"/*-resume.txt
 field() {
   local v
   v=$(sed -nE "s/.* $2=([0-9]+).*/\1/p" "$1" | tail -1)
-  [ -n "$v" ] || { echo "missing '$2=' in $1" >&2; exit 1; }
+  [ -n "$v" ] || {
+    echo "missing '$2=' in $1" >&2
+    exit 1
+  }
   printf '%s' "$v"
 }
 
