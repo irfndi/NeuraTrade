@@ -11,7 +11,7 @@
     "build:bun": "bun build index.ts --outdir ./dist --target bun",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsrs --noEmit",
     "typecheck:fast": "bunx tsrs --noEmit",
     "lint": "bunx oxlint .",
     "fmt:check": "bunx oxfmt --check .",
@@ -23,27 +23,26 @@
     "tail:cf": "alchemy tail",
     "autoresearch:once": "bun run autoresearch/run-once.ts",
     "autoresearch:loop": "bun run autoresearch/loop.ts",
-    "autoresearch:test": "bun test autoresearch/"
+    "autoresearch:test": "bun test autoresearch/",
+    "typecheck:tsc": "tsc --noEmit"
   },
   "dependencies": {
-    "@effect/platform-bun": "4.0.5",
-    "@effect/platform-node": "4.0.5",
-    "alchemy": "2.0.0-beta.83",
+    "@alchemy.run/cloudflare": "2.0.0-beta.84",
+    "@effect/platform-bun": "4.1.0",
+    "alchemy": "2.0.0-beta.84",
     "decimal.js": "^10.6.0",
-    "effect": "4.0.6",
-    "hyparquet": "1.31.5",
-    "hyparquet-writer": "0.17.0",
-    "ky": "^2.2.0",
-    "zod": "^4.6.7"
+    "effect": "4.1.0"
   },
   "devDependencies": {
-    "@effect/tsgo": "0.57.0",
-    "@oxlint/plugins": "1.89.0",
+    "@effect/tsgo": "0.63.0",
+    "@oxlint/plugins": "1.90.0",
     "@types/bun": "1.4.4",
     "fast-check": "^4.10.2",
-    "oxlint": "1.89.0",
+    "hyparquet": "1.32.0",
+    "hyparquet-writer": "0.18.0",
+    "oxlint": "1.90.0",
     "oxlint-tsgolint": "7.0.2005",
-    "tsrs": "^0.18.0-ts7.1.0-dev.20260929",
+    "tsrs": "^0.20.1-ts7.1.0-beta",
     "typescript": "7.0.2"
   },
   "keywords": [
@@ -56,10 +55,6 @@
   "author": "NeuraTrade",
   "license": "MIT",
   "overrides": {
-    "hono": ">=4.13.7",
-    "@hono/node-server": ">=1.19.10",
-    "sharp": ">=0.35.5",
-    "valibot": ">=1.4.2",
-    "lodash": "^4.18.1"
+    "sharp": ">=0.35.5"
   }
 }

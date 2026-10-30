@@ -1,23 +1,24 @@
 #!/usr/bin/env bun
 import { Database } from "bun:sqlite";
+import * as S from "effect/Schema";
 import { join } from "node:path";
-import { z } from "zod";
 import { bootstrapMeanConfidenceInterval } from "../src/paper-trading/expectancy-confidence.js";
 import { splitCandlesByOos } from "../src/scalping/backtest.js";
 import { runGridBacktest, type GridOptions } from "../src/scalping/grid.js";
 import type { Candle } from "../src/market-data/types.js";
 import { money } from "../src/utils/money.js";
 
-const rowSchema = z.object({
-  open_price: z.number(),
-  high_price: z.number(),
-  low_price: z.number(),
-  close_price: z.number(),
-  volume: z.number(),
-  timestamp: z.string(),
+const rowSchema = S.Struct({
+  open_price: S.Number,
+  high_price: S.Number,
+  low_price: S.Number,
+  close_price: S.Number,
+  volume: S.Number,
+  timestamp: S.String,
 });
 
-const rowsSchema = z.array(rowSchema);
+type WireRow = typeof rowSchema.Type;
+const rowsSchema = S.Array(rowSchema);
 
 function argument(name: string, fallback: string): string {
   const index = process.argv.indexOf(name);
@@ -47,15 +48,16 @@ const database = new Database(join(home, "data", "neuratrade.db"), {
 });
 
 try {
-  const rows = rowsSchema.parse(
-    database
+  const rows = (() => {
+    const queried: unknown[] = database
       .query(
         `SELECT o.open_price, o.high_price, o.low_price, o.close_price, o.volume, o.timestamp
          FROM ohlcv_data o JOIN exchanges e ON e.id=o.exchange_id JOIN trading_pairs tp ON tp.id=o.trading_pair_id
          WHERE e.name = ? AND tp.symbol = ? AND o.timeframe = ? ORDER BY o.timestamp ASC`,
       )
-      .all(exchange, symbol, timeframe),
-  );
+      .all(exchange, symbol, timeframe);
+    return S.decodeUnknownSync(rowsSchema)(queried);
+  })();
   if (rows.length === 0) {
     throw new Error(`no candles for ${exchange}:${symbol}:${timeframe}`);
   }

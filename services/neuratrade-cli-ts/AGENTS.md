@@ -109,6 +109,13 @@ Thresholds live in `src/scalping/readiness.ts` (`defaultReadinessThresholds`). T
 - **Effect v4 everywhere**: `Effect.gen`, `Layer`, `Context.Service` (NOT the v3 `Context.Tag`), `Config`, `Schedule`, `Stream`, `Result` (NOT `Either`).
 - `FileSystem`/`Path`/`Terminal` come from core `effect`; Bun layers from `@effect/platform-bun` (`BunServices.layer`, `BunFileSystem.layer`).
 - Schema defaults: `X.pipe(S.withDecodingDefault(Effect.succeed(v)))` — no `S.optional` wrapper.
+- **Wire-tolerant parsing (zod `.catch` replacement)**: zod is gone. For boundary
+  parsing with `.catch(fallback)` semantics use `S.optional(schema.pipe(S.catchDecoding(()
+  => Effect.succeed(Option.some(fallback)))))` — see `tolerantMember` in
+  `src/exchange/adapters/bybit-futures.ts`. A bare filter (type-only check, no
+  fallback) is `S.String.check(S.makeFilter<string>(pred, { message: "..." }))`. Do
+  not hand-write `S.refine(...)` curried calls: their inference collapses to
+  `unknown` and they must take a type predicate.
 - All IO wrapped in `Effect.try*`/services; no bare `new Database`, `fs.*`, `process.env`, `console.*` inside Effect code (tests excepted).
 - Tests co-located as `*.test.ts` plus `tests/integration/` and `tests/e2e/`; `fast-check` for property tests.
 - Coverage threshold: 80% lines/functions/statements, 70% branches.

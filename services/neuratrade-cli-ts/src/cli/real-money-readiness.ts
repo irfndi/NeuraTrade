@@ -1,8 +1,8 @@
 import { Database } from "bun:sqlite";
+import * as S from "effect/Schema";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
 import type { CandleLike } from "../scalping/types.js";
 import {
   READINESS_COHORT_CANDIDATES,
@@ -193,16 +193,26 @@ function databasePath(home: string): string {
   return join(home, "data", "neuratrade.db");
 }
 
-const executionParityCheckSchema = z.object({
-  name: z.string(),
-  passed: z.boolean(),
-  detail: z.string(),
+const executionParityCheckSchema = S.Struct({
+  name: S.String,
+  passed: S.Boolean,
+  detail: S.String,
 });
 
-const executionParityArtifactSchema = z.object({
-  protocolVersion: z.string().optional(),
-  checks: z.array(z.unknown()).optional(),
+type ExecutionParityCheck = typeof executionParityCheckSchema.Type;
+
+const executionParityArtifactSchema = S.Struct({
+  protocolVersion: S.optional(S.String),
+  checks: S.optional(S.Array(S.Unknown)),
 });
+
+function tryDecode<A>(schema: { readonly "Type": A }, value: unknown): A | undefined {
+  try {
+    return S.decodeUnknownSync(schema as never)(value) as A;
+  } catch {
+    return undefined;
+  }
+}
 
 function absentExecutionParity(): ExecutionParityEvidence {
   return { passed: false, protocolVersion: "execution-parity/v1", checks: [] };
@@ -230,18 +240,20 @@ function readExecutionParityFile(home: string): ExecutionParityEvidence {
   try {
     if (!existsSync(filePath)) return absentExecutionParity();
     const raw = JSON.parse(readFileSync(filePath, "utf8"));
-    const parsed = executionParityArtifactSchema.safeParse(raw);
-    if (!parsed.success) return absentExecutionParity();
-    const checks = (parsed.data.checks ?? []).flatMap((check) => {
-      const checkResult = executionParityCheckSchema.safeParse(check);
-      return checkResult.success ? [checkResult.data] : [];
-    });
+    const artifact = tryDecode(executionParityArtifactSchema, raw);
+    if (artifact === undefined) return absentExecutionParity();
+    const checks: ExecutionParityCheck[] = (artifact.checks ?? []).flatMap(
+      (check) => {
+        const decoded = tryDecode(executionParityCheckSchema, check);
+        return decoded === undefined ? [] : [decoded];
+      },
+    );
     return {
       passed: checks.length > 0 && checks.every((check) => check.passed),
       protocolVersion:
-        parsed.data.protocolVersion !== undefined &&
-        parsed.data.protocolVersion.length > 0
-          ? parsed.data.protocolVersion
+        artifact.protocolVersion !== undefined &&
+        artifact.protocolVersion.length > 0
+          ? artifact.protocolVersion
           : "execution-parity/v1",
       checks,
     };

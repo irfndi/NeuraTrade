@@ -1,6 +1,5 @@
 import { Effect, Layer } from "effect";
-import ky from "ky";
-import { z } from "zod";
+import * as S from "effect/Schema";
 import { ExchangeError } from "../adapter.js";
 import {
   FuturesExchangeAdapter,
@@ -19,66 +18,73 @@ interface BackendRiskGatedConfig {
   readonly timeoutMs?: number;
 }
 
-const decimalText = z
-  .string()
-  .min(1)
-  .refine((value) => {
-    try {
-      return money(value).isFinite();
-    } catch {
-      return false;
-    }
-  }, "must be a finite decimal");
+// Backend gate wire contracts (Effect Schema; fail closed on garbage).
 
-const orderResponseSchema = z.object({
-  intent_id: z.string().min(1),
-  order_id: z.string().min(1),
-  client_id: z.string().min(1),
-  exchange: z.string().min(1),
-  symbol: z.string().min(1),
-  side: z.enum(["buy", "sell"]),
+const decimalText = S.String.check(
+  S.makeFilter<string>(
+    (value) => {
+      try {
+        return money(value).isFinite();
+      } catch {
+        return false;
+      }
+    },
+    { message: "must be a finite decimal" },
+  ),
+);
+
+const isoTimestamp = S.String.check(
+  S.makeFilter<string>(
+    (value) => !Number.isNaN(Date.parse(value)),
+    { message: "must be an ISO timestamp" },
+  ),
+);
+
+const nonEmpty = S.String.check(S.isMinLength(1));
+
+const orderResponseSchema = S.Struct({
+  intent_id: nonEmpty,
+  order_id: nonEmpty,
+  client_id: nonEmpty,
+  exchange: nonEmpty,
+  symbol: nonEmpty,
+  side: S.Union([S.Literal("buy"), S.Literal("sell")]),
   filled_qty: decimalText,
   filled_price: decimalText,
   fee: decimalText,
-  status: z.string().min(1),
-  timestamp: z
-    .string()
-    .refine(
-      (value) => !Number.isNaN(Date.parse(value)),
-      "must be an ISO timestamp",
-    ),
+  status: nonEmpty,
+  timestamp: isoTimestamp,
 });
 
-type OrderResponse = z.infer<typeof orderResponseSchema>;
+type OrderResponse = typeof orderResponseSchema.Type;
 
-const positionResponseSchema = z.object({
-  id: z.string().min(1),
-  symbol: z.string().min(1),
-  side: z.enum(["long", "short"]),
-  product_type: z.enum(["USDT-FUTURES", "COIN-FUTURES", "USDC-FUTURES"]),
-  margin_mode: z.enum(["isolated", "crossed"]),
-  leverage: z.number().int().nonnegative(),
+const positionResponseSchema = S.Struct({
+  id: nonEmpty,
+  symbol: nonEmpty,
+  side: S.Union([S.Literal("long"), S.Literal("short")]),
+  product_type: S.Union([
+    S.Literal("USDT-FUTURES"),
+    S.Literal("COIN-FUTURES"),
+    S.Literal("USDC-FUTURES"),
+  ]),
+  margin_mode: S.Union([S.Literal("isolated"), S.Literal("crossed")]),
+  leverage: S.Natural,
   quantity: decimalText,
   available: decimalText,
   entry_price: decimalText,
   liquidation_price: decimalText,
   unrealized_pnl: decimalText,
-  margin_coin: z.string().min(1),
+  margin_coin: nonEmpty,
 });
 
-const positionsResponseSchema = z.object({
-  exchange: z.string().min(1),
-  positions: z.array(positionResponseSchema),
-  count: z.number().int().nonnegative(),
-  timestamp: z
-    .string()
-    .refine(
-      (value) => !Number.isNaN(Date.parse(value)),
-      "must be an ISO timestamp",
-    ),
+const positionsResponseSchema = S.Struct({
+  exchange: nonEmpty,
+  positions: S.Array(positionResponseSchema),
+  count: S.Natural,
+  timestamp: isoTimestamp,
 });
 
-type PositionsResponse = z.infer<typeof positionsResponseSchema>;
+type PositionsResponse = typeof positionsResponseSchema.Type;
 
 function comparableSymbol(symbol: string): string {
   return symbol
@@ -112,9 +118,13 @@ function makeAdapter(
 
       const response = yield* Effect.tryPromise({
         try: () =>
-          ky.post(`${baseUrl}/api/v1/execution/futures/order`, {
-            headers: { "X-API-Key": config.apiKey },
-            json: {
+          fetch(`${baseUrl}/api/v1/execution/futures/order`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": config.apiKey,
+            },
+            body: JSON.stringify({
               intent_id: intentId,
               chat_id: config.chatId,
               exchange:
@@ -132,10 +142,8 @@ function makeAdapter(
               reduce_only: request.reduceOnly ?? false,
               portfolio_value: price.times(request.size).toString(),
               current_position: "0",
-            },
-            retry: { limit: 0 },
-            timeout: timeoutMs,
-            throwHttpErrors: false,
+            }),
+            signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
           }),
         catch: (error) =>
           new ExchangeError(
@@ -159,7 +167,7 @@ function makeAdapter(
       const payload = yield* Effect.tryPromise({
         try: async () => {
           const body: unknown = await response.json();
-          return orderResponseSchema.parse(body);
+          return S.decodeUnknownSync(orderResponseSchema)(body);
         },
         catch: (error) =>
           new ExchangeError(
@@ -233,13 +241,11 @@ function makeAdapter(
       });
       const response = yield* Effect.tryPromise({
         try: () =>
-          ky.get(
+          fetch(
             `${baseUrl}/api/v1/execution/futures/positions?${query.toString()}`,
             {
               headers: { "X-API-Key": config.apiKey },
-              retry: { limit: 0 },
-              timeout: timeoutMs,
-              throwHttpErrors: false,
+              signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
             },
           ),
         catch: (error) =>
@@ -264,7 +270,7 @@ function makeAdapter(
       const payload: PositionsResponse = yield* Effect.tryPromise({
         try: async () => {
           const body: unknown = await response.json();
-          return positionsResponseSchema.parse(body);
+          return S.decodeUnknownSync(positionsResponseSchema)(body) as PositionsResponse;
         },
         catch: (error) =>
           new ExchangeError(

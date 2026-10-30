@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { Effect } from "effect";
-import { z } from "zod";
+import * as S from "effect/Schema";
 import { money } from "../../utils/money.js";
 import { FuturesExchangeAdapter } from "../futures-adapter.js";
 import { BackendRiskGatedFuturesExchangeAdapterLive } from "./backend-risk-gated-futures.js";
@@ -9,9 +9,9 @@ import liveOrderFilledFixture from "../../../tests/fixtures/backend/live-order-f
 const originalFetch = globalThis.fetch;
 
 /** Captured request body for the backend execution gate. */
-const requestBodySchema = z.record(
-  z.string(),
-  z.union([z.string(), z.boolean()]),
+const requestBodySchema = S.Record(
+  S.String,
+  S.Union([S.String, S.Boolean]),
 );
 
 afterEach(() => {
@@ -53,7 +53,7 @@ describe("BackendRiskGatedFuturesExchangeAdapter", () => {
       value: async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init);
         const body: unknown = JSON.parse(await request.text());
-        requestBody = requestBodySchema.parse(body);
+        requestBody = S.decodeUnknownSync(requestBodySchema)(body);
         return new Response(JSON.stringify(liveOrderFilledFixture), {
           status: 200,
           headers: { "Content-Type": "application/json" },

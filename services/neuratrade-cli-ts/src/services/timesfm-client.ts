@@ -1,5 +1,5 @@
 import { delimiter, resolve } from "node:path";
-import { z } from "zod";
+import * as S from "effect/Schema";
 
 export interface TimesFmSeriesInput {
   readonly id: string;
@@ -71,40 +71,40 @@ export class TimesFmWorkerError extends Error {
 
 type SpawnedProcess = ReturnType<typeof Bun.spawn>;
 
-const finiteNumberSchema = z.number().finite();
-const numberRowSchema = z.array(finiteNumberSchema);
-const quantilesSchema = z.array(z.array(numberRowSchema));
-const forecastRecordSchema = z.object({
-  id: z.string().min(1),
-  target_names: z.array(z.string()),
-  timestamps_ms: z.array(finiteNumberSchema),
-  forecast: z.array(numberRowSchema),
-  quantiles: quantilesSchema.nullable(),
+const finiteNumberSchema = S.Finite;
+const numberRowSchema = S.Array(S.Finite);
+const quantilesSchema = S.Array(S.Array(numberRowSchema));
+const forecastRecordSchema = S.Struct({
+  id: S.String.check(S.isMinLength(1)),
+  target_names: S.Array(S.String),
+  timestamps_ms: S.Array(S.Finite),
+  forecast: S.Array(numberRowSchema),
+  quantiles: S.NullishOr(quantilesSchema),
 });
-const forecastResponseSchema = z.object({
-  ok: z.literal(true),
-  request_id: z.string().min(1),
-  latency_ms: finiteNumberSchema,
-  forecasts: z.array(forecastRecordSchema),
+const forecastResponseSchema = S.Struct({
+  ok: S.Literal(true),
+  request_id: S.String.check(S.isMinLength(1)),
+  latency_ms: S.Finite,
+  forecasts: S.Array(forecastRecordSchema),
 });
-const validatedResponseSchema = z.object({
-  ok: z.literal(true),
-  request_id: z.string().min(1),
-  validated: z.literal(true),
-  series_count: finiteNumberSchema,
-  horizon: finiteNumberSchema,
+const validatedResponseSchema = S.Struct({
+  ok: S.Literal(true),
+  request_id: S.String.check(S.isMinLength(1)),
+  validated: S.Literal(true),
+  series_count: S.Finite,
+  horizon: S.Finite,
 });
-const errorResponseSchema = z.object({
-  ok: z.literal(false),
-  request_id: z.string().nullable(),
-  error: z.object({ code: z.string(), message: z.string() }),
+const errorResponseSchema = S.Struct({
+  ok: S.Literal(false),
+  request_id: S.NullishOr(S.String),
+  error: S.Struct({ code: S.String, message: S.String }),
 });
-const workerResponseSchema = z.union([
+const workerResponseSchema = S.Union([
   forecastResponseSchema,
   validatedResponseSchema,
   errorResponseSchema,
 ]);
-type WorkerWireResponse = z.infer<typeof workerResponseSchema>;
+type WorkerWireResponse = typeof workerResponseSchema.Type;
 
 function parseForecastResponse(
   value: WorkerWireResponse,
@@ -130,7 +130,7 @@ function parseForecastResponse(
       targetNames: record.target_names,
       timestampsMs: record.timestamps_ms,
       forecast: record.forecast,
-      quantiles: record.quantiles,
+      quantiles: record.quantiles ?? null,
     })),
   };
 }
@@ -322,16 +322,18 @@ export class TimesFmWorker {
             );
           }),
         ]);
-        const parsed = workerResponseSchema.safeParse(
-          JSON.parse(response) as unknown,
-        );
-        if (!parsed.success) {
+        let wire: WorkerWireResponse;
+        try {
+          wire = S.decodeUnknownSync(workerResponseSchema)(
+            JSON.parse(response) as unknown,
+          );
+        } catch {
           throw new TimesFmWorkerError(
             "worker response failed schema validation",
             "schema_error",
           );
         }
-        return parseForecastResponse(parsed.data);
+        return parseForecastResponse(wire);
       } finally {
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       }

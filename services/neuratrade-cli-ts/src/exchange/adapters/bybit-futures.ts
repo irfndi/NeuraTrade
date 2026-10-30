@@ -17,9 +17,9 @@
  * where body is the raw JSON for POST and the query string (with empty HTTP
  * body) for GET.
  */
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Option } from "effect";
 import { createHmac } from "node:crypto";
-import { z } from "zod";
+import * as S from "effect/Schema";
 import { ExchangeError } from "../adapter.js";
 import {
   FuturesExchangeAdapter,
@@ -216,7 +216,242 @@ interface BybitTradingStopParams {
 }
 
 // ---------------------------------------------------------------------------
-// Boundary parsing (zod)
+// Boundary parsing (Effect Schema)
+// ---------------------------------------------------------------------------
+/**
+ * Struct member with zod-`.catch(fallback)` semantics: a missing key, wrong
+ * type, or a literal mismatch all recover with the fallback. Implemented as
+ * `optional(member.pipe(catchDecoding(...)))` because a MissingKey issue
+ * surfaces at the struct level before the member's own schema runs — the
+ * optional wrapper lets `undefined` flow into the inner catch. Decoded
+ * objects therefore carry the member as `T | undefined`, and the
+ * wire→domain mappers below apply `?? fallback`.
+ */
+function tolerantMember<A, I>(
+  schema: S.Codec<A, I, never, never>,
+  fallback: A,
+) {
+  return S.optional(
+    schema.pipe(
+      S.catchDecoding(() =>
+        Effect.succeed(Option.some(fallback) as Option.Option<A>),
+      ),
+    ),
+  );
+}
+
+const tolerantString = (fallback: string) =>
+  tolerantMember(S.String, fallback);
+
+const bybitSideSchema = S.Union([S.Literal("Buy"), S.Literal("Sell")]);
+
+const BybitLotSizeWireSchema = S.Struct({
+  minOrderQty: tolerantString("0"),
+  qtyStep: tolerantString("0"),
+  minOrderAmt: tolerantString("0"),
+});
+
+const BybitContractWireSchema = S.Struct({
+  symbol: tolerantString(""),
+  status: tolerantString(""),
+  lotSizeFilter: tolerantMember(BybitLotSizeWireSchema, {
+    minOrderQty: "0",
+    qtyStep: "0",
+    minOrderAmt: "0",
+  }),
+  priceFilter: tolerantMember(
+    S.Struct({ tickSize: tolerantString("0") }),
+    { tickSize: "0" },
+  ),
+  leverageFilter: tolerantMember(
+    S.Struct({ maxLeverage: tolerantString("1") }),
+    { maxLeverage: "1" },
+  ),
+});
+
+type BybitContractWire = typeof BybitContractWireSchema.Type;
+
+const BybitWalletCoinWireSchema = S.Struct({
+  coin: tolerantString(""),
+  equity: tolerantString("0"),
+  walletBalance: tolerantString("0"),
+  availableToWithdraw: tolerantString("0"),
+  usdValue: tolerantString("0"),
+});
+
+type BybitWalletCoinWire = typeof BybitWalletCoinWireSchema.Type;
+
+const BybitPositionWireSchema = S.Struct({
+  symbol: tolerantString(""),
+  side: tolerantMember(bybitSideSchema, "Buy"),
+  size: tolerantString("0"),
+  avgPrice: tolerantString("0"),
+  markPrice: tolerantString("0"),
+  unrealisedPnl: tolerantString("0"),
+  liqPrice: tolerantString("0"),
+  leverage: tolerantString("1"),
+  tradeMode: tolerantMember(S.Number, 0),
+  positionIdx: tolerantMember(S.Number, 0),
+});
+
+type BybitPositionWire = typeof BybitPositionWireSchema.Type;
+
+const BybitClosedPnlWireSchema = S.Struct({
+  symbol: tolerantString(""),
+  side: tolerantMember(bybitSideSchema, "Buy"),
+  orderId: tolerantString(""),
+  closedSize: tolerantString("0"),
+  avgEntryPrice: tolerantString("0"),
+  avgExitPrice: tolerantString("0"),
+  closedPnl: tolerantString("0"),
+  openFee: tolerantString("0"),
+  closeFee: tolerantString("0"),
+  fillCount: tolerantString("0"),
+  createdTime: tolerantString("0"),
+  updatedTime: tolerantString("0"),
+});
+
+type BybitClosedPnlWire = typeof BybitClosedPnlWireSchema.Type;
+
+const BybitOrderWireSchema = S.Struct({
+  orderId: tolerantString(""),
+  orderLinkId: tolerantString(""),
+  symbol: tolerantString(""),
+  side: tolerantMember(bybitSideSchema, "Buy"),
+  orderType: tolerantString(""),
+  orderStatus: tolerantString(""),
+  qty: tolerantString("0"),
+  price: tolerantString("0"),
+  avgPrice: tolerantString("0"),
+  cumExecQty: tolerantString("0"),
+  cumExecFee: tolerantString("0"),
+});
+
+type BybitOrderWire = typeof BybitOrderWireSchema.Type;
+
+const BybitOrderAckWireSchema = S.Struct({
+  orderId: tolerantString(""),
+  orderLinkId: tolerantString(""),
+});
+
+type BybitOrderAckWire = typeof BybitOrderAckWireSchema.Type;
+
+const BybitContractListWireSchema = S.Struct({
+  list: S.optional(S.Array(BybitContractWireSchema)),
+});
+const BybitWalletBalanceWireSchema = S.Struct({
+  list: S.optional(
+    S.Array(
+      S.Struct({
+        coin: S.optional(S.Array(BybitWalletCoinWireSchema)),
+      }),
+    ),
+  ),
+});
+const BybitPositionListWireSchema = S.Struct({
+  list: S.optional(S.Array(BybitPositionWireSchema)),
+});
+const BybitClosedPnlListWireSchema = S.Struct({
+  list: S.optional(S.Array(BybitClosedPnlWireSchema)),
+});
+const BybitOrderListWireSchema = S.Struct({
+  list: S.optional(S.Array(BybitOrderWireSchema)),
+});
+
+/** Bybit v5 response envelope: { retCode, retMsg, result }. */
+const BybitEnvelopeSchema = S.Struct({
+  retCode: S.Number,
+  retMsg: S.optional(S.String),
+  result: S.optional(S.Unknown),
+});
+
+// ---------------------------------------------------------------------------
+// Wire → domain mappers
+// ---------------------------------------------------------------------------
+
+/**
+ * The wire schemas decode with optional members; with strict fallbacks
+ * the type has undefined. These mappers apply the defaults explicitly.
+ */
+function toBybitContract(wire: BybitContractWire): BybitContract {
+  const lot = wire.lotSizeFilter ?? {
+    minOrderQty: "0",
+    qtyStep: "0",
+    minOrderAmt: "0",
+  };
+  const price = wire.priceFilter ?? { tickSize: "0" };
+  const leverage = wire.leverageFilter ?? { maxLeverage: "1" };
+  return {
+    symbol: wire.symbol ?? "",
+    status: wire.status ?? "",
+    minOrderQty: lot.minOrderQty ?? "0",
+    qtyStep: lot.qtyStep ?? "0",
+    minOrderAmt: lot.minOrderAmt ?? "0",
+    tickSize: price.tickSize ?? "0",
+    maxLeverage: leverage.maxLeverage ?? "1",
+  };
+}
+
+function toBybitWalletCoin(wire: BybitWalletCoinWire): BybitWalletCoin {
+  return {
+    coin: wire.coin ?? "",
+    equity: wire.equity ?? "0",
+    walletBalance: wire.walletBalance ?? "0",
+    availableToWithdraw: wire.availableToWithdraw ?? "0",
+    usdValue: wire.usdValue ?? "0",
+  };
+}
+
+function toBybitPosition(wire: BybitPositionWire): BybitPosition {
+  return {
+    symbol: wire.symbol ?? "",
+    side: wire.side ?? "Buy",
+    size: wire.size ?? "0",
+    avgPrice: wire.avgPrice ?? "0",
+    markPrice: wire.markPrice ?? "0",
+    unrealisedPnl: wire.unrealisedPnl ?? "0",
+    liqPrice: wire.liqPrice ?? "0",
+    leverage: wire.leverage ?? "1",
+    tradeMode: wire.tradeMode ?? 0,
+    positionIdx: wire.positionIdx ?? 0,
+  };
+}
+
+function toBybitClosedPnl(wire: BybitClosedPnlWire): BybitClosedPnl {
+  return {
+    symbol: wire.symbol ?? "",
+    side: wire.side ?? "Buy",
+    orderId: wire.orderId ?? "",
+    closedSize: wire.closedSize ?? "0",
+    avgEntryPrice: wire.avgEntryPrice ?? "0",
+    avgExitPrice: wire.avgExitPrice ?? "0",
+    closedPnl: wire.closedPnl ?? "0",
+    openFee: wire.openFee ?? "0",
+    closeFee: wire.closeFee ?? "0",
+    fillCount: wire.fillCount ?? "0",
+    createdTime: wire.createdTime ?? "0",
+    updatedTime: wire.updatedTime ?? "0",
+  };
+}
+
+function toBybitOrder(wire: BybitOrderWire): BybitOrder {
+  return {
+    orderId: wire.orderId ?? "",
+    clientOrderId: wire.orderLinkId ?? "",
+    symbol: wire.symbol ?? "",
+    side: wire.side ?? "Buy",
+    orderType: wire.orderType ?? "",
+    orderStatus: wire.orderStatus ?? "",
+    qty: wire.qty ?? "0",
+    price: wire.price ?? "0",
+    avgPrice: wire.avgPrice ?? "0",
+    cumExecQty: wire.cumExecQty ?? "0",
+    cumExecFee: wire.cumExecFee ?? "0",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Request wire types + Symbol normalization
 // ---------------------------------------------------------------------------
 
 /**
@@ -254,161 +489,6 @@ type BybitQuery = {
   endTime?: number;
 };
 
-/** Headers produced by bybitAuthHeaders. */
-type BybitAuthHeaders = {
-  readonly "Content-Type": "application/json";
-  readonly "X-BAPI-API-KEY": string;
-  readonly "X-BAPI-TIMESTAMP": string;
-  readonly "X-BAPI-RECV-WINDOW": string;
-  readonly "X-BAPI-SIGN": string;
-};
-
-/**
- * Tolerant string field: non-empty string kept, otherwise the fallback.
- * Decoded at the response boundary so callers see a typed domain value.
- */
-const tolerantString = (fallback: string) =>
-  z
-    .string()
-    .transform((value) => (value === "" ? fallback : value))
-    .catch(fallback);
-
-const BybitLotSizeFilterSchema = z.object({
-  minOrderQty: tolerantString("0"),
-  qtyStep: tolerantString("0"),
-  minOrderAmt: tolerantString("0"),
-});
-const BybitPriceFilterSchema = z.object({
-  tickSize: tolerantString("0"),
-});
-const BybitLeverageFilterSchema = z.object({
-  maxLeverage: tolerantString("1"),
-});
-
-const BybitContractSchema = z
-  .object({
-    symbol: tolerantString(""),
-    status: tolerantString(""),
-    lotSizeFilter: BybitLotSizeFilterSchema.catch({
-      minOrderQty: "0",
-      qtyStep: "0",
-      minOrderAmt: "0",
-    }),
-    priceFilter: BybitPriceFilterSchema.catch({
-      tickSize: "0",
-    }),
-    leverageFilter: BybitLeverageFilterSchema.catch({
-      maxLeverage: "1",
-    }),
-  })
-  .transform((contract) => ({
-    symbol: contract.symbol,
-    status: contract.status,
-    minOrderQty: contract.lotSizeFilter.minOrderQty,
-    qtyStep: contract.lotSizeFilter.qtyStep,
-    minOrderAmt: contract.lotSizeFilter.minOrderAmt,
-    tickSize: contract.priceFilter.tickSize,
-    maxLeverage: contract.leverageFilter.maxLeverage,
-  }));
-
-const BybitWalletCoinSchema = z.object({
-  coin: tolerantString(""),
-  equity: tolerantString("0"),
-  walletBalance: tolerantString("0"),
-  availableToWithdraw: tolerantString("0"),
-  usdValue: tolerantString("0"),
-});
-
-const BybitPositionSchema = z.object({
-  symbol: tolerantString(""),
-  side: z.enum(["Buy", "Sell"]).catch("Buy"),
-  size: tolerantString("0"),
-  avgPrice: tolerantString("0"),
-  markPrice: tolerantString("0"),
-  unrealisedPnl: tolerantString("0"),
-  liqPrice: tolerantString("0"),
-  leverage: tolerantString("1"),
-  tradeMode: z.number().catch(0),
-  positionIdx: z.number().catch(0),
-});
-
-const BybitClosedPnlSchema = z.object({
-  symbol: tolerantString(""),
-  side: z.enum(["Buy", "Sell"]).catch("Buy"),
-  orderId: tolerantString(""),
-  closedSize: tolerantString("0"),
-  avgEntryPrice: tolerantString("0"),
-  avgExitPrice: tolerantString("0"),
-  closedPnl: tolerantString("0"),
-  openFee: tolerantString("0"),
-  closeFee: tolerantString("0"),
-  fillCount: tolerantString("0"),
-  createdTime: tolerantString("0"),
-  updatedTime: tolerantString("0"),
-});
-
-const BybitOrderSchema = z
-  .object({
-    orderId: tolerantString(""),
-    orderLinkId: tolerantString(""),
-    symbol: tolerantString(""),
-    side: z.enum(["Buy", "Sell"]).catch("Buy"),
-    orderType: tolerantString(""),
-    orderStatus: tolerantString(""),
-    qty: tolerantString("0"),
-    price: tolerantString("0"),
-    avgPrice: tolerantString("0"),
-    cumExecQty: tolerantString("0"),
-    cumExecFee: tolerantString("0"),
-  })
-  .transform((order) => ({
-    orderId: order.orderId,
-    clientOrderId: order.orderLinkId,
-    symbol: order.symbol,
-    side: order.side,
-    orderType: order.orderType,
-    orderStatus: order.orderStatus,
-    qty: order.qty,
-    price: order.price,
-    avgPrice: order.avgPrice,
-    cumExecQty: order.cumExecQty,
-    cumExecFee: order.cumExecFee,
-  }));
-
-const BybitOrderAckSchema = z.object({
-  orderId: tolerantString(""),
-  orderLinkId: tolerantString(""),
-});
-
-const BybitContractListSchema = z.object({
-  list: z.array(BybitContractSchema).optional(),
-});
-const BybitWalletBalanceSchema = z.object({
-  list: z
-    .array(
-      z.object({
-        coin: z.array(BybitWalletCoinSchema).optional(),
-      }),
-    )
-    .optional(),
-});
-const BybitPositionListSchema = z.object({
-  list: z.array(BybitPositionSchema).optional(),
-});
-const BybitClosedPnlListSchema = z.object({
-  list: z.array(BybitClosedPnlSchema).optional(),
-});
-const BybitOrderListSchema = z.object({
-  list: z.array(BybitOrderSchema).optional(),
-});
-
-/** Bybit v5 response envelope: { retCode, retMsg, result }. */
-const BybitEnvelopeSchema = z.object({
-  retCode: z.number(),
-  retMsg: z.string().optional(),
-  result: z.unknown().optional(),
-});
-
 // ---------------------------------------------------------------------------
 // Symbol normalization
 // ---------------------------------------------------------------------------
@@ -442,6 +522,14 @@ function bybitSign(secret: string, payload: string): string {
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
+type BybitAuthHeaders = {
+  "Content-Type": string;
+  "X-BAPI-API-KEY": string;
+  "X-BAPI-TIMESTAMP": string;
+  "X-BAPI-RECV-WINDOW": string;
+  "X-BAPI-SIGN": string;
+};
+
 function bybitAuthHeaders(
   credentials: BybitCredentials,
   body: string,
@@ -474,7 +562,7 @@ export function fetchBybit<A>(
     readonly signed?: boolean;
     readonly acceptableRetCodes?: ReadonlyArray<number>;
   },
-  resultSchema: z.ZodType<A>,
+  resultSchema: S.Codec<A>,
   credentials?: BybitCredentials,
 ): Effect.Effect<A, BybitClientError> {
   return Effect.gen(function* () {
@@ -565,8 +653,17 @@ export function fetchBybit<A>(
 
     // Decode the Bybit envelope at the response boundary so retCode/retMsg
     // and the raw result become strongly typed domain values.
+    //
+    // Note: this is now YIELDED after the envelope, so the result decode
+    // remains STRICT (no fallback) — a malformed result payload is a
+    // BybitApiError, not a silently-degraded domain value.
     const envelope = yield* Effect.try({
-      try: () => BybitEnvelopeSchema.parse(parsed),
+      try: () =>
+        S.decodeUnknownSync(BybitEnvelopeSchema)(parsed) as {
+          readonly retCode: number;
+          readonly retMsg?: string | undefined;
+          readonly result?: unknown;
+        },
       catch: (error): BybitClientError =>
         new BybitApiError({
           status: response.status,
@@ -594,7 +691,17 @@ export function fetchBybit<A>(
       );
     }
 
-    return resultSchema.parse(envelope.result);
+    const decoded: A = yield* Effect.try({
+      try: () =>
+        S.decodeUnknownSync(resultSchema)(envelope.result) as A,
+      catch: (error): BybitClientError =>
+        new BybitApiError({
+          status: response.status,
+          body: error instanceof Error ? error.message : String(error),
+          endpoint: path,
+        }),
+    });
+    return decoded;
   });
 }
 
@@ -697,7 +804,7 @@ function makeBybitClientImpl(
   const get = <A>(
     path: string,
     query: Record<string, string | number> = {},
-    resultSchema: z.ZodType<A>,
+    resultSchema: S.Codec<A>,
     signed = true,
   ) =>
     fetchBybit<A>(
@@ -711,7 +818,7 @@ function makeBybitClientImpl(
   const post = <A>(
     path: string,
     body: BybitRequestPayload,
-    resultSchema: z.ZodType<A>,
+    resultSchema: S.Codec<A>,
     acceptableRetCodes?: ReadonlyArray<number>,
   ) =>
     fetchBybit<A>(
@@ -735,15 +842,15 @@ function makeBybitClientImpl(
       get(
         "/v5/market/instruments-info",
         { category: "linear", symbol },
-        BybitContractListSchema,
+        BybitContractListWireSchema,
         false,
       ).pipe(
         // A symbol the venue does not list must fail, not fall back to a
         // fabricated zero contract: sizing/tick math on zeros produces
         // nonsense orders, and the close path sizes against this too.
-        Effect.flatMap((result) => {
-          const contract = result.list?.[0];
-          if (!contract) {
+        Effect.flatMap((listResult) => {
+          const wire = listResult.list?.[0];
+          if (wire === undefined) {
             return Effect.fail(
               new BybitApiError({
                 status: 200,
@@ -753,31 +860,41 @@ function makeBybitClientImpl(
               }),
             );
           }
-          return Effect.succeed(contract);
+          return Effect.succeed(toBybitContract(wire));
         }),
       ),
     getBalance: () =>
       get(
         "/v5/account/wallet-balance",
         { accountType: "UNIFIED" },
-        BybitWalletBalanceSchema,
-      ).pipe(Effect.map((result) => result.list?.[0]?.coin ?? [])),
+        BybitWalletBalanceWireSchema,
+      ).pipe(
+        Effect.map(
+          (result) => (result.list?.[0]?.coin ?? []).map(toBybitWalletCoin),
+        ),
+      ),
     getPositions: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
-      return get("/v5/position/list", query, BybitPositionListSchema).pipe(
+      return get(
+        "/v5/position/list",
+        query,
+        BybitPositionListWireSchema,
+      ).pipe(
         // positionIdx in the venue's own rows is the authoritative mode
         // signal; refresh before callers size or close against these rows.
         Effect.tap((result) =>
           Effect.sync(() => {
             positionMode = bybitPositionModeFromRows(
-              result.list ?? [],
+              (result.list ?? []).map((row) => ({
+                positionIdx: row.positionIdx ?? 0,
+              })),
               positionMode,
             );
           }),
         ),
-        Effect.map((result) => result.list ?? []),
+        Effect.map((result) => (result.list ?? []).map(toBybitPosition)),
       );
     },
     getClosedPnl: (args = {}) => {
@@ -791,8 +908,12 @@ function makeBybitClientImpl(
       return get(
         "/v5/position/closed-pnl",
         query,
-        BybitClosedPnlListSchema,
-      ).pipe(Effect.map((result) => result.list ?? []));
+        BybitClosedPnlListWireSchema,
+      ).pipe(
+        Effect.map(
+          (result) => (result.list ?? []).map(toBybitClosedPnl),
+        ),
+      );
     },
     placeOrder: (order) => {
       const body: BybitRequestPayload = {
@@ -808,11 +929,14 @@ function makeBybitClientImpl(
       };
       if (order.orderType === "Limit") body.timeInForce = "GTC";
       if (order.price !== undefined) body.price = order.price;
-      if (order.reduceOnly === true) body.reduceOnly = true;
-      return post("/v5/order/create", body, BybitOrderAckSchema).pipe(
+      if (order.reduceOnly === true) body.reduceOnly = true;      return post(
+        "/v5/order/create",
+        body,
+        BybitOrderAckWireSchema,
+      ).pipe(
         Effect.map((ack) => ({
-          orderId: ack.orderId,
-          clientOrderId: ack.orderLinkId,
+          orderId: ack.orderId ?? "",
+          clientOrderId: ack.orderLinkId ?? "",
         })),
       );
     },
@@ -820,11 +944,11 @@ function makeBybitClientImpl(
       get(
         "/v5/order/realtime",
         { category: "linear", symbol, orderId },
-        BybitOrderListSchema,
+        BybitOrderListWireSchema,
       ).pipe(
         Effect.map(
           (result) =>
-            result.list?.[0] ?? {
+            result.list?.[0] === undefined ? {
               orderId: "",
               clientOrderId: "",
               symbol: "",
@@ -836,7 +960,7 @@ function makeBybitClientImpl(
               avgPrice: "0",
               cumExecQty: "0",
               cumExecFee: "0",
-            },
+            } : toBybitOrder(result.list[0]),
         ),
       ),
     // History holds what realtime drops: filled, cancelled, rejected.
@@ -846,27 +970,29 @@ function makeBybitClientImpl(
       get(
         "/v5/order/history",
         { category: "linear", symbol, orderId },
-        BybitOrderListSchema,
-      ).pipe(Effect.map((result) => result.list?.[0] ?? null)),
+        BybitOrderListWireSchema,
+      ).pipe(Effect.map((result) =>
+        result.list?.[0] === undefined ? null : toBybitOrder(result.list[0]),
+      )),
     getOpenOrders: (symbol) => {
       const query: BybitQuery = { category: "linear" };
       if (symbol !== undefined) query.symbol = symbol;
       else query.settleCoin = "USDT";
-      return get("/v5/order/realtime", query, BybitOrderListSchema).pipe(
-        Effect.map((result) => result.list ?? []),
+      return get("/v5/order/realtime", query, BybitOrderListWireSchema).pipe(
+        Effect.map((result) => (result.list ?? []).map(toBybitOrder)),
       );
     },
     cancelOrder: ({ symbol, orderId }) =>
       post(
         "/v5/order/cancel",
         { category: "linear", symbol, orderId },
-        z.unknown(),
+        S.Unknown,
       ).pipe(Effect.as(undefined)),
     setLeverage: ({ symbol, buyLeverage, sellLeverage }) =>
       post(
         "/v5/position/set-leverage",
         { category: "linear", symbol, buyLeverage, sellLeverage },
-        z.unknown(),
+        S.Unknown,
         BYBIT_IDEMPOTENT_RET_CODES.SET_LEVERAGE,
       ).pipe(
         Effect.catchIf(
@@ -890,7 +1016,7 @@ function makeBybitClientImpl(
       post(
         "/v5/position/set-mode",
         { category: "linear", mode: mode === "hedge_mode" ? 3 : 0 },
-        z.unknown(),
+        S.Unknown,
         BYBIT_IDEMPOTENT_RET_CODES.SET_POSITION_MODE,
       ).pipe(
         // Best-effort: tolerate both the "already in this mode" retCode and an
@@ -925,7 +1051,7 @@ function makeBybitClientImpl(
       };
       if (takeProfit !== undefined) body.takeProfit = takeProfit;
       if (stopLoss !== undefined) body.stopLoss = stopLoss;
-      return post("/v5/position/trading-stop", body, z.unknown()).pipe(
+      return post("/v5/position/trading-stop", body, S.Unknown).pipe(
         Effect.as(undefined),
       );
     },
