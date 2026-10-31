@@ -182,6 +182,9 @@ jobs:
       - name: Run Telegram dependency audit
         run: cd services/telegram-service && bun audit
 
+      - name: Gate Telegram audit on high/critical
+        run: ./scripts/bun-audit-gate.sh services/telegram-service
+
       - name: Cache TypeScript CLI Bun dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.3
         with:
@@ -199,64 +202,4 @@ jobs:
         run: cd services/neuratrade-cli-ts && bun audit
 
       - name: Gate CLI audit on high/critical
-        run: |
-          # Preserve bun's exit status: an audit crash (network error, bun
-          # bug) must not fall through to an empty report that reads as a
-          # passing gate.
-          cd services/neuratrade-cli-ts
-          if ! bun audit --json > /tmp/cli-audit.json; then
-            echo "bun audit --json failed (exit $?); reports must not be assumed empty" >&2
-            exit 1
-          fi
-          python3 - <<'PY'
-          import json, sys
-
-          UNKNOWN_SHAPE = 2  # distinct from findings (1) so shape drift stands out
-
-          try:
-              data = json.load(open("/tmp/cli-audit.json"))
-          except (json.JSONDecodeError, OSError) as err:
-              print(f"audit JSON unreadable: {err}", file=sys.stderr)
-              sys.exit(UNKNOWN_SHAPE)
-
-          def advisory_pairs(obj):
-              """Return [(package, advisory)] for known bun audit shapes, else None."""
-              if isinstance(obj, dict) and isinstance(obj.get("vulnerabilities"), dict):
-                  obj = obj["vulnerabilities"]
-              if not isinstance(obj, dict):
-                  return None
-              # An EMPTY dict is a clean report, not shape drift: `bun audit
-              # --json` prints `{}` when there are no advisories. Treating it
-              # as unknown made a clean audit fail the gate.
-              if not obj:
-                  return []
-              out = []
-              for pkg, val in obj.items():
-                  if not isinstance(val, (dict, list)):
-                      return None
-                  for adv in val if isinstance(val, list) else [val]:
-                      if not isinstance(adv, dict) or "severity" not in adv:
-                          return None
-                      out.append((pkg, adv))
-              return out
-
-          pairs = advisory_pairs(data)
-          if pairs is None:
-              print(
-                  "unexpected bun audit --json shape: expected a map of "
-                  "package -> advisory (or list of advisories, or wrapped in "
-                  "{'vulnerabilities': {...}}), each advisory with a "
-                  "'severity' key; got " + type(data).__name__ + ". Update this "
-                  "gate for the new shape before trusting its result.",
-                  file=sys.stderr,
-              )
-              sys.exit(UNKNOWN_SHAPE)
-
-          bad = [
-              (pkg, a["severity"], a.get("url"))
-              for pkg, a in pairs
-              if a["severity"] in ("high", "critical")
-          ]
-          print("high/critical findings:", bad if bad else "none")
-          sys.exit(1 if bad else 0)
-          PY
+        run: ./scripts/bun-audit-gate.sh services/neuratrade-cli-ts
