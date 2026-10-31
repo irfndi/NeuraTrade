@@ -15,6 +15,10 @@
 import { Database } from "bun:sqlite";
 import { resampleCandles } from "../src/scalping/grid-universe.ts";
 import { runLadderGridBacktest } from "../src/scalping/ladder-grid.ts";
+import {
+  returnMoments,
+  sharpeFromReturns,
+} from "../src/scalping/deflated-sharpe.ts";
 import type { Candle } from "../src/market-data/types.ts";
 import type { AutoresearchKnobs } from "./knobs.ts";
 import {
@@ -47,6 +51,16 @@ export interface EvaluateResult {
   readonly winRatePct: number;
   readonly tradesPerSymMonth: number;
   readonly expectancyPct: number;
+  /**
+   * Per-period Sharpe of the window-return series (undefined when there are too
+   * few windows or zero dispersion). This is the input the Deflated Sharpe
+   * Ratio needs — `score` is a location statistic and must never be fed to it.
+   */
+  readonly sharpe?: number;
+  /** Skewness of the window returns. */
+  readonly skewness?: number;
+  /** RAW kurtosis of the window returns (3 = normal). */
+  readonly kurtosis?: number;
   readonly windows: number;
   readonly symbols: number;
   readonly steps: number;
@@ -598,6 +612,12 @@ function summarizeWindowStats(
     .map((r) => Math.log(1 + Math.max(-0.95, r / 100)));
   const medianLogReturn = median(logs);
 
+  // Sharpe-family inputs for selection-bias correction, computed over the same
+  // percentage window returns the score summarizes so every ledger entry
+  // carries comparable per-window units.
+  const sharpe = sharpeFromReturns(stats.rets);
+  const moments = returnMoments(stats.rets);
+
   const g = checkGuards({
     medianLogReturn,
     winRatePct,
@@ -619,6 +639,9 @@ function summarizeWindowStats(
     winRatePct,
     tradesPerSymMonth,
     expectancyPct,
+    sharpe,
+    skewness: moments.skewness,
+    kurtosis: moments.kurtosis,
     windows,
     symbols: symbolCount,
     steps: stats.steps,
