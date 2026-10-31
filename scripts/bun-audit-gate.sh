@@ -19,7 +19,7 @@ cd "$service_dir" || exit 1
 # `bun audit --json` exits 1 whenever it REPORTS advisories, so exit status
 # alone cannot distinguish findings from a crash. Require a parseable report:
 # empty output means the audit genuinely failed and must not read as a pass.
-bun audit --json > "$report" 2>/dev/null
+bun audit --json >"$report" 2>/dev/null
 if [ ! -s "$report" ]; then
   echo "bun audit produced no report; a crash must not read as a passing gate" >&2
   exit 1
