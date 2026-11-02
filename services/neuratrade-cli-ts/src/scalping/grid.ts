@@ -119,6 +119,13 @@ export interface GridTrade {
   readonly pnlQuote: number;
   readonly win: boolean;
   readonly isLiquidation: boolean;
+  /**
+   * Distance from entry to the protective stop, as a PERCENT of entry price
+   * (1.5 = 1.5%). Recorded so R-multiples are computable: without it the
+   * metrics layer had `initialRiskPct: 0` hardcoded and `averageRMultiple`
+   * was permanently 0 for every strategy, gate-invisible.
+   */
+  readonly initialRiskPct: number;
 }
 
 export interface GridResult {
@@ -549,6 +556,11 @@ export function runGridBacktest(
         pnlQuote: settled.pnlQuote,
         win: settled.win,
         isLiquidation,
+        // The protective stop sits gridMaxGrids steps against the trade, and
+        // one step is gridStepPct% of the entry mid, so the initial risk is
+        // gridStepPct * gridMaxGrids percent of entry. Recorded so R-multiples
+        // are computable rather than hardcoded to 0 downstream.
+        initialRiskPct: options.gridStepPct * options.gridMaxGrids,
       });
       positionSize = 0;
       // Pause only after a losing non-liquidation exit ("losing stop-out"
@@ -602,6 +614,7 @@ export function runGridBacktest(
       pnlQuote: settled.pnlQuote,
       win: settled.win,
       isLiquidation: false,
+      initialRiskPct: options.gridStepPct * options.gridMaxGrids,
     });
     positionSize = 0;
   }

@@ -1011,7 +1011,11 @@ function gridTradeToBacktestTrade(
       : t.win
         ? ("take_profit" as const)
         : ("stop_loss" as const),
-    initialRiskPct: 0,
+    // Carries the trade's real initial risk so R-multiples are computable.
+    // Previously hardcoded 0, which made `averageRMultiple` permanently 0 for
+    // every strategy — a metric that could never move, on a field nothing
+    // assigned.
+    initialRiskPct: t.initialRiskPct,
     fillType: "maker" as const,
     entryFeePct: feePct / 2,
     exitFeePct: feePct / 2,

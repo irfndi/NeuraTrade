@@ -128,7 +128,18 @@ export interface LadderTrade {
   readonly exitBar: number;
   readonly entryPrice: number;
   readonly exitPrice: number;
-  /** Net leveraged return fraction including round-trip fees. */
+  /**
+   * Net leveraged return as a FRACTION, not a percent (0.015 = 1.5%), fees
+   * included. Deliberately not renamed: the name is misleading but it is load
+   * bearing across the backtest, persistence and readiness paths, and a rename
+   * would be a wider change than this fix warrants.
+   *
+   * Consumed by `computePerformanceMetrics`, which AVERAGES this value to form
+   * `metrics.expectancy`. That figure is therefore a fraction too, and
+   * `readiness` compares it against `minExpectancyPct` (currently 0, where the
+   * comparison is unit-invariant). Pinned by ladder-grid.units.test.ts so a
+   * future non-zero percent threshold cannot silently be 100x off.
+   */
   readonly pnlPct: number;
   /** Absolute quote-currency PnL of the trade. */
   readonly pnlQuote?: number;
