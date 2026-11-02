@@ -12,11 +12,14 @@ import {
   MarketDataRepositorySQLiteLive,
   type MarketDataRepositoryService,
 } from "../../market-data/repository.js";
+import {
+  validateCandlePrices,
+  validateCandleSeries,
+} from "../../market-data/gateway.js";
 import { defaultComposerConfig } from "../../scalping/composer.js";
 import { CandleLike, ComposerConfig } from "../../scalping/types.js";
 import {
   attachMonteCarlo,
-  runBacktest,
   splitCandlesByOos,
   type BacktestResult,
   type BacktestTrade,
@@ -673,6 +676,17 @@ export function backtestProgram(args: ResolvedBacktestArgs) {
         ),
       );
     }
+
+    // Refuse to score a corrupt series. A per-candle validity check cannot catch
+    // a 3-million-x range (0.04232..126011.18) from a unit/symbol mix-up, and
+    // such a series silently produced a 59-trillion-percent "OOS return" that
+    // then PASSED its readiness gate. Never let bad data justify real money.
+    yield* validateCandlePrices(args.exchange, candles).pipe(
+      Effect.mapError((e) => new MarketDataRepositoryError(e.reason)),
+    );
+    yield* validateCandleSeries(args.exchange, candles).pipe(
+      Effect.mapError((e) => new MarketDataRepositoryError(e.reason)),
+    );
 
     const fundingRates = yield* loadFundingRatesOrWarn(repo, args, candles);
 

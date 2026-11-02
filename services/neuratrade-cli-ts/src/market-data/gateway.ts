@@ -107,6 +107,46 @@ export function validateCandlePrices(
 }
 
 /**
+ * Plausibility bound for the whole series, not one candle at a time.
+ *
+ * `validateCandlePrices` rejects non-positive or non-finite values, but a series
+ * can still be corrupt: the local 1h BTC set spans 0.04232 to 126011.18, a
+ * 3-million-x range that is a data defect rather than a price move. Feeding
+ * such a series into the backtest produces absurd returns (a 59-trillion-percent
+ * "OOS return" that then PASSED its gate) and lets a broken dataset justify
+ * real money.
+ *
+ * The bound is deliberately loose — crypto has genuinely done 100x — so this
+ * rejects only the orders-of-magnitude corruption a unit/venue/split mix-up
+ * produces, never a real market move.
+ */
+export const MAX_SERIES_PRICE_RATIO = 1000;
+
+export function validateCandleSeries(
+  venue: string,
+  candles: readonly Candle[],
+): Effect.Effect<void, MarketDataError, never> {
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = 0;
+  for (const c of candles) {
+    if (c.low > 0 && c.low < lo) lo = c.low;
+    if (c.high > hi) hi = c.high;
+  }
+  if (!Number.isFinite(lo) || hi <= 0) return Effect.void;
+  const ratio = hi / lo;
+  if (ratio > MAX_SERIES_PRICE_RATIO) {
+    return Effect.fail(
+      new MarketDataError(
+        `${venue}: series price range ${lo}..${hi} spans ${ratio.toFixed(0)}x ` +
+          `(limit ${MAX_SERIES_PRICE_RATIO}x) - the data is corrupt (mixed symbols, ` +
+          `units, or unadjusted splits), so any score computed from it is meaningless`,
+      ),
+    );
+  }
+  return Effect.void;
+}
+
+/**
  * Reject order-book levels whose price/volume did not parse (0 or NaN), so an
  * empty-string field cannot become a 0-priced best bid/ask (mid = 0).
  */

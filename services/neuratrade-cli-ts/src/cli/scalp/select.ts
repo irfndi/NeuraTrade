@@ -11,10 +11,7 @@ import { Effect } from "effect";
 import { resolve } from "node:path";
 import { Path } from "../../services/path.js";
 import { SqliteClient, type SqliteError } from "../../services/sqlite.js";
-import {
-  BacktestEngine,
-  type BacktestEngineImpl,
-} from "../../scalping/services.js";
+import { BacktestEngine } from "../../scalping/services.js";
 import {
   MarketDataRepository,
   MarketDataRepositoryError,
@@ -461,8 +458,25 @@ export function combineWalkForwardResults(
   }
 
   const totalReturnPct = ((capital - initialCapital) / initialCapital) * 100;
-  const maxDrawdownPct = 0; // Simplified
   const winningTrades = combinedTrades.filter((t) => t.netPnl > 0).length;
+  // Drawdown on the running equity path. This must not be stubbed to zero:
+  // G3b reads it to gate real money, and a hardcoded 0 made the gate pass
+  // unconditionally.
+  let maxDrawdownPct = 0;
+  {
+    let equity = initialCapital;
+    let runningPeak = initialCapital;
+    for (const t of combinedTrades) {
+      equity += t.netPnl;
+      if (equity > runningPeak) runningPeak = equity;
+      if (runningPeak > 0) {
+        const dd = ((runningPeak - equity) / runningPeak) * 100;
+        if (dd > maxDrawdownPct) maxDrawdownPct = dd;
+      }
+    }
+  }
+  void peak;
+
   const losingTrades = combinedTrades.filter((t) => t.netPnl < 0).length;
 
   return {
