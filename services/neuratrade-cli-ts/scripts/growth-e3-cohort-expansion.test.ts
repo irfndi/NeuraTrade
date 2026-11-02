@@ -36,6 +36,7 @@ function syntheticResult(pnlPcts: number[]): GridResult {
       pnlQuote: pnlPct,
       win: pnlPct > 0,
       isLiquidation: false,
+      initialRiskPct: 2,
     })),
   };
 }
