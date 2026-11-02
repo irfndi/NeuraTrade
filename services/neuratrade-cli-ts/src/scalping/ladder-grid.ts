@@ -599,14 +599,24 @@ export function runLadderGridBacktest(
     bar: number,
     previousPaused: number,
   ): LadderSideResult | null => {
+    // Stop offsets must use the STEP AT ENTRY, not the current bar's step.
+    // `step` is recomputed every bar as open * gridStepPct/100, so a later bar
+    // at a different price would silently move the boundary (a drop to 95.8
+    // turned the legacy 96.0 stop into 96.168). Each rung already carries its
+    // own entry-time step, so derive the offset from those.
+    const entryStep = (r: Rung | undefined): number =>
+      r !== undefined && r.step > 0 ? r.step : step;
+    const legacyOffset = entryStep(filled[0]) * (N + opts.gridMaxGrids);
     const boundary =
       stopRatio > 0
         ? side === "long"
-          ? Math.min(...filled.map((r) => r.entryPrice)) - step * stopRatio
-          : Math.max(...filled.map((r) => r.entryPrice)) + step * stopRatio
+          ? Math.max(...filled.map((r) => r.entryPrice)) -
+            entryStep(filled[0]) * stopRatio
+          : Math.min(...filled.map((r) => r.entryPrice)) +
+            entryStep(filled[0]) * stopRatio
         : side === "long"
-          ? state.base - step * (N + opts.gridMaxGrids)
-          : state.base + step * (N + opts.gridMaxGrids);
+          ? state.base - legacyOffset
+          : state.base + legacyOffset;
     const liquidationLevels = filled
       .map((r) => liquidationPrice(side, r.entryPrice, leverage))
       .filter((price) => price > 0);
