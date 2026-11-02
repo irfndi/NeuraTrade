@@ -1,9 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import * as fc from "fast-check";
 import {
+  EG_CRITICAL_5PCT_2VAR,
   assessEdge,
   barrierHitRate,
   costAdjustedBreakeven,
+  engleGrangerAdf,
+  isCointegrated,
+  ols,
   varianceRatio,
 } from "./edge-validation.js";
 
@@ -279,5 +283,87 @@ describe("varianceRatio", () => {
   it("returns NaN instead of a number when it cannot be computed", () => {
     expect(varianceRatio([1, 2, 3], 16)).toBeNaN();
     expect(varianceRatio([100, 100, 100, 100], 2)).toBeNaN();
+  });
+});
+
+describe("ols", () => {
+  it("recovers an exact linear relationship", () => {
+    const x = [1, 2, 3, 4, 5];
+    const y = x.map((v) => 3 + 2 * v);
+    const fit = ols(y, x);
+    expect(fit.intercept).toBeCloseTo(3, 10);
+    expect(fit.slope).toBeCloseTo(2, 10);
+  });
+
+  it("refuses a constant x rather than returning NaN", () => {
+    expect(() => ols([1, 2, 3], [5, 5, 5])).toThrow(RangeError);
+  });
+
+  it("rejects mismatched lengths", () => {
+    expect(() => ols([1, 2], [1, 2, 3])).toThrow(RangeError);
+  });
+});
+
+describe("engleGrangerAdf / isCointegrated", () => {
+  /** Deterministic noise in [-0.5, 0.5). */
+  function noiseFactory(seed: number) {
+    let s = seed;
+    return () => {
+      s = (s * 1103515245 + 12345) % 2147483648;
+      return s / 2147483648 - 0.5;
+    };
+  }
+
+  it("finds cointegration when the spread really is stationary", () => {
+    // Two series sharing a common stochastic trend, plus a mean-reverting gap.
+    // This is the case a pairs trader would legitimately bet on.
+    const next = noiseFactory(7);
+    const common: number[] = [];
+    const gap: number[] = [];
+    let level = 0;
+    let g = 0;
+    for (let i = 0; i < 3000; i += 1) {
+      level += next() * 0.01;
+      g = 0.7 * g + next() * 0.002; // strongly mean-reverting gap
+      common.push(level);
+      gap.push(g);
+    }
+    const y = common.map((c, i) => c + gap[i]);
+    const x = common.map((c) => c);
+    const { intercept, slope } = ols(y, x);
+    const resid = y.map((v, i) => v - (intercept + slope * x[i]));
+    expect(isCointegrated(resid)).toBe(true);
+  });
+
+  it("rejects a spread built from two independent random walks", () => {
+    // No shared trend: the residual is a random walk and must not pass. This is
+    // the exact false positive that makes naive pairs screens look profitable.
+    const next = noiseFactory(42);
+    const a: number[] = [];
+    const b: number[] = [];
+    let la = 0;
+    let lb = 0;
+    for (let i = 0; i < 3000; i += 1) {
+      la += next() * 0.01;
+      lb += next() * 0.01;
+      a.push(la);
+      b.push(lb);
+    }
+    const { intercept, slope } = ols(a, b);
+    const resid = a.map((v, i) => v - (intercept + slope * b[i]));
+    expect(isCointegrated(resid)).toBe(false);
+  });
+
+  it("returns undefined instead of a number when the sample is too short", () => {
+    expect(engleGrangerAdf([1, 2, 3])).toBeUndefined();
+  });
+
+  it("uses the Engle-Granger critical value, not the single-series ADF one", () => {
+    // The distinction matters: a t of -3.0 passes a naive -2.86 threshold and
+    // fails the correct -3.34 one. Getting this wrong is how a non-tradeable
+    // spread gets waved through.
+    expect(EG_CRITICAL_5PCT_2VAR).toBeLessThan(-2.86);
+    const borderline = { t: -3.0 };
+    expect(borderline.t < EG_CRITICAL_5PCT_2VAR).toBe(false);
   });
 });

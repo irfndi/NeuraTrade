@@ -234,3 +234,99 @@ export function varianceRatio(closes: readonly number[], q: number): number {
 
   return varQ / q / varOne;
 }
+
+/**
+ * Ordinary least squares of `y` on `x`. Used to estimate the hedge ratio of a
+ * spread and to run the ADF regression.
+ */
+export interface OlsFit {
+  readonly intercept: number;
+  readonly slope: number;
+}
+
+/** Fit `y = intercept + slope * x`. */
+export function ols(y: readonly number[], x: readonly number[]): OlsFit {
+  if (y.length !== x.length || y.length < 2) {
+    throw new RangeError(
+      `ols: y and x must be the same length >= 2 (got ${y.length}, ${x.length})`,
+    );
+  }
+  const n = y.length;
+  const meanX = x.reduce((a, b) => a + b, 0) / n;
+  const meanY = y.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  for (let i = 0; i < n; i += 1) {
+    sxy += (x[i] - meanX) * (y[i] - meanY);
+    sxx += (x[i] - meanX) ** 2;
+  }
+  if (!(sxx > 0)) {
+    throw new RangeError("ols: x has no variance, slope is undefined");
+  }
+  const slope = sxy / sxx;
+  return { intercept: meanY - slope * meanX, slope };
+}
+
+/**
+ * Engle-Granger ADF t-statistic for a residual spread fitted by OLS.
+ *
+ * This is the necessary condition for a relative-value trade. If the spread is
+ * not stationary there is nothing to revert, and any "z-score reversion" you
+ * measure is noise being fitted.
+ *
+ * Returns the t-statistic of `delta(resid) ~ resid[-1]`. Compare against the
+ * TWO-VARIABLE Engle-Granger critical value, not the single-series ADF one:
+ * about -3.34 at 5% for 2 variables with no trend. Using -2.86 here is the
+ * classic way this test gets over-read, because the residuals come from an
+ * estimated regression and the test is therefore biased toward acceptance.
+ *
+ * `undefined` when the residual series is too short to regress.
+ */
+export function engleGrangerAdf(resid: readonly number[]): number | undefined {
+  const n = resid.length;
+  if (n < 30) return undefined;
+  const delta: number[] = [];
+  const lag: number[] = [];
+  for (let k = 1; k < n; k += 1) {
+    delta.push(resid[k] - resid[k - 1]);
+    lag.push(resid[k - 1]);
+  }
+  let beta: number;
+  try {
+    beta = ols(delta, lag).slope;
+  } catch {
+    return undefined;
+  }
+  const meanDelta = delta.reduce((a, b) => a + b, 0) / delta.length;
+  const meanLag = lag.reduce((a, b) => a + b, 0) / lag.length;
+  let residualSumSq = 0;
+  let lagSumSq = 0;
+  for (let k = 0; k < delta.length; k += 1) {
+    const fitted = meanDelta + beta * (lag[k] - meanLag);
+    residualSumSq += (delta[k] - fitted) ** 2;
+    lagSumSq += (lag[k] - meanLag) ** 2;
+  }
+  if (!(lagSumSq > 0) || delta.length <= 2) return undefined;
+  const standardError = Math.sqrt(
+    residualSumSq / (delta.length - 2) / lagSumSq,
+  );
+  return standardError > 0 ? beta / standardError : undefined;
+}
+
+/** 5% Engle-Granger critical value for 2 variables, no trend (MacKinnon). */
+export const EG_CRITICAL_5PCT_2VAR = -3.34;
+
+/**
+ * Whether a spread from `ols` is cointegrated at 5%.
+ *
+ * Only "yes" licenses a relative-value trade. "no" means the spread wanders, so
+ * entry and exit thresholds are arbitrary and the reversion you measure is
+ * fitted to noise.
+ */
+export function isCointegrated(
+  resid: readonly number[],
+  criticalValue = EG_CRITICAL_5PCT_2VAR,
+): boolean {
+  const t = engleGrangerAdf(resid);
+  return t !== undefined && t < criticalValue;
+}
