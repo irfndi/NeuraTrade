@@ -713,15 +713,27 @@ function sideStopBoundary(
 ): number {
   const { opts, w } = ctx;
   const stopRatio = opts.stopRatio ?? 0;
+  // Offsets use the STEP AT ENTRY, not the current bar's step. `ctx.step` is
+  // recomputed each bar as open * gridStepPct/100, so a later bar at a
+  // different price would silently move the stop (a drop to 95.8 turned a
+  // legacy 96.0 boundary into 96.168). Kept identical to ladder-grid.ts or the
+  // backtest/incremental parity tests diverge.
+  const entryStep =
+    filled[0] !== undefined && filled[0].step > 0 ? filled[0].step : ctx.step;
   if (stopRatio > 0) {
     const entries = filled.map((rung) => rung.entryPrice);
+    // Anchor to the NEAREST filled rung, matching the documented contract
+    // ("Step-relative stop distance from the nearest filled rung",
+    // ladder-grid.ts). Anchoring to min/max (the DEEPEST rung) meant that once
+    // rung 2 filled, rung 1 risked ~2.58 steps to make 1.95: an R:R the
+    // strategy then had to overcome on most of its trades.
     return side === "long"
-      ? Math.min(...entries) - ctx.step * stopRatio
-      : Math.max(...entries) + ctx.step * stopRatio;
+      ? Math.max(...entries) - entryStep * stopRatio
+      : Math.min(...entries) + entryStep * stopRatio;
   }
   return side === "long"
-    ? sideBase(w, side) - ctx.step * (ctx.rungCount + opts.gridMaxGrids)
-    : sideBase(w, side) + ctx.step * (ctx.rungCount + opts.gridMaxGrids);
+    ? sideBase(w, side) - entryStep * (ctx.rungCount + opts.gridMaxGrids)
+    : sideBase(w, side) + entryStep * (ctx.rungCount + opts.gridMaxGrids);
 }
 
 function sideLiquidationLevel(
@@ -789,6 +801,14 @@ function resolveLadderRiskExit(
   }
 
   const boundary = sideStopBoundary(ctx, side, filled);
+  // NOTE: no same-bar entry guard here, deliberately. The target path will not
+  // close a rung on its entry bar (unless conservativeIntrabar is off) while
+  // this stop will, which is asymmetric and biases results toward stop-outs.
+  // Adding the symmetric guard was attempted and reverted: it changes which
+  // trades exist, cascading into the golden backtest-vs-incremental parity
+  // fixtures and several hand-built stop scenarios. That is a behavioural
+  // change to the strategy, not a bug fix, so it needs its own PR with the
+  // golden files regenerated and the change measured. Tracked separately.
   if (sideLevelTouched(side, candle, boundary)) {
     return {
       closeRungs: filled,
@@ -1113,7 +1133,7 @@ function stateToWorking(state: LadderPaperState): WorkingState {
 }
 
 function workingToState(
-  options: LadderPaperTradingOptions,
+  _options: LadderPaperTradingOptions,
   w: WorkingState,
   lastTimestamp: Date | null,
   previous: LadderPaperState,
@@ -1940,7 +1960,7 @@ function guardLadderIteration(
   options: LadderPaperTradingOptions,
   state: LadderPaperState,
   w: WorkingState,
-  repo: PaperTradingRepositoryService,
+  _repo: PaperTradingRepositoryService,
   services: LadderOptionalServices,
 ): Effect.Effect<
   LadderPaperIterationResult | null,
