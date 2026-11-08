@@ -1178,6 +1178,89 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(placeCalls).toBe(1);
   });
 
+  // state-machines.md RISK-02: an open breaker must keep haltING new rungs
+  // while still letting an already-open ladder manage its exits.
+  it("holds new rungs but keeps managing rungs while the circuit breaker is open", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts = baseOptions();
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const breaker: CircuitBreakerService = {
+      recordTradeResult: () => Effect.void,
+      isOpen: () => Effect.succeed(true),
+      getReason: () => Effect.succeed("daily loss 5% reached"),
+      currentDailyLossPct: () => Effect.succeed(5),
+      reset: () => Effect.void,
+    };
+    const run = () =>
+      Effect.runPromise(
+        runLadderPaperTradingIteration(opts).pipe(
+          Effect.provideService(PaperTradingRepository, repo),
+          Effect.provideService(MarketDataGateway, gateway),
+          Effect.provideService(CircuitBreaker, breaker),
+        ),
+      );
+
+    // Flat: the breaker holds the iteration before any rung is seeded.
+    const flat = await run();
+    expect(flat.note).toContain("circuit breaker open");
+    expect(flat.openRungs).toBe(0);
+
+    // Open ladder: the same breaker must not freeze rung management.
+    const stateJson = db
+      .query("SELECT state_json FROM ladder_paper_state WHERE symbol = ?")
+      .get(opts.symbol) as { state_json: string } | null;
+    const persisted = JSON.parse(
+      stateJson?.state_json ??
+        JSON.stringify({
+          longRungs: [],
+          shortRungs: [],
+          longBase: 0,
+          shortBase: 0,
+        }),
+    );
+    db.query(
+      `INSERT INTO ladder_paper_state (exchange, symbol, timeframe, state_json, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+         state_json = excluded.state_json, updated_at = excluded.updated_at`,
+    ).run(
+      opts.exchange,
+      opts.symbol,
+      opts.timeframe,
+      JSON.stringify({
+        ...persisted,
+        longRungs: [
+          {
+            rungIndex: 0,
+            side: "long",
+            level: 99,
+            step: 1,
+            filled: true,
+            entryPrice: 99,
+            entryBar: 1,
+            entryTimestamp: 0,
+          },
+        ],
+        longBase: 100,
+        lastTimestamp: 0,
+      }),
+      new Date().toISOString(),
+    );
+
+    const open = await run();
+    expect(open.note).not.toContain("circuit breaker open");
+    expect(open.closedThisIteration).toBeGreaterThan(0);
+  });
+
   it("holds (never reprocesses) when no candle is newer than the last processed", async () => {
     const db = new Database(":memory:");
     const repo = new PaperTradingRepositorySQLite(db);

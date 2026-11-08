@@ -586,6 +586,138 @@ describe("grid paper engine", () => {
     expect(result.note).toContain("READINESS PROVENANCE MISMATCH");
   });
 
+  // state-machines.md RISK-01: the drawdown latch used to be armed in
+  // finalizeGridBar and cleared by guardKilledGridState on the very next
+  // iteration, so it was neither a halt nor a recovery.
+  it("keeps a drawdown-breached flat account halted until the peak re-anchors", async () => {
+    const repo = new InMemoryPaperRepository();
+    // 5% below peak, limit 4%: already past the limit before any trade.
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        initialCapital: 20,
+        capital: money(19),
+        peakCapital: money(20),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 20,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 4,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: new Date(),
+      } satisfies GridPaperState),
+    );
+    const options = makeOptions({
+      initialCapital: 20,
+      gridMaxGrids: 20,
+      maxDrawdownPct: 4,
+    });
+    const candles = makeCandles(20, 1000, "oscillate");
+
+    const first = await runWithRepo(options, repo, candles);
+    const second = await runWithRepo(options, repo, candles);
+    const third = await runWithRepo(options, repo, candles);
+
+    // Halted, not flapping: no entry on any bar, and every bar says why.
+    for (const result of [first, second, third]) {
+      expect(result.action).toBe("hold");
+      expect(result.note).toContain("drawdown limit breached");
+    }
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBeNull();
+    expect(state?.killed).toBe(true);
+    const trades = await Effect.runPromise(
+      repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 10),
+    );
+    expect(trades).toHaveLength(0);
+  });
+
+  it("keeps evaluating exits on an open position latched by the drawdown limit", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter, closes } = makeTrackingFuturesAdapter(true, {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 1,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    });
+    const options = makeOptions({
+      isLive: true,
+      initialCapital: 1000,
+      gridPauseAfterLossBars: 0,
+      maxDrawdownPct: 4,
+    });
+    const openedAt = new Date("2026-08-01T00:00:00.000Z");
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        initialCapital: 1000,
+        capital: money(950),
+        peakCapital: money(1000),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.01"),
+        entryFee: money("0.01"),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(options),
+        cohortId: "test-drawdown-exit-cohort",
+        candidateLockAt: openedAt,
+        datasetCutoffAt: openedAt,
+        entryOpenedAt: openedAt,
+        executionEnvironment: "bitget-live",
+        gridStepPct: options.gridStepPct,
+        gridMaxGrids: options.gridMaxGrids,
+        gridPauseAfterLossBars: 0,
+        feePct: options.feePct,
+        slippageBps: options.slippageBps,
+        trendFilterPeriod: options.trendFilterPeriod,
+        maxPositionPct: options.maxPositionPct,
+        maxDrawdownPct: 4,
+        leverage: 1,
+        killed: true,
+        lastTimestamp: null,
+        updatedAt: openedAt,
+      } satisfies GridPaperState),
+    );
+    const baseCandles = makeCandles(20, 1000, "oscillate");
+    const last = baseCandles.at(-1)!;
+    const candles = [
+      ...baseCandles.slice(0, -1),
+      { ...last, high: 1001, low: 900, close: 1000 },
+    ];
+
+    const result = await runWithRepo(options, repo, candles, adapter);
+
+    // The stop fires even though the account is latched: a halt must never
+    // freeze an open position.
+    expect(closes.length).toBe(1);
+    expect(result.action).toBe("closed");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBeNull();
+  });
+
   it("heals flat config drift while preserving realized capital", async () => {
     // 2026-09-03: a full flat reseed vaporized a realized +0.55% BTC win
     // (50.27 -> 50.00). Limits come from options; the balance is the
@@ -1034,6 +1166,89 @@ describe("grid paper engine", () => {
 
     expect(result.note).toContain("RISK BLOCKED");
     expect(orders).toHaveLength(0);
+  });
+
+  // state-machines.md RISK-02 (the P0 half): the breaker halts NEW entries,
+  // but it must never freeze the exit rules of an already-open live position.
+  it("keeps evaluating exits on an open live position while the circuit breaker is open", async () => {
+    const repo = new InMemoryPaperRepository();
+    const options = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+    const { adapter, closes } = makeTrackingFuturesAdapter(true, {
+      symbol: "ETH/USDT",
+      side: "long",
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      leverage: 1,
+      quantity: money("0.01"),
+      available: money("0.01"),
+      entryPrice: money(1000),
+      marginCoin: "USDT",
+    });
+    const openedAt = new Date("2026-08-01T00:00:00.000Z");
+    await Effect.runPromise(
+      repo.saveGridState({
+        exchange: "binance",
+        symbol: "ETH/USDT",
+        timeframe: "15m",
+        capital: money(1000),
+        peakCapital: money(1000),
+        paused: 0,
+        side: "long",
+        entryPrice: money(1000),
+        entryOrderId: "entry-live",
+        entryFilledQty: money("0.01"),
+        entryFee: money("0.01"),
+        entryFillSource: "live",
+        strategyConfigFingerprint: liveTestFingerprint(options),
+        cohortId: "test-breaker-cohort",
+        candidateLockAt: openedAt,
+        datasetCutoffAt: openedAt,
+        entryOpenedAt: openedAt,
+        executionEnvironment: "bitget-live",
+        gridStepPct: options.gridStepPct,
+        gridMaxGrids: options.gridMaxGrids,
+        gridPauseAfterLossBars: 0,
+        feePct: options.feePct,
+        slippageBps: options.slippageBps,
+        trendFilterPeriod: options.trendFilterPeriod,
+        maxPositionPct: options.maxPositionPct,
+        maxDrawdownPct: options.maxDrawdownPct,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: null,
+        updatedAt: openedAt,
+      }),
+    );
+    const baseCandles = makeCandles(20, 1000, "oscillate");
+    const last = baseCandles.at(-1)!;
+    const candles = [
+      ...baseCandles.slice(0, -1),
+      { ...last, high: 1001, low: 900, close: 1000 },
+    ];
+    const openBreaker: CircuitBreakerService = {
+      isOpen: () => Effect.succeed(true),
+      getReason: () => Effect.succeed("daily loss 5% reached threshold 2%"),
+      currentDailyLossPct: () => Effect.succeed(5),
+      recordTradeResult: () => Effect.void,
+      reset: () => Effect.void,
+    };
+
+    const result = await runWithRepo(
+      options,
+      repo,
+      candles,
+      adapter,
+      makeRiskGuard(),
+      openBreaker,
+    );
+
+    // The stop must still fire: only NEW risk is blocked by the breaker.
+    expect(closes.length).toBe(1);
+    expect(result.action).toBe("closed");
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    expect(state?.side).toBeNull();
   });
 
   it("records realized grid closes in the circuit breaker", async () => {

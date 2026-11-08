@@ -574,6 +574,23 @@ function loadGridState(
   });
 }
 
+function gridDrawdownBreached(state: GridPaperState): boolean {
+  if (state.maxDrawdownPct >= 100) return false;
+  if (!state.peakCapital.greaterThan(0)) return false;
+  return state.peakCapital
+    .minus(state.capital)
+    .div(state.peakCapital)
+    .times(100)
+    .greaterThanOrEqualTo(state.maxDrawdownPct);
+}
+
+/**
+ * `killed` is a sticky no-new-risk latch with two causes: a live
+ * reconciliation mismatch (unknown exchange state) and the account drawdown
+ * limit. It must gate ENTRIES only: it used to return early for any killed
+ * state, so an already-open position stopped evaluating its stop/target and
+ * was frozen open with capital drifting (state-machines.md RISK-01/02).
+ */
 function guardKilledGridState(
   state: GridPaperState,
   repo: PaperTradingRepositoryService,
@@ -584,12 +601,27 @@ function guardKilledGridState(
 > {
   return Effect.gen(function* () {
     if (!state.killed) return { state };
-    if (state.side === null && !(yield* killSwitch.isEngaged())) {
-      const reset = { ...state, killed: false, updatedAt: new Date() };
-      yield* repo.saveGridState(reset);
-      return { state: reset };
+    if (yield* killSwitch.isEngaged()) {
+      return {
+        state,
+        earlyResult: gridHoldResult(state, "kill switch active"),
+      };
     }
-    return { state, earlyResult: gridHoldResult(state, "kill switch active") };
+    // An open position still runs its exit rules; entries are only reachable
+    // from the flat branch, so no new risk can be created here.
+    if (state.side !== null) return { state };
+    if (gridDrawdownBreached(state)) {
+      return {
+        state,
+        earlyResult: gridHoldResult(
+          state,
+          `drawdown limit breached (${state.maxDrawdownPct}% from peak ${state.peakCapital.toFixed(2)}) — no new entries`,
+        ),
+      };
+    }
+    const reset = { ...state, killed: false, updatedAt: new Date() };
+    yield* repo.saveGridState(reset);
+    return { state: reset };
   });
 }
 
@@ -824,7 +856,12 @@ function reconcileGridLiveState(
         ),
       };
     }
-    if (yield* circuitBreaker.isOpen()) {
+    // The breaker halts NEW risk, not exits. Gating an open position on it
+    // skipped stop/liquidation evaluation entirely, so a live position the
+    // day's loss limit had just flagged was held open with no exit path
+    // (state-machines.md RISK-02). Flat is the only state that opens a
+    // position, so this still blocks every new entry.
+    if (state.side === null && (yield* circuitBreaker.isOpen())) {
       return {
         state,
         earlyResult: gridHoldResult(
@@ -1777,18 +1814,12 @@ function finalizeGridBar(
       lastTimestamp: current.timestamp,
       updatedAt: new Date(),
     };
-    const drawdownPct = state.peakCapital.greaterThan(0)
-      ? state.peakCapital.minus(state.capital).div(state.peakCapital).times(100)
-      : money(0);
-    if (
-      drawdownPct.greaterThanOrEqualTo(state.maxDrawdownPct) &&
-      state.maxDrawdownPct < 100
-    ) {
+    if (gridDrawdownBreached(state)) {
       state = { ...state, killed: true };
       note =
         note === "no action"
-          ? "kill switch triggered"
-          : `${note}; kill switch triggered`;
+          ? `kill switch triggered (drawdown limit ${state.maxDrawdownPct}%)`
+          : `${note}; kill switch triggered (drawdown limit ${state.maxDrawdownPct}%)`;
     }
     yield* repo.saveGridState(state);
     const closedLike = note.includes("closed") || note.startsWith("liquidated");
@@ -1913,6 +1944,26 @@ function processGridBar(
         capital: toNumber(state.capital),
         peakCapital: toNumber(state.peakCapital),
         note: `paused (${state.paused} bars remaining)`,
+      };
+    }
+
+    // Drawdown is a no-new-risk limit, not a post-hoc latch: checking it only
+    // in finalizeGridBar let the breaching bar open the very position the
+    // limit was supposed to refuse (state-machines.md RISK-01).
+    if (state.side === null && gridDrawdownBreached(state)) {
+      state = {
+        ...state,
+        killed: true,
+        lastTimestamp: current.timestamp,
+        updatedAt: new Date(),
+      };
+      yield* repo.saveGridState(state);
+      return {
+        action: "hold" as const,
+        side: state.side,
+        capital: toNumber(state.capital),
+        peakCapital: toNumber(state.peakCapital),
+        note: `drawdown limit breached (${state.maxDrawdownPct}% from peak ${state.peakCapital.toFixed(2)}) — no new entries`,
       };
     }
 

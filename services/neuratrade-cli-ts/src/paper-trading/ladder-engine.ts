@@ -1975,8 +1975,13 @@ function guardLadderIteration(
     }
     if (
       Option.isSome(services.circuitBreaker) &&
-      (yield* services.circuitBreaker.value.isOpen())
+      (yield* services.circuitBreaker.value.isOpen()) &&
+      openRungCount(w) === 0
     ) {
+      // Halts NEW rungs only (rung management below still runs), so an open
+      // ladder keeps its stop/target exits while the day's loss limit is
+      // tripped -- the same posture as the grid engine (state-machines.md
+      // RISK-02: a daily loss limit must never keep a losing position open).
       return ladderHoldResult(state, "ladder held: circuit breaker open", w);
     }
     if (options.isLive === true) {
