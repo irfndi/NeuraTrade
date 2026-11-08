@@ -122,6 +122,11 @@ const repo: PaperTradingRepositoryService = {
     Effect.sync(() => {
       trades.push(t);
     }),
+  recordGridExit: (t: GridPaperTrade, next: GridPaperState) =>
+    Effect.sync(() => {
+      trades.push(t);
+      state = next;
+    }),
   listRecentGridTrades: (ex: string, sym: string, tf: string) =>
     Effect.succeed(
       trades.filter(

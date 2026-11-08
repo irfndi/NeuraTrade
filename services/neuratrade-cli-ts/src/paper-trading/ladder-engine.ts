@@ -1679,7 +1679,27 @@ function executeLadderBarLive(
       });
     }
     const exits: (FuturesOrderFill | null)[] = [];
+    // A close is only a real reduce-only order when the rung it reduces was
+    // actually filled. Rungs whose entry this bar skipped (qty 0, floor-
+    // unorderable) still produce a paper close event, and sending that close
+    // asks the venue to reduce a position that does not exist (Bitget 40020).
+    // The ordering below (all entries, then all closes) is what makes this
+    // safe today; the guard makes the dependency explicit so reordering or
+    // parallelising the loops cannot silently reintroduce it
+    // (state-machines.md RISK-05).
+    const confirmedEntries = new Set(
+      entries.map((entry) => `${entry.side}:${entry.rungIndex}`),
+    );
+    const filledThisBar = new Set(
+      fills.map((fill) => `${fill.side}:${fill.rungIndex}`),
+    );
     for (const close of closes) {
+      const key = `${close.side}:${close.rungIndex}`;
+      if (filledThisBar.has(key) && !confirmedEntries.has(key)) {
+        // Ledger keeps the (zero-size) close; the venue gets no order.
+        exits.push(null);
+        continue;
+      }
       const confirmed = yield* executeLadderCloseLive(
         close,
         w,
@@ -2013,6 +2033,33 @@ function rollbackWorkingState(
   target.paused = snapshot.paused;
 }
 
+/**
+ * Persist ladder state with retries, then engage the kill switch.
+ *
+ * A confirmed venue fill whose state write never lands leaves a real position
+ * the ledger does not know about; the next bar cannot reconcile it and the
+ * orphan guard only recovers the "no rungs" case (state-machines.md L8).
+ * Mirrors the grid engine's saveGridStateWithRetry.
+ */
+function saveLadderStateWithRetry(
+  repo: PaperTradingRepositoryService,
+  killSwitch: Option.Option<KillSwitchService>,
+  state: LadderPaperState,
+  failReason: string,
+): Effect.Effect<boolean, KillSwitchError> {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = yield* repo.saveLadderState(state).pipe(Effect.result);
+      if (saved._tag === "Success") return true;
+      if (attempt < 2) yield* Effect.sleep(200 * (attempt + 1));
+    }
+    if (Option.isSome(killSwitch)) {
+      yield* killSwitch.value.engage(failReason);
+    }
+    return false;
+  });
+}
+
 function ladderLiveFailureReason(
   failure: ExchangeError | RiskError | PaperTradingRepositoryError,
 ): string {
@@ -2228,7 +2275,7 @@ function executeLadderLiveEvents(
   services: LadderOptionalServices,
 ): Effect.Effect<
   LadderPaperIterationResult | null,
-  PaperTradingRepositoryError
+  PaperTradingRepositoryError | KillSwitchError
 > {
   return Effect.gen(function* () {
     if (
@@ -2272,14 +2319,23 @@ function executeLadderLiveEvents(
     }
     rollbackWorkingState(w, cloneWorking(snapshot));
     const rolledState = workingToState(options, w, last.timestamp, state);
-    yield* repo.saveLadderState(rolledState);
+    // Same durability rule as the success path: a rollback write that cannot
+    // land must latch, not throw a bare error out of the iteration.
+    const rolled = yield* saveLadderStateWithRetry(
+      repo,
+      services.killSwitch,
+      rolledState,
+      "state save failed after a rolled-back live ladder bar",
+    );
     return {
       action: "hold",
       capital: toNumber(w.capital),
       peakCapital: toNumber(w.peak),
       openRungs: openRungCount(w),
       closedThisIteration: 0,
-      note: `live ladder execution failed (bar rolled back): ${failureReason}`,
+      note: rolled
+        ? `live ladder execution failed (bar rolled back): ${failureReason}`
+        : `KILL SWITCH ENGAGED: live ladder failed (${failureReason}) and the rollback could not be persisted`,
     };
   });
 }
@@ -2518,6 +2574,27 @@ export function runLadderPaperTradingIteration(
     );
     if (liveResult) return liveResult;
 
+    // Persist the advanced state BEFORE the trade rows. If the trade write
+    // fails, the bar must not be replayed: a replay re-fills and re-closes the
+    // same rungs and double-books the PnL, which corrupts capital. Losing the
+    // history rows only weakens evidence, so the state wins the race.
+    const nextState = workingToState(options, w, last.timestamp, state);
+    const persisted = yield* saveLadderStateWithRetry(
+      repo,
+      services.killSwitch,
+      nextState,
+      "state save failed after a confirmed ladder fill",
+    );
+    if (!persisted) {
+      return ladderHoldResult(
+        nextState,
+        "KILL SWITCH ENGAGED: ladder state save failed after a confirmed fill",
+        w,
+        last.close,
+        options,
+      );
+    }
+
     if (iterationCloses.length > 0 && repo.recordLadderTrades !== undefined) {
       yield* repo.recordLadderTrades(
         iterationCloses.map((close) => ladderTradeFromClose(options, close)),
@@ -2530,8 +2607,6 @@ export function runLadderPaperTradingIteration(
       );
     }
 
-    const nextState = workingToState(options, w, last.timestamp, state);
-    yield* repo.saveLadderState(nextState);
     return buildLadderIterationResult(
       nextState,
       w,

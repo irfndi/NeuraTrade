@@ -332,6 +332,230 @@ describe("PaperTradingRepositorySQLite", () => {
     db.close();
   });
 
+  // state-machines.md RISK-04a: the exit row and the flat state must commit
+  // together. Before this, a crash between them replayed the close.
+  it("records the grid exit and its state in one transaction", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const closedAt = new Date();
+    const trade: GridPaperTrade = {
+      id: "grid-atomic-1",
+      exchange: "bitget-futures",
+      symbol: "BTC/USDT:USDT",
+      timeframe: "15m",
+      side: "long",
+      entryPrice: money("70000"),
+      exitPrice: money("70100"),
+      capitalBefore: money("1000"),
+      capitalAfter: money("1002"),
+      pnlPct: money("0.2"),
+      exitReason: "target",
+      openedAt: new Date(closedAt.getTime() - 3_600_000),
+      closedAt,
+    };
+    const flatState = {
+      exchange: trade.exchange,
+      symbol: trade.symbol,
+      timeframe: trade.timeframe,
+      initialCapital: 1000,
+      capital: money("1002"),
+      peakCapital: money("1002"),
+      paused: 0,
+      side: null,
+      entryPrice: money(0),
+      gridStepPct: 1,
+      gridMaxGrids: 2,
+      gridPauseAfterLossBars: 0,
+      feePct: 0.2,
+      slippageBps: 5,
+      trendFilterPeriod: 10,
+      maxPositionPct: 100,
+      maxDrawdownPct: 100,
+      leverage: 1,
+      killed: false,
+      lastTimestamp: closedAt,
+      updatedAt: closedAt,
+    } satisfies GridPaperState;
+
+    await Effect.runPromise(repository.recordGridExit(trade, flatState));
+
+    // Both writes are visible together, so a replayed bar cannot re-close.
+    const state = await Effect.runPromise(
+      repository.getGridState(trade.exchange, trade.symbol, trade.timeframe),
+    );
+    expect(state?.side).toBeNull();
+    expect(state?.capital.toString()).toBe("1002");
+    const trades = await Effect.runPromise(
+      repository.listRecentGridTrades(
+        trade.exchange,
+        trade.symbol,
+        trade.timeframe,
+        10,
+      ),
+    );
+    expect(trades).toHaveLength(1);
+
+    // A duplicate id (a replay) fails the whole unit, leaving one row and the
+    // state untouched: the two writes cannot diverge.
+    const replay = await Effect.runPromise(
+      repository
+        .recordGridExit(trade, { ...flatState, capital: money("1004") })
+        .pipe(Effect.result),
+    );
+    expect(replay._tag).toBe("Failure");
+    const afterReplay = await Effect.runPromise(
+      repository.getGridState(trade.exchange, trade.symbol, trade.timeframe),
+    );
+    expect(afterReplay?.capital.toString()).toBe("1002");
+    db.close();
+  });
+
+  // state-machines.md RISK-03c: the day's baseline is the capital BEFORE the
+  // first trade, not "whatever capital the first caller happened to see".
+  it("anchors start-of-day capital at the first trade, not at the first read", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const closedAt = new Date();
+    const flatState = (capital: string) =>
+      ({
+        exchange: "bitget-futures",
+        symbol: "BTC/USDT:USDT",
+        timeframe: "15m",
+        capital: money(capital),
+        peakCapital: money("1000"),
+        paused: 0,
+        side: null,
+        entryPrice: money(0),
+        gridStepPct: 1,
+        gridMaxGrids: 2,
+        gridPauseAfterLossBars: 0,
+        feePct: 0.2,
+        slippageBps: 5,
+        trendFilterPeriod: 10,
+        maxPositionPct: 100,
+        maxDrawdownPct: 100,
+        leverage: 1,
+        killed: false,
+        lastTimestamp: closedAt,
+        updatedAt: closedAt,
+      }) satisfies GridPaperState;
+
+    // A read before any trade returns the capital in hand and writes nothing.
+    expect(
+      (
+        await Effect.runPromise(
+          repository.getStartOfDayCapital(closedAt, money("950")),
+        )
+      ).toString(),
+    ).toBe("950");
+    expect(
+      (
+        db
+          .query("SELECT COUNT(*) AS n FROM paper_start_of_day_capital")
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+
+    // The first trade's PRE-trade capital becomes the day's baseline...
+    await Effect.runPromise(
+      repository.recordGridExit(
+        {
+          id: "grid-baseline-1",
+          exchange: "bitget-futures",
+          symbol: "BTC/USDT:USDT",
+          timeframe: "15m",
+          side: "long",
+          entryPrice: money("70000"),
+          exitPrice: money("69900"),
+          capitalBefore: money("1000"),
+          capitalAfter: money("990"),
+          pnlPct: money("-1"),
+          exitReason: "stop",
+          openedAt: new Date(closedAt.getTime() - 3_600_000),
+          closedAt,
+        },
+        flatState("990"),
+      ),
+    );
+    expect(
+      (
+        await Effect.runPromise(
+          repository.getStartOfDayCapital(closedAt, money("990")),
+        )
+      ).toString(),
+    ).toBe("1000");
+
+    // ...and a later trade cannot move it, so today's loss stays visible.
+    await Effect.runPromise(
+      repository.recordGridExit(
+        {
+          id: "grid-baseline-2",
+          exchange: "bitget-futures",
+          symbol: "BTC/USDT:USDT",
+          timeframe: "15m",
+          side: "long",
+          entryPrice: money("69900"),
+          exitPrice: money("69800"),
+          capitalBefore: money("990"),
+          capitalAfter: money("980"),
+          pnlPct: money("-1"),
+          exitReason: "stop",
+          openedAt: new Date(closedAt.getTime() - 1_800_000),
+          closedAt,
+        },
+        flatState("980"),
+      ),
+    );
+    expect(
+      (
+        await Effect.runPromise(
+          repository.getStartOfDayCapital(closedAt, money("980")),
+        )
+      ).toString(),
+    ).toBe("1000");
+    db.close();
+  });
+
+  // state-machines.md RISK-03: flow PnL must be visible to the daily limits.
+  it("counts flow trades in the daily risk accounting", async () => {
+    const db = new Database(":memory:");
+    const repository = new PaperTradingRepositorySQLite(db);
+    await Effect.runPromise(repository.ensureTables());
+    const closedAt = new Date();
+    await Effect.runPromise(
+      repository.recordFlowClose!(
+        {
+          id: "flow-risk-1",
+          exchange: "bybit-futures",
+          symbol: "BTCUSDT",
+          timeframe: "5m",
+          side: "LONG",
+          entryPrice: 60_000,
+          exitPrice: 59_700,
+          qty: 0.01,
+          capitalBefore: 100,
+          capitalAfter: 97,
+          pnl: -3,
+          pnlPct: -3,
+          exitReason: "stop",
+          openedAt: new Date(closedAt.getTime() - 600_000),
+          closedAt,
+        },
+        "bybit-futures",
+        "BTCUSDT",
+      ),
+    );
+    expect(
+      await Effect.runPromise(repository.countTradesForDate(closedAt)),
+    ).toBe(1);
+    expect(
+      (await Effect.runPromise(repository.getTodayRealizedPnl())).toString(),
+    ).toBe("-3");
+    db.close();
+  });
+
   it("migrates scaled_out/scale_out_price columns onto an existing positions table", async () => {
     // Simulate a DB created before the scale-out columns existed: the
     // paper_positions table is present but lacks scaled_out / scale_out_price.

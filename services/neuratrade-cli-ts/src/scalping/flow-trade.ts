@@ -37,7 +37,10 @@ import type {
   PaperTradingRepositoryError,
   PaperTradingRepositoryService,
 } from "../paper-trading/repository.js";
-import type { ContractSizeSpec } from "../paper-trading/types.js";
+import type {
+  ContractSizeSpec,
+  FlowTradeRecord,
+} from "../paper-trading/types.js";
 import { orderableQty } from "../paper-trading/types.js";
 import type { CandleLike } from "./types.js";
 import type {
@@ -357,14 +360,30 @@ function openFlowTrade(
       return flowHoldResult(state, "no entry: ATR15 or price unavailable");
     }
 
+    // Real account state, not the configured opening constants: the guard used
+    // to receive `opts.capital` for capital/peak/start-of-day, zero realized
+    // PnL and zero trades, so every limit was evaluated against a fresh
+    // account that never lost anything (state-machines.md RISK-03).
+    const accountCapital = state.capital;
+    const startOfDayCapital = yield* repo.getStartOfDayCapital(
+      new Date(now),
+      money(accountCapital),
+    );
+    const dailyRealizedPnl = yield* repo
+      .getTodayRealizedPnl()
+      .pipe(Effect.orElseSucceed(() => money(0)));
+    const tradesTodayCount = yield* repo
+      .countTradesForDate(new Date(now))
+      .pipe(Effect.orElseSucceed(() => 0));
+
     yield* riskGuard.check({
       isLive: opts.isLive,
-      capital: opts.capital,
-      peakCapital: opts.capital,
-      startOfDayCapital: opts.capital,
-      dailyRealizedPnl: 0,
-      tradesTodayCount: 0,
-      positionValue: 0,
+      capital: accountCapital,
+      peakCapital: Math.max(accountCapital, opts.capital),
+      startOfDayCapital: toNumber(startOfDayCapital),
+      dailyRealizedPnl: toNumber(dailyRealizedPnl),
+      tradesTodayCount,
+      positionValue: accountCapital * (opts.maxPositionSizePct / 100),
       symbol: opts.symbol,
       side: side === "LONG" ? "buy" : "sell",
       leverage: opts.leverage,
@@ -378,7 +397,9 @@ function openFlowTrade(
             ),
     });
 
-    const allocation = money(opts.capital).times(opts.maxPositionSizePct / 100);
+    const allocation = money(accountCapital).times(
+      opts.maxPositionSizePct / 100,
+    );
     const rawQty = allocation.div(market.price);
     const sizedQty =
       opts.contractSpecs === undefined
@@ -431,7 +452,7 @@ function openFlowTrade(
       lastPeak: entryPrice,
       exitAt: now + opts.holdMinutes * 60_000,
       orderId: fill.orderId,
-      capital: opts.capital,
+      capital: accountCapital,
       atr,
       stage: "initial",
       entryOfiSign:
@@ -594,9 +615,39 @@ function closeFlowPosition(
     const note = `closed ${side} (${reason}) @ ${price.toFixed(4)}${
       close === null ? " — no position on exchange to reduce" : ""
     }`;
-    yield* repo.clearFlowTradeState(opts.exchange, opts.symbol);
+    // The exit is booked in the ledger, not just forgotten: flow PnL has to be
+    // visible to the daily-loss limit and the trade count (state-machines.md
+    // RISK-03). The row and the state clear commit in one transaction.
+    const entryPrice = input.state.entryPrice ?? price;
+    const pnl =
+      (side === "LONG" ? price - entryPrice : entryPrice - price) * qty;
+    const capitalBefore = input.state.capital;
+    const capitalAfter = capitalBefore + pnl;
+    const trade: FlowTradeRecord = {
+      id: `flow-trade-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      exchange: opts.exchange,
+      symbol: opts.symbol,
+      timeframe: opts.timeframe,
+      side,
+      entryPrice,
+      exitPrice: price,
+      qty,
+      capitalBefore,
+      capitalAfter,
+      pnl,
+      pnlPct: capitalBefore > 0 ? (pnl / capitalBefore) * 100 : 0,
+      exitReason: reason,
+      openedAt: new Date(input.state.entryTime ?? now),
+      closedAt: new Date(now),
+    };
+    if (repo.recordFlowClose !== undefined) {
+      yield* repo.recordFlowClose(trade, opts.exchange, opts.symbol);
+    } else {
+      yield* repo.clearFlowTradeState(opts.exchange, opts.symbol);
+    }
     const state = {
       ...freshFlowTradeState(opts, now),
+      capital: capitalAfter,
       lastPrice: price,
       updatedAt: now,
     };

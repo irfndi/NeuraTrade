@@ -176,8 +176,19 @@ export const GatewayStateLive: Layer.Layer<
         yield* fs
           .makeDirectory(dir, { recursive: true })
           .pipe(Effect.catch(() => Effect.void));
+        // Write-then-rename: a direct write to the final path is observable
+        // mid-flight, and a truncated document parses as "no state" (the
+        // reader falls back to the zero value), so a torn read looked like a
+        // stopped gateway. rename(2) is atomic within a filesystem, so a
+        // reader sees either the old file or the new one
+        // (state-machines.md RISK-06).
+        const tmpPath = `${filePath}.tmp`;
+        const written = yield* fs
+          .writeFileString(tmpPath, serialized)
+          .pipe(Effect.result);
+        if (written._tag === "Failure") return;
         yield* fs
-          .writeFileString(filePath, serialized)
+          .rename(tmpPath, filePath)
           .pipe(Effect.catch(() => Effect.void));
       });
 

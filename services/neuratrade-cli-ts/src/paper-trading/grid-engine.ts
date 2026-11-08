@@ -1095,9 +1095,6 @@ interface GridClosePositionInput {
   readonly productType: FuturesProductType;
   readonly marginMode: FuturesMarginMode;
   readonly adapter: FuturesExchangeAdapterService;
-  readonly repo: PaperTradingRepositoryService;
-  readonly circuitBreaker: CircuitBreakerService;
-  readonly startOfDayCapital: Decimal;
   readonly fee: number;
   readonly stopFee: number;
   readonly fundingCost: Decimal;
@@ -1197,9 +1194,6 @@ function closeGridPosition(
       productType,
       marginMode,
       adapter,
-      repo,
-      circuitBreaker,
-      startOfDayCapital,
       fee,
       stopFee,
       fundingCost,
@@ -1290,11 +1284,10 @@ function closeGridPosition(
       stopFee,
       fundingCost,
     });
-    yield* repo.recordGridTrade(close.trade);
-    yield* circuitBreaker.recordTradeResult(
-      toNumber(close.capitalAfter.minus(state.capital)),
-      toNumber(startOfDayCapital),
-    );
+    // The trade row and the post-exit state are committed together by the
+    // caller (recordGridExit); recording the trade here left a window where a
+    // crash booked the exit without advancing the state, so the next bar
+    // closed the same position again (state-machines.md RISK-04a).
     return { ...close, exitPrice };
   });
 }
@@ -1652,9 +1645,17 @@ type GridClosePosition = (
   side: GridPaperPositionSide,
   exitReason: GridPaperTrade["exitReason"],
   theoreticalExitPrice: Decimal,
+  exit: GridPositionExit,
 ) => Effect.Effect<
-  GridCloseTradeResult & { readonly exitPrice: Decimal },
-  ExchangeError | PaperTradingRepositoryError | CircuitBreakerError
+  GridCloseTradeResult & {
+    readonly exitPrice: Decimal;
+    /** Post-exit state, already committed with the trade row. */
+    readonly nextState: GridPaperState;
+  },
+  | ExchangeError
+  | PaperTradingRepositoryError
+  | KillSwitchError
+  | CircuitBreakerError
 >;
 
 function resolveGridPositionExit(
@@ -1786,10 +1787,10 @@ function processGridPosition(
       state.side,
       exit.reason,
       exit.theoreticalExitPrice,
+      exit,
     );
-    const nextState = gridStateAfterPositionExit(state, current, exit, close);
     return {
-      state: nextState,
+      state: close.nextState,
       note: gridPositionExitNote(state, isLive, exit, close),
     };
   });
@@ -1907,7 +1908,7 @@ function processGridBar(
       services,
       market,
     } = input;
-    const { repo, adapter, circuitBreaker } = services;
+    const { repo, adapter, circuitBreaker, killSwitch } = services;
     let state = input.state;
     const { candles, index: i, current, trend } = market;
     const isLive = options.isLive ?? false;
@@ -1989,23 +1990,55 @@ function processGridBar(
       side: GridPaperPositionSide,
       exitReason: GridPaperTrade["exitReason"],
       theoreticalExitPrice: Decimal,
+      exit: GridPositionExit,
     ) =>
-      closeGridPosition({
-        state,
-        options,
-        side,
-        exitReason,
-        theoreticalExitPrice,
-        isLive,
-        productType,
-        marginMode,
-        adapter,
-        repo,
-        circuitBreaker,
-        startOfDayCapital,
-        fee,
-        stopFee,
-        fundingCost,
+      Effect.gen(function* () {
+        const close = yield* closeGridPosition({
+          state,
+          options,
+          side,
+          exitReason,
+          theoreticalExitPrice,
+          isLive,
+          productType,
+          marginMode,
+          adapter,
+          fee,
+          stopFee,
+          fundingCost,
+        }).pipe(
+          // A live exit the venue did not confirm must stop NEW risk: the
+          // position is still open on the exchange, so re-entering while the
+          // close keeps failing is how one stuck order becomes two open
+          // positions (state-machines.md RISK-04b). The latch still lets the
+          // next bar retry the exit, and the error is rethrown so the
+          // iteration reports the failure instead of hiding it.
+          Effect.tapError(() =>
+            isLive
+              ? saveGridStateWithRetry(
+                  repo,
+                  killSwitch,
+                  { ...state, killed: true, updatedAt: new Date() },
+                  "state save failed after an unconfirmed live close",
+                )
+              : Effect.void,
+          ),
+        );
+        const nextState = gridStateAfterPositionExit(
+          state,
+          current,
+          exit,
+          close,
+        );
+        // One transaction: the exit row and the flat state land together, so
+        // a crash cannot book the trade without advancing the state
+        // (state-machines.md RISK-04a).
+        yield* repo.recordGridExit(close.trade, nextState);
+        yield* circuitBreaker.recordTradeResult(
+          toNumber(close.capitalAfter.minus(state.capital)),
+          toNumber(startOfDayCapital),
+        );
+        return { ...close, nextState };
       });
 
     if (state.side === null) {

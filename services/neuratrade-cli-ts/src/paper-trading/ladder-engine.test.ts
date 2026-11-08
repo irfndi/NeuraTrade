@@ -12,6 +12,7 @@ import {
   FuturesExchangeAdapter,
   type FuturesExchangeAdapterService,
 } from "../exchange/futures-adapter.js";
+import { KillSwitch } from "../risk/kill-switch.js";
 import { ExchangeError } from "../exchange/adapter.js";
 import { makeSimulatedFuturesExchangeAdapterService } from "../exchange/adapters/simulated-futures.js";
 import type { CandleLike } from "../scalping/types.js";
@@ -19,7 +20,9 @@ import { runLadderGridBacktest } from "../scalping/ladder-grid.js";
 import { money, toNumber } from "../utils/money.js";
 import {
   PaperTradingRepository,
+  PaperTradingRepositoryError,
   PaperTradingRepositorySQLite,
+  type PaperTradingRepositoryService,
 } from "./repository.js";
 import {
   advanceLadderBar,
@@ -896,6 +899,162 @@ describe("runLadderPaperTradingIteration (persistence + resume)", () => {
     expect(placed).toBe(0);
     expect(result.action).toBe("hold");
     expect(result.note).not.toContain("notional size");
+  });
+
+  // state-machines.md L8: a confirmed fill whose state write never lands leaves
+  // a real position the ledger cannot reconcile. It must engage the kill switch
+  // instead of silently continuing (the grid path already did this).
+  it("engages the kill switch when the state save fails after a confirmed fill", async () => {
+    const db = new Database(":memory:");
+    const inner = new PaperTradingRepositorySQLite(db);
+    // Save #1 is loadLadderState seeding a fresh state; from then on the disk
+    // is "full", so the save after the bar fails and must engage the switch.
+    const saves = { attempts: 0 };
+    const failingRepo: PaperTradingRepositoryService = Object.create(inner);
+    Object.assign(failingRepo, {
+      saveLadderState: (state: LadderPaperState) => {
+        saves.attempts += 1;
+        if (saves.attempts === 1) return inner.saveLadderState(state);
+        return Effect.fail(
+          new PaperTradingRepositoryError("disk full (test injection)"),
+        );
+      },
+    });
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(),
+      isLive: true,
+      maxPositionPct: 50,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      fetchOHLCV: () => Effect.succeed(oscillatorSeries() as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const adapter = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const engaged: string[] = [];
+    const killSwitch = {
+      engage: (reason: string) => {
+        engaged.push(reason);
+        return Effect.void;
+      },
+      disengage: () => Effect.void,
+      isEngaged: () => Effect.succeed(engaged.length > 0),
+      getReason: () => Effect.succeed(engaged[0] ?? ""),
+    };
+
+    const result = await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, failingRepo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, adapter),
+        Effect.provideService(KillSwitch, killSwitch),
+      ),
+    );
+
+    // One seed save + the 3 attempts of the retry helper.
+    expect(saves.attempts).toBe(4);
+    expect(engaged).toHaveLength(1);
+    expect(engaged[0]).toContain("state save failed");
+    expect(result.note).toContain("KILL SWITCH ENGAGED");
+  });
+
+  // state-machines.md RISK-05: a rung the live executor skipped (qty 0, below
+  // the venue floor) must not have its same-bar close sent as a reduce-only
+  // order: there is no position behind it and the venue rejects it.
+  it("does not send a close order for a rung whose entry was skipped", async () => {
+    const db = new Database(":memory:");
+    const repo = new PaperTradingRepositorySQLite(db);
+    const opts: LadderPaperTradingOptions = {
+      ...baseOptions(), // capital 100, rungs 2
+      isLive: true,
+      maxPositionPct: 50,
+      maxNotionalPct: 100,
+      productType: "USDT-FUTURES",
+      marginMode: "isolated",
+      // BTC-like floor: the 25 USDT rung cannot be ordered, so the entry is
+      // skipped while the ledger still fills and targets it on the same bar.
+      contractSpecs: { minQty: 0.001, qtyStep: 0.001, minTradeUSDT: 5 },
+    };
+    const gateway = {
+      fetchTick: () => Effect.fail({ reason: "n" } as never),
+      // Down through the first rung, then straight back up through its target.
+      fetchOHLCV: () =>
+        Effect.succeed([
+          candle(100000, 100000, 100000, 100000, 0),
+          candle(99000, 99000, 98000, 98000, 1),
+          candle(98000, 101000, 98000, 100500, 2),
+        ] as Candle[]),
+      fetchOrderBook: () => Effect.fail({ reason: "n" } as never),
+      fetchSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetchDemoSymbols: () => Effect.fail({ reason: "n" } as never),
+      fetch24hrVolumes: () => Effect.succeed({}),
+      fetchFundingRates: () => Effect.succeed([]),
+    };
+    const riskGuard = makeRiskGuard({
+      liveTradingEnabled: true,
+      maxPositionSizePct: 100,
+      maxDailyLossPct: 100,
+      maxDrawdownPct: 100,
+      minCapital: 0,
+      maxTradesPerDay: Number.MAX_SAFE_INTEGER,
+      maxLeverage: 10,
+      allowedProductTypes: ["USDT-FUTURES"],
+    });
+    const base = await Effect.runPromise(
+      makeSimulatedFuturesExchangeAdapterService(
+        gateway,
+        { USDT: 1000 },
+        "bybit-futures",
+      ),
+    );
+    const calls = { place: 0, close: 0 };
+    const counting: FuturesExchangeAdapterService = {
+      ...base,
+      placeOrder: (req) => {
+        calls.place += 1;
+        return base.placeOrder(req);
+      },
+      closePosition: (req) => {
+        calls.close += 1;
+        return base.closePosition(req);
+      },
+    };
+
+    await Effect.runPromise(
+      runLadderPaperTradingIteration(opts).pipe(
+        Effect.provideService(PaperTradingRepository, repo),
+        Effect.provideService(MarketDataGateway, gateway),
+        Effect.provideService(RiskGuard, riskGuard),
+        Effect.provideService(FuturesExchangeAdapter, counting),
+      ),
+    );
+
+    // The rung was never orderable, so neither leg may reach the venue.
+    expect(calls.place).toBe(0);
+    expect(calls.close).toBe(0);
   });
 
   it("uses dynamic leverage that scales with account size (small acct -> low cap)", async () => {

@@ -170,6 +170,13 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
+  recordGridExit(trade: GridPaperTrade, state: GridPaperState) {
+    return Effect.sync(() => {
+      this.gridTrades.push(trade);
+      this.gridState = state;
+    });
+  }
+
   listRecentGridTrades(
     _exchange: string,
     _symbol: string,
@@ -1698,6 +1705,68 @@ describe("grid paper engine", () => {
       repo.getGridState("binance", "ETH/USDT", "15m"),
     );
     expect(state?.side).toBe("long");
+    expect(
+      await Effect.runPromise(
+        repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),
+      ),
+    ).toHaveLength(0);
+  });
+
+  // state-machines.md RISK-04b: a live exit the venue did not confirm must
+  // stop NEW risk. The position is still open on the exchange, so re-entering
+  // while the close keeps failing turns one stuck order into two positions.
+  it("latches the account when a live close is not confirmed", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter(false);
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+
+    await runWithRepo(opts, repo, candles, adapter);
+    let caught: ExchangeError | null = null;
+    for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
+      try {
+        await runWithRepo(opts, repo, candles, adapter);
+      } catch (error) {
+        if (error instanceof ExchangeError) caught = error;
+      }
+    }
+
+    expect(caught instanceof ExchangeError).toBe(true);
+    const state = await Effect.runPromise(
+      repo.getGridState("binance", "ETH/USDT", "15m"),
+    );
+    // Still open (the close never confirmed) AND latched against new risk.
+    expect(state?.side).toBe("long");
+    expect(state?.killed).toBe(true);
+  });
+
+  // state-machines.md RISK-04a: the exit row and the flat state are one unit.
+  it("does not book a grid exit whose state write failed", async () => {
+    const repo = new InMemoryPaperRepository();
+    const { adapter } = makeTrackingFuturesAdapter();
+    const candles = makeCandles(20, 1000, "oscillate");
+    const opts = makeOptions({ isLive: true, gridPauseAfterLossBars: 0 });
+    const failing = Object.create(repo) as PaperTradingRepositoryService;
+    Object.assign(failing, {
+      // The atomic write is the only way a trade can be recorded, so a failure
+      // here must leave the ledger with no exit row at all.
+      recordGridExit: () =>
+        Effect.fail(
+          new PaperTradingRepositoryError("disk full (test injection)"),
+        ),
+    });
+
+    await runWithRepo(opts, failing, candles, adapter);
+    let caught: PaperTradingRepositoryError | null = null;
+    for (let attempt = 0; attempt < 10 && caught === null; attempt++) {
+      try {
+        await runWithRepo(opts, failing, candles, adapter);
+      } catch (error) {
+        if (error instanceof PaperTradingRepositoryError) caught = error;
+      }
+    }
+
+    expect(caught instanceof PaperTradingRepositoryError).toBe(true);
     expect(
       await Effect.runPromise(
         repo.listRecentGridTrades("binance", "ETH/USDT", "15m", 100),

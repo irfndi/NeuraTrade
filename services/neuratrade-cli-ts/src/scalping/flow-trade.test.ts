@@ -99,15 +99,22 @@ class FakeRepo implements PaperTradingRepositoryService {
   getPortfolio = () => Effect.die(new Error("unused"));
   setPortfolio = () => Effect.die(new Error("unused"));
   listRecentTrades = () => Effect.die(new Error("unused"));
-  countTradesForDate = () => Effect.die(new Error("unused"));
-  getTodayRealizedPnl = () => Effect.die(new Error("unused"));
-  getStartOfDayCapital = () => Effect.die(new Error("unused"));
+  countTradesForDate = () => Effect.succeed(this.tradesToday);
+  getTodayRealizedPnl = () => Effect.succeed(money(this.realizedPnlToday));
+  getStartOfDayCapital = (
+    _date: Date,
+    currentCapital: ReturnType<typeof money>,
+  ) => Effect.succeed(currentCapital);
+  /** Set by tests that assert what the risk guard is handed. */
+  tradesToday = 0;
+  realizedPnlToday = 0;
   getGridState = () => Effect.die(new Error("unused"));
   saveGridState = () => Effect.die(new Error("unused"));
   getLadderState = () => Effect.die(new Error("unused"));
   saveLadderState = () => Effect.die(new Error("unused"));
   resetGridState = () => Effect.die(new Error("unused"));
   recordGridTrade = () => Effect.die(new Error("unused"));
+  recordGridExit = () => Effect.die(new Error("unused"));
   listRecentGridTrades = () => Effect.die(new Error("unused"));
   listAllGridTrades = () => Effect.die(new Error("unused"));
   listWatchlist = () => Effect.die(new Error("unused"));

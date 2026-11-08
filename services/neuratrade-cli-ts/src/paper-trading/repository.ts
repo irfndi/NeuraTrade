@@ -3,6 +3,7 @@ import * as S from "effect/Schema";
 import { Database } from "bun:sqlite";
 import { Decimal, money, toNumber, type Money } from "../utils/money.js";
 import type {
+  FlowTradeRecord,
   GridPaperState,
   GridPaperTrade,
   LadderPaperTrade,
@@ -135,6 +136,18 @@ function isSqliteBusy(err: PaperTradingRepositoryError): boolean {
  * insert so the 38-column binding stays readable; the decimal columns keep
  * exact money strings next to the REAL columns existing queries read.
  */
+/** Parse a JSON text column, naming the column in the failure instead of
+ *  surfacing a bare SyntaxError from deep inside a repository read. */
+function parseJsonColumn<T>(raw: string, column: string): T {
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    throw new Error(
+      `corrupt ${column} JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 function ladderTradeRow(trade: LadderPaperTrade): readonly SqlValue[] {
   return [
     trade.id,
@@ -353,6 +366,17 @@ export interface PaperTradingRepositoryService {
     currentCapital: Decimal,
   ) => Effect.Effect<Decimal, PaperTradingRepositoryError, never>;
 
+  /**
+   * Record a flow-trade exit and clear the flow state in ONE transaction.
+   * Returns the row it wrote so the caller can keep its in-memory capital in
+   * step with the ledger (state-machines.md RISK-03).
+   */
+  readonly recordFlowClose?: (
+    trade: FlowTradeRecord,
+    exchange: string,
+    symbol: string,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
   readonly getGridState: (
     exchange: string,
     symbol: string,
@@ -376,6 +400,19 @@ export interface PaperTradingRepositoryService {
 
   readonly recordGridTrade: (
     trade: GridPaperTrade,
+  ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
+
+  /**
+   * Record a grid exit and persist the resulting state in ONE transaction.
+   *
+   * The two writes are the exit ledger row and the position state; committing
+   * them separately meant a crash in between left the trade recorded while the
+   * state still said "open", so the next iteration closed the same position
+   * again and double-booked the PnL (state-machines.md RISK-04a).
+   */
+  readonly recordGridExit: (
+    trade: GridPaperTrade,
+    state: GridPaperState,
   ) => Effect.Effect<void, PaperTradingRepositoryError, never>;
 
   readonly listRecentGridTrades: (
@@ -815,6 +852,27 @@ CREATE TABLE IF NOT EXISTS flow_trade_state (
   PRIMARY KEY (exchange, symbol)
 );
 
+CREATE TABLE IF NOT EXISTS flow_trades (
+  id TEXT PRIMARY KEY,
+  exchange TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  side TEXT NOT NULL,
+  entry_price REAL NOT NULL,
+  exit_price REAL NOT NULL,
+  qty REAL NOT NULL,
+  capital_before REAL NOT NULL,
+  capital_after REAL NOT NULL,
+  pnl REAL NOT NULL,
+  pnl_pct REAL NOT NULL,
+  exit_reason TEXT NOT NULL,
+  opened_at DATETIME NOT NULL,
+  closed_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_trades_closed_at
+  ON flow_trades(closed_at DESC);
+
 CREATE TABLE IF NOT EXISTS watchlist (
   exchange TEXT NOT NULL,
   symbol TEXT NOT NULL,
@@ -1082,40 +1140,39 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
         // NULLs are touched) so every read stays exact. New writes always
         // populate the decimal columns, so after this backfill the REAL
         // columns are never the source of truth for money values.
-        for (const tableColumn of [
-          "paper_portfolio capital",
-          "paper_portfolio peak_capital",
-          "paper_positions entry_price",
-          "paper_positions size",
-          "paper_positions stop_loss",
-          "paper_positions take_profit",
-          "paper_positions scale_out_price",
-          "paper_trades entry_price",
-          "paper_trades exit_price",
-          "paper_trades size",
-          "paper_trades pnl",
-          "paper_trades pnl_pct",
-          "paper_start_of_day_capital start_capital",
-          "grid_paper_state capital",
-          "grid_paper_state peak_capital",
-          "grid_paper_state entry_price",
-          "grid_paper_state entry_filled_qty",
-          "grid_paper_state entry_fee",
-          "grid_paper_trades entry_price",
-          "grid_paper_trades exit_price",
-          "grid_paper_trades capital_before",
-          "grid_paper_trades capital_after",
-          "grid_paper_trades pnl_pct",
-          "grid_paper_trades entry_filled_qty",
-          "grid_paper_trades exit_filled_qty",
-          "grid_paper_trades entry_fee",
-          "grid_paper_trades exit_fee",
-          "grid_paper_trades realized_pnl_pct",
+        // Identifiers are written out literally (never interpolated): the
+        // statement list IS the whitelist.
+        for (const backfill of [
+          "UPDATE paper_portfolio SET capital_decimal = CAST(capital AS TEXT) WHERE capital_decimal IS NULL",
+          "UPDATE paper_portfolio SET peak_capital_decimal = CAST(peak_capital AS TEXT) WHERE peak_capital_decimal IS NULL",
+          "UPDATE paper_positions SET entry_price_decimal = CAST(entry_price AS TEXT) WHERE entry_price_decimal IS NULL",
+          "UPDATE paper_positions SET size_decimal = CAST(size AS TEXT) WHERE size_decimal IS NULL",
+          "UPDATE paper_positions SET stop_loss_decimal = CAST(stop_loss AS TEXT) WHERE stop_loss_decimal IS NULL",
+          "UPDATE paper_positions SET take_profit_decimal = CAST(take_profit AS TEXT) WHERE take_profit_decimal IS NULL",
+          "UPDATE paper_positions SET scale_out_price_decimal = CAST(scale_out_price AS TEXT) WHERE scale_out_price_decimal IS NULL",
+          "UPDATE paper_trades SET entry_price_decimal = CAST(entry_price AS TEXT) WHERE entry_price_decimal IS NULL",
+          "UPDATE paper_trades SET exit_price_decimal = CAST(exit_price AS TEXT) WHERE exit_price_decimal IS NULL",
+          "UPDATE paper_trades SET size_decimal = CAST(size AS TEXT) WHERE size_decimal IS NULL",
+          "UPDATE paper_trades SET pnl_decimal = CAST(pnl AS TEXT) WHERE pnl_decimal IS NULL",
+          "UPDATE paper_trades SET pnl_pct_decimal = CAST(pnl_pct AS TEXT) WHERE pnl_pct_decimal IS NULL",
+          "UPDATE paper_start_of_day_capital SET start_capital_decimal = CAST(start_capital AS TEXT) WHERE start_capital_decimal IS NULL",
+          "UPDATE grid_paper_state SET capital_decimal = CAST(capital AS TEXT) WHERE capital_decimal IS NULL",
+          "UPDATE grid_paper_state SET peak_capital_decimal = CAST(peak_capital AS TEXT) WHERE peak_capital_decimal IS NULL",
+          "UPDATE grid_paper_state SET entry_price_decimal = CAST(entry_price AS TEXT) WHERE entry_price_decimal IS NULL",
+          "UPDATE grid_paper_state SET entry_filled_qty_decimal = CAST(entry_filled_qty AS TEXT) WHERE entry_filled_qty_decimal IS NULL",
+          "UPDATE grid_paper_state SET entry_fee_decimal = CAST(entry_fee AS TEXT) WHERE entry_fee_decimal IS NULL",
+          "UPDATE grid_paper_trades SET entry_price_decimal = CAST(entry_price AS TEXT) WHERE entry_price_decimal IS NULL",
+          "UPDATE grid_paper_trades SET exit_price_decimal = CAST(exit_price AS TEXT) WHERE exit_price_decimal IS NULL",
+          "UPDATE grid_paper_trades SET capital_before_decimal = CAST(capital_before AS TEXT) WHERE capital_before_decimal IS NULL",
+          "UPDATE grid_paper_trades SET capital_after_decimal = CAST(capital_after AS TEXT) WHERE capital_after_decimal IS NULL",
+          "UPDATE grid_paper_trades SET pnl_pct_decimal = CAST(pnl_pct AS TEXT) WHERE pnl_pct_decimal IS NULL",
+          "UPDATE grid_paper_trades SET entry_filled_qty_decimal = CAST(entry_filled_qty AS TEXT) WHERE entry_filled_qty_decimal IS NULL",
+          "UPDATE grid_paper_trades SET exit_filled_qty_decimal = CAST(exit_filled_qty AS TEXT) WHERE exit_filled_qty_decimal IS NULL",
+          "UPDATE grid_paper_trades SET entry_fee_decimal = CAST(entry_fee AS TEXT) WHERE entry_fee_decimal IS NULL",
+          "UPDATE grid_paper_trades SET exit_fee_decimal = CAST(exit_fee AS TEXT) WHERE exit_fee_decimal IS NULL",
+          "UPDATE grid_paper_trades SET realized_pnl_pct_decimal = CAST(realized_pnl_pct AS TEXT) WHERE realized_pnl_pct_decimal IS NULL",
         ]) {
-          const [table, column] = tableColumn.split(" ");
-          this.db.exec(
-            `UPDATE ${table} SET ${column}_decimal = CAST(${column} AS TEXT) WHERE ${column}_decimal IS NULL`,
-          );
+          this.db.exec(backfill);
         }
       },
       catch: (err) =>
@@ -1568,6 +1625,8 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                SELECT closed_at FROM paper_trades
                UNION ALL
                SELECT closed_at FROM grid_paper_trades
+               UNION ALL
+               SELECT closed_at FROM flow_trades
              ) AS all_paper_trades
              WHERE date(closed_at) = date(?)`,
           )
@@ -1608,17 +1667,29 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           capital_after_value: string;
           capital_before_value: string;
         }>;
+        const flowRows = this.db
+          .query(
+            `SELECT CAST(pnl AS TEXT) AS pnl_value
+             FROM flow_trades
+             WHERE date(closed_at) = date('now')`,
+          )
+          .all() as Array<{ pnl_value: string }>;
         const paperPnl = paperRows.reduce(
           (total, row) => total.plus(new Decimal(row.pnl_value)),
           new Decimal(0),
         );
-        return gridRows.reduce(
+        const flowPnl = flowRows.reduce(
+          (total, row) => total.plus(new Decimal(row.pnl_value)),
+          new Decimal(0),
+        );
+        const gridPnl = gridRows.reduce(
           (total, row) =>
             total
               .plus(new Decimal(row.capital_after_value))
               .minus(new Decimal(row.capital_before_value)),
-          paperPnl,
+          money(0),
         );
+        return gridPnl.plus(paperPnl).plus(flowPnl);
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -1642,22 +1713,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           )
           .get(dateKey) as { start_capital_value: string } | null;
         if (row) return new Decimal(row.start_capital_value);
-        this.db
-          .query(
-            `INSERT INTO paper_start_of_day_capital
-             (date, start_capital, start_capital_decimal, updated_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(date) DO UPDATE SET
-               start_capital = excluded.start_capital,
-               start_capital_decimal = excluded.start_capital_decimal,
-               updated_at = excluded.updated_at`,
-          )
-          .run(
-            dateKey,
-            toNumber(currentCapital),
-            currentCapital.toString(),
-            new Date().toISOString(),
-          );
+        // No trade yet today, so no row: the capital in hand IS the day's
+        // opening capital. The row is written by the first trade's recording
+        // path (ensureStartOfDayCapital) with the capital BEFORE that trade --
+        // writing it here instead made the baseline depend on which engine
+        // happened to ask first, so a loss before that moment vanished from
+        // the daily-loss limit (state-machines.md RISK-03c).
         return currentCapital;
       },
       catch: (err) =>
@@ -1797,62 +1858,7 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
   ): Effect.Effect<void, PaperTradingRepositoryError, never> {
     return Effect.try({
       try: () => {
-        this.db
-          .query(
-            `INSERT INTO grid_paper_state
-             (exchange, symbol, timeframe, initial_capital, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
-              entry_price, entry_price_decimal, entry_order_id, entry_client_oid, entry_filled_qty,
-              entry_filled_qty_decimal, entry_fee, entry_fee_decimal, entry_fill_source,
-              strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
-              entry_opened_at, execution_environment,
-              grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
-              fee_pct, slippage_bps, trend_filter_period, max_position_pct,
-              max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
-               initial_capital = excluded.initial_capital,
-               capital = excluded.capital,
-               peak_capital = excluded.peak_capital,
-               capital_decimal = excluded.capital_decimal,
-               peak_capital_decimal = excluded.peak_capital_decimal,
-               paused = excluded.paused,
-               side = excluded.side,
-               entry_price = excluded.entry_price,
-               entry_price_decimal = excluded.entry_price_decimal,
-               entry_order_id = excluded.entry_order_id,
-               entry_client_oid = excluded.entry_client_oid,
-               entry_filled_qty = excluded.entry_filled_qty,
-               entry_filled_qty_decimal = excluded.entry_filled_qty_decimal,
-               entry_fee = excluded.entry_fee,
-               entry_fee_decimal = excluded.entry_fee_decimal,
-               entry_fill_source = excluded.entry_fill_source,
-               strategy_config_fingerprint = excluded.strategy_config_fingerprint,
-               cohort_id = excluded.cohort_id,
-               candidate_lock_at = excluded.candidate_lock_at,
-               dataset_cutoff_at = excluded.dataset_cutoff_at,
-               entry_opened_at = excluded.entry_opened_at,
-               execution_environment = excluded.execution_environment,
-               grid_step_pct = excluded.grid_step_pct,
-               grid_max_grids = excluded.grid_max_grids,
-               grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
-               fee_pct = excluded.fee_pct,
-               slippage_bps = excluded.slippage_bps,
-               trend_filter_period = excluded.trend_filter_period,
-               max_position_pct = excluded.max_position_pct,
-               max_drawdown_pct = excluded.max_drawdown_pct,
-               leverage = excluded.leverage,
-               killed = excluded.killed,
-               last_timestamp = excluded.last_timestamp,
-               updated_at = excluded.updated_at`,
-          )
-          .run(
-            state.exchange,
-            state.symbol,
-            state.timeframe,
-            ...gridStateSqlValues(state),
-          );
+        this.upsertGridStateRow(state);
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
@@ -1880,7 +1886,10 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
           )
           .get(exchange, symbol, timeframe) as { state_json: string } | null;
         if (!row) return null;
-        const parsed = JSON.parse(row.state_json) as LadderStateJson;
+        const parsed = parseJsonColumn<LadderStateJson>(
+          row.state_json,
+          "ladder_paper_state.state_json",
+        );
         return {
           exchange: parsed.exchange,
           symbol: parsed.symbol,
@@ -2282,26 +2291,151 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     }
     return Effect.try({
       try: () => {
-        this.db
-          .query(
-            `INSERT INTO grid_paper_trades
-             (id, exchange, symbol, timeframe, side, entry_price, exit_price,
-              capital_before, capital_after, pnl_pct,
-              entry_price_decimal, exit_price_decimal, capital_before_decimal,
-              capital_after_decimal, pnl_pct_decimal, fill_source, entry_order_id,
-              entry_client_oid, exit_order_id, exit_client_oid, entry_filled_qty,
-              entry_filled_qty_decimal, exit_filled_qty, exit_filled_qty_decimal,
-              entry_fee, entry_fee_decimal, exit_fee, exit_fee_decimal,
-              realized_pnl_pct, realized_pnl_pct_decimal,
-              strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
-              entry_opened_at, execution_environment, exit_reason, opened_at, closed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(...gridTradeSqlValues(trade));
+        this.insertGridTradeRow(trade);
       },
       catch: (err) =>
         new PaperTradingRepositoryError(
           `Failed to record grid paper trade: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
+  /** Upsert the grid state row. Caller supplies the transaction boundary. */
+  private upsertGridStateRow(state: GridPaperState): void {
+    this.db
+      .query(
+        `INSERT INTO grid_paper_state
+         (exchange, symbol, timeframe, initial_capital, capital, peak_capital, capital_decimal, peak_capital_decimal, paused, side,
+          entry_price, entry_price_decimal, entry_order_id, entry_client_oid, entry_filled_qty,
+          entry_filled_qty_decimal, entry_fee, entry_fee_decimal, entry_fill_source,
+          strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
+          entry_opened_at, execution_environment,
+          grid_step_pct, grid_max_grids, grid_pause_after_loss_bars,
+          fee_pct, slippage_bps, trend_filter_period, max_position_pct,
+          max_drawdown_pct, leverage, killed, last_timestamp, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(exchange, symbol, timeframe) DO UPDATE SET
+           initial_capital = excluded.initial_capital,
+           capital = excluded.capital,
+           peak_capital = excluded.peak_capital,
+           capital_decimal = excluded.capital_decimal,
+           peak_capital_decimal = excluded.peak_capital_decimal,
+           paused = excluded.paused,
+           side = excluded.side,
+           entry_price = excluded.entry_price,
+           entry_price_decimal = excluded.entry_price_decimal,
+           entry_order_id = excluded.entry_order_id,
+           entry_client_oid = excluded.entry_client_oid,
+           entry_filled_qty = excluded.entry_filled_qty,
+           entry_filled_qty_decimal = excluded.entry_filled_qty_decimal,
+           entry_fee = excluded.entry_fee,
+           entry_fee_decimal = excluded.entry_fee_decimal,
+           entry_fill_source = excluded.entry_fill_source,
+           strategy_config_fingerprint = excluded.strategy_config_fingerprint,
+           cohort_id = excluded.cohort_id,
+           candidate_lock_at = excluded.candidate_lock_at,
+           dataset_cutoff_at = excluded.dataset_cutoff_at,
+           entry_opened_at = excluded.entry_opened_at,
+           execution_environment = excluded.execution_environment,
+           grid_step_pct = excluded.grid_step_pct,
+           grid_max_grids = excluded.grid_max_grids,
+           grid_pause_after_loss_bars = excluded.grid_pause_after_loss_bars,
+           fee_pct = excluded.fee_pct,
+           slippage_bps = excluded.slippage_bps,
+           trend_filter_period = excluded.trend_filter_period,
+           max_position_pct = excluded.max_position_pct,
+           max_drawdown_pct = excluded.max_drawdown_pct,
+           leverage = excluded.leverage,
+           killed = excluded.killed,
+           last_timestamp = excluded.last_timestamp,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        state.exchange,
+        state.symbol,
+        state.timeframe,
+        ...gridStateSqlValues(state),
+      );
+  }
+
+  /** Insert one grid trade row. Caller supplies the transaction boundary. */
+  private insertGridTradeRow(trade: GridPaperTrade): void {
+    this.db
+      .query(
+        `INSERT INTO grid_paper_trades
+         (id, exchange, symbol, timeframe, side, entry_price, exit_price,
+          capital_before, capital_after, pnl_pct,
+          entry_price_decimal, exit_price_decimal, capital_before_decimal,
+          capital_after_decimal, pnl_pct_decimal, fill_source, entry_order_id,
+          entry_client_oid, exit_order_id, exit_client_oid, entry_filled_qty,
+          entry_filled_qty_decimal, exit_filled_qty, exit_filled_qty_decimal,
+          entry_fee, entry_fee_decimal, exit_fee, exit_fee_decimal,
+          realized_pnl_pct, realized_pnl_pct_decimal,
+          strategy_config_fingerprint, cohort_id, candidate_lock_at, dataset_cutoff_at,
+          entry_opened_at, execution_environment, exit_reason, opened_at, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(...gridTradeSqlValues(trade));
+  }
+
+  /**
+   * Anchor the UTC day's opening capital the first time the day trades.
+   *
+   * `getStartOfDayCapital` used to WRITE this row on first use, so the
+   * baseline was "capital when some engine first asked" -- after a loss that
+   * silently became the already-reduced balance and hid the day's real loss
+   * from every limit (state-machines.md RISK-03c). Writing it from the trade
+   * path with `capitalBefore` makes the baseline "capital before the day's
+   * first trade" for every engine, and DO NOTHING keeps the first trade of
+   * the day authoritative.
+   */
+  private ensureStartOfDayCapital(
+    dateKey: string,
+    capitalBefore: Decimal,
+  ): void {
+    this.db
+      .query(
+        `INSERT INTO paper_start_of_day_capital
+         (date, start_capital, start_capital_decimal, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(date) DO NOTHING`,
+      )
+      .run(
+        dateKey,
+        toNumber(capitalBefore),
+        capitalBefore.toString(),
+        new Date().toISOString(),
+      );
+  }
+
+  /**
+   * Record a grid exit AND its resulting state atomically.
+   *
+   * Splitting these writes let a crash commit the trade row while the state
+   * still said "open", so the next iteration closed the same position again
+   * and double-booked the exit (state-machines.md RISK-04a).
+   */
+  recordGridExit(
+    trade: GridPaperTrade,
+    state: GridPaperState,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.transaction(() => {
+          this.insertGridTradeRow(trade);
+          this.upsertGridStateRow(state);
+          this.ensureStartOfDayCapital(
+            trade.closedAt.toISOString().slice(0, 10),
+            trade.capitalBefore,
+          );
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to record grid exit: ${err instanceof Error ? err.message : String(err)}`,
           err,
         ),
     });
@@ -2607,6 +2741,66 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
     });
   }
 
+  /**
+   * Record a flow-trade exit and clear the flow state in ONE transaction.
+   *
+   * The close used to send the venue order and then delete the state row with
+   * no history behind it, so the engine had no realized PnL, no trade count,
+   * and no way to tell a restart from a fresh account (state-machines.md
+   * RISK-03).
+   */
+  recordFlowClose(
+    trade: FlowTradeRecord,
+    exchange: string,
+    symbol: string,
+  ): Effect.Effect<void, PaperTradingRepositoryError, never> {
+    return Effect.try({
+      try: () => {
+        this.db.transaction(() => {
+          this.db
+            .query(
+              `INSERT INTO flow_trades
+               (id, exchange, symbol, timeframe, side, entry_price, exit_price,
+                qty, capital_before, capital_after, pnl, pnl_pct, exit_reason,
+                opened_at, closed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              trade.id,
+              trade.exchange,
+              trade.symbol,
+              trade.timeframe,
+              trade.side,
+              trade.entryPrice,
+              trade.exitPrice,
+              trade.qty,
+              trade.capitalBefore,
+              trade.capitalAfter,
+              trade.pnl,
+              trade.pnlPct,
+              trade.exitReason,
+              trade.openedAt.toISOString(),
+              trade.closedAt.toISOString(),
+            );
+          this.db
+            .query(
+              "DELETE FROM flow_trade_state WHERE exchange = ? AND symbol = ?",
+            )
+            .run(exchange, symbol);
+          this.ensureStartOfDayCapital(
+            trade.closedAt.toISOString().slice(0, 10),
+            money(trade.capitalBefore),
+          );
+        })();
+      },
+      catch: (err) =>
+        new PaperTradingRepositoryError(
+          `Failed to record flow close: ${err instanceof Error ? err.message : String(err)}`,
+          err,
+        ),
+    });
+  }
+
   getFlowTradeState(
     exchange: string,
     symbol: string,
@@ -2778,11 +2972,12 @@ export class PaperTradingRepositorySQLite implements PaperTradingRepositoryServi
                     dataset_cutoff_at, entry_opened_at, execution_environment,
                     exit_reason, opened_at, closed_at
              FROM grid_paper_trades
-             WHERE exchange = ? AND timeframe = ?${liveOnly ? " AND fill_source = 'live'" : ""}
+             WHERE exchange = ? AND timeframe = ?
+               AND (? = 0 OR fill_source = 'live')
              ORDER BY closed_at DESC
              LIMIT ?`,
           )
-          .all(exchange, timeframe, limit) as Array<{
+          .all(exchange, timeframe, liveOnly ? 1 : 0, limit) as Array<{
           id: string;
           exchange: string;
           symbol: string;

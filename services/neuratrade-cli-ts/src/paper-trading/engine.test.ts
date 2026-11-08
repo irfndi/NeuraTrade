@@ -277,6 +277,13 @@ class InMemoryPaperRepository implements PaperTradingRepositoryService {
     });
   }
 
+  recordGridExit(trade: GridPaperTrade, state: GridPaperState) {
+    return Effect.sync(() => {
+      this.gridTrades.push(trade);
+      this.gridState = state;
+    });
+  }
+
   listRecentGridTrades(
     _exchange: string,
     _symbol: string,

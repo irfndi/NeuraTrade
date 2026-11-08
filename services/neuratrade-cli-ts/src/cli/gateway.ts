@@ -103,7 +103,7 @@ const statusCommand = Command.make("status", {}, () =>
       }
     } else {
       yield* Console.log(`⚠️  Backend Health: ${result.backendHealth.detail}`);
-      if (result.mode === "warming" || result.mode === "degraded") {
+      if (result.mode === "warming") {
         yield* Console.log(
           `Gateway runtime mode is ${result.mode.toUpperCase()} (services may still be warming).`,
         );

@@ -244,9 +244,22 @@ export const ProcessManagerLive: Layer.Layer<
 
         yield* logger.info(`Spawned ${name}`, { pid: proc.pid });
 
-        // Write PID file
+        // Write PID file, then VERIFY it landed. `PidFile.write` swallows
+        // filesystem errors, so an unverified write can leave a live process
+        // with no PID file: `gateway stop` then cannot find it and it keeps
+        // holding the port (state-machines.md RISK-06). Fail closed by
+        // terminating the process we just spawned rather than leaking it.
         if (pidFileService !== "") {
           yield* pidFile.write(pidFileService, proc.pid);
+          const recorded = yield* pidFile.read(pidFileService);
+          if (recorded !== proc.pid) {
+            yield* signalAndWaitUtil(proc.pid, "SIGTERM", 5000);
+            return yield* Effect.fail(
+              new ProcessError(
+                `${name}: spawned PID ${proc.pid} but the PID file ${JSON.stringify(pidFileService)} could not be written (recorded ${recorded ?? "nothing"}); process terminated instead of being left untracked`,
+              ),
+            );
+          }
           yield* logger.info(`Wrote PID file for ${name}`, {
             pid: proc.pid,
             pidFile: pidFileService,

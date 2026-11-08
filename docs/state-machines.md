@@ -14,18 +14,18 @@ Machines:
 
 | ID | Machine | Where | Persisted in | Fix status |
 | --- | --- | --- | --- | --- |
-| SM-GRID | Grid paper/live position | `paper-trading/grid-engine.ts` | `grid_paper_state` | **fixed** (RISK-01, RISK-02) |
-| SM-LADDER | Ladder paper/live rungs | `paper-trading/ladder-engine.ts` | `ladder_paper_state`, `ladder_paper_trades` | **fixed** (RISK-02); RISK-04/05 open |
-| SM-FLOW | Flow Ignition single position | `scalping/flow-trade.ts` | `flow_trade_state` | open (RISK-03) |
+| SM-GRID | Grid paper/live position | `paper-trading/grid-engine.ts` | `grid_paper_state` | **fixed** (RISK-01, RISK-02, RISK-04) |
+| SM-LADDER | Ladder paper/live rungs | `paper-trading/ladder-engine.ts` | `ladder_paper_state`, `ladder_paper_trades` | **fixed** (RISK-02, RISK-04, RISK-05) |
+| SM-FLOW | Flow Ignition single position | `scalping/flow-trade.ts` | `flow_trade_state`, `flow_trades` | **fixed** (RISK-03) |
 | SM-BREAK | Daily-loss circuit breaker | `risk/circuit-breaker.ts` | `risk_circuit_breaker`, `risk_circuit_breaker_resets` | sound |
 | SM-KILL | Kill switch | `risk/kill-switch.ts` | `risk_kill_switch` | sound |
-| SM-GATEWAY | Gateway lifecycle | `services/gateway-orchestrator.ts`, `services/gateway-state.ts`, `services/pid.ts` | `pids/gateway-state.json`, `pids/*.pid` | open (RISK-06) |
+| SM-GATEWAY | Gateway lifecycle | `services/gateway-orchestrator.ts`, `services/gateway-state.ts`, `services/pid.ts` | `pids/gateway-state.json`, `pids/*.pid` | **fixed** (RISK-06) |
 | SM-ORDER | Exchange order/fill | `exchange/adapters/bitget-futures.ts`, `bybit-futures.ts` | exchange only | sound |
 | SM-RECON | Grid live reconciliation | `paper-trading/live-position-reconciliation.ts` | derived | sound |
 
-Priority order of confirmed defects: **RISK-02** (money, unbounded) →
-**RISK-01** (money, bounded) → **RISK-03** → **RISK-04** → **RISK-06** →
-**RISK-05**.
+All six confirmed defects are fixed and each has a regression test that was
+verified to fail on the pre-fix code. Fixes landed in two commits: RISK-01/02
+(`ab287e916`), then RISK-03/04/05/06 (this change).
 
 ---
 
@@ -56,6 +56,8 @@ writes it back once per iteration.
 | I5 | A live exit must be confirmed by the venue (matching size, reducing side, positive price) before the ledger goes flat | `closeGridPosition` (grid-engine.ts:1183) |
 | I6 | A state write that cannot be persisted after a venue order engages the kill switch | `saveGridStateWithRetry` (grid-engine.ts:718) |
 | I7 | The drawdown limit blocks an entry **before** it is placed, not after | `processGridBar` (grid-engine.ts:1953) — *added by the RISK-01 fix* |
+| I8 | The exit row and the flat state commit in ONE transaction, so a crash cannot book a close without advancing the state | `recordGridExit` (repository.ts), called from `closePosition` (grid-engine.ts:1991) |
+| I9 | A live exit the venue did not confirm latches `killed` (no new entries) while still leaving the position open for retry | `closePosition` `tapError` (grid-engine.ts:2003) |
 
 ### Transition table
 
@@ -119,26 +121,40 @@ limit.
   keeps managing rungs while the circuit breaker is open`.
 - Issue: `clever-cabin-…` (drawdown latch + breaker).
 
-**RISK-04a — crash between the trade row and the state row double-books an exit (OPEN, P0).**
-`closeGridPosition` writes `grid_paper_trades` (grid-engine.ts:1293) *and*
-`circuitBreaker.recordTradeResult` (grid-engine.ts:1294) **before** the caller
-persists the flat state in `finalizeGridBar` (grid-engine.ts:1824). A crash in
-that window leaves the ledger holding the position while the trade row and the
-day's loss already exist; the next iteration re-closes.
+**RISK-04a — crash between the trade row and the state row double-booked an exit (FIXED).**
+`closeGridPosition` used to write `grid_paper_trades` *and*
+`circuitBreaker.recordTradeResult` **before** the caller persisted the flat
+state in `finalizeGridBar`. A crash in that window left the ledger holding the
+position while the trade row already existed, so the next iteration re-closed
+the same position.
 
-- Evidence (probe): iteration 1 opens, iteration 2 closes (`trades=1`); then
-  restoring the pre-close state (the crash window) and iterating again produces
-  a second exit row (`exit rows = ["target:1000.495", "target:1010"]`,
-  `trades=2`).
-- Issue: `clever-cabin-kacz`.
+- Evidence (probe, pre-fix): iteration 1 opens, iteration 2 closes
+  (`trades=1`); restoring the pre-close state (the crash window) and iterating
+  again produced a second exit row
+  (`exit rows = ["target:1000.495", "target:1010"]`, `trades=2`).
+- Fix: `recordGridExit(trade, state)` writes the trade row, the state row and
+  the day's opening-capital anchor in one SQLite transaction
+  (`repository.ts`); `closeGridPosition` no longer records anything, and the
+  breaker is fed after the durable write. A replay now fails on the duplicate
+  primary key and leaves the state untouched.
+- Regression: `PaperTradingRepositorySQLite > records the grid exit and its
+  state in one transaction`, `grid paper engine > does not book a grid exit
+  whose state write failed`.
+- Issue: `clever-cabin-kacz` (closed).
 
-**RISK-04b — a failed live close is retried on the next bar (OPEN, by design, undocumented).**
-`processGridPosition` returns the failure unchanged; nothing latches and
-nothing engages the kill switch, so the same reduce-only close is re-sent next
-bar. Idempotent on a venue that reports "nothing closable", but it hides a
-sustained close outage (probe: three consecutive `action=THREW` iterations,
-`side=long` and `killed=false` throughout).
-- Issue: `clever-cabin-kacz`.
+**RISK-04b — a failed live close was retried with no latch (FIXED).**
+Nothing latched and nothing engaged the kill switch, so the same reduce-only
+close was re-sent next bar and new entries stayed possible: one stuck close
+could become two open positions (probe, pre-fix: three consecutive
+`action=THREW` iterations with `side=long`, `killed=false`).
+
+- Fix: `closePosition` uses `Effect.tapError` to persist `killed: true` through
+  `saveGridStateWithRetry` before rethrowing (grid-engine.ts:2003). The error
+  still surfaces, the position stays open for the next bar to retry, and I4
+  guarantees the latch cannot freeze the exit.
+- Regression: `grid paper engine > latches the account when a live close is not
+  confirmed`.
+- Issue: `clever-cabin-kacz` (closed).
 
 **Not a defect:** a live position closed on the venue but still open locally
 (`reconcileLivePosition` → `mismatch "local state exists without exchange
@@ -174,6 +190,9 @@ persisted once at the end (or rolled back in full on any venue failure).
 | L5 | `PAUSED` expires: the per-bar decrement always runs | `advanceLadderBar` (ladder-engine.ts:1031) |
 | L6 | A drawdown block is a seed gate, not a freeze — open rungs keep their exits | `seedLadderSide` (ladder-engine.ts:654), `guardLadderIteration` (ladder-engine.ts:1979) |
 | L7 | A config mismatch on an open ladder force-closes at the current close and re-seeds next bar | `forceReseedLadderState` (ladder-engine.ts:1742) |
+| L8 | A state write that cannot be persisted after a venue interaction retries, then engages the kill switch | `saveLadderStateWithRetry` (ladder-engine.ts:2019) |
+| L9 | The advanced state is persisted BEFORE the trade rows, so a failed history write cannot cause a bar replay | `runLadderPaperTradingIteration` (ladder-engine.ts:2531) |
+| L10 | A close order is only sent for a rung whose entry this bar confirmed (or that was already filled before it) | `executeLadderBarLive` (ladder-engine.ts:1689) |
 
 ### Transition table
 
@@ -190,24 +209,38 @@ persisted once at the end (or rolled back in full on any venue failure).
 
 ### Reachable invalid states
 
-**RISK-05 — same-candle entry+exit is correct only because of loop order (OPEN, P1).**
-`executeLadderBarLive` executes **all** entries, then **all** closes
-(ladder-engine.ts:1663–1693) and never checks that a close's matching entry
-succeeded. Today this is safe only because a failed entry aborts the whole bar
-before the close loop runs. Any reordering, parallelism, or partial fill turns
-a same-candle exit into a reduce-only order with no position behind it
-(venue `40020`), which is the failure the comment at ladder-engine.ts:1659
-says was fixed. The dependency is load-bearing and unasserted.
-- Issue: `clever-cabin-80tn`.
+**RISK-05 — a skipped entry could still have its close sent (FIXED).**
+`executeLadderBarLive` runs all entries, then all closes, and never checked
+that a close's matching entry succeeded. A rung the executor skips because its
+size is below the venue floor (`qty === 0`) still produces a paper close event
+on the same bar, and that close was sent as a reduce-only order with no
+position behind it — the `40020` failure the comment at ladder-engine.ts:1659
+says was fixed. The loop order was the only thing preventing it.
 
-**L8 — a ledger-write failure after a confirmed fill can leave an untracked live position (OPEN, P0).**
-`executeLadderFillLive` returns an exchange-confirmed fill
-(ladder-engine.ts:1576) and the state is not persisted until
-ladder-engine.ts:2534. If `saveLadderState` fails there, no kill switch is
-engaged (the grid path has `saveGridStateWithRetry`, ladder does not) and
-nothing records that a fill landed. `guardOrphanPosition` recovers only the
-`openRungCount(w) === 0` case.
-- Issue: `clever-cabin-kacz`.
+- Fix: `executeLadderBarLive` builds a `confirmedEntries` set from the entries
+  it actually placed and a `filledThisBar` set from the bar's fill events; a
+  close whose rung was filled this bar without a confirmed entry is recorded
+  but never sent (ladder-engine.ts:1689). The dependency is now explicit, so
+  reordering or parallelising the loops cannot reintroduce it.
+- Regression: `runLadderPaperTradingIteration (persistence + resume) > does not
+  send a close order for a rung whose entry was skipped`.
+- Issue: `clever-cabin-80tn` (closed).
+
+**L8 — a ledger-write failure after a confirmed fill could leave an untracked live position (FIXED).**
+`executeLadderFillLive` returns an exchange-confirmed fill and the state was
+persisted much later with a bare `saveLadderState`; a failure there engaged
+nothing, and `guardOrphanPosition` recovers only the `openRungCount(w) === 0`
+case.
+
+- Fix: `saveLadderStateWithRetry` retries three times, then engages the kill
+  switch and returns a `KILL SWITCH ENGAGED` hold (ladder-engine.ts:2019). Both
+  the success path (2531) and the rolled-back path (2333) use it.
+- Fix (ordering): the state is persisted before the trade rows (L9). A replay
+  re-fills and re-closes the same rungs and corrupts capital, while a missing
+  history row only weakens evidence — so the state wins the race.
+- Regression: `runLadderPaperTradingIteration (persistence + resume) > engages
+  the kill switch when the state save fails after a confirmed fill`.
+- Issue: `clever-cabin-kacz` (closed).
 
 ---
 
@@ -234,7 +267,8 @@ One directional position per `(exchange, symbol)`; `side` is the primary axis,
 | F2 | `side !== null` ⟹ `entryPrice`, `qty`, `stopPrice`, `exitAt`, `atr` non-null | `openFlowTrade` (flow-trade.ts:341) |
 | F3 | `stage` only moves `initial → breakeven → trail` | `updateFlowTrailing` (flow-trade.ts:510) |
 | F4 | The venue must hold the same side with `qty > 0`, else `LATCHED` + kill switch | `guardFlowPosition` (flow-trade.ts:472) |
-| F5 | The risk guard must see **current** capital, peak, start-of-day capital and today's trades | `openFlowTrade` (flow-trade.ts:360) — *violated, see RISK-03* |
+| F5 | The risk guard sees the **persisted** capital, the day's start-of-day capital, today's realized PnL and today's trade count | `openFlowTrade` (flow-trade.ts:360) |
+| F6 | Every close writes a `flow_trades` row and clears `flow_trade_state` in one transaction, and the realized PnL moves the persisted capital | `closeFlowPosition` (flow-trade.ts:600), `recordFlowClose` (repository.ts) |
 
 ### Transition table
 
@@ -252,29 +286,36 @@ One directional position per `(exchange, symbol)`; `side` is the primary axis,
 
 ### Reachable invalid states
 
-**RISK-03 — the flow engine's risk guard never sees a real account (OPEN, P0 if `--live` ever ships).**
-`openFlowTrade` calls `riskGuard.check` with `capital`, `peakCapital`,
-`startOfDayCapital` all hardcoded to `opts.capital`, `dailyRealizedPnl: 0`,
-`tradesTodayCount: 0`, `positionValue: 0` (flow-trade.ts:360–366).
-`flow_trade_state.capital` is only ever written from `opts.capital`
-(flow-trade.ts:169, 434) and there is **no flow trade table**
-(`repository.ts:797–816` has no `recordFlowTrade`), so realized PnL never
-enters the ledger. Every check evaluates the untouched opening configuration.
+**RISK-03 — the flow engine's risk guard never saw a real account (FIXED).**
+`openFlowTrade` called `riskGuard.check` with `capital`, `peakCapital` and
+`startOfDayCapital` all hardcoded to `opts.capital`, plus `dailyRealizedPnl: 0`,
+`tradesTodayCount: 0`, `positionValue: 0`. `flow_trade_state.capital` was only
+ever written from `opts.capital` and there was **no flow trade table**, so
+realized PnL never entered the ledger: every check evaluated the untouched
+opening configuration (probe, pre-fix: a live flow state with capital 12.5
+iterated with a spy `RiskGuard` never reached the guard, and the persisted
+capital stayed 12.5).
 
-- Evidence (probe): a live flow state (capital 12.5, side LONG) iterated with a
-  spy `RiskGuard` → the guard is never called on the hold path, and the
-  persisted capital stays `12.5`.
-- Impact today: flow-trade exposes no `--live` flag, so this is a latent P0.
-  It becomes live the moment the Bitget real-money adapter
-  (`clever-cabin-va5`) wires it.
-- Issue: `clever-cabin-20oq`.
+- Fix (account state): the guard now receives the persisted capital, the day's
+  start-of-day capital, `getTodayRealizedPnl()` and `countTradesForDate()`
+  (flow-trade.ts:360). Sizing uses the same capital, so the position cannot
+  outgrow the account.
+- Fix (ledger): `flow_trades` (repository.ts:843) records every close through
+  `recordFlowClose`, which inserts the row, deletes the state row and anchors
+  the day's opening capital in ONE transaction; `getTodayRealizedPnl` and
+  `countTradesForDate` now include flow rows, so the daily-loss limit and the
+  breaker see flow PnL. `closeFlowPosition` moves the persisted capital by the
+  realized PnL.
+- Regression: `PaperTradingRepositorySQLite > counts flow trades in the daily
+  risk accounting`.
+- Issue: `clever-cabin-20oq` (closed).
 
-**RISK-03b — the flow close is not atomic with its ledger (OPEN).**
-`closeFlowPosition` sends the venue close and then `clearFlowTradeState`
-(flow-trade.ts:597) without persisting a "closing" marker; a crash between them
-re-enters `manageFlowPosition`, which reconciles against the venue and, on a
-mismatch, latches the kill switch. Fail-closed and operator-recoverable —
-listed for completeness, no separate issue.
+**RISK-03b — the flow close is now atomic with its ledger (FIXED by F6).**
+`closeFlowPosition` used to send the venue close and then delete the state row
+with no history behind it. The row and the clear now commit together; a crash
+between the venue fill and that commit leaves the position open locally, which
+`guardFlowPosition` reconciles and latches on — fail-closed, operator
+recoverable.
 
 ---
 
@@ -299,6 +340,8 @@ listed for completeness, no separate issue.
 | B4 | A mid-day reset requires `authorized: true` and never deletes `daily_pnl` | `reset` (circuit-breaker.ts:288–303) |
 | B5 | A reset never hands back a fresh loss budget inside the same UTC day | circuit-breaker.ts:319 |
 | B6 | Non-positive start-of-day capital opens the breaker instead of recording 0% | `recordTradeResult` (circuit-breaker.ts:190) |
+| B7 | The day's opening capital is anchored by the day's FIRST TRADE (capital before it), not by the first reader | `ensureStartOfDayCapital` (repository.ts) |
+| B8 | A read with no row yet returns the capital in hand and writes nothing | `getStartOfDayCapital` (repository.ts:1700) |
 
 ### Transition table
 
@@ -322,19 +365,26 @@ The breaker is **only** a new-risk gate. Consumers:
   (ladder-engine.ts:2527); `isOpen` holds only while flat
   (ladder-engine.ts:1979).
 - `futures-engine` — `recordTradeResult` on close (futures-engine.ts:442, 528).
-- `flow-trade` — **never records and never reads.** See RISK-03.
+- `flow-trade` — records every close through `recordFlowClose` and reads
+  `isOpen` via `guardFlowState` (flow-trade.ts:250). Before RISK-03 was fixed
+  it did neither.
 
-**RISK-03c — the breaker's denominator is not the start-of-day capital the rest of the system uses (OPEN, P0).**
-`paper_start_of_day_capital` is written only by `getStartOfDayCapital`
-(`repository.ts:1631`), i.e. by whichever engine happens to run first that day;
-`recordGridTrade` (`repository.ts:2266`) never writes it. `grid-engine`,
-`futures-engine` and the ladder's risk guard call `getStartOfDayCapital(...)`
-with capital **at first use** (ladder-engine.ts:1489), while the ladder passes
-its own `startOfDayCapital` to the breaker (ladder-engine.ts:2493). An engine
-that starts after a loss therefore adopts the already-lossy capital as the
-day's baseline, and the two limit implementations can disagree about whether
-the day is already lost.
-- Issue: `clever-cabin-20oq`.
+**RISK-03c — the baseline was "capital when some engine first asked" (FIXED).**
+`paper_start_of_day_capital` used to be written by `getStartOfDayCapital`
+itself, i.e. by whichever engine happened to ask first that day. An engine
+starting after a loss adopted the already-reduced balance as the day's opening
+capital, so that loss became invisible to every daily limit and the ladder's
+two denominators could disagree about whether the day was already lost.
+
+- Fix: `getStartOfDayCapital` is now read-only and returns the capital in hand
+  when no row exists (correct: no trade yet today). The row is written by the
+  first trade's recording path — `recordGridExit` / `recordFlowClose` /
+  `recordLadderTrades` — with `capitalBefore`, via
+  `INSERT ... ON CONFLICT DO NOTHING`, so the first trade of the day is
+  authoritative regardless of which engine trades.
+- Regression: `PaperTradingRepositorySQLite > anchors start-of-day capital at
+  the first trade, not at the first read`.
+- Issue: `clever-cabin-20oq` (closed).
 
 ---
 
@@ -385,7 +435,7 @@ documented posture.
 
 | Field | Values **written** | Values only **read** |
 | --- | --- | --- |
-| `mode` | `""` (default), `starting`, `warming`, `healthy`, `down` | `degraded` — dead branch |
+| `mode` | `""` (default), `starting`, `warming`, `healthy`, `down` | — (the dead `degraded` branch was removed) |
 | service `status` | `starting`, `healthy`, `warming`, `down`, `disabled`, `skipped` | — |
 
 The only `writeMode` callers are gateway-orchestrator.ts:249, 356 (both
@@ -408,27 +458,40 @@ gateway-orchestrator.ts:463.
 
 ### Reachable invalid states
 
-**RISK-06a — `degraded` is unreachable (OPEN, P3).** `gateway.ts:106` treats
-`mode === "degraded"` as a real runtime mode and prints a warming hint for it,
-but no writer ever produces it: the final mode is `warming \| healthy`
-(gateway-orchestrator.ts:538). The branch can never fire, so an operator
-diagnosing a partially-degraded gateway sees the "make sure the backend is
-running" text instead of the warming explanation. Cosmetic, but it is the kind
-of dead state that makes the other states look more expressive than they are.
-- Issue: `clever-cabin-rhwr`.
+**RISK-06a — `degraded` was unreachable (FIXED).** `gateway.ts:106` treated
+`mode === "degraded"` as a real runtime mode and printed a warming hint for
+it, but no writer ever produced it (the final mode is `warming \| healthy`,
+gateway-orchestrator.ts:538). The branch could never fire, so an operator
+diagnosing a partially-degraded gateway saw the "make sure the backend is
+running" text instead of the warming explanation. The dead branch is removed;
+the state list now matches what is actually written.
 
-**RISK-06 — non-atomic state file + lost updates + PID after spawn (OPEN, P2).**
-`writeMode`/`writeServiceState` are read-modify-write on the whole JSON file
-with no lock (gateway-state.ts:184, 203), `write` calls `writeFileString` on
-the final path with no temp-file rename (gateway-state.ts:164) and swallows
-errors (gateway-state.ts:179). A concurrent start/stop silently drops the other
-writer's service entry; a torn read decodes to the **zero-value default**
-(`decodeOrFallback`, gateway-state.ts:109) and is indistinguishable from "no
-state". `startService` writes the PID file only **after** `Bun.spawn` returns
-(process-manager.ts:307), so a crash in that window leaves a live untracked
-process; a recycled PID is detected only when patterns are passed
-(process-manager.ts:348).
-- Issue: `clever-cabin-rhwr`.
+**RISK-06b — torn reads and lost updates in the state file (FIXED).**
+`write` used to call `writeFileString` on the final path, so a reader could
+observe a truncated document, and a truncated document decodes to the
+**zero-value default** (`decodeOrFallback`, gateway-state.ts:109) — a torn read
+was indistinguishable from "no state". Fixed with write-then-`rename(2)`
+(gateway-state.ts:173): a reader now sees either the old file or the new one.
+
+Remaining, deliberately not "fixed": `writeMode`/`writeServiceState` are still
+read-modify-write on the whole file, so two concurrent `gateway start`/`stop`
+processes can still lose each other's service entry. Serialising them needs a
+lock (or a single writer) — a lifecycle decision, not a local patch. The file
+is diagnostic state; trading never reads it.
+
+**RISK-06c — a spawned process could be left untracked (FIXED).**
+`startService` writes the PID file after `Bun.spawn`, and `PidFile.write`
+swallows filesystem errors, so a failed write left a live process that
+`gateway stop` could not find, still holding its port. The PID is now read back
+and compared; on mismatch the just-spawned process is terminated and the call
+fails with `ProcessError` (process-manager.ts:247).
+
+A recycled PID is still only detected when `patterns` are supplied
+(process-manager.ts:365) — callers that pass no patterns accept any live PID in
+the file. Unchanged: the check needs the binary name, which only the caller
+knows.
+- Issue: `clever-cabin-rhwr` (closed for 06a/06b/06c; the concurrent-writer
+  note above is recorded there as accepted).
 
 ---
 
@@ -506,3 +569,28 @@ reachable invalid state found.
   breaker skipping exits) fixed in `grid-engine.ts` + `ladder-engine.ts` with
   four regression tests. RISK-03, RISK-04, RISK-06 filed; RISK-05 documented
   as an unasserted dependency.
+- **2026-11-08** — remaining four fixed. RISK-04a: `recordGridExit` commits the
+  exit row + state + day anchor in one transaction. RISK-04b: an unconfirmed
+  live close latches `killed`. L8: `saveLadderStateWithRetry` + state-before-
+  trades ordering. RISK-05: closes require a confirmed entry. RISK-03: flow
+  engine gets a real ledger (`flow_trades`), truthful risk inputs and an atomic
+  close. RISK-03c: the day's baseline is anchored by the first trade. RISK-06:
+  atomic state-file rename, PID read-back verification, dead `degraded` branch
+  removed. Six regression tests, each verified to fail on the pre-fix code.
+
+## Known gaps (accepted, with the reason)
+
+- Concurrent `gateway start`/`stop` can lose a service entry in
+  `gateway-state.json` (SM-GATEWAY). Diagnostic state only; fixing it needs a
+  single writer or a lock.
+- A recycled PID is trusted when a caller passes no `patterns`
+  (process-manager.ts:365). The pattern needs the binary name, which only the
+  caller knows.
+- The grid breaker's `recordTradeResult` runs just after the atomic exit write.
+  A crash in that microsecond loses one day-loss accumulation while the trade
+  row survives; `getTodayRealizedPnl` still sees it, so the guard stays honest
+  and only the breaker's own accumulator drifts until the next close.
+- `paper_start_of_day_capital` is anchored by grid/ladder/flow trade recording.
+  The spot paper engine (`paper-trading/engine.ts`) records through
+  `closePosition`/`scaleOutPosition`, which do not anchor it yet; its baseline
+  therefore still comes from `getStartOfDayCapital` at first use.

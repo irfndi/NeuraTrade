@@ -324,3 +324,30 @@ export interface LadderPaperState {
   readonly lastTimestamp: Date | null;
   readonly updatedAt: Date;
 }
+
+/**
+ * Durable close record for the Flow Ignition engine.
+ *
+ * The flow engine used to keep no trade history at all: `flow_trade_state`
+ * held the open position and its `capital` was never updated, so every risk
+ * check evaluated the untouched opening configuration and the daily-loss
+ * limit could not see flow PnL (state-machines.md RISK-03). One row per
+ * closed flow trade makes realized PnL and the trade count observable.
+ */
+export interface FlowTradeRecord {
+  readonly id: string;
+  readonly exchange: string;
+  readonly symbol: string;
+  readonly timeframe: string;
+  readonly side: "LONG" | "SHORT";
+  readonly entryPrice: number;
+  readonly exitPrice: number;
+  readonly qty: number;
+  readonly capitalBefore: number;
+  readonly capitalAfter: number;
+  readonly pnl: number;
+  readonly pnlPct: number;
+  readonly exitReason: "stop" | "emergency" | "time";
+  readonly openedAt: Date;
+  readonly closedAt: Date;
+}
